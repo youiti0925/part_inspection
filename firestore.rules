@@ -1,0 +1,25 @@
+rules_version = '2';
+
+// 製品検査アプリ Firestore セキュリティルール
+// 認証 (匿名認証含む) を必須にし、未認証アクセスを拒否
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // アプリ専有のパス配下: artifacts/{appId}/public/data/...
+    match /artifacts/{appId}/public/data/{collection}/{docId} {
+      // 認証済み (匿名認証 OK) のユーザーに read/write 許可
+      // ※ 同じ Firebase プロジェクトを最終検査アプリと共有しているため、
+      //   appId で実質的にアプリを分離している
+      allow read, write: if request.auth != null;
+    }
+
+    // ネストした sub-collection (将来の measurements/photos 用)
+    match /artifacts/{appId}/public/data/{collection}/{docId}/{sub=**} {
+      allow read, write: if request.auth != null;
+    }
+
+    // それ以外のパスは全て拒否
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

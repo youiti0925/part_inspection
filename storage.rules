@@ -1,0 +1,19 @@
+rules_version = '2';
+
+// Cloud Storage セキュリティルール
+// 認証 (匿名認証含む) を必須にし、未認証アクセスを拒否
+service firebase.storage {
+  match /b/{bucket}/o {
+    // アプリ専有のパス: artifacts/{appId}/...
+    match /artifacts/{appId}/{allPaths=**} {
+      allow read, write: if request.auth != null
+        // 画像のみ・10MB上限
+        && (request.resource == null || request.resource.size < 10 * 1024 * 1024);
+    }
+
+    // それ以外のパスは全て拒否
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

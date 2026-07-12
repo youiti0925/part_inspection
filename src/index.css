@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* === スクロールバーを太く・掴みやすく（現場の「細くてクリックしづらい」クレーム対応） === */
+/* Firefox */
+* { scrollbar-width: auto; scrollbar-color: #94a3b8 #e2e8f0; }
+/* WebKit (Chrome/Edge/Safari) — 既定の約2倍の太さ＋余白で掴みやすく */
+*::-webkit-scrollbar { width: 16px; height: 16px; }
+*::-webkit-scrollbar-track { background: #e2e8f0; border-radius: 8px; }
+*::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 8px;
+  border: 3px solid #e2e8f0;   /* 余白で見た目スッキリ＋当たり判定は太いまま */
+  min-height: 48px;            /* 長いリストでも掴みやすい最小サイズ */
+}
+*::-webkit-scrollbar-thumb:hover { background: #64748b; }
+*::-webkit-scrollbar-thumb:active { background: #475569; }

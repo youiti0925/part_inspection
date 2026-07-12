@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "inspection-time-c4fd3"
+  },
+  "targets": {
+    "inspection-time-c4fd3": {
+      "hosting": {
+        "parts": [
+          "parts-inspection-app"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

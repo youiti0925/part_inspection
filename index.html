@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>部品検査 (Parts Inspection)</title>
+    <style>
+      * { -webkit-tap-highlight-color: transparent; }
+      body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+      /* iOS Safari の自動ズーム防止: viewport の maximum-scale=1.0 と組み合わせて使用 */
+      /* 細かい数値入力欄 (text-xs等) のレイアウトを壊さないため、Tailwind class 指定がない場合のみデフォルト 16px に */
+      input[type="text"]:not([class*="text-"]),
+      input[type="number"]:not([class*="text-"]),
+      input[type="date"]:not([class*="text-"]),
+      input[type="datetime-local"]:not([class*="text-"]),
+      textarea:not([class*="text-"]),
+      select:not([class*="text-"]) { font-size: 16px; }
+      ::-webkit-scrollbar { width: 6px; height: 6px; }
+      ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      @media print { body * { visibility: hidden; } #print-area, #print-area * { visibility: visible; } }
+    </style>
+  </head>
+  <body class="bg-slate-100 min-h-screen">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
