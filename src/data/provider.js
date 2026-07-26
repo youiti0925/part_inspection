@@ -51,9 +51,8 @@ export const CLAIM = Object.freeze({
  * ⚠絞り込み(where/orderBy/limit)は **部品検査で先に必要になった** 部分。
  *   使わないアプリは fs に query 系を渡さなくても今までどおり動く(必要な時だけ要求する)。
  *
- * ⚠⚠ このファイルは 2026-07-27 時点で **製品検査/部品検査/司令塔③ の3つが同一**。
- *   最終検査(golden)だけ絞り込みの部分がまだ入っていない(別作業中だったため触っていない)。
- *   次に最終検査を触るとき、この版をそのまま配ること。差分は「絞り込み」の一塊だけ。
+ * ⚠⚠ このファイルは 2026-07-27 時点で **4アプリすべて同一**。
+ *   片方だけ直すと、次に配った時に静かに巻き戻る。直したら4つ全部へ配ること。
  */
 export const createFirebaseBackend = (db, fs) => {
   const need = (n) => { if (typeof fs?.[n] !== 'function') throw new Error(`createFirebaseBackend: fs.${n} が渡されていません`); };
