@@ -23,3 +23,8 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+# 環境変数ファイル(.env.local など)。⚠`.env` だけだと .env.local がすり抜ける。
+# 2026-07-26: 公開リポジトリ流出の原因が「gitignoreが狭すぎた」ことだったため、ここも広げる。
+.env.*
+!.env.example

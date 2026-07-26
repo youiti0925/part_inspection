@@ -24,10 +24,18 @@ import {
 import { initializeApp } from "firebase/app";
 import {
   getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot,
-  serverTimestamp, query, orderBy, limit, where, getDocs, updateDoc,
+  serverTimestamp, query, orderBy, limit, where, getDocs, getDoc, updateDoc,
   deleteField,
-  initializeFirestore, persistentLocalCache, persistentMultipleTabManager
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+  connectFirestoreEmulator
 } from "firebase/firestore";
+
+// --- 保管庫の窓口(PocketBase移行 Phase M1) ---------------------------------
+// ⚠M1では中身は Firebase のまま。保存されるデータもパスも1バイトも変わらない。
+// ⚠部品検査は本番データ0件だが、Provider対応・接続試験は他アプリと同じに揃える(指示書 未決②の回答)。
+import { providerFor, ROW_DATA_WINS } from './data/provider.js';
+const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp };
+const DATA = (db) => providerFor(db, FS_API);
 import {
   getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject
 } from "firebase/storage";
@@ -38,7 +46,7 @@ import {
   MAX_CALCULATIONS, groupKeyFor
 } from './measurement-utils';
 import {
-  getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken
+  getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, connectAuthEmulator
 } from "firebase/auth";
 
 // 「❓使い方」全画面マニュアル
@@ -799,7 +807,7 @@ const ROTARY_EVT_COL = 'rotaryEvents';
 // 品目コード(model)+このモードで測定条件が決まる(回転/傾斜=どのマスタか, 分割/再現/合体=どの条件群か)。
 const ROTARY_MODES = ['回転分割', '傾斜分割', '回転再現性', '傾斜再現性', '回転分割+再現', '傾斜分割+再現'];
 const rotaryWorkId = (lotId, unitIdx) => `${lotId}_u${unitIdx}`;
-const rotaryCmdDoc = (db, id) => doc(db, 'artifacts', APP_DATA_ID, 'public', 'data', ROTARY_CMD_COL, id);
+const rotaryCmdDoc = (db, id) => DATA(db).docRef(APP_DATA_ID, ROTARY_CMD_COL, id);
 // 指令を書く (prepare=準備工程の開始 / start_capture=測定工程の開始)。失敗してもタイマー自体は止めない(現場優先)。
 const writeRotaryCommand = async (db, kind, { workId, station, model, machine, mode }) => {
   if (!db || !workId || !station) return { ok: false, reason: 'missing' };
@@ -8987,7 +8995,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   useEffect(() => {
     if (!db || !rotaryConfig?.enabled) return;
     rotarySessionStartRef.current = Date.now();
-    const q = query(collection(db, 'artifacts', APP_DATA_ID, 'public', 'data', ROTARY_EVT_COL), where('type', '==', 'done'));
+    const q = query(DATA(db).colRef(APP_DATA_ID, ROTARY_EVT_COL), where('type', '==', 'done'));
     const unsub = onSnapshot(q, (snap) => {
       snap.docChanges().forEach((c) => {
         if (c.type !== 'added') return;
@@ -15485,8 +15493,8 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
   const exportForPocketBase = async () => {
     // strict_mode_history / help_images は遅延購読のため、移行時は Firestore から直接読み直して取りこぼしを防ぐ。
     let strictHist = strictModeHistory || [], helpImgs = [];
-    try { const sh = await getDocs(collection(db, 'artifacts', APP_DATA_ID, 'public', 'data', 'strict_mode_history')); strictHist = sh.docs.map(d => ({ id: d.id, ...d.data() })); } catch (e) { /* state フォールバック */ }
-    try { const hi = await getDocs(collection(db, 'artifacts', APP_DATA_ID, 'public', 'data', 'help_images')); helpImgs = hi.docs.map(d => ({ id: d.id, ...d.data() })); } catch (e) { /* 空フォールバック */ }
+    try { strictHist = await DATA(db).getAll(APP_DATA_ID, 'strict_mode_history', { map: ROW_DATA_WINS }); } catch (e) { /* state フォールバック */ }
+    try { helpImgs = await DATA(db).getAll(APP_DATA_ID, 'help_images', { map: ROW_DATA_WINS }); } catch (e) { /* 空フォールバック */ }
     const data = {
       forPocketBase: true,
       schemaVersion: 1,
@@ -26465,6 +26473,18 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
        console.warn('Firestore persistence unavailable, falling back', e?.message);
        firestore = getFirestore(app);
      }
+
+     // 🧪 開発時のみ: Firestore/Auth エミュレータへ繋ぐ(製品検査・最終検査と同じ方式)。
+     //   .env.local の VITE_USE_EMULATOR=1 のときだけ有効。本番ビルドでは未設定なので絶対に通らない。
+     //   ⚠これが無いと npm run dev は【本番Firestore】に繋がる。画面の検証はここで行う。
+     if (import.meta.env.DEV && String(import.meta.env.VITE_USE_EMULATOR || '') === '1') {
+       try {
+         connectFirestoreEmulator(firestore, '127.0.0.1', 8080);
+         connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+         console.warn('🧪 エミュレータ接続中 (本番Firestoreには繋がっていません)');
+       } catch (e) { console.warn('エミュレータ接続に失敗', e?.message); }
+     }
+
      setDb(firestore);
  
      const initAuth = async () => {
@@ -26498,8 +26518,11 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
    // --- Data Sync ---
    useEffect(() => {
      if (!user || !db) return;
-     const getPath = (colName) => collection(db, 'artifacts', APP_DATA_ID, 'public', 'data', colName);
- 
+     // 保管庫の窓口(Phase M1)。中身は Firebase のままだが、置き場所の決定はここへ集約した。
+     const P = DATA(db);
+     const getPath = (colName) => P.colRef(APP_DATA_ID, colName);
+     const watch = (colName, cb) => P.watchCollection(APP_DATA_ID, colName, cb);
+
      const unsubs = [
        // active ロットのみ常時リアルタイム購読 (作業中・待機中・処理中)
        // 完了ロットは限定件数のみ。Firestore の課金とロード時間を抑える
@@ -26515,15 +26538,15 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
            const data = snap.docs.map(d => ({ ...d.data(), id: d.id }));
            setWorkers(data);
         }),
-       onSnapshot(getPath('logs'), (snap) => setLogs(snap.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => b.timestamp - a.timestamp))),
-       onSnapshot(getPath('notes'), (snap) => setNotes(snap.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
-       onSnapshot(getPath('announcements'), (snap) => setAnnouncements(snap.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
-       onSnapshot(getPath('indirectWork'), (snap) => setIndirectWork(snap.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (b.startTime || 0) - (a.startTime || 0)))),
-       onSnapshot(getPath('improvements'), (snap) => setImprovementCards(snap.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
-       onSnapshot(getPath('observationPlans'), (snap) => setObservationPlans(snap.docs.map(d => ({ ...d.data(), id: d.id })))),
-       onSnapshot(doc(db, 'artifacts', APP_DATA_ID, 'public', 'data', 'settings', 'config'), (snap) => {
+       watch('logs', (rows) => setLogs(rows.slice().sort((a, b) => b.timestamp - a.timestamp))),
+       watch('notes', (rows) => setNotes(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
+       watch('announcements', (rows) => setAnnouncements(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
+       watch('indirectWork', (rows) => setIndirectWork(rows.slice().sort((a, b) => (b.startTime || 0) - (a.startTime || 0)))),
+       watch('improvements', (rows) => setImprovementCards(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
+       watch('observationPlans', (rows) => setObservationPlans(rows)),
+       P.watchDoc(APP_DATA_ID, 'settings', 'config', (data0, snap) => {
          if (snap.exists()) {
-            const data = snap.data();
+            const data = data0;
             // ▼ Firestore 上の全フィールドを取り込んでから既知フィールドだけデフォルト適用。
             //   こうしないと、ここに明示的に書いてない新規フィールド (qualityStandards,
             //   modelStandardMap, workStandards など) が保存されているのに読み込まれない
@@ -26615,7 +26638,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
        setSyncStatus('syncing');
        setErrorMsg(null);
 
-       await setDoc(doc(db, 'artifacts', APP_DATA_ID, 'public', 'data', col, id), { ...cleanUndefined(data), updatedAt: serverTimestamp() }, { merge: true });
+       await DATA(db).save(APP_DATA_ID, col, id, { ...cleanUndefined(data), updatedAt: serverTimestamp() });
        setSyncStatus('idle');
        lastFailedPayloadRef.current = null;
      } catch (e) {
@@ -26639,7 +26662,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
      try {
        setSyncStatus('syncing');
        // undefined を含むキーが Firestore で例外を投げないよう cleanUndefined を通す
-       await setDoc(doc(db, 'artifacts', APP_DATA_ID, 'public', 'data', 'settings', 'config'), cleanUndefined(newSettings), { merge: true });
+       await DATA(db).save(APP_DATA_ID, 'settings', 'config', cleanUndefined(newSettings));
        setSyncStatus('idle');
        lastFailedPayloadRef.current = null;
      } catch (e) {
@@ -26672,12 +26695,12 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
        for (const raw of arr) {
          if (raw && raw.id) {
            const { id, ...rest } = raw;
-           await setDoc(doc(db, 'artifacts', APP_DATA_ID, 'public', 'data', col, id), { ...cleanUndefined(rest), updatedAt: serverTimestamp() }, { merge: true });
+           await DATA(db).save(APP_DATA_ID, col, id, { ...cleanUndefined(rest), updatedAt: serverTimestamp() });
          }
          done++; if (onProgress) onProgress(done, total);
        }
      }
-     await setDoc(doc(db, 'artifacts', APP_DATA_ID, 'public', 'data', 'settings', 'config'), cleanUndefined(parsed.settings || {}), { merge: true });
+     await DATA(db).save(APP_DATA_ID, 'settings', 'config', cleanUndefined(parsed.settings || {}));
      done++; if (onProgress) onProgress(done, total);
      return { total };
    };
@@ -26694,7 +26717,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
        setSyncStatus('syncing');
        const payload = {};
        list.forEach(p => { payload[p] = deleteField(); });
-       await updateDoc(doc(db, 'artifacts', APP_DATA_ID, 'public', 'data', 'settings', 'config'), payload);
+       await updateDoc(DATA(db).docRef(APP_DATA_ID, 'settings', 'config'), payload);
        setSyncStatus('idle');
      } catch (e) {
        console.error(e);
@@ -26707,7 +26730,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
      if (!user || !db) return;
      try {
        setSyncStatus('syncing');
-       await deleteDoc(doc(db, 'artifacts', APP_DATA_ID, 'public', 'data', col, id));
+       await DATA(db).remove(APP_DATA_ID, col, id);
        setSyncStatus('idle');
        lastFailedPayloadRef.current = null;
      } catch (e) {
@@ -26722,7 +26745,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
    useEffect(() => {
      if (!showHelp || !db) return;
      const unsub = onSnapshot(
-       collection(db, 'artifacts', APP_DATA_ID, 'public', 'data', 'help_images'),
+       DATA(db).colRef(APP_DATA_ID, 'help_images'),
        (snap) => {
          const map = {};
          snap.docs.forEach(d => { if (d.data()?.image) map[d.id] = d.data().image; });
@@ -27930,7 +27953,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
                  if (!naSet.has(sid)) removals[`tasks.${k}`] = deleteField();
                }
              });
-             if (Object.keys(removals).length) await updateDoc(doc(db, 'artifacts', APP_DATA_ID, 'public', 'data', 'lots', existing.id), removals).catch(() => {});
+             if (Object.keys(removals).length) await updateDoc(DATA(db).docRef(APP_DATA_ID, 'lots', existing.id), removals).catch(() => {});
            }
          } else {
            const { row, steps, appliedStandard, naStepIds } = p;
@@ -28095,7 +28118,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
    useEffect(() => {
      if (!strictPanelActive || !db) return;
      const unsub = onSnapshot(
-       collection(db, 'artifacts', APP_DATA_ID, 'public', 'data', 'strict_mode_history'),
+       DATA(db).colRef(APP_DATA_ID, 'strict_mode_history'),
        (snap) => setStrictModeHistory(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
        (e) => console.warn('strict_mode_history subscribe error', e)
      );
@@ -28375,7 +28398,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
                if (!naSet.has(sid)) removals[`tasks.${k}`] = deleteField();
              }
            });
-           if (Object.keys(removals).length) updateDoc(doc(db, 'artifacts', APP_DATA_ID, 'public', 'data', 'lots', l.id), removals).catch(() => {});
+           if (Object.keys(removals).length) updateDoc(DATA(db).docRef(APP_DATA_ID, 'lots', l.id), removals).catch(() => {});
          });
          alert(`✅ 未着手の ${targets.length}件 に最新テンプレを反映しました。`);
        }

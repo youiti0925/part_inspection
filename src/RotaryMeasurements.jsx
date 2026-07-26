@@ -3,7 +3,12 @@
 //   artifacts/product-inspection-v1/public/data/rotaryMeasurements/{機番_日時}
 // へ結果が書き込まれる。ここはそれをリアルタイム購読して表示するだけ（書き込み一切なし）。
 import React, { useEffect, useMemo, useState } from 'react';
-import { collection, onSnapshot, orderBy, query, limit } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, orderBy, query, limit } from 'firebase/firestore';
+import { providerFor } from './data/provider.js';
+
+// 保管庫の窓口(PocketBase移行 Phase M1)。中身は Firebase のまま。
+const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp };
+const DATA = (d) => providerFor(d, FS_API);
 import { Ruler, Search, Loader2, AlertTriangle, CheckCircle2, Thermometer, User, Calendar, FileImage } from 'lucide-react';
 
 const APP_DATA_ID = 'product-inspection-v1';
@@ -32,7 +37,7 @@ export default function RotaryMeasurementsPanel({ db }) {
     if (!db) return;
     setLoading(true);
     const q = query(
-      collection(db, 'artifacts', APP_DATA_ID, 'public', 'data', 'rotaryMeasurements'),
+      DATA(db).colRef(APP_DATA_ID, 'rotaryMeasurements'),
       orderBy('savedAtEpoch', 'desc'),
       limit(100)
     );
