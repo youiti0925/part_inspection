@@ -11,10 +11,12 @@
 import { initializeApp } from 'firebase/app';
 import {
   getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDocs, getDoc,
-  serverTimestamp, deleteField, connectFirestoreEmulator,
+  serverTimestamp, deleteField, updateDoc, runTransaction,
+  query, where, orderBy, limit, connectFirestoreEmulator,
 } from 'firebase/firestore';
 import { getAuth, signInAnonymously, connectAuthEmulator } from 'firebase/auth';
 import { createFirebaseBackend, createProvider, ROW_DOCID_WINS, ROW_DATA_WINS } from '../src/data/provider.js';
+import { DATA_DELETE, DATA_SERVER_NOW } from '../src/data/sentinels.js';
 import { NS, GOAL_NS, CONTACT_NS, dataPath, areaOf, backendFor, PLANNED_PROVIDERS } from '../src/data/routes.js';
 
 const HOST = process.env.FIRESTORE_EMULATOR_HOST;
@@ -28,14 +30,26 @@ const db = getFirestore(app);
 const [h, p] = HOST.split(':');
 connectFirestoreEmulator(db, h, Number(p));
 // ルールが匿名ログインを要求する(2026-07-26 の名前空間許可リスト)。アプリと同じ状態で試す。
+// ⚠認証の場所は決め打ちにしない。別のエミュレータが既に 8080/9099 を使っていることがあり、
+//   その時は別ポートで立てる。FIREBASE_AUTH_EMULATOR_HOST があればそちらを使う。
+const AUTH_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOST || `${h}:9099`;
 const auth = getAuth(app);
-connectAuthEmulator(auth, `http://${h}:9099`, { disableWarnings: true });
+connectAuthEmulator(auth, `http://${AUTH_HOST}`, { disableWarnings: true });
 await signInAnonymously(auth);
 
-const FS = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp };
+const FS = {
+  collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp,
+  deleteField, updateDoc, runTransaction, query, where, orderBy, limit,
+};
 const P = createProvider({ backends: { firebase: createFirebaseBackend(db, FS) } });
 
-const NSX = NS.final;
+// ⚠窓口はもう docRef/colRef を公開していない(逃げ道を残さないため)。
+//   パスの一致だけは「生の参照」を見ないと確かめられないので、**この試験道具だけ**が
+//   保管庫の内部(_docRef)へ手を伸ばす。アプリのコードからは絶対に使わない。
+const rawDocRef = (ns, col, id) => P.backends.firebase._docRef(ns, col, id);
+
+// ⚠このリポジトリは部品検査。自分の名前空間で試す(他アプリの棚に試験データを置かない)。
+const NSX = NS.parts;
 const COL = 'lots';
 const TAG = 'm1-verify';
 let pass = 0, fail = 0;
@@ -56,7 +70,7 @@ console.log('\n=== M1 回帰試験: 窓口を通しても今まで通りか ===\
   let same = true, bad = '';
   for (const [ns, col, id] of cases) {
     const a = oldDoc(ns, col, id).path;
-    const b = P.docRef(ns, col, id).path;
+    const b = rawDocRef(ns, col, id).path;
     if (a !== b) { same = false; bad = `${a} != ${b}`; }
   }
   ok('V1 窓口が組み立てるパスは手書きと1文字も違わない', same, bad);
@@ -118,18 +132,74 @@ console.log('\n=== M1 回帰試験: 窓口を通しても今まで通りか ===\
   ok('V4c 窓口経由の削除も効く', !gone.exists());
 }
 
-// --- V4d 「消したキー」の印が窓口で潰れない ------------------------------------
+// --- V4d 「消したキー」の印が、本物の Firestore でちゃんと削除になる ------------
 {
-  // ⚠2026-07-26に直したばかりの穴: setDoc(merge:true) は「送らなかったキー」を消さない。
-  //   だから削除は deleteField() の番兵をペイロードに入れて渡している。
-  //   窓口がペイロードを作り直すと、この番兵がただのオブジェクトに化けて削除が効かなくなる。
+  // ⚠2026-07-26に直したばかりの穴: 保存(merge:true) は「送らなかったキー」を消さない。
+  //   画面は DATA_DELETE の「ただの印」を置くだけで、Firestore の deleteField() へ
+  //   直すのは窓口の中だけ。印が途中で潰れると削除が黙って効かなくなる。
   const id = `${TAG}-delfield`;
   await P.save(NSX, COL, id, { keep: 1, gone: { a: 1 }, nest: { x: 1, y: 2 } }, { merge: false });
-  await P.save(NSX, COL, id, { gone: deleteField(), nest: { y: deleteField() } });
+  await P.save(NSX, COL, id, { gone: DATA_DELETE, nest: { y: DATA_DELETE } });
   const d = (await getDoc(oldDoc(NSX, COL, id))).data();
-  ok('V4d 窓口を通しても deleteField() の削除が効く',
+  ok('V4d 窓口を通しても「消す印」が本当に削除になる',
     d.keep === 1 && d.gone === undefined && d.nest.x === 1 && d.nest.y === undefined, JSON.stringify(d));
+
+  // ⚠印は「ただのオブジェクト」。生の deleteField() と同じ結果になることを実データで見る。
+  await P.save(NSX, COL, id, { raw: { a: 1, b: 2 } });
+  await updateDoc(oldDoc(NSX, COL, id), { 'raw.b': deleteField() });
+  const d2 = (await getDoc(oldDoc(NSX, COL, id))).data();
+  ok('V4e 生の deleteField() と結果が同じ', d2.raw.a === 1 && d2.raw.b === undefined, JSON.stringify(d2.raw));
   await P.remove(NSX, COL, id);
+}
+
+// --- V4f setFields は「項目を丸ごと差し替える」(入れ子マージをしない) -----------
+{
+  // ⚠保存(merge:true)は入れ子のmapを再帰マージするので「キーを消す」が伝わらない。
+  //   設定の削除・profileSkipped タスクの掃除はここに乗っている。
+  const id = `${TAG}-setfields`;
+  await P.save(NSX, COL, id, { tasks: { keep: { s: 1 }, drop: { s: 2 } }, other: 'x' }, { merge: false });
+  await P.setFields(NSX, COL, id, { 'tasks.drop': DATA_DELETE });
+  const d = (await getDoc(oldDoc(NSX, COL, id))).data();
+  ok('V4f setFields + 消す印で、入れ子のキーだけが消える',
+    d.tasks.keep.s === 1 && d.tasks.drop === undefined && d.other === 'x', JSON.stringify(d));
+  await P.remove(NSX, COL, id);
+}
+
+// --- V4g サーバ時刻の印が、本物の Timestamp になる ------------------------------
+{
+  const id = `${TAG}-servernow`;
+  await P.save(NSX, COL, id, { updatedAt: DATA_SERVER_NOW }, { merge: false });
+  const d = (await getDoc(oldDoc(NSX, COL, id))).data();
+  ok('V4g サーバ時刻の印は Timestamp になる(端末の時計を使っていない)',
+    !!(d.updatedAt && typeof d.updatedAt.toMillis === 'function'), JSON.stringify(d));
+  await P.remove(NSX, COL, id);
+}
+
+// --- V4h 絞り込み(並び順・件数・条件)が手書きの query と同じ結果 ---------------
+{
+  // ⚠部品検査は lots を orderBy+limit、rotaryEvents を where で購読している。
+  //   画面が Firestore の orderBy()/limit()/where() を組み立てると窓口の外へ出るので、
+  //   「ただの配列/数」で渡す形にした。結果が今までと同じかを実データで見る。
+  const ids = ['q1', 'q2', 'q3'].map((s) => `${TAG}-${s}`);
+  await P.save(NSX, COL, ids[0], { tag: TAG, createdAt: 100, type: 'done' }, { merge: false });
+  await P.save(NSX, COL, ids[1], { tag: TAG, createdAt: 300, type: 'done' }, { merge: false });
+  await P.save(NSX, COL, ids[2], { tag: TAG, createdAt: 200, type: 'other' }, { merge: false });
+
+  const viaProvider = await P.getAll(NSX, COL, { orderBy: [['createdAt', 'desc']], limit: 2 });
+  const rawSnap = await getDocs(query(
+    collection(db, 'artifacts', NSX, 'public', 'data', COL), orderBy('createdAt', 'desc'), limit(2)
+  ));
+  const viaRaw = rawSnap.docs.map((d) => ({ ...d.data(), id: d.id }));
+  ok('V4h 並び順+件数は手書きの query と完全一致',
+    JSON.stringify(viaProvider) === JSON.stringify(viaRaw), JSON.stringify(viaProvider));
+
+  const filtered = await new Promise((res) => {
+    const un = P.watchCollection(NSX, COL, (rows) => { un(); res(rows); }, { where: [['type', '==', 'done']] });
+  });
+  const hitIds = filtered.map((r) => r.id).sort();
+  ok('V4i 条件(where)が効いている', hitIds.length === 2 && hitIds.every((x) => x !== ids[2]), JSON.stringify(hitIds));
+
+  for (const id of ids) await P.remove(NSX, COL, id);
 }
 
 // --- V5 領域の振り分けが設計どおり -------------------------------------------
@@ -145,16 +215,20 @@ console.log('\n=== M1 回帰試験: 窓口を通しても今まで通りか ===\
   const future = createProvider({
     backends: { firebase: createFirebaseBackend(db, FS) }, providers: PLANNED_PROVIDERS,
   });
+  // ⚠読み書きは必ず Promise で返る(同期 throw だと .catch() で拾えず失敗が黙って消える)。
   let threw = '';
-  try { future.docRef(NSX, 'lots', 'x'); } catch (e) { threw = e.message; }
+  try { await future.save(NSX, 'lots', `${TAG}-future`, {}); } catch (e) { threw = e.message; }
   ok('V5d 未実装の保管庫は黙って素通りせず落ちる', /用意されていません/.test(threw), threw);
-  ok('V5e 連絡だけは同じ設定でも通る', !!future.docRef(NSX, 'contact_requests', 'x'));
+  let ok5e = false;
+  try { await future.save(NSX, 'contact_requests', `${TAG}-future`, { t: 1 }); ok5e = true; } catch { ok5e = false; }
+  ok('V5e 連絡だけは同じ設定でも通る', ok5e);
+  await P.remove(NSX, 'contact_requests', `${TAG}-future`);
 }
 
 // --- V6 壊れたIDでサーバへ行かせない ------------------------------------------
 {
   let threw = '';
-  try { P.docRef(NSX, COL, 'a/b'); } catch (e) { threw = e.message; }
+  try { await P.save(NSX, COL, 'a/b', {}); } catch (e) { threw = e.message; }
   ok('V6 スラッシュ入りIDは組み立て時に止める(別の場所へ書かせない)', /ドキュメントID/.test(threw), threw);
 }
 

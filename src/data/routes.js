@@ -97,6 +97,76 @@ export const COLLECTION_AREA = Object.freeze({
   weekly_briefs: 'goals',
 });
 
+// ----------------------------------------------------------------------------
+// このリポジトリがどのアプリか。**4リポジトリで値が違う唯一の行。**
+// ----------------------------------------------------------------------------
+export const THIS_APP = 'parts'; // final(最終検査) / product / parts / overview
+
+/** アプリの一覧。 */
+export const APP_KEYS = Object.freeze(['final', 'product', 'parts', 'overview']);
+
+// ----------------------------------------------------------------------------
+// コレクション → それを使っているアプリ(実測 2026-07-26)
+// ----------------------------------------------------------------------------
+// ⚠これは「地図と現物が双方向で一致しているか」を機械で確かめるための一覧。
+//   routes.test.mjs が両方向を見る:
+//     ① 現物 → 地図: このアプリが窓口へ渡した名前が COLLECTION_AREA にあるか
+//     ② 地図 → 現物: ここで「このアプリが使う」と書いた名前が、実際にソースにあるか
+//   ②が無いと、**幽霊のルートが残っても誰も気づかない**。
+//   実際に `rotary_commands` `rotary_events`(正しくは rotaryCommands / rotaryEvents)が
+//   1件も使われないまま地図に載っていた。
+//
+// ⚠コレクション名は変数でも渡る(`watch(colName, cb)`)。静的検査だけでは
+//   網羅を保証できないので、実行時のルート監査(provider の routeAudit)と併用する。
+export const COLLECTION_APPS = Object.freeze({
+  lots: ['final', 'product', 'parts', 'overview'],
+  settings: ['final', 'product', 'parts', 'overview'],
+  workers: ['final', 'product', 'parts', 'overview'],
+  worker_settings: ['final'],
+  templates: ['product', 'parts', 'overview'],
+  target_time_history: ['final', 'overview'],
+  notes: ['final', 'product', 'parts', 'overview'],
+  announcements: ['final', 'product', 'parts', 'overview'],
+  indirectWork: ['final', 'product', 'parts', 'overview'],
+  field_reports: ['final', 'overview'],
+  skip_evidence: ['final'],
+  logs: ['product', 'parts', 'overview'],
+  strict_mode_history: ['product', 'parts', 'overview'],
+  minor_reports: ['product'],
+  controllers: ['product'],
+  motor_ledger: ['product'],
+  order_motors: ['product'],
+  spare_motors: ['product'],
+  accessory_refs: ['final'],
+  accessory_lists: ['final'],
+  rotaryCommands: ['product', 'parts'],
+  rotaryEvents: ['product', 'parts'],
+  rotaryMeasurements: ['product', 'parts'],
+  observationPlans: ['product', 'parts', 'overview'],
+  config: ['final', 'product', 'parts', 'overview'],
+  lot_images: ['final'],
+  help_images: ['final', 'product', 'parts', 'overview'],
+  work_standard_files: ['final', 'product'],
+  accessory_scan_images: ['final'],
+  video_recipes: ['final', 'product'],
+  improvements: ['final', 'product', 'parts', 'overview'],
+  accessory_scan_logs: ['final'],
+  contact_requests: ['final', 'product', 'overview'],
+  arrival_times: ['final', 'product'],
+  push_tokens: ['final', 'product'],
+  weekly_briefs: ['final', 'product'],
+});
+
+/**
+ * まだ実装されていないが名前を予約しているコレクション。
+ * ⚠ここに入れるには **理由が要る**。理由なしで置くと幽霊が復活する。
+ *   形は { name: { reserved: true, reason: '...' } }。
+ */
+export const RESERVED_COLLECTIONS = Object.freeze({});
+
+/** そのコレクションを、このアプリが使うか。 */
+export const usedByApp = (col, app = THIS_APP) => (COLLECTION_APPS[col] || []).includes(app);
+
 /**
  * (名前空間, コレクション) から機能領域を決める。
  * ⚠コレクション名だけでは決まらない。`settings` は3つの名前空間にあり、

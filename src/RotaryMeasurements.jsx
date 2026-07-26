@@ -3,11 +3,12 @@
 //   artifacts/product-inspection-v1/public/data/rotaryMeasurements/{機番_日時}
 // へ結果が書き込まれる。ここはそれをリアルタイム購読して表示するだけ（書き込み一切なし）。
 import React, { useEffect, useMemo, useState } from 'react';
-import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, orderBy, query, limit } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, orderBy, query, limit, where } from 'firebase/firestore';
 import { providerFor } from './data/provider.js';
 
 // 保管庫の窓口(PocketBase移行 Phase M1)。中身は Firebase のまま。
-const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp };
+// ⚠Firestore の関数は「窓口へ渡す」だけ。画面で呼ばない(deleteField()/serverTimestamp() も含む)。
+const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
 const DATA = (d) => providerFor(d, FS_API);
 import { Ruler, Search, Loader2, AlertTriangle, CheckCircle2, Thermometer, User, Calendar, FileImage } from 'lucide-react';
 
@@ -36,22 +37,23 @@ export default function RotaryMeasurementsPanel({ db }) {
   useEffect(() => {
     if (!db) return;
     setLoading(true);
-    const q = query(
-      DATA(db).colRef(APP_DATA_ID, 'rotaryMeasurements'),
-      orderBy('savedAtEpoch', 'desc'),
-      limit(100)
-    );
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        setItems(snap.docs.map((d) => ({ ...d.data(), id: d.id })));
+    // ⚠並び順・件数は「ただの配列/数」で窓口へ渡す。中身は今までと同じ
+    //   orderBy('savedAtEpoch','desc') + limit(100)。行の作り方も既定のまま({...d.data(), id: d.id})。
+    const unsub = DATA(db).watchCollection(
+      APP_DATA_ID, 'rotaryMeasurements',
+      (rows) => {
+        setItems(rows);
         setLoading(false);
         setError(null);
       },
-      (err) => {
-        console.error('rotaryMeasurements subscribe failed', err);
-        setError(err?.message || '読み込みに失敗しました');
-        setLoading(false);
+      {
+        orderBy: [['savedAtEpoch', 'desc']],
+        limit: 100,
+        onError: (err) => {
+          console.error('rotaryMeasurements subscribe failed', err);
+          setError(err?.message || '読み込みに失敗しました');
+          setLoading(false);
+        },
       }
     );
     return () => unsub();

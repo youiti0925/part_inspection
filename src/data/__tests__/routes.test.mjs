@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   AREAS, NS, GOAL_NS, CONTACT_NS, KNOWN_NAMESPACES, COLLECTION_AREA,
   areaOf, isKnownCollection, dataPath, backendFor, DEFAULT_PROVIDERS, PLANNED_PROVIDERS,
+  COLLECTION_APPS, RESERVED_COLLECTIONS, THIS_APP, APP_KEYS, usedByApp,
 } from '../routes.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -15,6 +16,13 @@ const SRC = path.resolve(HERE, '..', '..');
 // ⚠ソースを読むときは NUL バイトを落とす。
 //   生の \0 が2個あるだけで、検索が黙って途中で止まる(2026-07-26 に実際にやられた)。
 const readSrc = (p) => fs.readFileSync(p, 'utf8').replace(/\0/g, '');
+
+// ⚠コメントを消してから探す。消さずに grep すると
+//   「setDoc(merge:true) は…」という**説明文**を違反として数えてしまい、嘘の指摘になる。
+//   行数は変えない(何行目かを報告するため、コメントは空白に置き換える)。
+const stripComments = (src) => src
+  .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+  .replace(/(^|[^:])\/\/[^\n]*/g, (m, p1) => p1 + ' '.repeat(m.length - p1.length));
 
 // ============================================================================
 // R01-R08 地図そのもの
@@ -94,7 +102,23 @@ const walkSrc = (dir, out = []) => {
   }
   return out;
 };
-const APP_FILES = walkSrc(SRC);
+
+// ⚠除外は **理由付きで名指し** する。パターンで広く除外すると、
+//   本当に直すべきファイルが黙って検査対象から外れる。
+// ⚠部品検査には「起動していない旧版」が無い。src/App.jsx が main.jsx から起動している現用ファイル。
+//   → 除外は **空**。1ファイルも検査から外さない。
+const NOT_THE_APP = {};
+const APP_FILES = walkSrc(SRC).filter((f) => !NOT_THE_APP[path.basename(f)]);
+
+test('R20 検査から外したファイルは、本当に起動していない', () => {
+  // 除外したまま「実は使われていた」を防ぐ。main.jsx が import しているなら除外は嘘。
+  const main = readSrc(path.join(SRC, 'main.jsx'));
+  for (const name of Object.keys(NOT_THE_APP)) {
+    const live = new RegExp(`^\\s*import\\s+[^\\n]*['"]\\./${name.replace('.', '\\.')}['"]`, 'm').test(main);
+    assert.equal(live, false, `${name} は実際に起動しています。除外をやめて直してください。`);
+    assert.ok(fs.existsSync(path.join(SRC, name)), `${name} はもう存在しません。NOT_THE_APP から消してください。`);
+  }
+});
 
 test('R09 アプリのソースに Firestore の直パスが残っていない', () => {
   const left = [];
@@ -141,6 +165,77 @@ test('R13 ソースに NUL バイトが混ざっていない', () => {
   ];
   const dirty = files.filter((f) => fs.readFileSync(f, 'latin1').includes(NUL)).map((f) => path.basename(f));
   assert.deepEqual(dirty, []);
+});
+
+test('R14 地図 → 現物: このアプリが使うと書いた名前は、実際にソースにある', () => {
+  // ⚠これが **逆向き** の確認。R10 は「使っている名前が地図にあるか」しか見ないので、
+  //   幽霊のルート(誰も使わないのに地図に載っている)を検出できない。
+  //   実際に `rotary_commands` `rotary_events` が1件も使われないまま載っていた
+  //   (正しくは rotaryCommands / rotaryEvents)。
+  const all = APP_FILES.map((f) => readSrc(f)).join('\n');
+  const ghosts = Object.keys(COLLECTION_AREA)
+    .filter((c) => usedByApp(c, THIS_APP))
+    .filter((c) => !all.includes(`'${c}'`) && !all.includes(`"${c}"`));
+  assert.deepEqual(ghosts, [], `地図では「${THIS_APP} が使う」となっているのに、ソースに出てこない: ${ghosts.join(', ')}`);
+});
+
+test('R15 現物 → 地図: 窓口へ渡した名前は「このアプリが使う」と書いてある', () => {
+  const re = /\b(?:watchCollection|watchDoc|getAll|getOne|save|remove|setFields|claimOnce|appendCapped|routeOf)\s*\(\s*[A-Za-z_$][\w$.]*\s*,\s*'([a-zA-Z0-9_]+)'/g;
+  const found = new Set();
+  for (const f of APP_FILES) for (const m of readSrc(f).matchAll(re)) found.add(m[1]);
+  const missing = [...found].filter((c) => !usedByApp(c, THIS_APP));
+  assert.deepEqual(missing, [], `COLLECTION_APPS に '${THIS_APP}' を足してください: ${missing.join(', ')}`);
+});
+
+test('R16 地図に載っているものは、どれかのアプリが使う(予約は理由付きだけ)', () => {
+  const orphan = Object.keys(COLLECTION_AREA).filter(
+    (c) => (COLLECTION_APPS[c] || []).length === 0 && !RESERVED_COLLECTIONS[c]
+  );
+  assert.deepEqual(orphan, [], `どのアプリも使わないルート: ${orphan.join(', ')}`);
+  // 予約するなら理由が要る(理由なしで置くと幽霊が復活する)
+  for (const [name, r] of Object.entries(RESERVED_COLLECTIONS)) {
+    assert.equal(r.reserved, true, name);
+    assert.ok(typeof r.reason === 'string' && r.reason.length > 0, `${name} に reason がありません`);
+  }
+});
+
+test('R17 COLLECTION_APPS と COLLECTION_AREA は同じ名前を持つ', () => {
+  const a = Object.keys(COLLECTION_AREA).sort();
+  const b = Object.keys(COLLECTION_APPS).sort();
+  assert.deepEqual(b, a, '片方にしか無い名前があります');
+  for (const [c, apps] of Object.entries(COLLECTION_APPS)) {
+    for (const app of apps) assert.ok(APP_KEYS.includes(app), `${c}: 知らないアプリ名 ${app}`);
+  }
+  assert.ok(APP_KEYS.includes(THIS_APP));
+});
+
+test('R18 Firestore 固有の値が画面のコードで作られていない', () => {
+  // ⚠deleteField() / serverTimestamp() を画面が呼ぶと保管庫を差し替えられない。
+  //   さらに Firestore の FieldValue は IndexedDB に入らないので、
+  //   オフライン再送(送信待ちを端末に貯める)が原理的に作れなくなる。
+  //   渡してよいのは「関数そのもの」を窓口へ注入する FS_API の1行だけ。
+  const bad = [];
+  for (const f of APP_FILES) {
+    stripComments(readSrc(f)).split('\n').forEach((line, i) => {
+      if (/\b(?:deleteField|serverTimestamp)\s*\(\s*\)/.test(line)) bad.push(`${path.basename(f)}:${i + 1}`);
+    });
+  }
+  assert.deepEqual(bad, [], `画面で Firestore 固有の値を作っています:\n${bad.join('\n')}`);
+});
+
+test('R19 窓口の外に「生の参照」の逃げ道が無い', () => {
+  // ⚠ここは Firestore を **呼んでいる** 行だけを見る。コメントは先に消す。
+  //   行単位の grep でコメントごと数えると嘘の指摘になる(2026-07-26 に実際にやった)。
+  const bad = [];
+  for (const f of APP_FILES) {
+    stripComments(readSrc(f)).split('\n').forEach((line, i) => {
+      const at = `${path.basename(f)}:${i + 1}`;
+      if (/\.(?:docRef|colRef)\s*\(/.test(line)) bad.push(at);
+      if (/\b(?:runTransaction|updateDoc|setDoc|deleteDoc|getDocs|getDoc|onSnapshot)\s*\(/.test(line)
+        && !/const FS_API/.test(line)) bad.push(at);
+    });
+  }
+  assert.deepEqual(bad, [], `Firestore を直接呼んでいます(窓口を通してください):\n${bad.join('\n')}`);
 });
 
 test('R12 定数で渡しているコレクションも地図に載っている', () => {

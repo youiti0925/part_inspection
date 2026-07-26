@@ -25,7 +25,7 @@ import { initializeApp } from "firebase/app";
 import {
   getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot,
   serverTimestamp, query, orderBy, limit, where, getDocs, getDoc, updateDoc,
-  deleteField,
+  deleteField, runTransaction,
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   connectFirestoreEmulator
 } from "firebase/firestore";
@@ -33,8 +33,15 @@ import {
 // --- 保管庫の窓口(PocketBase移行 Phase M1) ---------------------------------
 // ⚠M1では中身は Firebase のまま。保存されるデータもパスも1バイトも変わらない。
 // ⚠部品検査は本番データ0件だが、Provider対応・接続試験は他アプリと同じに揃える(指示書 未決②の回答)。
+// ⚠⚠ Firestore 固有の値(deleteField()/serverTimestamp())を画面で作らない。
+//   画面は DATA_DELETE / DATA_SERVER_NOW という「ただの印」を置き、
+//   Firestore 固有の値への変換は窓口が保存の直前に1回だけ行う。
+//   理由は2つ。① FieldValue は IndexedDB に保存できないので M2 のオフライン再送が
+//   原理的に作れない ② JSON にすると中身が消えて、送信待ちを人が確認できない。
+//   同じ理由で docRef()/colRef() の逃げ道も使わない(窓口に意図の名前で置く)。
 import { providerFor, ROW_DATA_WINS } from './data/provider.js';
-const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp };
+import { DATA_DELETE, DATA_SERVER_NOW } from './data/sentinels.js';
+const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
 const DATA = (db) => providerFor(db, FS_API);
 import {
   getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject
@@ -807,16 +814,17 @@ const ROTARY_EVT_COL = 'rotaryEvents';
 // 品目コード(model)+このモードで測定条件が決まる(回転/傾斜=どのマスタか, 分割/再現/合体=どの条件群か)。
 const ROTARY_MODES = ['回転分割', '傾斜分割', '回転再現性', '傾斜再現性', '回転分割+再現', '傾斜分割+再現'];
 const rotaryWorkId = (lotId, unitIdx) => `${lotId}_u${unitIdx}`;
-const rotaryCmdDoc = (db, id) => DATA(db).docRef(APP_DATA_ID, ROTARY_CMD_COL, id);
 // 指令を書く (prepare=準備工程の開始 / start_capture=測定工程の開始)。失敗してもタイマー自体は止めない(現場優先)。
 const writeRotaryCommand = async (db, kind, { workId, station, model, machine, mode }) => {
   if (!db || !workId || !station) return { ok: false, reason: 'missing' };
   try {
     const id = kind === 'prepare' ? `${workId}_prepare` : `${workId}_start`;
     const payload = kind === 'prepare'
-      ? { type: 'prepare', station, workId, model: model || '', machine: machine || '', mode: mode || '', status: 'pending', createdAt: serverTimestamp() }
-      : { type: 'start_capture', station, workId, status: 'pending', createdAt: serverTimestamp() };
-    await setDoc(rotaryCmdDoc(db, id), payload);
+      ? { type: 'prepare', station, workId, model: model || '', machine: machine || '', mode: mode || '', status: 'pending', createdAt: DATA_SERVER_NOW }
+      : { type: 'start_capture', station, workId, status: 'pending', createdAt: DATA_SERVER_NOW };
+    // ⚠ merge:false = 全上書き。元は setDoc(ref, payload) の第3引数なし(=全上書き)だった。
+    //   指令は「前回の残りかす」が混ざると分割アプリが誤動作するので、意味を変えない。
+    await DATA(db).save(APP_DATA_ID, ROTARY_CMD_COL, id, payload, { merge: false });
     return { ok: true };
   } catch (e) {
     console.error('writeRotaryCommand failed', kind, e);
@@ -8995,8 +9003,9 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   useEffect(() => {
     if (!db || !rotaryConfig?.enabled) return;
     rotarySessionStartRef.current = Date.now();
-    const q = query(DATA(db).colRef(APP_DATA_ID, ROTARY_EVT_COL), where('type', '==', 'done'));
-    const unsub = onSnapshot(q, (snap) => {
+    // ⚠絞り込みは「ただの配列」で窓口へ渡す(Firestore の where() を画面で作らない)。
+    //   中身は今までと同じ where('type','==','done')。
+    const unsub = DATA(db).watchCollection(APP_DATA_ID, ROTARY_EVT_COL, (_rows, snap) => {
       snap.docChanges().forEach((c) => {
         if (c.type !== 'added') return;
         const e = c.doc.data();
@@ -9013,7 +9022,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
           setOrderHint('🔗 測定完了を受信しましたが、その台が一時停止中のため自動停止できませんでした。再開してから手動で完了してください。');
         }
       });
-    }, (err) => console.error('rotaryEvents subscribe failed', err));
+    }, { where: [['type', '==', 'done']], onError: (err) => console.error('rotaryEvents subscribe failed', err) });
     return () => unsub();
   }, [db, rotaryConfig?.enabled]);
 
@@ -26520,24 +26529,18 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
      if (!user || !db) return;
      // 保管庫の窓口(Phase M1)。中身は Firebase のままだが、置き場所の決定はここへ集約した。
      const P = DATA(db);
-     const getPath = (colName) => P.colRef(APP_DATA_ID, colName);
      const watch = (colName, cb) => P.watchCollection(APP_DATA_ID, colName, cb);
 
      const unsubs = [
        // active ロットのみ常時リアルタイム購読 (作業中・待機中・処理中)
        // 完了ロットは限定件数のみ。Firestore の課金とロード時間を抑える
-       onSnapshot(query(getPath('lots'), orderBy('createdAt', 'desc'), limit(500)), { includeMetadataChanges: true }, (snap) => {
-           const data = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-           setLots(data);
-         }),
-       onSnapshot(getPath('templates'), { includeMetadataChanges: true }, (snap) => {
-           const data = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-           setTemplates(data);
-        }),
-       onSnapshot(getPath('workers'), { includeMetadataChanges: true }, (snap) => {
-           const data = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-           setWorkers(data);
-        }),
+       // ⚠並び順・件数・メタデータ変更は「ただの配列/数/真偽」で窓口へ渡す。
+       //   中身は今までと同じ orderBy('createdAt','desc') + limit(500) + includeMetadataChanges。
+       //   行の作り方も今までと同じ {...d.data(), id: d.id}(窓口の既定 = ROW_DOCID_WINS)。
+       P.watchCollection(APP_DATA_ID, 'lots', (rows) => setLots(rows),
+         { orderBy: [['createdAt', 'desc']], limit: 500, includeMetadataChanges: true }),
+       P.watchCollection(APP_DATA_ID, 'templates', (rows) => setTemplates(rows), { includeMetadataChanges: true }),
+       P.watchCollection(APP_DATA_ID, 'workers', (rows) => setWorkers(rows), { includeMetadataChanges: true }),
        watch('logs', (rows) => setLogs(rows.slice().sort((a, b) => b.timestamp - a.timestamp))),
        watch('notes', (rows) => setNotes(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
        watch('announcements', (rows) => setAnnouncements(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
@@ -26638,7 +26641,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
        setSyncStatus('syncing');
        setErrorMsg(null);
 
-       await DATA(db).save(APP_DATA_ID, col, id, { ...cleanUndefined(data), updatedAt: serverTimestamp() });
+       await DATA(db).save(APP_DATA_ID, col, id, { ...cleanUndefined(data), updatedAt: DATA_SERVER_NOW });
        setSyncStatus('idle');
        lastFailedPayloadRef.current = null;
      } catch (e) {
@@ -26695,7 +26698,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
        for (const raw of arr) {
          if (raw && raw.id) {
            const { id, ...rest } = raw;
-           await DATA(db).save(APP_DATA_ID, col, id, { ...cleanUndefined(rest), updatedAt: serverTimestamp() });
+           await DATA(db).save(APP_DATA_ID, col, id, { ...cleanUndefined(rest), updatedAt: DATA_SERVER_NOW });
          }
          done++; if (onProgress) onProgress(done, total);
        }
@@ -26707,8 +26710,10 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
 
    // 設定内のネストしたサブキーを削除するヘルパー。
    // 例) deleteSettingsField('qualityStandards.qs-xxx') → settings.qualityStandards から qs-xxx を完全削除。
-   // Firestore の `setDoc({ merge: true })` ではマップのサブキーを omit しても削除されない (merge 動作)
-   // ので、削除には `updateDoc` + `deleteField()` を使う必要がある。
+   // ⚠「保存(merge)」ではサブキーを omit しても消えない。消したものが次の同期で復活する。
+   //   → 消すことを DATA_DELETE の印で明示し、窓口の setFields(項目を丸ごと差し替え)で書く。
+   //   ⚠キーの書き方('qualityStandards.qs-xxx' のドット区切り)は今までと1文字も変えない。
+   //     窓口は印を Firestore の deleteField() に直すだけで、キーはそのまま渡す。
    const deleteSettingsFields = async (paths) => {
      if (!user || !db) return;
      const list = Array.isArray(paths) ? paths : [paths];
@@ -26716,8 +26721,8 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
      try {
        setSyncStatus('syncing');
        const payload = {};
-       list.forEach(p => { payload[p] = deleteField(); });
-       await updateDoc(DATA(db).docRef(APP_DATA_ID, 'settings', 'config'), payload);
+       list.forEach(p => { payload[p] = DATA_DELETE; });
+       await DATA(db).setFields(APP_DATA_ID, 'settings', 'config', payload);
        setSyncStatus('idle');
      } catch (e) {
        console.error(e);
@@ -26744,14 +26749,14 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
    // --- ヘルプ用スクショ (help_images コレクション。開いたときだけ購読して全端末で共有) ---
    useEffect(() => {
      if (!showHelp || !db) return;
-     const unsub = onSnapshot(
-       DATA(db).colRef(APP_DATA_ID, 'help_images'),
-       (snap) => {
+     const unsub = DATA(db).watchCollection(
+       APP_DATA_ID, 'help_images',
+       (_rows, snap) => {
          const map = {};
          snap.docs.forEach(d => { if (d.data()?.image) map[d.id] = d.data().image; });
          setHelpImages(map);
        },
-       (e) => console.warn('help_images subscribe error', e)
+       { onError: (e) => console.warn('help_images subscribe error', e) }
      );
      return () => unsub();
    }, [showHelp]);
@@ -27942,7 +27947,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
                }
              : { priority: row.priority, dueDate: row.dueDate, modelText: row.modelText }; // 着手済みは実測に関わる項目を書き換えない(監査確定)
            await saveData('lots', existing.id, updates);
-           // 未着手ロットは、規格変更/台数縮小で不要になった古い profileSkipped タスクを deleteField で掃除(merge:true は sub-key を消さない)。
+           // 未着手ロットは、規格変更/台数縮小で不要になった古い profileSkipped タスクを消す印で掃除(保存(merge)は sub-key を消さない)。
            if (isUntouched) {
              const naSet = new Set(naStepIds || []);
              const removals = {};
@@ -27950,10 +27955,10 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
                const t = existing.tasks[k];
                if (t && t.status === 'skipped' && t.profileSkipped) {
                  const sid = k.includes('-lot-') ? k.split('-lot-')[0] : k.slice(0, k.lastIndexOf('-'));
-                 if (!naSet.has(sid)) removals[`tasks.${k}`] = deleteField();
+                 if (!naSet.has(sid)) removals[`tasks.${k}`] = DATA_DELETE;
                }
              });
-             if (Object.keys(removals).length) await updateDoc(DATA(db).docRef(APP_DATA_ID, 'lots', existing.id), removals).catch(() => {});
+             if (Object.keys(removals).length) await DATA(db).setFields(APP_DATA_ID, 'lots', existing.id, removals).catch(() => {});
            }
          } else {
            const { row, steps, appliedStandard, naStepIds } = p;
@@ -28117,10 +28122,12 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
    // 変更履歴は厳密モード画面を見ているときだけ購読（全端末共有・監査ログ）
    useEffect(() => {
      if (!strictPanelActive || !db) return;
-     const unsub = onSnapshot(
-       DATA(db).colRef(APP_DATA_ID, 'strict_mode_history'),
-       (snap) => setStrictModeHistory(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
-       (e) => console.warn('strict_mode_history subscribe error', e)
+     // ⚠行の作り方は今までと同じ {id: d.id, ...d.data()} = 本文の id が勝つ読み方(ROW_DATA_WINS)。
+     //   既定(ROW_DOCID_WINS)と結果が変わるので、勝手に入れ替えない。
+     const unsub = DATA(db).watchCollection(
+       APP_DATA_ID, 'strict_mode_history',
+       (rows) => setStrictModeHistory(rows),
+       { map: ROW_DATA_WINS, onError: (e) => console.warn('strict_mode_history subscribe error', e) }
      );
      return () => unsub();
    }, [strictPanelActive]);
@@ -28388,17 +28395,17 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
            const naSet = new Set(naStepIds || []);
            // appliedStandard は常に書く(?? null)。規格が外れた時に古い規格スナップショットが残って証明書へ誤印字されるのを防ぐ(正規編集パスと同じ)。
            saveData('lots', l.id, { steps, appliedStandard: appliedStandard ?? null, tasks: buildProfileSkippedTasks(steps, naStepIds, l.quantity || 1) });
-           // 規格変更で「該当なし」でなくなった工程の古い profileSkipped タスクを除去(merge:true は sub-key を消さないため deleteField が必要)。
+           // 規格変更で「該当なし」でなくなった工程の古い profileSkipped タスクを除去(保存(merge)は sub-key を消さないため消す印が要る)。
            //   放置すると検査すべき工程が「該当なし」のまま残り、進捗も完了済みに誤計上される。
            const removals = {};
            Object.keys(l.tasks || {}).forEach(k => {
              const t = (l.tasks || {})[k];
              if (t && t.status === 'skipped' && t.profileSkipped) {
                const sid = k.includes('-lot-') ? k.split('-lot-')[0] : k.slice(0, k.lastIndexOf('-'));
-               if (!naSet.has(sid)) removals[`tasks.${k}`] = deleteField();
+               if (!naSet.has(sid)) removals[`tasks.${k}`] = DATA_DELETE;
              }
            });
-           if (Object.keys(removals).length) updateDoc(DATA(db).docRef(APP_DATA_ID, 'lots', l.id), removals).catch(() => {});
+           if (Object.keys(removals).length) DATA(db).setFields(APP_DATA_ID, 'lots', l.id, removals).catch(() => {});
          });
          alert(`✅ 未着手の ${targets.length}件 に最新テンプレを反映しました。`);
        }
