@@ -49,9 +49,11 @@ export const CLAIM = Object.freeze({
  *            絞り込みを使うアプリはさらに { query, where, orderBy, limit }。
  *
  * ⚠絞り込み(where/orderBy/limit)は **部品検査で先に必要になった** 部分。
- *   最終検査は1件も使っていないので、あちらの provider.js にはまだ無い。
- *   ファイルを4リポジトリで同一に保つため、次に触るときこの版を配ること。
  *   使わないアプリは fs に query 系を渡さなくても今までどおり動く(必要な時だけ要求する)。
+ *
+ * ⚠⚠ このファイルは 2026-07-27 時点で **製品検査/部品検査/司令塔③ の3つが同一**。
+ *   最終検査(golden)だけ絞り込みの部分がまだ入っていない(別作業中だったため触っていない)。
+ *   次に最終検査を触るとき、この版をそのまま配ること。差分は「絞り込み」の一塊だけ。
  */
 export const createFirebaseBackend = (db, fs) => {
   const need = (n) => { if (typeof fs?.[n] !== 'function') throw new Error(`createFirebaseBackend: fs.${n} が渡されていません`); };
@@ -257,19 +259,43 @@ export const createProvider = ({ backends, providers = DEFAULT_PROVIDERS, onUnkn
 // ----------------------------------------------------------------------------
 const _byDb = new WeakMap();
 
-export const providerFor = (db, fs, providers = DEFAULT_PROVIDERS) => {
+/**
+ * PocketBase の保管庫を足すための差し込み口。
+ * ⚠ここで直接 import しない。PocketBase を使わないアプリのビルドに
+ *   余計なコードを載せないため、使う側が registerPocketbaseFactory() で入れる。
+ */
+let _pbFactory = null;
+export const registerPocketbaseFactory = (fn) => { _pbFactory = fn; };
+
+/**
+ * @param pbConfig  { url, email, password } があれば PocketBase の保管庫も作る。
+ *   ⚠管理者(superuser)の資格情報を渡さないこと。端末用の普通のアカウントを使う。
+ * ⚠providers を変えない限り、保管庫は Firebase のまま = 表示も保存先も1バイトも変わらない。
+ */
+export const providerFor = (db, fs, providers = DEFAULT_PROVIDERS, pbConfig = null) => {
   if (!db) return null;
+  const key = pbConfig?.url || '';
   const hit = _byDb.get(db);
-  if (hit && hit.providers === providers) return hit.provider;
+  if (hit && hit.providers === providers && hit.pbUrl === key) return hit.provider;
+
+  const backends = { firebase: createFirebaseBackend(db, fs) };
+  // PocketBase を使う設定になっている時だけ作る。
+  const usesPb = Object.values(providers).includes('pocketbase');
+  if (usesPb) {
+    if (!_pbFactory) throw new Error('PocketBase の保管庫が登録されていません(registerPocketbaseFactory を先に呼んでください)');
+    if (!pbConfig?.url) throw new Error('PocketBase の接続先が設定されていません(設定の pocketbase を確認してください)');
+    backends.pocketbase = _pbFactory(pbConfig);
+  }
+
   const provider = createProvider({
-    backends: { firebase: createFirebaseBackend(db, fs) },
+    backends,
     providers,
     onUnknownCollection: (ns, col) => {
       // 落とさない。ただし気づけるようにする(移行対象の取りこぼし検知)。
       console.warn(`[data] 地図に無いコレクションです: ${ns}/${col} — src/data/routes.js に追記してください`);
     },
   });
-  _byDb.set(db, { providers, provider });
+  _byDb.set(db, { providers, pbUrl: key, provider });
   return provider;
 };
 
