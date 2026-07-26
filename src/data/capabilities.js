@@ -61,17 +61,29 @@ export const FIREBASE_CAPABILITIES = Object.freeze({
 // ⚠この表を手で書き換えないこと。M2 の適合試験(conformance)が実測して
 //   evidence ファイルを吐き、それを読み込んで上書きする。
 // ----------------------------------------------------------------------------
+// 実測: 2026-07-27 / PocketBase v0.39.9 / Windows 11 / Node 24
+// 証拠: C:\AI-Work\pb-claim-spike\evidence-pocketbase.json ほか(リポジトリ外)
+// 測り方: tools/migration/measure-pb.mjs(100回・2台と10台の同時実行)
 export const POCKETBASE_CAPABILITIES = Object.freeze({
   provider: 'pocketbase',
-  realtime: true,          // SSE 購読
-  offlineWrites: false,    // ⚠無い。M2 で送信待ち箱(outbox)を自前で作る
-  atomicWrite: UNVERIFIED, // ← claimOnce の実測で決める
+  measuredAt: '2026-07-27',
+  serverVersion: '0.39.9',
+  realtime: true,          // SSE 購読(create/update/delete がすべて届くのを実測)
+                           // ⚠購読の filter / fields は **受け付けるが効かない**。絞り込みは端末側で行う。
+  offlineWrites: false,    // ⚠無い。src/data/outbox.js で自前の送信待ち箱を作った
+  atomicWrite: true,       // ⚠**作り方による**。UNIQUE インデックスへの create なら 10台×100回で常に勝者1台。
+                           //   サーバ側フックで rev を見比べる方式は 100回中98回で両方通った(使ってはいけない)
   fileStorage: true,
-  serverTimestamp: true,   // created/updated は サーバ側で入る
-  mapKeyDelete: false,     // ⚠JSON 列を丸ごと書き直す。消す場所は自分で計算する必要がある
-  nestedArrays: true,
-  docSizeLimit: UNVERIFIED,
-  atomicPrimitives: frozenAtomic({}),
+  serverTimestamp: true,   // ⚠0.23以降 created/updated は autodate を明示しないと入らない。
+                           //   JSON 列の中の時刻は pb_hooks/serverNow.pb.js が埋める
+  mapKeyDelete: false,     // ⚠JSON 列を丸ごと書き直す。消す場所は端末側で計算する(docMerge.js)
+  nestedArrays: true,      // 配列の中の配列が入る(Firestore は入らない)
+  docSizeLimit: 10_485_760, // 10MB は入った。20MB はこちらの棚割りの maxSize に当たった値であって
+                            // PocketBase の限界ではない。Firestore の 1MB より広いことが分かればよい。
+  atomicPrimitives: frozenAtomic({
+    claimOnce: true, compareAndSet: true, increment: true, multiRecordTransaction: true,
+    // ⚠まとめ書き(batch)API は **既定で無効**。有効化して初めて使える。
+  }),
 });
 
 /** まだ実測していない項目の一覧。報告に必ず載せる。 */
