@@ -1,20 +1,54 @@
 rules_version = '2';
 
-// 製品検査アプリ Firestore セキュリティルール
-// 認証 (匿名認証含む) を必須にし、未認証アクセスを拒否
+// 4アプリ共通 Firestore セキュリティルール (最終更新 2026-07-26)
+//
+// ⚠ここに書けること・書けないことをはっきりさせておく。
+//   このプロジェクトは **匿名認証** で動いている。匿名認証は「誰でもその場でIDが手に入る」仕組みなので、
+//   `request.auth != null` は **人を選別しない**。公開されている web APIキーを持っていれば誰でも通る。
+//   → つまり「部外者に読ませない」は **ルールだけでは実現できない**。
+//     本当に止めるには次のどれかが要る(いずれも清水さんの操作が必要):
+//       ① Firebase App Check を有効にする(本物のアプリからの通信だけ通す。使う人の操作は今のまま)
+//       ② 匿名認証をやめて、作業者ごとのログインにする
+//     ここでは、その手前でできる「事故と無駄書き込みの範囲を狭める」ところまでをやる。
+//
+// ⚠変更したら必ずエミュレータのテストを通してから。本番へ直接入れない。
+//   npx firebase-tools emulators:start --only firestore --project inspection-time-c4fd3
+//   node scripts/verify-rules.mjs
 service cloud.firestore {
   match /databases/{database}/documents {
-    // アプリ専有のパス配下: artifacts/{appId}/public/data/...
-    match /artifacts/{appId}/public/data/{collection}/{docId} {
-      // 認証済み (匿名認証 OK) のユーザーに read/write 許可
-      // ※ 同じ Firebase プロジェクトを最終検査アプリと共有しているため、
-      //   appId で実質的にアプリを分離している
-      allow read, write: if request.auth != null;
+
+    // 実在する名前空間だけを許可する(2026-07-26 に4アプリの実コードから採取)。
+    //   これが無いと、誰でも artifacts/なんでも/... に好きなだけ書き込めてしまう
+    //   (=気付かないうちに課金が伸びる/ゴミが溜まる)。アプリを増やしたらここに足すこと。
+    function knownApp(appId) {
+      return appId in [
+        'product-inspection-v1',   // 製品検査
+        'final-inspection-v1',     // 最終検査
+        'parts-inspection-v1',     // 部品検査
+        'overview-app-v1',         // 司令塔(工場全体)
+        'goal-shared-v1',          // 年間目標 (3アプリ共有)
+        'contact-shared-v1'        // 連絡の宛先グループ (アプリ間共有)
+      ];
     }
 
-    // ネストした sub-collection (将来の measurements/photos 用)
-    match /artifacts/{appId}/public/data/{collection}/{docId}/{sub=**} {
-      allow read, write: if request.auth != null;
+    match /artifacts/{appId}/public/data/{col}/{docId} {
+      allow read: if request.auth != null && knownApp(appId);
+      allow create, update: if request.auth != null && knownApp(appId);
+      // 設定(settings)だけは削除を禁止する。
+      //   どのアプリも設定ドキュメントを消すことは無い(消すのは中の項目だけで、それは update)。
+      //   一方これが消えると、工程テンプレの目標時間・宛先グループ・年間目標が全部飛ぶ。
+      //   「起こり得ないが起きたら致命的」なので、経路そのものを塞いでおく。
+      allow delete: if request.auth != null && knownApp(appId) && col != 'settings';
+    }
+
+    // ネストした sub-collection (現状どのアプリも使っていない。将来のために同じ条件で開けておく)
+    // ⚠rules_version 2 の {sub=**} は **0段でも一致する**。ここを `allow write` のままにすると、
+    //   上の「設定は消せない」がこちらで素通りしてしまう(実際にエミュレータのテストで素通りした)。
+    //   条件は必ず上と揃えること。
+    match /artifacts/{appId}/public/data/{col}/{docId}/{sub=**} {
+      allow read: if request.auth != null && knownApp(appId);
+      allow create, update: if request.auth != null && knownApp(appId);
+      allow delete: if request.auth != null && knownApp(appId) && col != 'settings';
     }
 
     // それ以外のパスは全て拒否
