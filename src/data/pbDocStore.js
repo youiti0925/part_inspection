@@ -32,6 +32,7 @@
 
 import { mergeDoc, overwriteDoc, setFieldsDoc } from './docMerge.js';
 import { claimOnce, PbHttpError, PbNetworkError } from './pbClient.js';
+import { commandHash } from './payloadHash.js';
 
 export const DOCS_COL = 'docs';
 export const CLAIMS_COL = 'claims';
@@ -42,6 +43,31 @@ export const STALE_GATE_MS = 60 * 1000;
 
 /** 書類の場所を1つの文字列にする(門の名前に使う)。 */
 export const docKey = (ns, col, docId) => `${ns}/${col}/${docId}`;
+
+/**
+ * 同じ命令IDなのに中身が違う。**捨てずに止める**ための知らせ。
+ * ⚠ここを「もう効いた」と扱うと、中身の違う保存が黙って消える。
+ */
+export class PbCommandMismatchError extends Error {
+  constructor(key, cmdId, want, got) {
+    super(`同じ命令ID(${cmdId})で中身が違います: ${key}。取り違えを避けるため保存しませんでした(記録済み=${got} / 今回=${want})`);
+    this.name = 'PbCommandMismatchError';
+    this.key = key; this.cmdId = cmdId; this.wantHash = want; this.gotHash = got;
+  }
+}
+
+/**
+ * 「もう効いているか」を **命令IDと中身の指紋の両方** で判定する。
+ * @returns 'applied'(効いている) | 'fresh'(まだ) — 中身違いは投げる
+ */
+export const appliedState = (rec, cmdId, hash, key) => {
+  if (!cmdId || !rec || rec.lastCmd !== cmdId) return 'fresh';
+  // ⚠指紋が記録されていない古い書類は、IDの一致だけで「効いた」とする(移行直後の互換)。
+  if (rec.lastCmdHash && hash && rec.lastCmdHash !== hash) {
+    throw new PbCommandMismatchError(key, cmdId, hash, rec.lastCmdHash);
+  }
+  return 'applied';
+};
 
 /** 衝突の知らせ。⚠通信の失敗と混ぜない。 */
 export class PbConflictError extends Error {
@@ -120,6 +146,12 @@ export const createDocStore = (client, {
     const merge = opts.merge !== false;
     const key = docKey(ns, col, docId);
     const cmdId = opts.cmdId || null;
+    // ⚠⚠「もう効いたか」は **命令ID + 中身の指紋** の両方で見る。
+    //   IDだけだと、IDがかぶった時に中身の違う保存を黙って捨ててしまう。
+    const cmdHash = cmdId ? commandHash({ op: 'save', ns, col, docId, patch, opts }) : null;
+    // 適用済みの記録は **中身と同じ1回の書き込み** に混ぜる(下の update / create を参照)。
+    // 別々に書くと「中身は入ったのに記録が無い」「記録だけある」がいつか起きる。
+    const stamp = cmdId ? { lastCmd: cmdId, lastCmdHash: cmdHash, lastCmdAt: new Date(now()).toISOString() } : {};
     let lastSeenRev = null;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -128,7 +160,8 @@ export const createDocStore = (client, {
       lastSeenRev = rev;
 
       // ⚠この命令は既に効いている(返事が届かなかっただけ)。二度書きしない。
-      if (cmdId && cur && cur.lastCmd === cmdId) {
+      //   中身が違えば「効いた」とせず、捨てずに止める(PbCommandMismatchError)。
+      if (appliedState(cur, cmdId, cmdHash, key) === 'applied') {
         return { rev, rebased: attempt > 0, created: false, alreadyApplied: true };
       }
 
@@ -148,7 +181,7 @@ export const createDocStore = (client, {
       if (!cur) {
         try {
           const body = merge ? mergeDoc(null, patch) : overwriteDoc(patch);
-          await client.create(docsCol, { ns, col, docId, data: body, rev: 1, sourceUpdatedAt: null, lastCmd: cmdId || '' });
+          await client.create(docsCol, { ns, col, docId, data: body, rev: 1, sourceUpdatedAt: null, ...stamp });
           return { rev: 1, rebased: attempt > 0, created: true };
         } catch (e) {
           if (e instanceof PbHttpError && e.isUnique) continue; // 同じ瞬間に別の端末が作った → 読み直す
@@ -165,7 +198,7 @@ export const createDocStore = (client, {
 
       try {
         const body = merge ? mergeDoc(cur.data, patch) : overwriteDoc(patch);
-        await client.update(docsCol, cur.id, { data: body, rev: rev + 1, ...(cmdId ? { lastCmd: cmdId } : {}) });
+        await client.update(docsCol, cur.id, { data: body, rev: rev + 1, ...stamp });
         return { rev: rev + 1, rebased: attempt > 0, created: false };
       } catch (e) {
         // ⚠⚠書けなかったら **門を必ず返す**。返さないとこの書類は二度と保存できない。
@@ -199,10 +232,12 @@ export const createDocStore = (client, {
     setFields: async (ns, col, docId, fields, opts = {}) => {
       const key = docKey(ns, col, docId);
       const cmdId = opts.cmdId || null;
+      const cmdHash = cmdId ? commandHash({ op: 'setFields', ns, col, docId, patch: fields }) : null;
+      const stamp = cmdId ? { lastCmd: cmdId, lastCmdHash: cmdHash, lastCmdAt: new Date(now()).toISOString() } : {};
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const cur = await findRecord(ns, col, docId);
         if (!cur) throw new Error(`対象がありません: ${key}`);
-        if (cmdId && cur.lastCmd === cmdId) return { rev: Number(cur.rev) || 0, alreadyApplied: true };
+        if (appliedState(cur, cmdId, cmdHash, key) === 'applied') return { rev: Number(cur.rev) || 0, alreadyApplied: true };
         const rev = Number(cur.rev) || 0;
         const g = await gate(ns, col, docId, rev);
         if (!g.acquired) {
@@ -210,7 +245,7 @@ export const createDocStore = (client, {
           throw g.error || new Error('権利の取得に失敗しました');
         }
         try {
-          await client.update(docsCol, cur.id, { data: setFieldsDoc(cur.data, fields), rev: rev + 1, ...(cmdId ? { lastCmd: cmdId } : {}) });
+          await client.update(docsCol, cur.id, { data: setFieldsDoc(cur.data, fields), rev: rev + 1, ...stamp });
         } catch (e) { await releaseGate(g.recordId); throw e; }  // ⚠門を返す(項目の差し替えは何度やっても同じ結果)
         return { rev: rev + 1 };
       }
@@ -245,10 +280,12 @@ export const createDocStore = (client, {
      */
     appendCapped: async (ns, col, docId, field, item, { maxBytes = 900 * 1024, fallback = {}, cmdId = null } = {}) => {
       const key = docKey(ns, col, docId);
+      const cmdHash = cmdId ? commandHash({ op: 'appendCapped', ns, col, docId, field, item }) : null;
+      const stamp = cmdId ? { lastCmd: cmdId, lastCmdHash: cmdHash, lastCmdAt: new Date(now()).toISOString() } : {};
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const cur = await findRecord(ns, col, docId);
-        // ⚠追記は「何度やっても同じ」ではない。命令の印で二度足しを止める。
-        if (cmdId && cur && cur.lastCmd === cmdId) {
+        // ⚠追記は「何度やっても同じ」ではない。命令の印と中身の指紋で二度足しを止める。
+        if (appliedState(cur, cmdId, cmdHash, key) === 'applied') {
           return { count: ((cur.data || {})[field] || []).length, dropped: 0, alreadyApplied: true };
         }
         const rev = cur ? (Number(cur.rev) || 0) : 0;
@@ -266,9 +303,9 @@ export const createDocStore = (client, {
         try {
           if (!cur) {
             // ⚠消えていた場合は中身ごと作り直す。field だけ書くと名前なしの幽霊になる。
-            await client.create(docsCol, { ns, col, docId, data: { ...fallback, [field]: arr }, rev: 1, lastCmd: cmdId || '' });
+            await client.create(docsCol, { ns, col, docId, data: { ...fallback, [field]: arr }, rev: 1, ...stamp });
           } else {
-            await client.update(docsCol, cur.id, { data: { ...base, [field]: arr }, rev: rev + 1, ...(cmdId ? { lastCmd: cmdId } : {}) });
+            await client.update(docsCol, cur.id, { data: { ...base, [field]: arr }, rev: rev + 1, ...stamp });
           }
           return { count: arr.length, dropped };
         } catch (e) {

@@ -173,6 +173,48 @@ test('G07 項目の差し替えも、書けなかった後に詰まらない', a
   assert.deepEqual((await store.getOne(NS, 'settings', 'config')).skip, { on: false });
 });
 
+test('G09 ⚠命令IDがかぶっても、中身が違えば「もう効いた」と誤認しない', async () => {
+  const srv = makeServer();
+  const store = createDocStore(srv, { owner: 'tabletA' });
+  await store.save(NS, 'lots', 'L1', { 台数: 5 }, { merge: false });
+  const cmd = 'devA-同じID';
+  await store.save(NS, 'lots', 'L1', { 台数: 6 }, { cmdId: cmd });
+  // 端末を開き直した直後などに、同じIDで **別の中身** が送られてくる場合
+  await assert.rejects(
+    () => store.save(NS, 'lots', 'L1', { 台数: 8 }, { cmdId: cmd }),
+    /同じ命令ID.*中身が違います/,
+    '⚠ここを「効いた」と扱うと、8台への修正が黙って消える'
+  );
+  assert.equal((await store.getOne(NS, 'lots', 'L1')).台数, 6, '前の保存は壊れていない');
+});
+
+test('G10 権利・中身・適用済みの記録が「1回の書き込み」で入る(ばらけない)', async () => {
+  const srv = makeServer();
+  const store = createDocStore(srv, { owner: 'tabletA' });
+  await store.save(NS, 'lots', 'L1', { 台数: 5 }, { merge: false });
+  const before = srv.docs.size;
+  await store.save(NS, 'lots', 'L1', { 台数: 6 }, { cmdId: 'c1' });
+  const rec = [...srv.docs.values()][0];
+  assert.equal(srv.docs.size, before, '書類が増えていない');
+  assert.equal(rec.data.台数, 6);
+  assert.equal(rec.lastCmd, 'c1');
+  assert.ok(rec.lastCmdHash, '中身の指紋も同じ書き込みで入っている');
+  assert.ok(rec.lastCmdAt, 'いつ効いたかも入っている');
+});
+
+test('G11 通信が切れた保存を送り直しても、二度は効かない(追記が2件にならない)', async () => {
+  const srv = makeServer();
+  const store = createDocStore(srv, { owner: 'tabletA' });
+  await store.save(NS, 'settings', 'config', { logs: [] }, { merge: false });
+  const cmd = 'devA-append-1';
+  // 1回目: サーバには入るが、返事が届かない状況を作る
+  await store.appendCapped(NS, 'settings', 'config', 'logs', { v: 1 }, { cmdId: cmd });
+  // 返事が届かなかったと思って、まったく同じ命令をもう一度送る
+  const again = await store.appendCapped(NS, 'settings', 'config', 'logs', { v: 1 }, { cmdId: cmd });
+  assert.equal(again.alreadyApplied, true);
+  assert.equal((await store.getOne(NS, 'settings', 'config')).logs.length, 1);
+});
+
 test('G08 掃除は古い門だけを外す(書いている最中の門を外さない)', async () => {
   let t = 1_700_000_000_000;
   const srv = makeServer({ now: () => t });

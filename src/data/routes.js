@@ -232,6 +232,35 @@ export const PLANNED_PROVIDERS = Object.freeze({
   push: 'firebase',
 });
 
+/**
+ * 設定から「どの保管庫を使うか」を決める。
+ * ⚠⚠ **既定は必ず Firebase。** 設定に `pocketbase.enabled === true` が
+ *   はっきり入っている時だけ切り替える。設定の読み込みに失敗した・接続先が
+ *   書かれていない・値がおかしい —— どの場合も **今までどおり Firebase で動く**。
+ *   「たぶん切り替わっているはず」で本番のデータを別の場所へ書き始めるのが一番危ない。
+ * ⚠連絡と通知は切り替えない(相手の携帯が4G/5Gで開くため。社内LANのPocketBaseには届かない)。
+ * @param cfg  settings.pocketbase = { enabled, url, email, password, areas? }
+ */
+export const providersFromSettings = (cfg) => {
+  if (!cfg || cfg.enabled !== true) return DEFAULT_PROVIDERS;
+  if (!cfg.url || typeof cfg.url !== 'string') return DEFAULT_PROVIDERS;
+  // 領域ごとに個別指定があればそれを尊重する(段階的に移すため)。
+  const want = (cfg.areas && typeof cfg.areas === 'object') ? cfg.areas : PLANNED_PROVIDERS;
+  const out = { ...DEFAULT_PROVIDERS };
+  for (const a of AREAS) {
+    if (a === 'contact' || a === 'push') continue;   // ⚠ここは動かさない
+    if (want[a] === 'pocketbase') out[a] = 'pocketbase';
+  }
+  return Object.freeze(out);
+};
+
+/** 今どこへ書いているかを人が読める形にする(画面に出して確かめるため)。 */
+export const providersSummary = (providers = DEFAULT_PROVIDERS) => AREAS.map((a) => ({
+  area: a,
+  backend: providers[a] || 'firebase',
+  label: { inspection: '検査本体', attachments: '写真・資料', analytics: '分析・改善', goals: '年間目標', contact: '連絡', push: '通知' }[a] || a,
+}));
+
 export const backendFor = (ns, col, providers = DEFAULT_PROVIDERS) => {
   const area = areaOf(ns, col);
   const b = providers[area];

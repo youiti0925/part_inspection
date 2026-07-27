@@ -150,6 +150,58 @@ test('B06 電波が一瞬切れても、保存は消えない(送信待ちに残
   be.close();
 });
 
+test('B08 ⚠⚠サーバには入ったのに返事だけ届かなかった時、送り直しても二度書きしない', async () => {
+  // これが一番たちの悪い切れ方。「失敗した」と思って送り直すと、
+  // 中身が二度効いたり、逆に「もう効いた」と誤認して別の保存を捨てたりする。
+  const srv = makeServer();
+  await srv.create('docs', { ns: NS, col: 'settings', docId: 'config', data: { logs: [] }, rev: 1 });
+  const realUpdate = srv.update;
+  let cutOnce = true;
+  srv.update = async (...a) => {
+    const r = await realUpdate(...a);          // サーバ側は成功する
+    if (cutOnce) { cutOnce = false; throw new PbNetworkError(new Error('ECONNRESET'), '/x'); } // 返事だけ届かない
+    return r;
+  };
+  const be = mk(srv);
+  await be.getAll(NS, 'settings');
+  await be.appendCapped(NS, 'settings', 'config', 'logs', { v: 1 });
+  await sleep(30);
+
+  assert.equal([...srv.docs.values()][0].data.logs.length, 1, 'サーバには入っている');
+  assert.equal((await be.outbox.summary()).total, 1, '端末は「まだ送れていない」と思っている');
+
+  await be.outbox.retry((await be.outbox.list())[0].commandId);
+  await sleep(60);
+
+  assert.equal([...srv.docs.values()][0].data.logs.length, 1, '⚠二度足しされていない');
+  assert.equal((await be.outbox.summary()).total, 0, '送信待ちは片付いた');
+  be.close();
+});
+
+test('B09 ⚠命令IDが同じで中身が違う保存は、捨てずに知らせて止める', async () => {
+  const srv = makeServer();
+  await srv.create('docs', { ns: NS, col: 'lots', docId: 'L1', data: { 台数: 5 }, rev: 1 });
+  const be = mk(srv);
+  await be.getAll(NS, 'lots');
+  const conflicts = [];
+  const be2 = createPocketbaseBackend(srv, {
+    outboxStore: createMemoryStore(), autoRealtime: false,
+    onConflict: ({ error }) => conflicts.push(error.message),
+  });
+  await be2.getAll(NS, 'lots');
+  await be2.save(NS, 'lots', 'L1', { 台数: 6 });
+  await sleep(40);
+  const cmdId = [...srv.docs.values()][0].lastCmd;
+  assert.ok(cmdId, '命令の印が押されている');
+
+  // 同じ命令IDで、中身だけ違うものを直接投げる(IDのかぶりを再現)
+  await assert.rejects(
+    () => be2.docStore.save(NS, 'lots', 'L1', { 台数: 9 }, { cmdId }),
+    /中身が違います/);
+  assert.equal([...srv.docs.values()][0].data.台数, 6, '⚠9台への保存が黙って消えていない(止まっている)');
+  be.close(); be2.close();
+});
+
 test('B07 送り直しても二度は効かない(追記が2件にならない)', async () => {
   const srv = makeServer();
   await srv.create('docs', { ns: NS, col: 'settings', docId: 'config', data: { logs: [] }, rev: 1 });

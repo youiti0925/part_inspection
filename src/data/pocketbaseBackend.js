@@ -16,7 +16,7 @@
 //   ④ 「読んで→書く」は UNIQUE の門で1台だけに渡す(pbDocStore.js)。
 // ============================================================================
 
-import { createDocStore, PbConflictError, DOCS_COL } from './pbDocStore.js';
+import { createDocStore, PbConflictError, PbCommandMismatchError, DOCS_COL } from './pbDocStore.js';
 import { createOutbox, createIdbStore, createMemoryStore, STATUS } from './outbox.js';
 import { mergeDoc, overwriteDoc, setFieldsDoc } from './docMerge.js';
 import { withDeletions } from './sentinels.js';
@@ -187,7 +187,10 @@ export const createPocketbaseBackend = (client, {
         await refreshDoc(cmd.ns, cmd.col, cmd.docId);
         return { ok: true };
       } catch (e) {
-        if (e instanceof PbConflictError) {
+        // ⚠⚠「同じ命令IDで中身が違う」は **人が見るまで捨てない**。
+        //   通信の失敗として送り直すと、いつまでも通らずやがて FAILED になり、
+        //   何が食い違ったのか分からなくなる。衝突と同じ扱いで箱に残す。
+        if (e instanceof PbConflictError || e instanceof PbCommandMismatchError) {
           onConflict && onConflict({ cmd, error: e });
           return { conflict: true, detail: e.message };
         }
