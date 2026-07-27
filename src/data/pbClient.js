@@ -44,8 +44,15 @@ export const createPbClient = ({ url, fetchImpl } = {}) => {
   const base = String(url).replace(/\/+$/, '');
   const doFetch = fetchImpl || ((...a) => fetch(...a));
   let token = null;
+  // ⚠⚠ログインが終わる前に読みに行かせない。
+  //   PocketBase の listRule は **絞り込みとして効く** ので、未ログインの一覧取得は
+  //   403 ではなく **200 + 0件** が返る。つまり「まだログインできていない」が
+  //   「データが1件も無い」と区別できない。実測(2026-07-27): サーバに139件あるのに
+  //   起動直後の画面は0件、エラーも出なかった。→ 全リクエストをログインの後ろに並べる。
+  let ready = null;
 
   const req = async (path, { method = 'GET', body, headers = {}, raw = false, signal } = {}) => {
+    if (ready) { try { await ready; } catch { /* 失敗の中身は isAuthed() と各リクエストで分かる */ } }
     const full = `${base}${path}`;
     const h = { ...headers };
     if (token) h.Authorization = token;
@@ -71,6 +78,13 @@ export const createPbClient = ({ url, fetchImpl } = {}) => {
     get token() { return token; },
     setToken: (t) => { token = t; },
     isAuthed: () => !!token,
+    /**
+     * ログインの約束を登録する。以後、**すべてのリクエストはこれが終わるまで待つ**。
+     * ⚠これを使わずに「ログインを投げっぱなし」にすると、起動直後の読み出しが
+     *   未ログインのまま走り、0件が返って画面が空になる(エラーも出ない)。
+     */
+    setReady: (p) => { ready = p; },
+    whenReady: () => (ready || Promise.resolve()),
 
     health: () => req('/api/health'),
     authSuperuser: async (email, password) => {
@@ -133,6 +147,8 @@ export const createPbClient = ({ url, fetchImpl } = {}) => {
       let closed = false;
       let clientId = null;
       (async () => {
+        // ⚠購読もログインの後ろに並べる。未ログインで開くと何も届かない。
+        if (ready) { try { await ready; } catch { /* 下の再接続で拾う */ } }
         for (let backoff = 500; !closed;) {
           try {
             const res = await doFetch(`${base}/api/realtime`, {

@@ -25,22 +25,33 @@ registerPocketbaseFactory((cfg) => {
   if (hit) return hit;
 
   const client = createPbClient({ url });
+
+  // ⚠⚠ **ログインを先に登録してから保管庫を作る。**
+  //   ログインを投げっぱなしにすると、起動直後の読み出しが未ログインのまま走る。
+  //   PocketBase の listRule は絞り込みとして効くので、そのときの返事は
+  //   403 ではなく **200 + 0件**。つまり「まだ入れていない」と「データが無い」が
+  //   区別できず、**画面が黙って空になる**(実測 2026-07-27: 139件あるのに0件)。
+  //   setReady に渡すと、以後のリクエストは全部この後ろに並ぶ。
+  if (cfg.email && cfg.password) {
+    client.setReady(
+      client.authUser(cfg.email, cfg.password, cfg.authCollection || 'device_users')
+        .catch((e) => {
+          // ⚠握り潰さない。ただしここで投げっぱなしにすると未処理の拒否になるので、
+          //   知らせてから収める。**入れていない事実は isAuthed() が false で残る**ので、
+          //   読み出し側は「0件」ではなく理由付きのエラーになる。
+          console.error('[pb] ログインできませんでした。読み書きはできません。', e?.message || e);
+          if (cfg.onAuthError) cfg.onAuthError(e);
+        })
+    );
+  } else {
+    console.warn('[pb] 端末用アカウントが設定されていません(設定の pocketbase を確認してください)');
+  }
+
   const backend = createPocketbaseBackend(client, {
     owner: cfg.owner || '',
     onPendingChange: cfg.onPendingChange,
     onConflict: cfg.onConflict,
   });
-
-  // ログイン。⚠失敗しても黙って続けない(読み書きが全部落ちる理由が分からなくなる)。
-  if (cfg.email && cfg.password) {
-    client.authUser(cfg.email, cfg.password, cfg.authCollection || 'device_users')
-      .catch((e) => {
-        console.error('[pb] ログインできませんでした。読み書きはできません。', e?.message || e);
-        if (cfg.onAuthError) cfg.onAuthError(e);
-      });
-  } else {
-    console.warn('[pb] 端末用アカウントが設定されていません(設定の pocketbase を確認してください)');
-  }
 
   _byUrl.set(url, backend);
   return backend;

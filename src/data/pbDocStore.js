@@ -14,6 +14,20 @@
 //
 //   → 「rev を R から R+1 へ進める権利」を UNIQUE の門で1台だけに渡す。
 //     門を通った端末だけが書く。通れなかった端末は読み直してやり直す。
+//
+// ⚠⚠ **門を取ったあとに書けなかった時の後始末が要る。**(2026-07-27 の点検で判明)
+//   電波が1回切れただけで次の2つが同時に起きていた:
+//     ・門を取ったまま返さない → 誰もその rev を二度と取れない
+//       = **その書類は以後どの端末からも保存できなくなる**(実測で再現)
+//     ・送信待ちの箱が「この命令はもう受け付け済み」と判断して箱から消す
+//       = **一度も書けていないのに「保存できました」になる**(実測で再現)
+//   直し方は3つ:
+//     ① 書けなかったら門を返す(自分が取った門だけ)
+//     ② 端末ごと落ちて返せなかった門は、**古くなったら誰でも外せる**(既定60秒)
+//     ③ 「効いたかどうか」は門ではなく **書類に押した命令の印(lastCmd)** で判断する
+//        → 返事が届かなかっただけの時に二度書きしない
+//   ⚠①②のために門は claims から **doc_gates** へ分けた。claims(通知の二重送信よけ)は
+//     消せてはいけないので、消せる入れ物を混ぜない。
 // ============================================================================
 
 import { mergeDoc, overwriteDoc, setFieldsDoc } from './docMerge.js';
@@ -21,6 +35,10 @@ import { claimOnce, PbHttpError, PbNetworkError } from './pbClient.js';
 
 export const DOCS_COL = 'docs';
 export const CLAIMS_COL = 'claims';
+/** rev を進める権利の入れ物。⚠claims と分ける(あちらは消せてはいけない)。 */
+export const GATES_COL = 'doc_gates';
+/** これより古い門は「端末が落ちて返せなかったもの」とみなして外す。 */
+export const STALE_GATE_MS = 60 * 1000;
 
 /** 書類の場所を1つの文字列にする(門の名前に使う)。 */
 export const docKey = (ns, col, docId) => `${ns}/${col}/${docId}`;
@@ -34,7 +52,10 @@ export class PbConflictError extends Error {
   }
 }
 
-export const createDocStore = (client, { docsCol = DOCS_COL, claimsCol = CLAIMS_COL, maxAttempts = 12, owner = '' } = {}) => {
+export const createDocStore = (client, {
+  docsCol = DOCS_COL, claimsCol = CLAIMS_COL, gatesCol = GATES_COL,
+  maxAttempts = 12, owner = '', staleGateMs = STALE_GATE_MS, now = () => Date.now(),
+} = {}) => {
   const esc = (v) => String(v).replace(/"/g, '\\"');
   const filterOf = (ns, col, docId) =>
     `ns="${esc(ns)}" && col="${esc(col)}"` + (docId === undefined ? '' : ` && docId="${esc(docId)}"`);
@@ -44,12 +65,46 @@ export const createDocStore = (client, { docsCol = DOCS_COL, claimsCol = CLAIMS_
     return r.items?.[0] || null;
   };
 
+  const gateScope = (ns, col, docId) => `doc:${docKey(ns, col, docId)}`;
+
   /**
    * 「rev を R → R+1 へ進める権利」を1台だけに渡す門。
-   * @returns {acquired, reason} reason は 'ok' | 'taken' | 'error'
+   * @returns {acquired, reason, recordId} reason は 'ok' | 'taken' | 'error'
    */
   const gate = (ns, col, docId, rev) =>
-    claimOnce(client, `doc:${docKey(ns, col, docId)}`, `rev:${rev}`, { owner, collection: claimsCol });
+    claimOnce(client, gateScope(ns, col, docId), `rev:${rev}`, { owner, collection: gatesCol });
+
+  /**
+   * 取った門を返す。⚠**自分が取った1件だけ**を消す(recordId を指定して消す)。
+   * 返せなくても致命ではない(古くなれば下の releaseStaleGate が外す)ので、
+   * ここで例外を投げて保存の失敗理由を上書きしない。
+   */
+  const releaseGate = async (recordId) => {
+    if (!recordId) return false;
+    try { await client.remove(gatesCol, recordId); return true; }
+    catch (e) { console.warn('[pb] 門を返せませんでした(古くなれば自動で外れます)', e?.message || e); return false; }
+  };
+
+  /**
+   * 端末ごと落ちて返せなかった門を外す。
+   * ⚠**新しい門は絶対に外さない。** 書く直前に取った門を外すと、同じ rev をもう一度
+   *   取れてしまい、相手の書き込みを消せるようになる。だから古いものだけ。
+   * @returns 外したら true(呼び出し側はもう一度やり直す)
+   */
+  const releaseStaleGate = async (ns, col, docId, rev) => {
+    try {
+      const r = await client.listPage(gatesCol, {
+        perPage: 1, filter: `scope="${esc(gateScope(ns, col, docId))}" && claimId="rev:${rev}"`,
+      });
+      const g = r.items?.[0];
+      if (!g) return false;                       // もう外れている → やり直せば通る
+      const age = now() - Date.parse(String(g.created || '').replace(' ', 'T') + (String(g.created || '').endsWith('Z') ? '' : 'Z'));
+      if (!Number.isFinite(age) || age < staleGateMs) return false;
+      await client.remove(gatesCol, g.id);
+      console.warn(`[pb] 返されないまま古くなった門を外しました(${gateScope(ns, col, docId)} rev:${rev} / ${Math.round(age / 1000)}秒前)`);
+      return true;
+    } catch { return false; }                     // 消せなくても保存の失敗理由を上書きしない
+  };
 
   /**
    * 中身を書く。Firestore の setDoc と同じ意味になるようにする。
@@ -57,17 +112,25 @@ export const createDocStore = (client, { docsCol = DOCS_COL, claimsCol = CLAIMS_
    * @param opts.baseRev   これを渡すと「その rev から進める時だけ書く」。
    *                       違っていれば PbConflictError。オフラインから復帰した
    *                       全上書きの保存で、相手の変更を黙って消さないために使う。
-   * @returns {rev, rebased, created}
+   * @param opts.cmdId     送信待ちの箱の命令ID。書類に印として一緒に押す。
+   *                       返事が届かずにもう一度送っても、二度は効かない。
+   * @returns {rev, rebased, created, alreadyApplied}
    */
   const write = async (ns, col, docId, patch, opts = {}) => {
     const merge = opts.merge !== false;
     const key = docKey(ns, col, docId);
+    const cmdId = opts.cmdId || null;
     let lastSeenRev = null;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const cur = await findRecord(ns, col, docId);
       const rev = cur ? (Number(cur.rev) || 0) : 0;
       lastSeenRev = rev;
+
+      // ⚠この命令は既に効いている(返事が届かなかっただけ)。二度書きしない。
+      if (cmdId && cur && cur.lastCmd === cmdId) {
+        return { rev, rebased: attempt > 0, created: false, alreadyApplied: true };
+      }
 
       // ⚠全上書きで、見ていた版が変わっていたら **書かずに知らせる**。
       //   ここを黙って上書きすると、オフライン復帰のたびに相手の作業が消える。
@@ -85,7 +148,7 @@ export const createDocStore = (client, { docsCol = DOCS_COL, claimsCol = CLAIMS_
       if (!cur) {
         try {
           const body = merge ? mergeDoc(null, patch) : overwriteDoc(patch);
-          await client.create(docsCol, { ns, col, docId, data: body, rev: 1, sourceUpdatedAt: null });
+          await client.create(docsCol, { ns, col, docId, data: body, rev: 1, sourceUpdatedAt: null, lastCmd: cmdId || '' });
           return { rev: 1, rebased: attempt > 0, created: true };
         } catch (e) {
           if (e instanceof PbHttpError && e.isUnique) continue; // 同じ瞬間に別の端末が作った → 読み直す
@@ -95,15 +158,20 @@ export const createDocStore = (client, { docsCol = DOCS_COL, claimsCol = CLAIMS_
 
       const g = await gate(ns, col, docId, rev);
       if (!g.acquired) {
-        if (g.reason === 'taken') continue;            // 他の端末が先に進めた → 読み直す
+        // 他の端末が先に進めた → 読み直す。ただし「取ったまま返さずに落ちた門」なら外す。
+        if (g.reason === 'taken') { await releaseStaleGate(ns, col, docId, rev); continue; }
         throw g.error || new Error('権利の取得に失敗しました');  // ⚠通信/認証の失敗は握り潰さない
       }
 
       try {
         const body = merge ? mergeDoc(cur.data, patch) : overwriteDoc(patch);
-        await client.update(docsCol, cur.id, { data: body, rev: rev + 1 });
+        await client.update(docsCol, cur.id, { data: body, rev: rev + 1, ...(cmdId ? { lastCmd: cmdId } : {}) });
         return { rev: rev + 1, rebased: attempt > 0, created: false };
       } catch (e) {
+        // ⚠⚠書けなかったら **門を必ず返す**。返さないとこの書類は二度と保存できない。
+        //   重ねる保存・全上書きは何度やっても同じ結果なので、返して安全。
+        //   (返した後に「実は届いていた」場合は lastCmd の印で二度書きを防ぐ)
+        await releaseGate(g.recordId);
         if (e instanceof PbHttpError && e.isUnique) continue;
         throw e;
       }
@@ -128,15 +196,22 @@ export const createDocStore = (client, { docsCol = DOCS_COL, claimsCol = CLAIMS_
     save: write,
 
     /** 指定した項目だけを丸ごと差し替える(Firestore の updateDoc と同じ)。 */
-    setFields: async (ns, col, docId, fields) => {
+    setFields: async (ns, col, docId, fields, opts = {}) => {
       const key = docKey(ns, col, docId);
+      const cmdId = opts.cmdId || null;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const cur = await findRecord(ns, col, docId);
         if (!cur) throw new Error(`対象がありません: ${key}`);
+        if (cmdId && cur.lastCmd === cmdId) return { rev: Number(cur.rev) || 0, alreadyApplied: true };
         const rev = Number(cur.rev) || 0;
         const g = await gate(ns, col, docId, rev);
-        if (!g.acquired) { if (g.reason === 'taken') continue; throw g.error || new Error('権利の取得に失敗しました'); }
-        await client.update(docsCol, cur.id, { data: setFieldsDoc(cur.data, fields), rev: rev + 1 });
+        if (!g.acquired) {
+          if (g.reason === 'taken') { await releaseStaleGate(ns, col, docId, rev); continue; }
+          throw g.error || new Error('権利の取得に失敗しました');
+        }
+        try {
+          await client.update(docsCol, cur.id, { data: setFieldsDoc(cur.data, fields), rev: rev + 1, ...(cmdId ? { lastCmd: cmdId } : {}) });
+        } catch (e) { await releaseGate(g.recordId); throw e; }  // ⚠門を返す(項目の差し替えは何度やっても同じ結果)
         return { rev: rev + 1 };
       }
       throw new Error(`項目の差し替えが${maxAttempts}回やり直しても通りませんでした(${key})`);
@@ -147,17 +222,15 @@ export const createDocStore = (client, { docsCol = DOCS_COL, claimsCol = CLAIMS_
       // ⚠書類を消したら、その書類の権利の記録も一緒に片付ける。
       //   残しておくと、同じIDで作り直したときに古い権利が邪魔をする。
       //   (書類が無ければ権利だけ残っている可能性があるので、いずれにせよ片付ける)
-      // ⚠端末用アカウントは権利の記録を消せない(ルールでそうしてある。消せると
-      //   二重送信を止められなくなる)。403 は想定内なので騒がない。
       //   ここで消せなくても困らない: **新規作成に門は付いていない**ので、
-      //   同じIDで作り直すのは通る。溜まった記録は管理者の pruneClaims が片付ける。
-      const scope = `doc:${docKey(ns, col, docId)}`;
+      //   同じIDで作り直すのは通る。
+      const scope = gateScope(ns, col, docId);
       try {
-        const rows = await client.listAll(claimsCol, { filter: `scope="${esc(scope)}"`, fields: 'id' });
-        for (const r of rows) await client.remove(claimsCol, r.id);
+        const rows = await client.listAll(gatesCol, { filter: `scope="${esc(scope)}"`, fields: 'id' });
+        for (const r of rows) await client.remove(gatesCol, r.id);
       } catch (e) {
         if (!(e instanceof PbHttpError && (e.status === 403 || e.status === 401))) {
-          console.warn('[pb] 権利の記録を片付けられませんでした', e?.message || e);
+          console.warn('[pb] 門の記録を片付けられませんでした', e?.message || e);
         }
       }
       if (!cur) return { removed: false };
@@ -170,13 +243,20 @@ export const createDocStore = (client, { docsCol = DOCS_COL, claimsCol = CLAIMS_
      * ⚠「読んで→足して→丸ごと書き戻す」を守らないと、2台が同時に足したとき
      *   後から書いた側が相手の1件を消す。門を通ってから書く。
      */
-    appendCapped: async (ns, col, docId, field, item, { maxBytes = 900 * 1024, fallback = {} } = {}) => {
+    appendCapped: async (ns, col, docId, field, item, { maxBytes = 900 * 1024, fallback = {}, cmdId = null } = {}) => {
       const key = docKey(ns, col, docId);
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const cur = await findRecord(ns, col, docId);
+        // ⚠追記は「何度やっても同じ」ではない。命令の印で二度足しを止める。
+        if (cmdId && cur && cur.lastCmd === cmdId) {
+          return { count: ((cur.data || {})[field] || []).length, dropped: 0, alreadyApplied: true };
+        }
         const rev = cur ? (Number(cur.rev) || 0) : 0;
         const g = await gate(ns, col, docId, rev);
-        if (!g.acquired) { if (g.reason === 'taken') continue; throw g.error || new Error('権利の取得に失敗しました'); }
+        if (!g.acquired) {
+          if (g.reason === 'taken') { await releaseStaleGate(ns, col, docId, rev); continue; }
+          throw g.error || new Error('権利の取得に失敗しました');
+        }
 
         const base = cur ? (cur.data || {}) : fallback;
         let arr = [...((base && base[field]) || []), item];
@@ -186,12 +266,16 @@ export const createDocStore = (client, { docsCol = DOCS_COL, claimsCol = CLAIMS_
         try {
           if (!cur) {
             // ⚠消えていた場合は中身ごと作り直す。field だけ書くと名前なしの幽霊になる。
-            await client.create(docsCol, { ns, col, docId, data: { ...fallback, [field]: arr }, rev: 1 });
+            await client.create(docsCol, { ns, col, docId, data: { ...fallback, [field]: arr }, rev: 1, lastCmd: cmdId || '' });
           } else {
-            await client.update(docsCol, cur.id, { data: { ...base, [field]: arr }, rev: rev + 1 });
+            await client.update(docsCol, cur.id, { data: { ...base, [field]: arr }, rev: rev + 1, ...(cmdId ? { lastCmd: cmdId } : {}) });
           }
           return { count: arr.length, dropped };
         } catch (e) {
+          // ⚠追記は二度やると1件増える。**命令の印がある時だけ門を返す**
+          //   (印があれば、届いていた場合に上の判定で止まる)。
+          //   印が無い呼び方では返さない = 古くなってから自動で外れるのを待つ。
+          if (cmdId) await releaseGate(g.recordId);
           if (e instanceof PbHttpError && e.isUnique) continue;
           throw e;
         }
@@ -217,7 +301,14 @@ export const createDocStore = (client, { docsCol = DOCS_COL, claimsCol = CLAIMS_
         const rev = Number(cur.rev) || 0;
         const g = await gate(ns, col, docId, rev);
         if (!g.acquired) return { acquired: false, reason: g.reason === 'taken' ? 'taken' : 'error', error: g.error };
-        await client.update(docsCol, cur.id, { data: mergeDoc(data, patch), rev: rev + 1 });
+        try {
+          await client.update(docsCol, cur.id, { data: mergeDoc(data, patch), rev: rev + 1 });
+        } catch (e) {
+          // ⚠門を返す。返さないとこの書類は以後どの端末からも保存できなくなる。
+          //   もう一度呼ばれても expect の照合が先に走るので、二重には効かない。
+          await releaseGate(g.recordId);
+          throw e;
+        }
         return { acquired: true, reason: 'ok' };
       } catch (e) {
         if (e instanceof PbNetworkError || e instanceof PbHttpError) return { acquired: false, reason: 'error', error: e };
@@ -231,12 +322,29 @@ export const createDocStore = (client, { docsCol = DOCS_COL, claimsCol = CLAIMS_
      *   同じ rev をもう一度取れてしまい、相手の書き込みを消せるようになる。
      *   だから **古いものだけ** を消す(既定 1日以上前)。
      */
-    pruneClaims: async ({ olderThanMs = 24 * 60 * 60 * 1000, limit = 5000 } = {}) => {
-      const cutoff = new Date(Date.now() - olderThanMs).toISOString().replace('T', ' ');
-      const rows = await client.listAll(claimsCol, { filter: `created < "${cutoff}"`, fields: 'id', sort: 'created' });
+    pruneClaims: async ({ olderThanMs = 24 * 60 * 60 * 1000, limit = 5000, collection = claimsCol } = {}) => {
+      const cutoff = new Date(now() - olderThanMs).toISOString().replace('T', ' ');
+      const rows = await client.listAll(collection, { filter: `created < "${cutoff}"`, fields: 'id', sort: 'created' });
       let n = 0;
-      for (const r of rows.slice(0, limit)) { await client.remove(claimsCol, r.id); n++; }
+      for (const r of rows.slice(0, limit)) { await client.remove(collection, r.id); n++; }
       return { removed: n };
     },
+
+    /**
+     * 使い終わった門を片付ける。
+     * ⚠これは「詰まりの解除」ではない(詰まりは書けなかった時に自分で返す + 60秒で自動解除)。
+     *   ここは **溜まった記録が増え続けないようにする掃除**。保存1回につき1件増えるので、
+     *   放っておくと年単位で数百万件になる。画面の起動時に一度呼ぶ想定。
+     */
+    pruneGates: async ({ olderThanMs = 60 * 60 * 1000, limit = 5000 } = {}) => {
+      const cutoff = new Date(now() - olderThanMs).toISOString().replace('T', ' ');
+      const rows = await client.listAll(gatesCol, { filter: `created < "${cutoff}"`, fields: 'id', sort: 'created' });
+      let n = 0;
+      for (const r of rows.slice(0, limit)) { await client.remove(gatesCol, r.id); n++; }
+      return { removed: n };
+    },
+
+    /** 試験・点検用(門を直接見る)。 */
+    _gates: { scopeOf: gateScope, release: releaseGate, releaseStale: releaseStaleGate, collection: gatesCol },
   };
 };

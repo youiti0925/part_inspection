@@ -41,13 +41,18 @@ export const createPocketbaseBackend = (client, {
   //   こうしないと、電波が切れている間に保存したものが画面から消える。
   //   ⚠pending を cache に直接書くと、サーバから読み直した時に消えてしまう。
   const cache = new Map();     // "ns/col" -> Map(docId -> data)
+  // ⚠⚠「読めた」を cache の有無で判断してはいけない。
+  //   読めなかった時も、画面を空にしないために cache へ空の Map を入れる。
+  //   そこで「読めた」の印を別に持たないと、**一度失敗しただけで二度と読み直さなくなる**。
+  //   実測(2026-07-27): サーバに139件あるのに、起動直後も以後もずっと0件だった。
+  const loaded = new Set();    // "ns/col"(サーバから正しく読めたもの)
   // ⚠版番号を手元でも覚える。電波が切れている間はサーバに聞けないので、
   //   これが無いと「オフラインで全部書き換える保存」がぶつかりを見逃して
   //   復帰時に相手の変更を丸ごと消す(実測で踏んだ)。
   const revs = new Map();      // "ns/col" -> Map(docId -> rev)
   const pending = new Map();   // "ns/col" -> Map(docId -> data | REMOVED)
   const REMOVED = Symbol('removed');
-  const listeners = new Map(); // "ns/col" -> Set(cb)
+  const listeners = new Map(); // "ns/col" -> Map(cb -> opts)  ⚠受け手ごとに読み方(map)が違う
   const loading = new Map();   // "ns/col" -> Promise
   const loadError = new Map(); // "ns/col" -> Error(読めなかった理由)
   const docListeners = new Map(); // "ns/col/docId" -> Set(cb)
@@ -60,13 +65,33 @@ export const createPocketbaseBackend = (client, {
     return out;
   };
 
-  const rowsOf = (k) => [...viewOf(k).entries()]
-    .map(([docId, data]) => ({ ...(data || {}), id: docId }))
+  // ⚠1件を行に直す方法は2通りある(ドキュメントID優先 / 本文のid優先)。
+  //   Firebase 版は呼び出し側から map で受け取っている。**同じものを受け取れないと、
+  //   同じ画面コードが保管庫によって違う行を作る**。Firestore の QueryDocumentSnapshot と
+  //   同じ形(= id と data())の見せかけを渡して、既存の map をそのまま使えるようにする。
+  const shim = (docId, data) => ({ id: docId, data: () => (data || {}) });
+  const DEFAULT_MAP = (d) => ({ ...d.data(), id: d.id });   // ROW_DOCID_WINS と同じ
+  const rowsOf = (k, map) => [...viewOf(k).entries()]
+    .map(([docId, data]) => (map || DEFAULT_MAP)(shim(docId, data)))
     .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+
+  // ⚠絞り込みは PocketBase 版にまだ無い。**黙って全件返すと嘘の一覧になる**ので、
+  //   その場で名指しで落とす(Firebase 版は対応しているので、片方だけ違う状態を隠さない)。
+  const rejectUnsupported = (ns, col, opts = {}) => {
+    const bad = ['where', 'orderBy', 'limit'].filter((n) => opts[n] !== undefined);
+    if (bad.length) {
+      throw new Error(`PocketBase 版は絞り込み(${bad.join('/')})にまだ対応していません (${ns}/${col})。` +
+        '端末側で絞るか、pocketbaseBackend.js に実装してください。**黙って全件返すことはしません。**');
+    }
+  };
 
   const emit = (k) => {
     const set = listeners.get(k);
-    if (set && set.size) { const rows = rowsOf(k); set.forEach((cb) => { try { cb(rows); } catch (e) { console.error('[pb] 購読の受け手で例外', e); } }); }
+    if (set && set.size) {
+      set.forEach((opts, cb) => {
+        try { cb(rowsOf(k, opts?.map)); } catch (e) { console.error('[pb] 購読の受け手で例外', e); }
+      });
+    }
     const m = viewOf(k);
     for (const [dk, dset] of docListeners) {
       if (!dk.startsWith(`${k}/`)) continue;
@@ -84,18 +109,29 @@ export const createPocketbaseBackend = (client, {
    */
   const ensureLoaded = (ns, col) => {
     const k = keyOf(ns, col);
-    if (cache.has(k)) return Promise.resolve();
+    if (loaded.has(k)) return Promise.resolve();   // ⚠cache ではなく「読めた印」で判断する
     if (loading.has(k)) return loading.get(k);
     const p = (async () => {
       try {
+        // ⚠⚠ログインできていない時に読みに行かせない。
+        //   PocketBase の listRule は **絞り込みとして効く** ので、未ログインの一覧取得は
+        //   403 ではなく **200 + 0件** が返る。そのまま信じると「全部消えた」画面になる。
+        // ⚠この確認は **ログインの結果が出てから** 行う。先に見ると、ログイン中というだけで
+        //   「入れていない」と判定してしまう(本物のサーバで実際に落ちた)。
+        if (typeof client.whenReady === 'function') { try { await client.whenReady(); } catch { /* 下の確認で出る */ } }
+        if (typeof client.isAuthed === 'function' && !client.isAuthed()) {
+          throw new Error('まだログインできていません(この0件はデータが無い意味ではありません)');
+        }
         const recs = await client.listAll(docsCol, { filter: `ns="${String(ns).replace(/"/g, '\\"')}" && col="${String(col).replace(/"/g, '\\"')}"`, sort: 'docId' });
         const m = new Map(); const rv = new Map();
         recs.forEach((r) => { m.set(r.docId, r.data || {}); rv.set(r.docId, Number(r.rev) || 0); });
         cache.set(k, m); revs.set(k, rv);
+        loaded.add(k);
         loadError.delete(k);
       } catch (e) {
         loadError.set(k, e);
         if (!cache.has(k)) cache.set(k, new Map()); // 空でも「見えている」状態にする(見込み値は残る)
+        // ⚠loaded には入れない。次に呼ばれたらもう一度読みに行く。
         throw e;
       } finally { emit(k); }
     })().finally(() => loading.delete(k));
@@ -114,7 +150,7 @@ export const createPocketbaseBackend = (client, {
       onEvent: ({ action, record }) => {
         if (!record || !record.ns || !record.col) return;
         const k = keyOf(record.ns, record.col);
-        if (!cache.has(k)) return; // 見ていないコレクションは無視(端末側で絞る)
+        if (!loaded.has(k)) return; // まだ読めていないコレクションは無視(読み直しの時に揃う)
         const m = cache.get(k);
         if (!revs.has(k)) revs.set(k, new Map());
         const rv = revs.get(k);
@@ -135,19 +171,18 @@ export const createPocketbaseBackend = (client, {
     isOnline: () => (typeof navigator === 'undefined' ? true : navigator.onLine !== false),
     onChange: (s) => { onPendingChange && onPendingChange(s); },
     apply: async (cmd) => {
-      // ② 1回だけ効かせる: この命令そのものに権利を取る。
-      //    返事が届かずにもう一度送っても、二重には効かない。
-      const { claimOnce } = await import('./pbClient.js');
-      const g = await claimOnce(client, 'cmd', cmd.commandId, { owner, collection: 'claims' });
-      if (!g.acquired) {
-        if (g.reason === 'taken') return { ok: true }; // 既に効いている = 成功と同じ
-        throw g.error || new Error('命令の権利を取れませんでした');
-      }
+      // ② 1回だけ効かせる。
+      // ⚠⚠ここで「命令の権利」を **書く前に** 取って、再送で「取れなかった=成功」と
+      //   みなしてはいけない。書く前に取るので、**書けずに終わった命令まで成功扱いになり、
+      //   箱から消える**(実測 2026-07-27: 電波が1回切れただけで保存が黙って消えた)。
+      //   → 「効いたかどうか」は書類そのものに押した印(lastCmd)で判断する。
+      //     印は中身と同じ1回の書き込みで押すので、ずれようがない。
+      const id = cmd.commandId;
       try {
-        if (cmd.op === 'remove') await store.remove(cmd.ns, cmd.col, cmd.docId);
-        else if (cmd.op === 'setFields') await store.setFields(cmd.ns, cmd.col, cmd.docId, cmd.patch);
-        else if (cmd.op === 'appendCapped') await store.appendCapped(cmd.ns, cmd.col, cmd.docId, cmd.field, cmd.item, cmd.opts || {});
-        else await store.save(cmd.ns, cmd.col, cmd.docId, cmd.patch, cmd.opts || {});
+        if (cmd.op === 'remove') await store.remove(cmd.ns, cmd.col, cmd.docId);  // 削除は何度やっても同じ
+        else if (cmd.op === 'setFields') await store.setFields(cmd.ns, cmd.col, cmd.docId, cmd.patch, { cmdId: id });
+        else if (cmd.op === 'appendCapped') await store.appendCapped(cmd.ns, cmd.col, cmd.docId, cmd.field, cmd.item, { ...(cmd.opts || {}), cmdId: id });
+        else await store.save(cmd.ns, cmd.col, cmd.docId, cmd.patch, { ...(cmd.opts || {}), cmdId: id });
         // 送れたら「見込みの値」を下ろす。以後はサーバの中身が正。
         await refreshDoc(cmd.ns, cmd.col, cmd.docId);
         return { ok: true };
@@ -237,6 +272,7 @@ export const createPocketbaseBackend = (client, {
       //   ぶつかりを検出できず、復帰時に相手の変更を消す(実測で踏んだ)。
       recs.forEach((r) => { m.set(r.docId, r.data || {}); rv.set(r.docId, Number(r.rev) || 0); });
       cache.set(k, m); revs.set(k, rv);
+      loaded.add(k);
       loadError.delete(k);
       emit(k);
       return m.size;
@@ -247,9 +283,10 @@ export const createPocketbaseBackend = (client, {
 
     // --- 読む ---------------------------------------------------------------
     watchCollection: (ns, col, cb, opts = {}) => {
+      rejectUnsupported(ns, col, opts);
       const k = keyOf(ns, col);
-      if (!listeners.has(k)) listeners.set(k, new Set());
-      listeners.get(k).add(cb);
+      if (!listeners.has(k)) listeners.set(k, new Map());
+      listeners.get(k).set(cb, opts);
       startRealtime();
       ensureLoaded(ns, col).catch((e) => {
         // ⚠黙って空にしない。読めていないことを呼び出し側へ伝える。
@@ -259,7 +296,7 @@ export const createPocketbaseBackend = (client, {
       //   同期で呼ぶと、呼び出し側の典型的な書き方
       //     const un = watchCollection(..., rows => { un(); ... })
       //   が「un はまだ初期化されていません」で落ちる。実際にこれで落ちた。
-      if (cache.has(k) || pending.has(k)) queueMicrotask(() => { try { cb(rowsOf(k)); } catch (e) { console.error(e); } });
+      if (cache.has(k) || pending.has(k)) queueMicrotask(() => { try { cb(rowsOf(k, opts.map)); } catch (e) { console.error(e); } });
       return () => { listeners.get(k)?.delete(cb); };
     },
 
@@ -277,7 +314,11 @@ export const createPocketbaseBackend = (client, {
 
     // ⚠電波が切れていても落とさない。手元にあるもの(サーバの中身⊕見込みの値)を返す。
     //   読めなかった事実は loadErrorOf() で分かるようにしてある。
-    getAll: async (ns, col) => { await softLoad(ns, col); return rowsOf(keyOf(ns, col)); },
+    getAll: async (ns, col, opts = {}) => {
+      rejectUnsupported(ns, col, opts);
+      await softLoad(ns, col);
+      return rowsOf(keyOf(ns, col), opts.map);
+    },
 
     getOne: async (ns, col, id) => {
       await softLoad(ns, col);

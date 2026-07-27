@@ -114,6 +114,7 @@ export const createOutbox = ({
   if (!store) throw new Error('createOutbox: store が必要です');
   if (typeof apply !== 'function') throw new Error('createOutbox: apply が必要です');
   const dev = deviceId || deviceIdOf();
+  const rnd = () => Math.random().toString(36).slice(2, 8);
   let seq = 0;
   let draining = false;
   let stopped = false;
@@ -135,7 +136,10 @@ export const createOutbox = ({
   const enqueue = async (cmd) => {
     seq += 1;
     const rec = {
-      commandId: `${dev}-${now().toString(36)}-${seq}`,
+      // ⚠アプリを開き直すと seq は 0 に戻る。時刻(ミリ秒)と seq だけだと、
+      //   同じミリ秒に開き直した時に **前の送信待ちと同じIDになって上書きしてしまう**。
+      //   偶然に頼らないよう、端末ごとに乱数を1つ混ぜる。
+      commandId: `${dev}-${now().toString(36)}-${seq}-${rnd()}`,
       seq: now() * 1000 + seq,
       status: STATUS.PENDING,
       tries: 0,
