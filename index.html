@@ -25,5 +25,60 @@
   <body class="bg-slate-100 min-h-screen">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+
+    <!-- ============================================================
+      🛟 最後の砦: アプリが一度も動き出さなかった時に、白紙のままにしない
+      ------------------------------------------------------------
+      ⚠アプリの中に入れた受け皿(ErrorBoundary)では、**この形は拾えない**。
+        あれは「Reactが動いている最中の失敗」を受け止めるもの。
+        本体の読み込み自体が失敗すると React が一度も動かないので、
+        #root は空のまま = 画面は真っ白のまま、何のエラーも出ない。
+
+      起きうる原因(現場で区別がつかないもの):
+        ・古いホーム画面のアイコンが、もう無い版のファイルを読みに行っている
+        ・通信が途中で切れて本体を読み切れなかった
+        ・端末が古くて、本体の書き方に対応していない
+
+      やること: 8秒待って中身が空なら、日本語で状況と出口を出す。**勝手に何もしない**
+      (自動再読込は、本当に壊れている時に延々と繰り返すだけなので入れない)。
+    ============================================================= -->
+    <script>
+      (function () {
+        var shown = false;
+        function boot() {
+          var root = document.getElementById('root');
+          if (shown || !root || root.childElementCount > 0) return;   // 動いていれば何もしない
+          shown = true;
+          var last = '';
+          try { last = localStorage.getItem('app.lastCrash.v1') || ''; } catch (e) {}
+          root.innerHTML =
+            '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;'
+          + 'background:#f8fafc;font-family:Meiryo,sans-serif">'
+          + '<div style="max-width:620px;width:100%;background:#fff;border:2px solid #fecdd3;border-radius:16px;'
+          + 'padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.08)">'
+          + '<div style="font-size:40px;line-height:1">🛟</div>'
+          + '<h1 style="font-size:22px;font-weight:900;margin:12px 0 4px;color:#9f1239">アプリを読み込めませんでした</h1>'
+          + '<p style="color:#334155;margin:0 0 4px"><b>作業の記録は消えていません。</b>保存済みの内容はサーバに残っています。</p>'
+          + '<p style="color:#334155;margin:0 0 16px">通信が不安定なときや、ホーム画面のアイコンが古いままのときに起こります。'
+          + 'まず「読み込み直す」を押してください。何度やっても同じ場合は、'
+          + '<b>ホーム画面のアイコンを一度削除して、ブラウザから開き直して入れ直す</b>と直ります。</p>'
+          + '<button id="__reload" style="background:#e11d48;color:#fff;border:0;border-radius:10px;'
+          + 'padding:12px 20px;font-weight:800;font-size:16px;cursor:pointer">読み込み直す</button>'
+          + (last ? '<details style="margin-top:16px;color:#64748b;font-size:12px"><summary style="cursor:pointer">'
+                  + '前回この端末で記録された内容</summary><pre style="white-space:pre-wrap;word-break:break-all">'
+                  + String(last).replace(/[<>&]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]; })
+                  + '</pre></details>' : '')
+          + '</div></div>';
+          var b = document.getElementById('__reload');
+          // ⚠キャッシュを避けて読み直す(古いファイルを掴んだままの時に効く)
+          if (b) b.onclick = function () { location.replace(location.pathname + '?r=' + Date.now()); };
+        }
+        // 本体の読み込みそのものが失敗した時は、待たずに出す
+        window.addEventListener('error', function (e) {
+          if (e && e.target && e.target.tagName === 'SCRIPT') setTimeout(boot, 300);
+        }, true);
+        setTimeout(boot, 8000);
+      })();
+    </script>
   </body>
 </html>
