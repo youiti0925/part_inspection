@@ -119,11 +119,67 @@ test('B04 購読でも読み方の指定が効く(受け手ごとに別でよい
   be.close();
 });
 
-test('B05 絞り込みを渡したら、黙って全件返さずにその場で落ちる', async () => {
+// ⚠以前ここは「絞り込みを渡したら落ちる」を確かめていた。**わざと未対応にしていた**ため。
+//   2026-07-28 の実画面試験で、製品検査・部品検査はロットを絞って読んでいる(新しい順500件 /
+//   未完了だけ)ことが分かり、落ちる = **そのアプリは切り替えられない**と判明した。
+//   端末側で Firestore と同じ規則で絞る実装を入れたので、確かめる中身も入れ替える。
+//   規則そのものの答え合わせは scripts/verify-query-parity.mjs(本物の Firestore と18件一致)。
+test('B05 絞り込み・並び替え・件数制限が効く(Firestore と同じ規則)', async () => {
   const srv = makeServer();
+  await srv.create('docs', { ns: NS, col: 'lots', docId: 'L1', data: { status: 'completed', createdAt: 300 }, rev: 1 });
+  await srv.create('docs', { ns: NS, col: 'lots', docId: 'L2', data: { status: 'working', createdAt: 100 }, rev: 1 });
+  await srv.create('docs', { ns: NS, col: 'lots', docId: 'L3', data: { status: 'working', createdAt: 200 }, rev: 1 });
+  await srv.create('docs', { ns: NS, col: 'lots', docId: 'L4', data: { createdAt: 400 }, rev: 1 });        // status 無し
   const be = mk(srv);
-  await assert.rejects(() => be.getAll(NS, 'lots', { where: [['status', '==', 'open']] }), /絞り込み/);
-  assert.throws(() => be.watchCollection(NS, 'lots', () => {}, { limit: 10 }), /絞り込み/);
+
+  const newest = await be.getAll(NS, 'lots', { orderBy: [['createdAt', 'desc']], limit: 2 });
+  assert.deepEqual(newest.map((r) => r.id), ['L4', 'L1'], '新しい順2件');
+
+  // ⚠status を持っていない L4 は != の対象外(Firestore と同じ)。ここを緩めると件数が変わる。
+  const active = await be.getAll(NS, 'lots', { where: [['status', '!=', 'completed']] });
+  assert.deepEqual(active.map((r) => r.id), ['L2', 'L3'], 'status を持たない書類は返らない');
+
+  // 購読でも同じ絞り込みが効く
+  const rows = await new Promise((res) => {
+    const un = be.watchCollection(NS, 'lots', (r) => { un(); res(r); }, { orderBy: [['createdAt', 'asc']], limit: 1 });
+  });
+  assert.deepEqual(rows.map((r) => r.id), ['L2'], '購読でも並び替えと件数制限が効く');
+
+  // ページ送り: 続きの位置を渡すと次が返る
+  const p1 = await be.getPage(NS, 'lots', { orderBy: [['createdAt', 'asc']], limit: 2 });
+  assert.deepEqual(p1.rows.map((r) => r.id), ['L2', 'L3']);
+  const p2 = await be.getPage(NS, 'lots', { orderBy: [['createdAt', 'asc']], limit: 2, after: p1.cursor });
+  assert.deepEqual(p2.rows.map((r) => r.id), ['L1', 'L4'], '続きから読める');
+  be.close();
+});
+
+test('B05b 購読の受け手には第2引数(snapshot)も渡る — 無いと画面が黙って死ぬ', async () => {
+  const srv = makeServer();
+  await srv.create('docs', { ns: NS, col: 'settings', docId: 'config', data: { baseFontSize: 16 }, rev: 1 });
+  const be = mk(srv);
+  await be.getAll(NS, 'settings');
+
+  // ⚠2026-07-28 実画面試験: 設定の購読が snap.exists() で毎回落ち、設定がずっと空のままだった。
+  //   受け手の例外は握られてログに出るだけなので、**エラーも出ないのに画面が空**になる。
+  const [data, snap] = await new Promise((res) => {
+    const un = be.watchDoc(NS, 'settings', 'config', (d, s) => { un(); res([d, s]); });
+  });
+  assert.equal(data.baseFontSize, 16);
+  assert.equal(typeof snap?.exists, 'function', 'watchDoc は snap.exists() を渡すこと');
+  assert.equal(snap.exists(), true);
+  assert.equal(snap.data().baseFontSize, 16);
+
+  const [rows, qsnap] = await new Promise((res) => {
+    const un = be.watchCollection(NS, 'settings', (r, s) => { un(); res([r, s]); });
+  });
+  assert.equal(rows.length, 1);
+  assert.ok(Array.isArray(qsnap?.docs), 'watchCollection は snap.docs を渡すこと');
+  assert.equal(qsnap.docs[0].id, 'config');
+  assert.equal(qsnap.docs[0].data().baseFontSize, 16);
+  assert.equal(qsnap.size, 1);
+  assert.equal(qsnap.empty, false);
+  let seen = 0; qsnap.forEach(() => { seen++; });
+  assert.equal(seen, 1, 'snap.forEach も使える');
   be.close();
 });
 

@@ -81,15 +81,17 @@ export const createFirebaseBackend = (db, fs) => {
     if (typeof fs?.[n] !== 'function') throw new Error(`createFirebaseBackend: ${why} には fs.${n} が要ります(FS_API に足してください)`);
     return fs[n];
   };
-  const hasFilter = (o) => !!(o && (o.where || o.orderBy || o.limit !== undefined));
+  const hasFilter = (o) => !!(o && (o.where || o.orderBy || o.limit !== undefined || o.after));
   /** 絞り込みがあれば Query を、無ければ CollectionReference をそのまま返す。 */
   const queryRef = (ns, col, opts = {}) => {
     const base = colRef(ns, col);
     if (!hasFilter(opts)) return base;
     const parts = [];
-    // ⚠順番を勝手に入れ替えない。where → orderBy → limit は今までの手書きと同じ並び。
+    // ⚠順番を勝手に入れ替えない。where → orderBy → startAfter → limit は今までの手書きと同じ並び。
+    //   startAfter は orderBy の後ろ(並べ替えの基準が無いと「続きの位置」が決まらない)。
     for (const w of (opts.where || [])) parts.push(needLazy('where', '絞り込み(where)')(...w));
     for (const o of (opts.orderBy || [])) parts.push(needLazy('orderBy', '並び順(orderBy)')(...(Array.isArray(o) ? o : [o])));
+    if (opts.after) parts.push(needLazy('startAfter', '続きから読む(after)')(opts.after));
     if (opts.limit !== undefined) parts.push(needLazy('limit', '件数制限(limit)')(opts.limit));
     return needLazy('query', '絞り込み')(base, ...parts);
   };
@@ -118,6 +120,19 @@ export const createFirebaseBackend = (db, fs) => {
         opts.includeMetadataChanges ? { includeMetadataChanges: true } : null),
     getAll: async (ns, col, opts = {}) => (await fs.getDocs(queryRef(ns, col, opts))).docs.map(opts.map || ROW_DOCID_WINS),
     getOne: async (ns, col, id) => { const s = await fs.getDoc(docRef(ns, col, id)); return s.exists() ? s.data() : null; },
+
+    // --- 絞り込み付きの読み ---------------------------------------------------
+    // ⚠絞り込みの指定は「ただのデータ」で受け取る({where, orderBy, limit, after})。
+    //   画面が Firestore の query()/where() を組み立てると、それは Firebase 固有の値なので
+    //   窓口の外へ出てしまい、保管庫を差し替えられなくなる。
+    watchQuery: (ns, col, spec = {}, cb, opts = {}) =>
+      listen(queryRef(ns, col, { ...opts, ...spec }), (snap) => cb(snap.docs.map(opts.map || ROW_DOCID_WINS), snap), opts.onError,
+        opts.includeMetadataChanges ? { includeMetadataChanges: true } : null),
+    /** 1ページ分。戻りの cursor を次の spec.after に渡すと続きが取れる。 */
+    getPage: async (ns, col, spec = {}, opts = {}) => {
+      const snap = await fs.getDocs(queryRef(ns, col, { ...opts, ...spec }));
+      return { rows: snap.docs.map(opts.map || ROW_DOCID_WINS), cursor: snap.docs.length ? snap.docs[snap.docs.length - 1] : null };
+    },
 
     save: (ns, col, id, data, opts = {}) => fs.setDoc(docRef(ns, col, id), prep(data), { merge: opts.merge !== false }),
     remove: (ns, col, id) => fs.deleteDoc(docRef(ns, col, id)),
@@ -239,6 +254,9 @@ export const createProvider = ({ backends, providers = DEFAULT_PROVIDERS, onUnkn
     watchDoc: call('watchDoc'),
     getAll: callAsync('getAll'),
     getOne: callAsync('getOne'),
+    // 絞り込み付きの読み(製品検査・部品検査が使う)。保管庫が違っても同じ答えを返す。
+    watchQuery: call('watchQuery'),
+    getPage: callAsync('getPage'),
 
     // --- 書く ---------------------------------------------------------------
     save: callAsync('save'),

@@ -21,6 +21,7 @@ import { createOutbox, createIdbStore, createMemoryStore, STATUS } from './outbo
 import { mergeDoc, overwriteDoc, setFieldsDoc } from './docMerge.js';
 import { withDeletions } from './sentinels.js';
 import { POCKETBASE_CAPABILITIES } from './capabilities.js';
+import { applyQuery } from './queryLocal.js';
 
 const keyOf = (ns, col) => `${ns}/${col}`;
 
@@ -71,25 +72,59 @@ export const createPocketbaseBackend = (client, {
   //   同じ形(= id と data())の見せかけを渡して、既存の map をそのまま使えるようにする。
   const shim = (docId, data) => ({ id: docId, data: () => (data || {}) });
   const DEFAULT_MAP = (d) => ({ ...d.data(), id: d.id });   // ROW_DOCID_WINS と同じ
-  const rowsOf = (k, map) => [...viewOf(k).entries()]
-    .map(([docId, data]) => (map || DEFAULT_MAP)(shim(docId, data)))
-    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
 
-  // ⚠絞り込みは PocketBase 版にまだ無い。**黙って全件返すと嘘の一覧になる**ので、
-  //   その場で名指しで落とす(Firebase 版は対応しているので、片方だけ違う状態を隠さない)。
-  const rejectUnsupported = (ns, col, opts = {}) => {
-    const bad = ['where', 'orderBy', 'limit'].filter((n) => opts[n] !== undefined);
-    if (bad.length) {
-      throw new Error(`PocketBase 版は絞り込み(${bad.join('/')})にまだ対応していません (${ns}/${col})。` +
-        '端末側で絞るか、pocketbaseBackend.js に実装してください。**黙って全件返すことはしません。**');
-    }
+  // ⚠⚠絞り込み・並び替え・件数制限は **端末側で行う**。
+  //   PocketBase の購読はフィルタが効かない(実測 v0.39.9)ので、全部手元に持ってから絞る。
+  //   規則は Firestore と1件ずつ突き合わせてある(scripts/verify-query-parity.mjs で18件合格)。
+  //   ⚠並びは「書類IDの文字列順」ではなく **Firestore の決まり** に従う(applyQuery が面倒を見る)。
+  const docsOf = (k, spec) => applyQuery(
+    [...viewOf(k).entries()].map(([docId, data]) => shim(docId, data)),
+    spec || {},
+  );
+  const rowsOf = (k, map, spec) => docsOf(k, spec).map((d) => (map || DEFAULT_MAP)(d));
+
+  // ⚠⚠購読の受け手には **第2引数** も渡す。
+  //   Firebase 版は cb(rows, snap) / cb(data, snap) と、Firestore の生の snapshot を渡している。
+  //   画面はそれを当てにして snap.exists() や snap.docs.forEach(d => d.data()) と書いている箇所がある。
+  //   PocketBase 版が第2引数を渡さないと **その購読だけが毎回例外で死ぬ**。しかも受け手の例外は
+  //   握られてログに出るだけなので、画面は「エラーも出ないのに、設定が空・写真が出ない」になる。
+  //   実測 2026-07-28(実画面の通し試験): 設定の購読が snap.exists() で落ち、設定がずっと空のままだった。
+  //   → Firestore の QuerySnapshot / DocumentSnapshot と **同じ呼び方ができる見せかけ** を渡す。
+  //   ⚠snapshot の中身は **絞り込んだ後** の書類だけ(Firestore と同じ)。全件を渡すと
+  //     snap.docs を使っている画面が、絞り込みを無視した一覧を作ってしまう。
+  const querySnapOf = (k, spec) => {
+    const docs = docsOf(k, spec);
+    return {
+      docs,
+      size: docs.length,
+      empty: docs.length === 0,
+      forEach: (fn, thisArg) => docs.forEach((d, i) => fn.call(thisArg, d, i, docs)),
+      // 手元のものを見せている=常に「確定」ではない。Firestore と同じ名前で持たせる。
+      metadata: { fromCache: !loaded.has(k), hasPendingWrites: (pending.get(k)?.size || 0) > 0 },
+    };
   };
+  const docSnapOf = (k, docId) => {
+    const m = viewOf(k);
+    const has = m.has(docId);
+    return {
+      id: docId,
+      exists: () => has,
+      data: () => (has ? m.get(docId) : undefined),
+      metadata: { fromCache: !loaded.has(k), hasPendingWrites: pending.get(k)?.has(docId) || false },
+    };
+  };
+
+  /** opts のうち「絞り込みの指定」だけを取り出す。 */
+  const specOf = (opts = {}) => ({ where: opts.where, orderBy: opts.orderBy, limit: opts.limit, after: opts.after });
 
   const emit = (k) => {
     const set = listeners.get(k);
     if (set && set.size) {
+      // ⚠受け手ごとに絞り込みが違う(同じ lots を「新しい順500件」と「未完了だけ」で
+      //   2本購読している画面がある)。**1つの snapshot を使い回してはいけない。**
       set.forEach((opts, cb) => {
-        try { cb(rowsOf(k, opts?.map)); } catch (e) { console.error('[pb] 購読の受け手で例外', e); }
+        try { cb(rowsOf(k, opts?.map, specOf(opts)), querySnapOf(k, specOf(opts))); }
+        catch (e) { console.error('[pb] 購読の受け手で例外', e); }
       });
     }
     const m = viewOf(k);
@@ -97,7 +132,8 @@ export const createPocketbaseBackend = (client, {
       if (!dk.startsWith(`${k}/`)) continue;
       const docId = dk.slice(k.length + 1);
       const data = m.has(docId) ? m.get(docId) : null;
-      dset.forEach((cb) => { try { cb(data); } catch (e) { console.error('[pb] 購読の受け手で例外', e); } });
+      const snap = docSnapOf(k, docId);
+      dset.forEach((cb) => { try { cb(data, snap); } catch (e) { console.error('[pb] 購読の受け手で例外', e); } });
     }
   };
 
@@ -286,7 +322,6 @@ export const createPocketbaseBackend = (client, {
 
     // --- 読む ---------------------------------------------------------------
     watchCollection: (ns, col, cb, opts = {}) => {
-      rejectUnsupported(ns, col, opts);
       const k = keyOf(ns, col);
       if (!listeners.has(k)) listeners.set(k, new Map());
       listeners.get(k).set(cb, opts);
@@ -299,7 +334,7 @@ export const createPocketbaseBackend = (client, {
       //   同期で呼ぶと、呼び出し側の典型的な書き方
       //     const un = watchCollection(..., rows => { un(); ... })
       //   が「un はまだ初期化されていません」で落ちる。実際にこれで落ちた。
-      if (cache.has(k) || pending.has(k)) queueMicrotask(() => { try { cb(rowsOf(k, opts.map)); } catch (e) { console.error(e); } });
+      if (cache.has(k) || pending.has(k)) queueMicrotask(() => { try { cb(rowsOf(k, opts.map, specOf(opts)), querySnapOf(k, specOf(opts))); } catch (e) { console.error(e); } });
       return () => { listeners.get(k)?.delete(cb); };
     },
 
@@ -311,16 +346,47 @@ export const createPocketbaseBackend = (client, {
       startRealtime();
       ensureLoaded(ns, col).catch((e) => { if (opts.onError) opts.onError(e); else console.error(`[pb] ${k} を読めませんでした`, e); });
       // ⚠1件購読も最初の通知は非同期(上と同じ理由)。
-      if (cache.has(k) || pending.has(k)) queueMicrotask(() => { const m = viewOf(k); try { cb(m.has(id) ? m.get(id) : null); } catch (e) { console.error(e); } });
+      if (cache.has(k) || pending.has(k)) queueMicrotask(() => { const m = viewOf(k); try { cb(m.has(id) ? m.get(id) : null, docSnapOf(k, id)); } catch (e) { console.error(e); } });
       return () => { docListeners.get(dk)?.delete(cb); };
     },
 
     // ⚠電波が切れていても落とさない。手元にあるもの(サーバの中身⊕見込みの値)を返す。
     //   読めなかった事実は loadErrorOf() で分かるようにしてある。
     getAll: async (ns, col, opts = {}) => {
-      rejectUnsupported(ns, col, opts);
       await softLoad(ns, col);
-      return rowsOf(keyOf(ns, col), opts.map);
+      return rowsOf(keyOf(ns, col), opts.map, specOf(opts));
+    },
+
+    // --- 絞り込み付きの読み(製品検査・部品検査が使う) ------------------------
+    // ⚠Firebase 版はサーバ側で絞る。こちらは全部読んでから端末で絞る。
+    //   **返る中身と並びは同じ**であることを scripts/verify-query-parity.mjs で確かめてある。
+    //   通信量は増える(全件読む)。PocketBase は社内サーバなので回線は太い、が
+    //   「同じつもりで違う」を避けるほうが大事。
+    watchQuery: (ns, col, spec = {}, cb, opts = {}) => {
+      const k = keyOf(ns, col);
+      const merged = { ...opts, ...spec };
+      if (!listeners.has(k)) listeners.set(k, new Map());
+      listeners.get(k).set(cb, merged);
+      startRealtime();
+      ensureLoaded(ns, col).catch((e) => {
+        if (opts.onError) opts.onError(e); else console.error(`[pb] ${k} を読めませんでした`, e);
+      });
+      if (cache.has(k) || pending.has(k)) {
+        queueMicrotask(() => { try { cb(rowsOf(k, opts.map, spec), querySnapOf(k, spec)); } catch (e) { console.error(e); } });
+      }
+      return () => { listeners.get(k)?.delete(cb); };
+    },
+
+    /**
+     * 1ページ分を取る。戻りの cursor を次の spec.after に渡すと続きが取れる。
+     * ⚠cursor は保管庫が決める「続きの位置」。中身を画面が解釈してはいけない。
+     */
+    getPage: async (ns, col, spec = {}, opts = {}) => {
+      await softLoad(ns, col);
+      const k = keyOf(ns, col);
+      const docs = docsOf(k, spec);
+      const map = opts.map || DEFAULT_MAP;
+      return { rows: docs.map(map), cursor: docs.length ? docs[docs.length - 1] : null };
     },
 
     getOne: async (ns, col, id) => {
