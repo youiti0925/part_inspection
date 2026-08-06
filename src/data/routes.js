@@ -89,6 +89,11 @@ export const COLLECTION_AREA = Object.freeze({
   // --- 連絡(Firebaseに残す) ------------------------------------------------
   contact_requests: 'contact',
   arrival_times: 'contact',
+  // --- 到着の実績(検査側だけの棚) -------------------------------------------
+  //   ⚠⚠ **組立には見せない。** 清水さん「これはあくまで検査側の予測だけで使うやつで、
+  //   他に見せることはしない」。連絡の棚(arrival_times)に混ぜると、書いた瞬間に
+  //   組立ポータルから読めてしまう。だから **別の棚** に分ける(隠すのではなく、置かない)。
+  arrival_actuals: 'analytics',
 
   // --- プッシュ通知(Firebaseに残す) ----------------------------------------
   push_tokens: 'push',
@@ -153,6 +158,7 @@ export const COLLECTION_APPS = Object.freeze({
   accessory_scan_logs: ['final'],
   contact_requests: ['final', 'product', 'overview'],
   arrival_times: ['final', 'product'],
+  arrival_actuals: ['final', 'product'],
   push_tokens: ['final', 'product'],
   weekly_briefs: ['final', 'product'],
 });

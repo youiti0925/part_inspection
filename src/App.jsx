@@ -2167,6 +2167,53 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
     );
   }
 
+  // 未該当エリア専用の「横長・低背」カード。製品検査と同じ直し。
+  // ⚠清水さん(2026-08-05):「未該当エリアは縦方向に場所とるから、そのエリアのカードは
+  //   もう少し横に広いカードにして伸ばして、縦方向はもっと小さくして」
+  //   → このエリアからしか variant="map-strip" を渡さない。だから他のエリアの見た目は変わらない。
+  //   ⚠テンプレ名と進捗バーはここでは出さない。高さの大半がこの2つで、この棚は一時置きの見出し棚だから。
+  if (variant === 'map-strip') {
+    const stripProg = computeLotProgress(lot);
+    const stripPct = stripProg?.progressPct ?? 0;
+    const stripTotal = stripProg?.totalTasks ?? 0;
+    const stripPause = lot.pauseReason?.category ? getPauseReasonColor(lot.pauseReason.category) : null;
+    return (
+      <div ref={cardRef}
+        draggable={lot.status !== 'completed'}
+        onDragStart={(e) => { e.dataTransfer.setData('lotId', lot.id); setDraggedLotId(lot.id); e.stopPropagation(); }}
+        onDragEnd={() => setDraggedLotId(null)}
+        onClick={() => lot.mapZoneId && lot.status !== 'completed' && onOpenExecution(lot)}
+        {...touchProps}
+        className={`${styleClass} ${borderClass} px-1.5 py-0.5 overflow-hidden`}
+        style={processingInlineStyle}
+        title={lot.modelText ? `${lot.orderNo || ''} ${lot.model || ''} ${lot.modelText}` : `${lot.orderNo || ''} ${lot.model || ''}`}
+      >
+        {/* 作業中の上端ストライプ。縦を詰めたいので h-1.5 → h-1 に細くする */}
+        {isLotProcessing && (
+          <div className="absolute top-0 left-0 right-0 h-1 bg-blue-500 pointer-events-none z-10" style={{ animation: 'lotStripeBlink 0.8s ease-in-out infinite' }}/>
+        )}
+        <div className="flex items-center gap-1.5 leading-tight min-w-0">
+          {/* 停止理由は絵文字＋短い文字だけ。横1行に収める */}
+          {stripPause && (
+            <span className={`${stripPause.bg} ${stripPause.border} ${stripPause.text} border rounded px-1 text-[10px] font-black shrink-0 whitespace-nowrap`} title={lot.pauseReason.note || lot.pauseReason.label}>
+              {stripPause.emoji}{lot.pauseReason.label}
+            </span>
+          )}
+          <span className="text-[11px] text-slate-500 font-bold shrink-0">{lot.orderNo}</span>
+          <span className="text-sm font-black text-slate-800 truncate shrink-0 max-w-[45%]">{lot.model}</span>
+          {/* 品名。番号だけでは分からないので、横に広くなった分ここへ入れる(縦には増やさない) */}
+          {lot.modelText && (
+            <span className="text-[10px] text-slate-500 truncate min-w-0 flex-1">{lot.modelText}</span>
+          )}
+          <span className="text-[11px] font-bold text-blue-600 shrink-0">{lot.quantity}台</span>
+          {stripTotal > 0 && (
+            <span className={`font-mono font-black text-xs shrink-0 ${stripPct >= 100 ? 'text-emerald-600' : stripPct > 0 ? 'text-blue-600' : 'text-slate-400'}`}>{stripPct}%</span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (variant === 'dashboard-map') {
     // コンパクト版でも 現状把握に必要な情報は全部残す:
     //   ① 停止理由 (最重要・大きく表示)
@@ -3559,7 +3606,8 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
              onDragOver={(e) => e.preventDefault()}
              onDrop={(e) => { e.preventDefault(); e.stopPropagation(); const lotId = e.dataTransfer.getData('lotId'); if (lotId) handleMoveLot(lotId, 'zone_unassigned'); }}
              className="shrink-0 border-t-2 border-slate-400 bg-slate-100/80 flex flex-row"
-             style={{ minHeight: '64px', maxHeight: '120px' }}
+             // ⚠縦に場所を取りすぎ(清水さん 2026-08-05)。カードを1行の横長にしたので高さ上限も下げる
+             style={{ minHeight: '48px', maxHeight: '80px' }}
            >
              <div className="shrink-0 w-32 bg-slate-200 px-2 py-1 flex flex-col items-start justify-center border-r border-slate-400">
                <div className="text-xs font-black text-slate-700">未該当エリア</div>
@@ -3570,14 +3618,15 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
                {zoneLots.length === 0 && (
                  <div className="flex items-center justify-center w-full text-[10px] text-slate-400 italic">ここに不良・残ロット等をドラッグ&ドロップ</div>
                )}
+               {/* ⚠横に広く・縦に低く(清水さん 2026-08-05)。w-48→w-72 */}
                {zoneLots.map(lot => (
-                 <div key={lot.id} className="shrink-0 w-48">
+                 <div key={lot.id} className="shrink-0 w-72">
                    <LotCard
                      lot={lot} workers={workers} templates={templates} mapZones={mapZones}
                      onOpenExecution={(l) => setExecutionLotId(l.id)}
                      saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId}
                      onEdit={onEditLot} onDelete={onDeleteLot}
-                     variant="dashboard-map"
+                     variant="map-strip"
                    />
                  </div>
                ))}
@@ -7226,7 +7275,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   const stopVoiceFlow = () => {
     voiceRunningRef.current = false;
     voiceActiveRef.current = false;
-    try { recognitionRef.current?.abort?.(); } catch {}
+    // ⚠ 2026-08-05: ここには recognitionRef が無い(別コンポーネントの物を書いていた)。
+    //   try/catch に食われて例外は出ないが、**止めたつもりで止まっていなかった**。
     try { window.speechSynthesis?.cancel?.(); } catch {}
   };
   const switchToCustom = () => {
@@ -20131,7 +20181,8 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
 };
 
 // テンプレート管理: 検索 / フィルタ / 並び替えサポート
-const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplate, deleteData, handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef }) => {
+// ⚠⚠ 2026-08-05 クラッシュ修正: 中で setShowStrictManager を呼んでいたが受け取っていなかった(製品検査と同じ)。
+const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplate, deleteData, handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, onOpenStrictManager = null }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('name_asc'); // name_asc | name_desc | steps_desc | steps_asc | recent | usage_desc
   // フィルタ (multi-select)
@@ -20335,7 +20386,12 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
   );
 };
 
- const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [], handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields }) => {
+// ⚠⚠ 2026-08-05 クラッシュ修正: 「厳密モード 一元管理を開く」ボタンは
+//   TemplateListSection ではなく **この TemplatesView の中**にある(下の方の設定パネル群)。
+//   前回 onOpenStrictManager を TemplateListSection 側だけに足したので、
+//   ボタンから見ると相変わらず「そんな名前は無い」状態のままだった(ESLint no-undef が出ていた)。
+//   → 受け取る側をここに足し、呼び出し側からも渡すようにした。
+ const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [], handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null }) => {
   const [newProcessOpt, setNewProcessOpt] = useState('');
   const defectProcessOptions = settings?.defectProcessOptions || DEFAULT_DEFECT_PROCESS_OPTIONS;
   const [localZones, setLocalZones] = useState(mapZones || INITIAL_MAP_ZONES);
@@ -20853,7 +20909,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
              「件数が貯まったら推奨」はやめ、<b>実時刻のある完了ロットで作業順がテンプレ順と一致した割合（順番の一貫性）</b>をエビデンスとして見て、管理者が判断します。<br/>
              どの組み合わせが 厳密／ガイド か、その<b>エビデンス</b>と<b>変更履歴（いつ・誰が・何を）</b>は、一元管理画面で一覧できます。
            </p>
-           <button onClick={() => setShowStrictManager(true)} className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-sm">
+           <button onClick={() => onOpenStrictManager && onOpenStrictManager()} disabled={!onOpenStrictManager} className="bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-sm">
              <ShieldCheck className="w-4 h-4" /> 厳密モード 一元管理を開く
            </button>
          </div>
@@ -28667,11 +28723,12 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
                handleBackupImport={handleBackupImport}
                excelInputRef={excelInputRef}
                backupInputRef={backupInputRef}
+               onOpenStrictManager={() => setShowStrictManager(true)}
              />
            )
          )}
          {activeTab === 'measurement-settings' && <MeasurementSettingsView settings={settings} saveSettings={saveSettings} comboPresets={settings?.comboPresets || []} templates={templates} />}
-         {activeTab === 'templates' && <TemplatesView editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} />}
+         {activeTab === 'templates' && <TemplatesView editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} />}
          </div>
        </main>
        

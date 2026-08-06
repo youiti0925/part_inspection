@@ -1,7 +1,11 @@
 <!doctype html>
-<html lang="ja">
+<!-- ⚠ 2026-08-06 Chromeのページ翻訳がDOMを書き換えると、Reactが自分の置いた要素を見失って
+     NotFoundError: insertBefore で画面が真っ白になる（最終検査で実際に発生）。
+     このアプリは現場向けの日本語専用なので、翻訳そのものを止める。 -->
+<html lang="ja" translate="no">
   <head>
     <meta charset="UTF-8" />
+    <meta name="google" content="notranslate" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>部品検査 (Parts Inspection)</title>
