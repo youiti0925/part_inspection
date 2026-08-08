@@ -28,3 +28,19 @@ dist-ssr
 # 2026-07-26: 公開リポジトリ流出の原因が「gitignoreが狭すぎた」ことだったため、ここも広げる。
 .env.*
 !.env.example
+
+# ⚠2026-08-08: 他3アプリ(2026-07-26 強化)に対して部品だけ未適用だったので揃える。
+#   本番に直接つなぐ調査スクリプト・本番ダンプ・firebase の出力を落とす。
+.firebase/
+audit/
+_*.mjs
+_*.js
+*backup*.json
+*_backup_*.json
+*dump*.json
+*export*.json
+firebase-export-*/
+firestore_export/
+auth_export/
+*.msi
+*.exe
