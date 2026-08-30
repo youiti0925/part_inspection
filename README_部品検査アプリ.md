@@ -33,8 +33,15 @@
 2. **Firestore / Authentication / Storage** を有効化(ルールは同梱の firestore.rules / storage.rules を流用)。
 3. **Webアプリ登録** → firebaseConfig を取得 → `src/App.jsx` の `USER_DEFINED_CONFIG` の "" を全て埋める。
 4. **`.firebaserc`** の `PARTS_PROJECT_ID_HERE` / `PARTS_HOSTING_SITE_HERE` を実際の値に。
-5. デプロイ: `npm run build` → `npx firebase deploy --only hosting:parts`。
+5. デプロイ: **`npm run deploy` だけ**(ビルドも見張りも台帳付けも、この中でやる)。
+   - 🚨 **`npx firebase deploy` を直に叩かない**(裏口)。門(`scripts/deploy.mjs` → `scripts/verify-deploy-safety.mjs`)を通らないと、
+     ①古い部品を持ち越す仕掛け(`keep-old-assets.mjs`)が走らず、前の版の `assets/index-〇〇.js` が本番から消える
+     ②何を出したかの台帳(`scripts/deploy-ledger.json`)が付かない。
+     8/12 から画面を開きっぱなしだった端末が 8/17 に起動しなくなり、その端末に貯まっていた作業が消えた
+     (詳しくは `docs/` のデプロイ事故の記録)。8/22 以降 実際にこの裏口が常用されて台帳が腐った。
+   - 出した後の確認: `node scripts/verify-deploy-safety.mjs --after`(本番の部品が全部 生きているかを実測)。
    - **firebase.json の Cache-Control は設定済み**(index=no-store / assets=immutable)=「反映されない」防止。
+   - **firebase.json の rewrites は `!/@(assets|notice-assets)/**`**(無い部品には 404 を返す)。`"**"` に戻さない。
 6. (AI分析機能を使うなら)Geminiキーは .env をコミットせず Cloudflare Worker プロキシ経由。機番AI認識は無し。
 
 ## 注意

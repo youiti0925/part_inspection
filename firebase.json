@@ -7,9 +7,13 @@
       "**/.*",
       "**/node_modules/**"
     ],
+    "predeploy": [
+      "npm run build",
+      "node scripts/keep-old-assets.mjs"
+    ],
     "rewrites": [
       {
-        "source": "**",
+        "source": "!/@(assets|notice-assets)/**",
         "destination": "/index.html"
       }
     ],

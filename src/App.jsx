@@ -1,4 +1,11 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+/* global __firebase_config, __initial_auth_token */
+// ⚠ この2つは Canvas プレビューが外から差し込む名前。ビルドにも .env にも入らない。
+//   コードでは必ず `typeof __firebase_config !== 'undefined'` で包んでから読んでいる(288行/27341行)ので
+//   実行時に落ちる事は無いが、この宣言が無いと eslint が no-undef を4件出す。
+//   🚨 no-undef は「白画面を見つける唯一の網」なので基準値で緩められない(verify-lint-baseline.mjs の HARD_ZERO)。
+//   4件の嘘の赤を溜めると、本物の no-undef が来た時に見分けが付かなくなる。
+//   → 最終検査(golden)の src/App.firebase.jsx:1 と同じ書き方で、この2つだけを名指しで宣言する。
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   Layout, ClipboardList, Package, 
   PlayCircle, CheckCircle2, AlertTriangle, 
@@ -41,6 +48,44 @@ import {
 //   同じ理由で docRef()/colRef() の逃げ道も使わない(窓口に意図の名前で置く)。
 import { providerFor, ROW_DATA_WINS } from './data/provider.js';
 import { DATA_DELETE, DATA_SERVER_NOW } from './data/sentinels.js';
+// 🚨🚨 作業時間が「保存で消える」のを止める見張り(2026-08-17 最終検査の事故と同じ形を部品でも塞ぐ)。
+//   ⚠このファイルは最終検査/製品検査と **1バイトも同じ**。片方だけ直すと静かに巻き戻る。
+import { assertSafeLotSave, assertLotsLoaded, wouldLoseWorkTime } from './domain/workTimeGuard.js';
+// 🚨 部品検査の線引き(どこまで通し、どこから止めるか)。**試験で固定してある**
+//   (src/domain/__tests__/lotSavePolicy.test.mjs)。コメントだけの線引きは必ずずれる。
+import { decideLotSave, wipeConfirmMessage } from './domain/lotSavePolicy.js';
+// 📦🚨 1MBの関所の線引き。**「写真を増やす保存」だけを止め、記録だけの保存は絶対に止めない。**
+//   止めると検査員は写真を減らす前に作業時間を保存できず、記録が消える(見張りが記録を消す)。
+//   ⚠試験で固定してある(src/domain/__tests__/lotCapacityGate.test.mjs)。
+import { decideCapacity, capacityBlockMessage } from './domain/lotCapacityGate.js';
+// 📦 ロット1件の容量。Firestore は1ドキュメント1MB。溢れると **そのロットは何も保存できなくなる**
+//   (不具合写真だけでなく検査記録の保存も落ちる = 凍結)。⚠バイトで数える(日本語は1文字≒3バイト)。
+//   ⚠このファイルも最終検査/製品検査と1バイトも同じ。
+import { approxBytes as capBytes, mergeEstimate as capMerge, DANGER_BYTES as CAP_DANGER, DOC_LIMIT as CAP_LIMIT } from './domain/lotCapacity.js';
+// 💾🚨 保存の「順番」の関所。2026-08-17 の事故(作業時間が5ロット分まるごと消えた)の中心。
+//   決まりは1つ: **記録が先・写真(別置き)が後・その間に await を1つも挟まない。**
+//   ⚠このファイルも最終検査/製品検査と1バイトも同じ(md5一致)。片方だけ直すと片方だけ記録が消える。
+//   ⚠部品検査には写真の別置き先(lot_images)が無いので、いまは別置き(blobs)が常に空。
+//     それでも関所を通す理由: 素の save のままだと、次に別置きを足した人が
+//     「写真を await してから記録を書く」形を **黙って** 書ける。それが 8/17 の形そのもの。
+// ⚠合わせ直しの道具も **同じ1本** から取る(3方向の突き合わせ・編集中の見張り・未送信の差分)。
+//   判定を画面へ書き写すと必ずズレる(2026-08-23 に最終検査/製品検査で1本化した理由)。
+//   画面がするのは「材料を渡す」ことと「返ってきた姿を貼る」ことだけ。
+import {
+  saveInOrder,
+  reconcileValueMap, noteEditedKeys, recentlyEditedKeys, pruneEditedKeys, unsentPatch,
+  reconcileTasks, runningTaskKeys,
+} from './domain/saveOrder.js';
+// 🚨🚨 読み取り(read)の予算。2026-08-17 に最終検査が **枠切れ(429)で 14:36〜15:59 止まった**。
+//   無料枠 50,000件/日 は **4アプリで1つ**。部品検査が食った分だけ他アプリの枠が減る。
+//   ⚠数の決め方・合体の仕方・いつ枠が戻るかは、全部 domain/readBudget.js に置いて試験で固定してある
+//     (src/domain/__tests__/readBudget.test.mjs)。ここに直書きすると必ずずれる。
+import {
+  mergeLotsById, windowIsWholeCollection, needsLotHistory, planLotSubscriptions,
+  isQuotaError, nextQuotaResetAt, quotaDayKeyOf, formatRemaining, formatClock,
+  snapshotReads, emptyTally, tallyAdd, quotaPercent,
+  READ_TALLY_STORAGE_KEY, FREE_TIER_DAILY_READS, LOTS_LIVE_LIMIT, LOTS_HISTORY_LIMIT, OPEN_LOTS_LIMIT,
+} from './domain/readBudget.js';
 const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
 const DATA = (db) => providerFor(db, FS_API);
 import {
@@ -384,10 +429,37 @@ const syncImageQuality = (cfg) => {
   IMG_QUALITY = next;
 };
 // resizeImage(file, type) / resizeImage(file, { maxDim, quality }) の両対応
-const resizeImage = (file, typeOrOpts = 'default') => new Promise((resolve) => {
+const _resizeOnce = (file, MAX, Q) => new Promise((resolve) => {
+  const r = new FileReader(); r.onload = (e) => { const i = new Image(); i.onload = () => { const c = document.createElement('canvas'); let w=i.width; let h=i.height; if(w>h){if(w>MAX){h*=MAX/w;w=MAX}}else{if(h>MAX){w*=MAX/h;h=MAX}} c.width=w; c.height=h; const ctx=c.getContext('2d'); if(ctx){ctx.drawImage(i,0,0,w,h); resolve(c.toDataURL('image/jpeg', Q));}else resolve(i.src); }; i.onerror = () => resolve(''); i.src = e.target?.result; }; r.onerror = () => resolve(''); r.readAsDataURL(file); });
+
+// 📷 出来上がりの **バイト数を実測して** 収める。
+//   ⚠今までは px と画質を掛けるだけで、出来上がりの容量を一度も見ていなかった。
+//     端末のカメラが良くなるほど1枚が重くなり、部品検査は **写真の別置き先が無い**ので
+//     そのままロット本体(1MB上限)に積み上がる = いずれ保存できない指図になる。
+//     (最終検査/製品検査では 2026-08-11 に同じ形を直してある)
+//   ⚠ **1段目(いままでの設定)で上限内なら、そのまま返る = 既存の見え方は1pxも変わらない。**
+//     段を降りるのは「今までなら重すぎた写真」だけ。
+//   ⚠縮める場所はここ1か所だけにする。カメラ側で先に縮めるとJPEGが二重に掛かって汚くなる。
+const IMG_BYTE_BUDGET = 260_000; // 1枚あたりの上限(base64込み)。1MBのロットに写真が積める枚数で決めた。
+const dataUrlBytes = (s) => (typeof s === 'string' ? s.length : 0);
+const resizeImage = async (file, typeOrOpts = 'default') => {
   const o = (typeof typeOrOpts === 'object') ? typeOrOpts : (IMG_QUALITY[typeOrOpts] || IMG_QUALITY.default);
   const MAX = o.maxDim || 900; const Q = (typeof o.quality === 'number') ? o.quality : 0.6;
-  const r = new FileReader(); r.onload = (e) => { const i = new Image(); i.onload = () => { const c = document.createElement('canvas'); let w=i.width; let h=i.height; if(w>h){if(w>MAX){h*=MAX/w;w=MAX}}else{if(h>MAX){w*=MAX/h;h=MAX}} c.width=w; c.height=h; const ctx=c.getContext('2d'); if(ctx){ctx.drawImage(i,0,0,w,h); resolve(c.toDataURL('image/jpeg', Q));}else resolve(i.src); }; i.src = e.target?.result; }; r.readAsDataURL(file); });
+  // 段。1段目は **今までと同じ設定**。以降は px と画質を少しずつ落とす。
+  const steps = [
+    { maxDim: MAX,                    quality: Q },
+    { maxDim: Math.round(MAX * 0.85), quality: Math.max(0.4, Q - 0.1) },
+    { maxDim: Math.round(MAX * 0.7),  quality: Math.max(0.35, Q - 0.15) },
+    { maxDim: Math.round(MAX * 0.55), quality: 0.35 },
+  ];
+  let out = '';
+  for (const s of steps) {
+    out = await _resizeOnce(file, s.maxDim, s.quality);
+    if (!out) break;                              // 読めなかった時はこれ以上試さない
+    if (dataUrlBytes(out) <= IMG_BYTE_BUDGET) break; // ⚠収まったらそこで止める(必要以上に落とさない)
+  }
+  return out;
+};
 const getBase64 = (file) => new Promise((resolve) => { const r = new FileReader(); r.readAsDataURL(file); r.onload = () => resolve(r.result); r.onerror = () => resolve(""); });
 
 // === 時間ソース一本化 (2026-05-31) ===
@@ -2179,10 +2251,20 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
     const stripPause = lot.pauseReason?.category ? getPauseReasonColor(lot.pauseReason.category) : null;
     return (
       <div ref={cardRef}
+        data-lot-id={lot.id}
         draggable={lot.status !== 'completed'}
         onDragStart={(e) => { e.dataTransfer.setData('lotId', lot.id); setDraggedLotId(lot.id); e.stopPropagation(); }}
         onDragEnd={() => setDraggedLotId(null)}
-        onClick={() => lot.mapZoneId && lot.status !== 'completed' && onOpenExecution(lot)}
+        onClick={(e) => {
+          // 🚨 2026-08-30 製品検査で清水さんに指摘された壊れ方が、部品にも同じ形で在った:
+          //   「現場マップで型式カードを押しても、なぜか自動で作業エリア拡大画面になる」
+          //   このカードを包んでいる div(ダッシュボードの列)に onClick={() => onSetMode('map-only')} が有り、
+          //   カードの onClick が **止めずに親へ伝わって** 拡大が必ず走っていた。
+          //   開けない台(mapZoneId 無し/完了)では作業画面も開かないので「押すと拡大だけ」に見える。
+          //   ⚠JSXの属性の並びの中に {/* */} のコメントは置けない(構文エラーになる)。理由はこの中に書く。
+          e.stopPropagation();
+          if (lot.mapZoneId && lot.status !== 'completed') onOpenExecution(lot);
+        }}
         {...touchProps}
         className={`${styleClass} ${borderClass} px-1.5 py-0.5 overflow-hidden`}
         style={processingInlineStyle}
@@ -2232,10 +2314,20 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
 
     return (
       <div ref={cardRef}
+        data-lot-id={lot.id}
         draggable={lot.status !== 'completed'}
         onDragStart={(e) => { e.dataTransfer.setData('lotId', lot.id); setDraggedLotId(lot.id); e.stopPropagation(); }}
         onDragEnd={() => setDraggedLotId(null)}
-        onClick={() => lot.mapZoneId && lot.status !== 'completed' && onOpenExecution(lot)}
+        onClick={(e) => {
+          // 🚨 2026-08-30 製品検査で清水さんに指摘された壊れ方が、部品にも同じ形で在った:
+          //   「現場マップで型式カードを押しても、なぜか自動で作業エリア拡大画面になる」
+          //   このカードを包んでいる div(ダッシュボードの列)に onClick={() => onSetMode('map-only')} が有り、
+          //   カードの onClick が **止めずに親へ伝わって** 拡大が必ず走っていた。
+          //   開けない台(mapZoneId 無し/完了)では作業画面も開かないので「押すと拡大だけ」に見える。
+          //   ⚠JSXの属性の並びの中に {/* */} のコメントは置けない(構文エラーになる)。理由はこの中に書く。
+          e.stopPropagation();
+          if (lot.mapZoneId && lot.status !== 'completed') onOpenExecution(lot);
+        }}
         {...touchProps}
         className={`${styleClass} ${borderClass} px-1.5 py-1 hover:scale-[1.02] transition-transform overflow-hidden`}
         style={processingInlineStyle}
@@ -2299,10 +2391,15 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
 
   return (
     <div ref={cardRef}
+      data-lot-id={lot.id}
       draggable={lot.status !== 'completed'}
       onDragStart={(e) => { e.dataTransfer.setData('lotId', lot.id); setDraggedLotId(lot.id); e.stopPropagation(); }}
       onDragEnd={() => setDraggedLotId(null)}
-      onClick={() => lot.mapZoneId && lot.status !== 'completed' && onOpenExecution(lot)}
+      onClick={(e) => {
+        // 🚨 2026-08-30 上の2つと同じ理由。押下を親(拡大)へ伝えない。
+        e.stopPropagation();
+        if (lot.mapZoneId && lot.status !== 'completed') onOpenExecution(lot);
+      }}
       {...touchProps}
       className={`${styleClass} ${borderClass} ${draggedLotId === lot.id ? 'opacity-50' : ''} group overflow-hidden`}
       style={processingInlineStyle}
@@ -2974,12 +3071,44 @@ const analyzeLotsForReview = (steps = [], completedLots = []) => {
   return { perLot, tmplTitles, autoTitles: [...autoTitles], skipRate, blockAgg, orderSignatures, lotsWithTime: perLot.length, totalLots: completedLots.length };
 };
 
+// ===========================================================================
+// 🚨🚨🚨 AIの鍵は **ブラウザに置かない**。必ず Worker(サーバ)を通す。
+// ---------------------------------------------------------------------------
+// 2026-07 に、この形(`?key=${apiKey}` をブラウザから直に叩く)で **鍵が漏れました**。
+// 原因は「.env をコミットした」+「VITE_ の値はビルドで公開バンドルへ焼き込まれる」の2つ。
+// 🚨 `import.meta.env.VITE_GEMINI_API_KEY` は **1文字も書かない事**。
+//   書いた瞬間、誰かが .env に値を入れれば、その鍵は本番の JS に入って全世界に配られます。
+//   「いまは空だから安全」は理由になりません(次に入れる人が居ます)。
+// ⚠ この決まりは scripts/verify-no-browser-api-key.mjs が毎回見張っています。
+//   プロキシのURL(VITE_GEMINI_PROXY_URL)は **秘密ではない**ので VITE_ でよい。鍵だけが駄目。
+// ---------------------------------------------------------------------------
+const GEMINI_PROXY_URL = String(import.meta.env.VITE_GEMINI_PROXY_URL || '').replace(/\/+$/, '');
+
+/**
+ * Worker 経由で Gemini を呼ぶ。鍵は Worker の secret(GEMINI_API_KEY)にだけ在る。
+ * ⚠返り値は Gemini の生の形のまま(candidates[0].content.parts[0].text)。
+ *   呼ぶ側の読み取り方を変えないため。
+ * @param {object} payload { contents, generationConfig } … いままでと同じ中身
+ * @param {string} modelName
+ */
+const callGeminiViaProxy = async (payload, modelName = 'gemini-2.5-flash') => {
+  if (!GEMINI_PROXY_URL) {
+    throw new Error('AIサーバーが未設定です。\n管理者: .env の VITE_GEMINI_PROXY_URL に Worker の URL を設定して、ビルドし直してください。');
+  }
+  const res = await fetch(`${GEMINI_PROXY_URL}/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelName, ...payload }),
+  });
+  if (!res.ok) throw new Error(`AIサーバーのエラー: HTTP ${res.status}`);
+  const j = await res.json();
+  if (j && j.error) throw new Error(`AIサーバーのエラー: ${j.error}`);
+  return j;
+};
+
 // === Gemini AI による作業順提案 (オプション) ===
-// VITE_GEMINI_API_KEY が設定されている場合のみ呼べる。analysis を JSON で投げて推奨順を取得
+// VITE_GEMINI_PROXY_URL が設定されている場合のみ呼べる。analysis を JSON で投げて推奨順を取得
 const requestGeminiWorkOrder = async (analysis, modelName = 'gemini-2.5-flash') => {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
-  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY が設定されていません。.env に API キーを設定してください。');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
   const stepsForAi = Object.values(analysis.stepStats).map(s => ({
     key: s.key,
     title: s.step.title,
@@ -3026,9 +3155,7 @@ JSON で次の形式で返してください:
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: { responseMimeType: 'application/json' },
   };
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  if (!res.ok) throw new Error(`Gemini API エラー: HTTP ${res.status}`);
-  const j = await res.json();
+  const j = await callGeminiViaProxy(payload, modelName);
   const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Gemini から空のレスポンスが返りました');
   try {
@@ -3041,9 +3168,6 @@ JSON で次の形式で返してください:
 // === AI 深掘り分析: 改善ヒントタブ用の汎用分析 ===
 // データを Gemini に投げて、人間が気づきにくい洞察・優先アクションを抽出
 const requestGeminiDeepAnalysis = async (payload, modelName = 'gemini-2.5-flash') => {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
-  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY が設定されていません。.env に API キーを設定してください。');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
   const prompt = `製造現場の検査アプリの時間取りデータを分析します。
 以下のデータから、現場改善に役立つ深い洞察と優先アクションを抽出してください。
 
@@ -3086,9 +3210,7 @@ JSON で次の形式で返してください:
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: { responseMimeType: 'application/json', temperature: 0.4 },
   };
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!res.ok) throw new Error(`Gemini API エラー: HTTP ${res.status} - ${(await res.text()).slice(0, 200)}`);
-  const j = await res.json();
+  const j = await callGeminiViaProxy(body, modelName);
   const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Gemini から空のレスポンスが返りました');
   try {
@@ -3101,10 +3223,7 @@ JSON で次の形式で返してください:
 // 動画から切り出したコマ(複数の静止画)を Gemini に渡し、作業手順・注意点の説明下書きを作る。
 // frames: ['data:image/jpeg;base64,...', ...]。contextLabel: 工程名など文脈。返り: { description, points[] }
 const requestGeminiFramesDraft = async (frames, contextLabel = '', modelName = 'gemini-2.5-flash') => {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
-  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY が設定されていません。.env に API キーを設定してください。');
   if (!frames || frames.length === 0) throw new Error('コマ(写真)がありません');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
   const prompt = `これは製造業の検査・組立の作業を撮った動画から時系列順に切り出した連続写真です${contextLabel ? `（工程: ${contextLabel}）` : ''}。
 作業者がこの工程を正しく行うための「作業手順・注意点の説明文」の下書きを作ってください。
 - 写真から読み取れる事実だけに基づき、推測は控えめに（不明な点は書かない）。
@@ -3118,9 +3237,7 @@ JSON で次の形式で返してください:
     contents: [{ role: 'user', parts: [{ text: prompt }, ...imgParts] }],
     generationConfig: { responseMimeType: 'application/json', temperature: 0.3 },
   };
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!res.ok) throw new Error(`Gemini API エラー: HTTP ${res.status} - ${(await res.text()).slice(0, 200)}`);
-  const j = await res.json();
+  const j = await callGeminiViaProxy(body, modelName);
   const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Gemini から空のレスポンスが返りました');
   try { return JSON.parse(text); } catch { return { description: text, points: [] }; }
@@ -3136,7 +3253,9 @@ const VideoToPhotosModal = ({ contextLabel = '', existingDescription = '', onApp
   const [aiBusy, setAiBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [applying, setApplying] = useState(false);
-  const hasAiKey = !!(import.meta.env.VITE_GEMINI_API_KEY);
+  // 🚨 鍵の有無ではなく **AIサーバー(Worker)の設定の有無** で押せるか決める。
+  //   鍵はブラウザに置かない(2026-07 の漏洩)。ここに VITE_GEMINI_API_KEY を戻さない事。
+  const hasAiKey = !!GEMINI_PROXY_URL;
 
   const pickVideo = (e) => {
     const f = e.target.files?.[0]; if (!f) { return; }
@@ -3244,7 +3363,7 @@ const VideoToPhotosModal = ({ contextLabel = '', existingDescription = '', onApp
           <div>
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs font-bold text-slate-500">説明文（手順・注意点）</span>
-              <button onClick={runAi} disabled={aiBusy || !hasAiKey} title={hasAiKey ? '' : 'AIキー(VITE_GEMINI_API_KEY)未設定'} className="text-[11px] font-bold px-2 py-1 rounded bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-40 flex items-center gap-1">
+              <button onClick={runAi} disabled={aiBusy || !hasAiKey} title={hasAiKey ? '' : 'AIサーバー未設定(管理者: .env の VITE_GEMINI_PROXY_URL)'} className="text-[11px] font-bold px-2 py-1 rounded bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-40 flex items-center gap-1">
                 {aiBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} AIで説明文を作る
               </button>
             </div>
@@ -3680,7 +3799,8 @@ const ShiftHandoverModal = ({ lots, indirectWork, currentUserName, workers, save
   const [memo, setMemo] = useState('');
   const myWorkerId = workers.find(w => w.name === currentUserName)?.id;
 
-  // 自分が今日触ったロット
+  // 自分が担当、または自分の作業記録があるロット
+  // ⚠ここは日付では絞っていない(「今日触った」ではない)。当日の絞りは下の todayCompleted / totalMyWork で行う。
   const myLots = useMemo(() => {
     return lots.filter(lot => {
       // 自分が担当 OR tasks に自分のworkerNameがある
@@ -3701,17 +3821,26 @@ const ShiftHandoverModal = ({ lots, indirectWork, currentUserName, workers, save
   const incomplete = myLots.filter(l => !(l.status === 'completed' || l.location === 'completed') && l.status !== 'processing' && l.status !== 'paused');
 
   // 自分の今日の合計作業時間
+  // 🚨 2026-08-23: ここに日付の条件が1つも無く、**全期間の合計** を「本日の実績」として出していた。
+  //   lots は過去500件(LOTS_HISTORY_LIMIT)まで載るので、7.75h のはずの所に数百時間が出ていた。
+  //   完了時刻で当日に絞る。完了時刻は endTime を最優先し、無い旧データは firstStartTime+duration で補う
+  //   (完了タスクの startTime は保存時に必ず null へ潰されるので使えない)。
+  //   どちらも無い＝完了時刻が分からないタスクは「今日」に数えない(分からない物を今日に足さない)。
   const totalMyWork = useMemo(() => {
     let sec = 0;
     lots.forEach(lot => {
       Object.values(lot.tasks || {}).forEach(t => {
         if (!t || t.status !== 'completed') return;
         if (t.workerName !== currentUserName && t.workerId !== myWorkerId) return;
+        const endMs = Number(t.endTime) || 0;
+        const fstMs = Number(t.firstStartTime) || 0;
+        const doneAt = endMs || (fstMs ? fstMs + (Number(t.duration) || 0) * 1000 : 0);
+        if (!doneAt || doneAt < todayMs) return;
         sec += (t.duration || 0);
       });
     });
     return sec;
-  }, [lots, currentUserName, myWorkerId]);
+  }, [lots, currentUserName, myWorkerId, todayMs]);
 
   const indirectToday = (indirectWork || []).filter(w => {
     if (w.workerName !== currentUserName) return false;
@@ -3719,7 +3848,12 @@ const ShiftHandoverModal = ({ lots, indirectWork, currentUserName, workers, save
   });
   const indirectSec = indirectToday.reduce((s, w) => s + (w.duration || 0), 0);
 
-  const handleSave = () => {
+  // 🚨 2026-08-17 と同じ形を塞ぐ: **保存を投げっぱなしのまま画面を閉じない**。
+  //   引継ぎは「次のシフトの人がこれだけを頼りにする」物なので、届かないまま
+  //   「保存しました」と言って閉じると、誰も引き継げないのに誰も気づけない。
+  const [savingHandover, setSavingHandover] = useState(false);
+  const handleSave = async () => {
+    if (savingHandover) return; // ⚠二度押しで同じ引継ぎを2件作らない
     if (!memo.trim() && inProgress.length === 0 && incomplete.length === 0) {
       if (!confirm('引継ぎ事項が空です。このまま登録しますか？')) return;
     }
@@ -3733,16 +3867,29 @@ const ShiftHandoverModal = ({ lots, indirectWork, currentUserName, workers, save
       inProgressList ? `\n■ 引継ぎ対象 (進行中・一時停止):\n${inProgressList}` : '',
       memo.trim() ? `\n■ 引継ぎメモ:\n${memo.trim()}` : '',
     ].filter(Boolean).join('\n');
-    saveData('notes', noteId, {
-      content,
-      author: currentUserName,
-      isPersonal: false,
-      isHandover: true,
-      handoverDate: todayStr,
-      createdAt: Date.now(),
-    });
-    alert('引継ぎを保存しました。次のシフトの担当者がノートで確認できます。');
-    onClose();
+    setSavingHandover(true);
+    try {
+      // 🚨 **await する**。届く前に「保存しました」と言って閉じない。
+      await saveData('notes', noteId, {
+        content,
+        author: currentUserName,
+        isPersonal: false,
+        isHandover: true,
+        handoverDate: todayStr,
+        createdAt: Date.now(),
+      });
+      alert('引継ぎを保存しました。次のシフトの担当者がノートで確認できます。');
+      onClose();
+    } catch (e) {
+      // 🚨 **閉じない**。閉じると打った引継ぎメモが手元ごと消える。
+      console.error('🚨 引継ぎが届かなかったので、画面はそのままにしました', e);
+      alert('🚨 引継ぎがサーバに届きませんでした。\n\n'
+        + `${(e && e.message) || e}\n\n`
+        + 'この画面は **わざと閉じていません**。打った内容は残っています。\n'
+        + 'つながってから、もう一度「保存」を押してください。');
+    } finally {
+      setSavingHandover(false);
+    }
   };
 
   return (
@@ -3805,7 +3952,7 @@ const ShiftHandoverModal = ({ lots, indirectWork, currentUserName, workers, save
         </div>
         <div className="border-t p-4 flex justify-end gap-2 shrink-0">
           <button onClick={onClose} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-bold">キャンセル</button>
-          <button onClick={handleSave} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black flex items-center gap-2 shadow-md"><Save className="w-4 h-4"/> 保存して引継ぎ</button>
+          <button onClick={handleSave} disabled={savingHandover} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg font-black flex items-center gap-2 shadow-md"><Save className="w-4 h-4"/> {savingHandover ? '保存中…' : '保存して引継ぎ'}</button>
         </div>
       </div>
     </div>
@@ -3853,8 +4000,20 @@ const DailySummaryModal = ({ lots, indirectWork, currentUserName, workers, setti
       const taskWorker = resolveTaskWorker(task, lot);
       if (selectedWorkers.length > 0 && !selectedWorkers.includes(taskWorker)) return;
       if (!task.duration || task.duration <= 0) return;
-      const taskEnd = (task.startTime || lot.workStartTime || lot.createdAt || 0) + (task.duration * 1000);
-      if (taskEnd < fromTs.getTime() || taskEnd > toTs.getTime() + 86400000) return;
+      // 🚨 2026-08-23: 完了タスクの startTime は保存時に必ず null へ潰されるため、
+      //   従来の第1候補は完了タスクでは常に null → lot.workStartTime(ロットを開始した日)に落ち、
+      //   そのロットのタスクが全部「ロットを始めた日」に付いていた。
+      //   (昨日以前に始めたロットを今日やった分が、今日に1秒も出なかった)
+      //   → 完了時刻は endTime を最優先、無ければ firstStartTime+duration で再構成する。
+      //   ⚠どちらも無い本当に古いデータだけは、今まで通りロット開始日ベースの推定に落とす(黙って消さない)。
+      const endMs = Number(task.endTime) || 0;
+      const fstMs = Number(task.firstStartTime) || 0;
+      const taskEnd = endMs
+        || (fstMs ? fstMs + task.duration * 1000
+                  : (Number(task.startTime) || Number(lot.workStartTime) || Number(lot.createdAt) || 0) + task.duration * 1000);
+      // ⚠上限に丸1日の下駄(+86400000)を履かせていたので、1日を選んでも翌日分が混じっていた。
+      //   toTs は既に 23:59:59.999 なので下駄は不要(2026-08-23 撤去)。
+      if (taskEnd < fromTs.getTime() || taskEnd > toTs.getTime()) return;
       const step = lot.steps?.find(s => key.startsWith(s.id + '-')) || lot.steps?.[parseInt(key.split('-')[0])];
       // key 形式: "stepId-unitIdx" → unitIdx を抽出して機番情報を取得
       // ロット1回キー "stepId-lot-k" の k は台番号ではなく回数なので「N回目」表示にする
@@ -4346,44 +4505,69 @@ const WorkStandardEditModal = ({ editingItem, onClose, onSave, onDelete, current
   );
 };
 
-const NoteModal = ({ notes, templates, workers, selectedWorker, saveData, deleteData, onClose, currentUserName = '' }) => {
+const NoteModal = ({ notes, templates, workers, saveData, deleteData, onClose, currentUserName = '' }) => {
   const [tab, setTab] = useState('my'); // 'my' | 'shared' | 'create'
   const [model, setModel] = useState('');
   const [stepTitle, setStepTitle] = useState('');
   const [content, setContent] = useState('');
   const [isShared, setIsShared] = useState(false);
   const [noteImage, setNoteImage] = useState(null);
+  const [busy, setBusy] = useState(false);
   const workerName = currentUserName;
 
   const myNotes = notes.filter(n => n.isPersonal && n.author === workerName);
   const sharedNotes = notes.filter(n => !n.isPersonal);
 
-  const handleImageChange = (e) => {
+  // 📷 2026-08-29: 撮った物を **無加工のまま** 持たせない。
+  //   前は FileReader.readAsDataURL の結果をそのまま setNoteImage していた。
+  //   いまの端末のカメラは1枚 3〜8MB。base64 にすると 4〜11MB になり、
+  //   それが notes の1件として Firestore の **1MB上限**に直行する = 保存できない。
+  //   下の resizeImage は「出来上がりのバイト数を実測して」260KB に収める版(このファイルの上の方)。
+  //   ⚠**見え方は変わる**。ここは今まで一度も縮めていなかったので、これからは
+  //     長辺 900px の JPEG(画質0.6)になる。元が PNG でも JPEG になる(透過は残らない)。
+  //     不良写真・作業標準・測定図は前から同じ resizeImage を通っている = このアプリの既定の扱いに揃えた。
+  //   ⚠縮めるのはここ1か所だけ(カメラ側でも縮めるとJPEGが二重に掛かって汚くなる)。
+  const handleImageChange = async (e) => {
     const file = e.target.files?.[0];
-    if (!file) { e.target.value = ''; return; }
-    // 画像ファイル以外を弾く (Android で accept="image/*" が無視されることがある)
-    if (!file.type.startsWith('image/')) {
-      alert('画像ファイルを選択してください');
-      e.target.value = '';
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = (ev) => setNoteImage(ev.target.result);
-    reader.onerror = () => alert(`画像の読込みに失敗しました: ${reader.error?.message || 'Unknown'}`);
-    reader.readAsDataURL(file);
-    // 同じファイルの再選択を可能にする (iPad/iPhone で頻発)
+    // 同じファイルの再選択を可能にする (iPad/iPhone で頻発)。
+    // ⚠await より **先に**空にする(後回しにすると、待っている間に選び直せない)。
     e.target.value = '';
+    if (!file) return;
+    // 画像ファイル以外を弾く (Android で accept="image/*" が無視されることがある)
+    if (!file.type.startsWith('image/')) { alert('画像ファイルを選択してください'); return; }
+    try {
+      const img = await resizeImage(file);
+      // resizeImage は読めなかった時に空文字を返す(HEIC など)。空を入れると絵が消えるので入れない。
+      if (!img) { alert('画像の読込みに失敗しました（この形式は読めないかもしれません）'); return; }
+      setNoteImage(img);
+    } catch (err) {
+      alert(`画像の読込みに失敗しました: ${err?.message || 'Unknown'}`);
+    }
   };
 
-  const handleSave = () => {
+  // 💾 2026-08-29: 保存を await して、**通ってから**入力欄を空にする。
+  //   前は saveData を投げっぱなしにして、その場で欄を消していた。
+  //   saveData は失敗すると自分で知らせて投げる作りなので、投げっぱなしだと
+  //   「保存できませんでした」と出たのに書いた物はもう画面に無い = 打ち直せなかった。
+  //   ⚠ここは机上の画面(ノート)なので await を足してよい。現場の検査動線には足していない。
+  const handleSave = async () => {
+    if (busy) return;
     if (!content.trim() && !noteImage) { alert('内容を入力してください'); return; }
     if (!workerName) { alert('作業者を選択してください'); return; }
     const id = `note_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    saveData('notes', id, {
-      author: workerName, model: model.trim(), stepTitle: stepTitle.trim(),
-      content: content.trim(), image: noteImage || null,
-      isPersonal: !isShared, createdAt: Date.now()
-    });
+    setBusy(true);
+    try {
+      await saveData('notes', id, {
+        author: workerName, model: model.trim(), stepTitle: stepTitle.trim(),
+        content: content.trim(), image: noteImage || null,
+        isPersonal: !isShared, createdAt: Date.now()
+      });
+    } catch {
+      // saveData 自身が知らせている。ここでは **欄を消さずに** 戻る(書いた物を残す)。
+      return;
+    } finally {
+      setBusy(false);
+    }
     setContent(''); setModel(''); setStepTitle(''); setNoteImage(null); setIsShared(false);
     setTab(isShared ? 'shared' : 'my');
   };
@@ -4421,7 +4605,7 @@ const NoteModal = ({ notes, templates, workers, selectedWorker, saveData, delete
                 <input type="checkbox" checked={isShared} onChange={e => setIsShared(e.target.checked)} className="rounded"/>
                 <div><span className="text-sm font-bold text-amber-700">みんなに共有する</span><div className="text-[10px] text-amber-500">該当する品目コード・工程の作業時に表示されます</div></div>
               </label>
-              <button onClick={handleSave} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700">保存</button>
+              <button onClick={handleSave} disabled={busy} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 disabled:opacity-50">{busy ? '保存中…' : '保存'}</button>
             </div>
           )}
           {tab === 'my' && (
@@ -4463,7 +4647,7 @@ const NoteModal = ({ notes, templates, workers, selectedWorker, saveData, delete
 };
 
 // --- Announcement Modal ---
-const AnnouncementModal = ({ announcements, workers, selectedWorker, saveData, deleteData, onClose, currentUserName = '' }) => {
+const AnnouncementModal = ({ announcements, workers, saveData, deleteData, onClose, currentUserName = '' }) => {
   const [view, setView] = useState('list'); // 'list' | 'create' | 'detail' | 'edit'
   const [selectedAnn, setSelectedAnn] = useState(null);
   const [title, setTitle] = useState('');
@@ -4473,47 +4657,69 @@ const AnnouncementModal = ({ announcements, workers, selectedWorker, saveData, d
   const [notifyTime2, setNotifyTime2] = useState('');
   const [annMode, setAnnMode] = useState('confirm'); // 'confirm' (確認モード) | 'alarm' (アラームモード)
   const [newComment, setNewComment] = useState('');
+  const [busy, setBusy] = useState(false);
   const workerName = currentUserName;
 
-  const handleImageChange = (e) => {
+  // 📷 2026-08-29: ノートと同じ直し。撮った物を無加工の base64 で持たせない
+  //   (いまの端末は1枚 3〜8MB → base64 で 4〜11MB → お知らせ1件が Firestore の 1MB上限を超える)。
+  //   resizeImage は出来上がりのバイト数を実測して 260KB に収める版(このファイルの上の方)。
+  //   ⚠**見え方は変わる**。長辺 900px の JPEG(画質0.6)になる(元が PNG でも JPEG。透過は残らない)。
+  const handleImageChange = async (e) => {
     const file = e.target.files?.[0];
-    if (!file) { e.target.value = ''; return; }
-    if (!file.type.startsWith('image/')) {
-      alert('画像ファイルを選択してください');
-      e.target.value = '';
-      return;
+    e.target.value = ''; // 同じファイル再選択を可能に (⚠await より先に空にする)
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { alert('画像ファイルを選択してください'); return; }
+    try {
+      const img = await resizeImage(file);
+      if (!img) { alert('画像の読込みに失敗しました（この形式は読めないかもしれません）'); return; }
+      setAnnImage(img);
+    } catch (err) {
+      alert(`画像の読込みに失敗しました: ${err?.message || 'Unknown'}`);
     }
-    const reader = new FileReader();
-    reader.onload = (ev) => setAnnImage(ev.target.result);
-    reader.onerror = () => alert(`画像の読込みに失敗しました: ${reader.error?.message || 'Unknown'}`);
-    reader.readAsDataURL(file);
-    e.target.value = ''; // 同じファイル再選択を可能に
   };
 
-  const handlePost = () => {
+  // 💾 2026-08-29: 保存が通ってから画面を進める(失敗した時に書いた物を消さない)。
+  //   ⚠ここは机上の画面(お知らせ)。現場の検査動線には await を足していない。
+  const handlePost = async () => {
+    if (busy) return;
     if (!title.trim()) { alert('タイトルを入力してください'); return; }
     if (!workerName) { alert('投稿者を入力してください'); return; }
     const id = `ann_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const notifyTimes = [notifyTime1, notifyTime2].filter(Boolean);
-    saveData('announcements', id, {
-      author: workerName, title: title.trim(), content: content.trim(),
-      image: annImage || null, comments: [], confirmedBy: [], createdAt: Date.now(),
-      notifyTimes: notifyTimes.length > 0 ? notifyTimes : null,
-      mode: annMode // 'confirm' or 'alarm'
-    });
+    setBusy(true);
+    try {
+      await saveData('announcements', id, {
+        author: workerName, title: title.trim(), content: content.trim(),
+        image: annImage || null, comments: [], confirmedBy: [], createdAt: Date.now(),
+        notifyTimes: notifyTimes.length > 0 ? notifyTimes : null,
+        mode: annMode // 'confirm' or 'alarm'
+      });
+    } catch {
+      return; // saveData 自身が知らせている。書いた物は消さずに残す
+    } finally {
+      setBusy(false);
+    }
     setTitle(''); setContent(''); setAnnImage(null); setNotifyTime1(''); setNotifyTime2(''); setAnnMode('confirm');
     setView('list');
   };
 
-  const handleUpdate = () => {
+  const handleUpdate = async () => {
+    if (busy) return;
     if (!selectedAnn) return;
     const notifyTimes = [notifyTime1, notifyTime2].filter(Boolean);
-    saveData('announcements', selectedAnn.id, {
-      title: title.trim(), content: content.trim(),
-      image: annImage ?? selectedAnn.image ?? null,
-      notifyTimes: notifyTimes.length > 0 ? notifyTimes : null,
-      mode: annMode // 編集時に mode も保存 (旧コードは反映されなかった)
-    });
+    setBusy(true);
+    try {
+      await saveData('announcements', selectedAnn.id, {
+        title: title.trim(), content: content.trim(),
+        image: annImage ?? selectedAnn.image ?? null,
+        notifyTimes: notifyTimes.length > 0 ? notifyTimes : null,
+        mode: annMode // 編集時に mode も保存 (旧コードは反映されなかった)
+      });
+    } catch {
+      return; // 直した中身を画面に残したまま止まる(打ち直しにならない)
+    } finally {
+      setBusy(false);
+    }
     setView('detail');
   };
 
@@ -4695,7 +4901,7 @@ const AnnouncementModal = ({ announcements, workers, selectedWorker, saveData, d
                   <div className="flex-1"><label className="text-[10px] text-blue-500">通知2</label><input type="time" value={notifyTime2} onChange={e=>setNotifyTime2(e.target.value)} className="w-full border rounded p-1.5 text-sm"/></div>
                 </div>
               </div>
-              <button onClick={view === 'edit' ? handleUpdate : handlePost} className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700">{view === 'edit' ? '更新する' : '投稿する'}</button>
+              <button onClick={view === 'edit' ? handleUpdate : handlePost} disabled={busy} className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 disabled:opacity-50">{busy ? '保存中…' : (view === 'edit' ? '更新する' : '投稿する')}</button>
             </div>
           )}
         </div>
@@ -6790,8 +6996,117 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   const [tasks, setTasks] = useState(lot.tasks || {});
   const tasksRef = useRef(lot.tasks || {});
   useEffect(() => { tasksRef.current = tasks; }, [tasks]);
-  const [stepTimes, setStepTimes] = useState(lot.stepTimes || {});
-  
+
+  // 🚨🚨🚨 「済み」の嘘を止める見張り。
+  //   ⚠この tasks は **開いた瞬間の lot.tasks から1回だけ** 作られ、以後サーバと合わせ直さない。
+  //     だから「サーバへ送れていない」時でも、画面はずっと済みのまま緑に見える。
+  //     2026-08-17 最終検査の事故で、作業者が最後まで気づけなかった理由がこれ。
+  //     (localSteps には合わせ直す effect が在るのに、tasks には無かった)
+  //   ⚠tasks を派生値へ作り替えるのは作業画面の全体に及ぶので、まず **食い違いを人に見せる**。
+  //     Firestore は自分が書いた分を手元の控えへ即座に反映するので、
+  //     食い違いが数秒より長く続くのは「本当に届いていない」時だけ。
+  const [tasksOutOfSync, setTasksOutOfSync] = useState(null); // { missing, at }
+  // ⚠依存に入れる物は「静的に読める1つの変数」にする(式を直接書くと lint が確かめられない)。
+  const serverTasks = (lot && lot.tasks && typeof lot.tasks === 'object' && !Array.isArray(lot.tasks)) ? lot.tasks : null;
+  useEffect(() => {
+    const srv = serverTasks || {};
+    // 画面が「手を付けた」と思っている鍵のうち、サーバ側に跡が無い物を数える。
+    const touched = (t) => !!t && typeof t === 'object' && (Number(t.duration) > 0 || t.firstStartTime || t.endTime || (t.status && t.status !== 'waiting'));
+    const missing = Object.keys(tasks).filter((k) => touched(tasks[k]) && !touched(srv[k]));
+    if (missing.length === 0) { setTasksOutOfSync(null); return; }
+    // 15秒 待ってまだ食い違うなら本物。書いた直後の一瞬では鳴らさない(鳴りっぱなしは誰も見なくなる)。
+    const t = setTimeout(() => setTasksOutOfSync({ missing: missing.length, at: Date.now() }), 15000);
+    return () => clearTimeout(t);
+  }, [serverTasks, tasks]);
+
+  // ===== 🚨🚨🚨 tasks を サーバと合わせ直す (2026-08-30) ===========================
+  //   ⚠上の見張り(tasksOutOfSync)は **食い違いを見せるだけ** で、合わせ直してはいなかった。
+  //     だから他の端末が足した記録は画面に入らず、こちらの古い写しで丸ごと上書きできた。
+  //     ・保存が1件も届いていなくても画面はずっと「済み」に見える(2026-08-17 の形)
+  //     ・ロットがまだ読めていない時に開くと tasks は {} のまま固定され、
+  //       その状態で「全作業完了」を押すと **tasks を丸ごと空で送る**(= 全部消える)
+  //   ⚠判定は書き写さない。製品検査と同じ domain/saveOrder.js の reconcileTasks
+  //     (3方向の突き合わせ・試験あり)を呼ぶだけ。この画面は材料を渡すだけ。
+  //     ・base     = 前に受け取ったサーバの姿  ・local = いま画面が持っている姿
+  //     ・server   = 今届いた姿(購読は「サーバ ⊕ この端末の送信待ち」= 保存済みは取り消しにならない)
+  //     ・keepKeys = 時計が動いている台(進行中・修正中)。何が来ても取り上げない。
+  //   ⚠🚨検査の動線に await を1つも足していない(購読が届いた時の effect だけ)。
+  const serverTasksRef = useRef(lot.tasks || {});
+  useEffect(() => {
+    const server = lot.tasks || {};
+    const r = reconcileTasks({
+      local: tasksRef.current || {},
+      server,
+      base: serverTasksRef.current || {},
+      keepKeys: runningTaskKeys(tasksRef.current || {}),
+    });
+    serverTasksRef.current = server;
+    if (!r.changed) return;
+    setTasks(r.tasks);
+    tasksRef.current = r.tasks;
+    if (r.adopted.length || r.removed.length || r.conflicts.length) {
+      console.info('[tasks 合わせ直し] 取り込み:', r.adopted, '消えた:', r.removed, 'ぶつかり(手元を残した):', r.conflicts);
+    }
+    // ⚠deps は lot.tasks だけで正しい(他は ref で読んでいる = 意図して依存に入れない)。
+  }, [lot.tasks]);
+
+  // ===== 🚨 stepTimes を サーバと合わせ直す (2026-08-30) ============================
+  //   直す前(実コードで確認):
+  //     ・`useState(lot.stepTimes || {})` の **1回きりの写し**。以後どこでも合わせ直していない。
+  //     ・なのに「次へ」(handleNext)は毎回 `stepTimes: newStepTimes` で **マップまるごと** を
+  //       送り返していた。= 他端末が直した工程の合計が、こちらの古い写しで戻る。
+  //     ・さらに、保存が1件も届いていなくても画面はずっと「済み」に見える
+  //       (2026-08-17 の事故で作業者が最後まで気づけなかった形そのもの)。
+  //   直した形:
+  //     ① 届いた姿と3方向で突き合わせる(tasks とまったく同じ判定 = reconcileValueMap)。
+  //     ② 人がいま入力中の鍵は取り上げない(keepKeys = この端末がさっき触った鍵)。
+  //   ⚠🚨検査の動線に await を1つも足していない。合わせ直しは **購読が届いた時の effect だけ**。
+  //     保存は今までどおり投げっぱなし(saveData 側が失敗を人に見せる)。
+  //   ⚠set の入口は setStepTimes 1本のまま(既存の呼び出しは1文字も変えない)。
+  //     合わせ直しだけが Raw を呼ぶ = 取り込みを「人が触った」と数えない。
+  const [stepTimes, setStepTimesRaw] = useState(lot.stepTimes || {});
+  const stepTimesRef = useRef(lot.stepTimes || {});
+  const serverStepTimesRef = useRef(lot.stepTimes || {});
+  const stepTimesTouchedRef = useRef(new Map());
+  const stepTimesLotRef = useRef(lot.id);
+  const setStepTimes = useCallback((next) => {
+    const prev = stepTimesRef.current || {};
+    const v = typeof next === 'function' ? next(prev) : next;
+    stepTimesTouchedRef.current = noteEditedKeys(stepTimesTouchedRef.current, prev, v, Date.now());
+    stepTimesRef.current = v;
+    setStepTimesRaw(v);
+  }, []);
+  useEffect(() => {
+    const server = lot.stepTimes || {};
+    const now = Date.now();
+    // 🚨ロットが変わったら前のロットの値を1つも持ち越さない。
+    //   この画面は閉じずに別ロットへ差し替わり得る。合わせ直しは「手元を残す」側なので、
+    //   守りが無いと **前のロットの合計が次のロットに混ざる**。
+    if (stepTimesLotRef.current !== lot.id) {
+      stepTimesLotRef.current = lot.id;
+      stepTimesTouchedRef.current = new Map();
+      serverStepTimesRef.current = server;
+      stepTimesRef.current = server;
+      setStepTimesRaw(server);
+      return;
+    }
+    stepTimesTouchedRef.current = pruneEditedKeys(stepTimesTouchedRef.current, now);
+    const r = reconcileValueMap({
+      local: stepTimesRef.current || {},
+      server,
+      base: serverStepTimesRef.current || {},
+      keepKeys: recentlyEditedKeys(stepTimesTouchedRef.current, now),
+    });
+    serverStepTimesRef.current = server;
+    if (!r.changed) return;
+    stepTimesRef.current = r.map;
+    setStepTimesRaw(r.map);
+    if (r.adopted.length || r.removed.length || r.conflicts.length) {
+      console.info('[stepTimes 合わせ直し] 取り込み:', r.adopted, '消えた:', r.removed, 'ぶつかり(手元を残した):', r.conflicts);
+    }
+    // ⚠deps は lot.id と lot.stepTimes だけで正しい(他は ref で読んでいる = 意図して依存に入れない)。
+  }, [lot.id, lot.stepTimes]);
+
   // Timer for Sequential Mode
   const [startTime, setStartTime] = useState(lot.workStartTime || null);
   const [elapsed, setElapsed] = useState(0);
@@ -6825,6 +7140,33 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
 
   // Interruptions (Defects/Monitoring)
   const [interruptions, setInterruptions] = useState(lot.interruptions || []);
+  // 🚨🚨 中断(不具合・軽微不良・気づき)も **開いた瞬間のコピーを握り続けていた**。
+  //   これは配列なので merge:true でも **丸ごと置き換わる** → 後から保存した端末が勝ち、
+  //   他の端末が足した不具合記録が黙って消える(最終検査・③では 2026-08-14 に直した形)。
+  //   ⚠ここは「サーバに在る物」と「まだ届いていない手元の物」を **id で合わせる**。
+  //     ・サーバにしか無い物 → 取り込む(他端末の記録を消さない)
+  //     ・手元にしか無い物   → 残す(まだ送れていない自分の記録を消さない)
+  //     ・進行中(active)     → 手元を優先(秒数が1秒ごとに進んでいる)
+  //   ⚠id が無い古い記録は触らない(消すと台帳から消える)。
+  const serverInts = Array.isArray(lot && lot.interruptions) ? lot.interruptions : null;
+  useEffect(() => {
+    if (!serverInts) return;
+    setInterruptions((prev) => {
+      const byId = new Map();
+      const noId = [];
+      serverInts.forEach((i) => { if (i && i.id) byId.set(i.id, i); else if (i) noId.push(i); });
+      prev.forEach((i) => {
+        if (!i || !i.id) return;
+        // 手元にしか無い(未送信) / 進行中(秒数が進んでいる) は手元を正とする
+        if (!byId.has(i.id) || i.status === 'active') byId.set(i.id, i);
+      });
+      prev.forEach((i) => { if (i && !i.id) noId.push(i); });
+      const next = [...byId.values(), ...noId];
+      // 中身が同じなら同じ配列を返す(毎秒の描き直しを増やさない)
+      if (next.length === prev.length && next.every((x, k) => x === prev[k])) return prev;
+      return next;
+    });
+  }, [serverInts]);
   // 測定画面メイン拡大表示トグル（測定タイプの工程のみで使用）
   const [measurementFullscreen, setMeasurementFullscreen] = useState(false);
   // 確認チェック拡大表示 + 注意事項/画像 拡大表示
@@ -6874,11 +7216,22 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     if (!pendingUndo) return;
     if (pendingUndoTimerRef.current) clearTimeout(pendingUndoTimerRef.current);
     if (pendingUndoCountdownRef.current) clearInterval(pendingUndoCountdownRef.current);
-    setTasks(pendingUndo.previousTasks);
+    // 🚨 取り消し(直前の姿へ戻す)は「時間が減る」保存になる。人が押した取り消しである事を
+    //   控えとして残す(=保存の関所が理由を読める・後から何が戻ったか追える)。
+    //   ⚠戻す対象の鍵だけに印を付ける。全部に付けると印の意味が薄れる。
+    //   ⚠画面の state と送る中身は **同じ物** にする(食い違うと見張りが誤報する)。
+    const undoAt = Date.now();
+    const restored = { ...pendingUndo.previousTasks };
+    const k = pendingUndo.key;
+    if (k && restored[k]) {
+      const now0 = tasksRef.current[k] || {};
+      restored[k] = { ...restored[k], redoReset: { at: undoAt, why: 'undo', before: Number(now0.duration) || 0, firstStartTime: now0.firstStartTime || null } };
+    }
+    setTasks(restored);
     if (pendingUndo.previousBatchStartTimes !== undefined) {
       setBatchStartTimes(pendingUndo.previousBatchStartTimes);
     }
-    onSave({ tasks: pendingUndo.previousTasks, status: 'processing' });
+    onSave({ tasks: restored, status: 'processing' });
     setPendingUndo(null);
     setUndoCountdown(0);
   };
@@ -6901,8 +7254,66 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     }, undoTimeout * 1000);
   };
 
-  // Measurement state
-  const [measurementResults, setMeasurementResults] = useState(lot.measurementResults || {});
+  // ===== 🚨🚨 Measurement state を サーバと合わせ直す (2026-08-30) ==================
+  //   直す前(実コードで確認):
+  //     ・`useState(lot.measurementResults || {})` の **1回きりの写し**。合わせ直しが無い。
+  //     ・なのに 60秒ごとの自動保存(下の lastFlushTimeRef の所)が
+  //       `measurementResults: measurementResultsRef.current` で **マップまるごと** を送り返す。
+  //     → 多端末で同じロットを開くと、他端末が直した測定値が 60秒以内に古い値へ戻る。
+  //       (「次へ」「中断」「完了」の保存も同じ古い写しを送っていた)
+  //     → そして保存が1件も届いていなくても、画面の ✓ はずっと付いたままだった。
+  //   直した形:
+  //     ① 届いた姿と3方向で突き合わせる(tasks とまったく同じ判定 = reconcileValueMap)。
+  //     ② 人がいま入力中の鍵は取り上げない(keepKeys)。tasks の「動いている時計」に当たる印が
+  //        測定値には無いので、**この端末がさっき触った鍵**を控えて keepKeys にする。
+  //     ③ 自動保存は「まだ送れていない鍵だけ」を送る(下の unsentPatch)。
+  //   ⚠🚨検査の動線に await を1つも足していない。合わせ直しは購読が届いた時の effect だけ。
+  //   ⚠set の入口は setMeasurementResults 1本のまま(既存の呼び出しは1文字も変えない)。
+  //     合わせ直しだけが Raw を呼ぶ = 取り込みを「人が触った」と数えない。
+  const [measurementResults, setMeasurementResultsRaw] = useState(lot.measurementResults || {});
+  // ⚠自動保存で使う最新値。set の入口で必ず更新する(effect 待ちにすると1拍遅れる)。
+  //   ⚠この ref を下(タイマーの所)で作り直さない。2本になると合わせ直した値が自動保存に乗らない。
+  const measurementResultsRef = useRef(lot.measurementResults || {});
+  const serverMeasurementResultsRef = useRef(lot.measurementResults || {});
+  const measurementTouchedRef = useRef(new Map());
+  const measurementLotRef = useRef(lot.id);
+  const setMeasurementResults = useCallback((next) => {
+    const prev = measurementResultsRef.current || {};
+    const v = typeof next === 'function' ? next(prev) : next;
+    measurementTouchedRef.current = noteEditedKeys(measurementTouchedRef.current, prev, v, Date.now());
+    measurementResultsRef.current = v;
+    setMeasurementResultsRaw(v);
+  }, []);
+  useEffect(() => {
+    const server = lot.measurementResults || {};
+    const now = Date.now();
+    // 🚨ロットが変わったら前のロットの測定値を1つも持ち越さない。
+    //   この画面は閉じずに別ロットへ差し替わり得る。合わせ直しは「手元を残す」側なので、
+    //   守りが無いと **前のロットの測定値が次のロットに混ざる**。
+    if (measurementLotRef.current !== lot.id) {
+      measurementLotRef.current = lot.id;
+      measurementTouchedRef.current = new Map();
+      serverMeasurementResultsRef.current = server;
+      measurementResultsRef.current = server;
+      setMeasurementResultsRaw(server);
+      return;
+    }
+    measurementTouchedRef.current = pruneEditedKeys(measurementTouchedRef.current, now);
+    const r = reconcileValueMap({
+      local: measurementResultsRef.current || {},
+      server,
+      base: serverMeasurementResultsRef.current || {},
+      keepKeys: recentlyEditedKeys(measurementTouchedRef.current, now),
+    });
+    serverMeasurementResultsRef.current = server;
+    if (!r.changed) return;
+    measurementResultsRef.current = r.map;
+    setMeasurementResultsRaw(r.map);
+    if (r.adopted.length || r.removed.length || r.conflicts.length) {
+      console.info('[measurementResults 合わせ直し] 取り込み:', r.adopted, '消えた:', r.removed, 'ぶつかり(手元を残した):', r.conflicts);
+    }
+    // ⚠deps は lot.id と lot.measurementResults だけで正しい(他は ref で読んでいる = 意図して依存に入れない)。
+  }, [lot.id, lot.measurementResults]);
 
   const [showPdf, setShowPdf] = useState(false);
   const [activeCustomTaskKey, setActiveCustomTaskKey] = useState(null);
@@ -7038,9 +7449,9 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   // 別モーダル長時間滞在時にデータが失われないよう、60秒に1回 totalWorkTime を Firestore へ自動 flush
   const lastFlushTimeRef = useRef(Date.now());
   // 自動 flush で使う最新値を ref に保持 (effect deps に入れず、interval リスタートも避ける)
-  const measurementResultsRef = useRef(measurementResults);
+  // ⚠measurementResultsRef / serverMeasurementResultsRef は **上の合わせ直しの所** で作っている。
+  //   ここで作り直すと ref が2本になり、合わせ直しで取り込んだ値が自動保存に乗らない。
   const onSaveRef = useRef(onSave);
-  useEffect(() => { measurementResultsRef.current = measurementResults; }, [measurementResults]);
   useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
   useEffect(() => {
     let interval;
@@ -7058,9 +7469,20 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
              const newElapsed = (lot.totalWorkTime || 0) + (currentNow - start);
              setElapsed(newElapsed);
              // 60秒に1回 Firestore へ書き戻し (リロード時のデータ消失防止)
+             // 🚨🚨 直す前はここで `measurementResults: measurementResultsRef.current` = **マップまるごと**
+             //   を送っていた。setDoc(merge:true) は送った鍵を上書きするので、他端末が直した測定値が
+             //   60秒以内に古い値へ戻っていた。
+             //   → ① 上の合わせ直しで ref を最新にした上で、② **まだ送れていない鍵だけ** を送る。
+             //   ⚠1件も無い時は measurementResults の項目ごと入れない(空マップ {} は丸ごと消す書き込み)。
              if (currentNow - lastFlushTimeRef.current >= 60_000) {
                lastFlushTimeRef.current = currentNow;
-               try { onSaveRef.current?.({ totalWorkTime: newElapsed, measurementResults: measurementResultsRef.current }); } catch {}
+               try {
+                 const mrDiff = unsentPatch(measurementResultsRef.current, serverMeasurementResultsRef.current);
+                 onSaveRef.current?.({
+                   totalWorkTime: newElapsed,
+                   ...(mrDiff ? { measurementResults: mrDiff.patch } : {}),
+                 });
+               } catch {}
              }
          }
 
@@ -8309,7 +8731,18 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   const [incompleteReason, setIncompleteReason] = useState('');
   const [incompleteResponsible, setIncompleteResponsible] = useState('');
 
-  const finalizeComplete = (overrideMeta = null) => {
+  // 🚨🚨🚨 2026-08-17(最終検査)で「作業時間が丸ごと消えた・復旧できなかった」のは この形です。
+  //   保存を **投げっぱなしのまま画面を閉じる** と、通信が詰まっている最中は
+  //   記録が待ち行列にすら入らず、閉じた瞬間に手元ごと消えます。
+  //   → **サーバが受け取るまで待ってから閉じる**。受け取れなければ **閉じない**
+  //     (閉じなければ記録は画面に残っているので、通信が戻ってからもう一度押せます)。
+  //   ⚠ ここを「catch を1つ足して黙らせる」形にしてはいけません。それは見張りの数を
+  //     減らすだけで、消えた保存が人に見えるようにはなりません。
+  const [isFinishing, setIsFinishing] = useState(false);
+  const finishingRef = useRef(false);
+  const finalizeComplete = async (overrideMeta = null) => {
+      // ⚠二度押し止め。await の間にもう一度押されると、同じ完了を2回投げる。
+      if (finishingRef.current) return;
       // overrideMeta: { reason, responsibleBy } を渡された場合は未完了確認済みとして処理
       const completedAt = Date.now();
       const skippedTasks = { ...tasksRef.current };
@@ -8347,20 +8780,39 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
           meta.incompleteReason = overrideMeta.reason;
           meta.incompleteResponsible = overrideMeta.responsibleBy;
       }
-      onSave({
-          status: 'completed', location: 'completed',
-          totalWorkTime: elapsed,
-          // workStartTime を null にすると「ロット作業開始時刻」が失われる → 保持する
-          // ガントチャートで「いつから〜いつまで」を表示するための重要データ
-          workStartTime: lot.workStartTime || startTime || null,
-          currentStepIndex: localSteps.length,
-          stepTimes, stepUnitTimes,
-          tasks: skippedTasks,
-          interruptions, measurementResults,
-          completedAt,
-          ...meta
-      });
-      onFinish();
+      finishingRef.current = true;
+      setIsFinishing(true);
+      try {
+          // 🚨 **await する**。ここが受け取られる前に onFinish() で画面を消すと、
+          //   詰まっている間の記録は待ち行列に一度も入らないまま消える。
+          await onSave({
+              status: 'completed', location: 'completed',
+              totalWorkTime: elapsed,
+              // workStartTime を null にすると「ロット作業開始時刻」が失われる → 保持する
+              // ガントチャートで「いつから〜いつまで」を表示するための重要データ
+              workStartTime: lot.workStartTime || startTime || null,
+              currentStepIndex: localSteps.length,
+              stepTimes, stepUnitTimes,
+              tasks: skippedTasks,
+              interruptions, measurementResults,
+              completedAt,
+              ...meta
+          });
+          // 受け取られた時だけ閉じる。
+          onFinish();
+          return true;
+      } catch (e) {
+          // 🚨 **閉じない**。閉じなければ記録は画面に残っていて、もう一度押せば送り直せる。
+          console.error('🚨 完了の保存が届かなかったので、画面はそのままにしました', e);
+          alert('🚨 完了の保存がサーバに届きませんでした。\n\n'
+              + `${(e && e.message) || e}\n\n`
+              + 'この画面は **わざと閉じていません**。検査の記録は画面に残っています。\n'
+              + 'つながってから、もう一度「完了確定」を押してください。');
+          return false;
+      } finally {
+          finishingRef.current = false;
+          setIsFinishing(false);
+      }
   };
 
   // X ボタン: 作業中なら一時停止して保存してから閉じる
@@ -8726,6 +9178,17 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   // 元テンプレ(同一工程)の設定を参照して発動させる(既存ロットでも効く)。
   const tplStepsRefAE = useRef([]); tplStepsRefAE.current = (templates.find(t => t.id === lot.templateId)?.steps) || [];
   const lotStatusRefAE = useRef(lot.status); lotStatusRefAE.current = lot.status; // 完了後に自動終了が status を戻すのを防ぐ
+  // 🚨🚨 2026-08-30 直した欠陥(製品検査アプリと同時に直した):
+  //   **担当を交代しても、自動終了した台が前の担当の実績になっていた。**
+  //   下の1秒インターバルは deps が [lot.quantity] だけなので、**張った瞬間の inspectorName / onSave を
+  //   持ち続ける**。開始時のタスクには workerName が入らないので、自動終了の
+  //   `t.workerName || inspectorName` は必ず inspectorName 側へ落ちる。
+  //   inspectorName は担当交代で作り直されるが、インターバルは張り直されないので旧担当の名前が焼かれる。
+  //   集計は resolveTaskWorker が task.workerName を最優先で返すため、直工の人別実績が別人に付く。
+  //   ⚠deps に足す直し方は取らない。担当を変えるたび1秒タイマーが張り直しになる。
+  //     すぐ上の4本(tasksRefAE 等)と、タイマーの onSaveRef と同じ「ref で鏡写し」に揃える。
+  const inspectorNameRefAE = useRef(inspectorName); inspectorNameRefAE.current = inspectorName;
+  const onSaveRefAE = useRef(onSave); onSaveRefAE.current = onSave;
   const [autoEndToast, setAutoEndToast] = useState(null); // { title } | null
   useEffect(() => { if (!autoEndToast) return; const id = setTimeout(() => setAutoEndToast(null), 4500); return () => clearTimeout(id); }, [autoEndToast]);
   useEffect(() => {
@@ -8755,14 +9218,16 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
           const session = t.startTime ? Math.floor((now - t.startTime) / 1000) : 0;
           if (session >= limitSec) {
             if (!nt) nt = { ...cur };
-            nt[key] = { ...t, status: 'completed', duration: (t.duration || 0) + limitSec, startTime: null, endTime: now, firstStartTime: t.firstStartTime || t.startTime || now, autoEnded: true, workerName: t.workerName || inspectorName };
+            nt[key] = { ...t, status: 'completed', duration: (t.duration || 0) + limitSec, startTime: null, endTime: now, firstStartTime: t.firstStartTime || t.startTime || now, autoEnded: true, workerName: t.workerName || inspectorNameRefAE.current };
             lastTitle = step.title;
           }
         }
       });
-      if (nt) { setTasks(nt); onSave({ tasks: nt, status: 'processing' }); setAutoEndToast({ title: lastTitle }); }
+      if (nt) { setTasks(nt); onSaveRefAE.current?.({ tasks: nt, status: 'processing' }); setAutoEndToast({ title: lastTitle }); }
     }, 1000);
     return () => clearInterval(iv);
+    // ⚠inspectorName / onSave は deps に入れず ref(inspectorNameRefAE / onSaveRefAE)で最新を読む。
+    //   理由は上のコメント(担当交代のたびにタイマーを張り直さないため)。
   }, [lot.quantity]);
 
   const [completedTaskMenu, setCompletedTaskMenu] = useState(null); // { key, stepIdx, unitIdx }
@@ -8812,10 +9277,6 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     setTasks(newTasks);
     onSave({ tasks: newTasks, status: 'processing' });
   };
-
-  // 全ての hooks 呼び出しが終わったあとで、ロット未定義の場合は何も描画しない
-  // (上の useEffect で onClose を呼ぶスケジュールが既に走っている)
-  if (!_lotProp) return null;
 
   // タスクキー生成: 既存データとの互換のため、step.id ベースを優先しつつ数値index フォールバック
   const getTaskKey = (stepIdx, unitIdx) => {
@@ -9076,6 +9537,17 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     return () => unsub();
   }, [db, rotaryConfig?.enabled]);
 
+  // 全ての hooks 呼び出しが終わったあとで、ロット未定義の場合は何も描画しない
+  // (上の useEffect で onClose を呼ぶスケジュールが既に走っている)
+  // 🚨 2026-08-23: この行より **後ろ** に hooks が2つ残っていた
+  //   (じっと見るモードの useMemo / 分割測定アプリ連携の useEffect)。
+  //   別端末でロットが消されると lots.find が undefined を返し、この return が走って
+  //   hooks の呼び出し回数が減る → React が「Rendered fewer hooks than expected」を投げ、
+  //   作業中の経過時間ごと作業画面が落ちていた。
+  //   → hooks を上へ動かすと、この早期 return の render では const が TDZ のままになり
+  //     useEffect の中から呼ぶ関数が ReferenceError になる。そこで **関所の方を最後の hook の下へ** 動かした。
+  if (!_lotProp) return null;
+
   // 自動測定(batch+autoEnd)の予定秒数を解決。ロット工程→無ければ元テンプレの同一工程(id→題名)。
   const autoEndSecForStep = (step) => {
     if (!step) return 0;
@@ -9141,7 +9613,11 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     } else if (action === 'restart') {
       // 「最初から作業」: いきなり time-tracking 開始ではなく、まっさら (waiting) に戻す。
       // ユーザがもう一度タスクボタンを押すと、通常の toggleTask フローで時間取り開始される。
-      newTasks[key] = { status: 'waiting', duration: 0, startTime: null, firstStartTime: null, endTime: null, reworks: currentTask.reworks };
+      // 🚨 元の秒数と着手時刻を **控えてから** 0 に戻す。控えが無いと後から復旧できない
+      //   (2026-08-17: 消えた記録で唯一の手掛かりが firstStartTime だった)。
+      //   ⚠この印は保存の関所が「人が承知でやったやり直し」と読む鍵でもある(workTimeGuard の redoReset)。
+      newTasks[key] = { status: 'waiting', duration: 0, startTime: null, firstStartTime: null, endTime: null, reworks: currentTask.reworks,
+        redoReset: { at: Date.now(), why: 'restart', before: Number(currentTask.duration) || 0, firstStartTime: currentTask.firstStartTime || null } };
       if (activeCustomTaskKey === key) setActiveCustomTaskKey(null);
     } else if (action === 'ng') {
       const captured = captureSessionIfProcessing(currentTask);
@@ -9219,7 +9695,9 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
       const k = keyOf(u);
       const cur = newTasks[k] || { status: 'waiting', duration: 0 };
       if (anySkipped) {
-        if (cur.status === 'skipped') newTasks[k] = { status: 'waiting', duration: 0, startTime: null, firstStartTime: null, endTime: null };
+        // 🚨 該当なし解除でも「元の秒数・着手時刻」を控える。控えが無いと復旧できない(上の restart と同じ)。
+        if (cur.status === 'skipped') newTasks[k] = { status: 'waiting', duration: 0, startTime: null, firstStartTime: null, endTime: null,
+          redoReset: { at: nowTs, why: 'unskip', before: Number(cur.duration) || 0, firstStartTime: cur.firstStartTime || null } };
       } else {
         if (cur.status === 'completed' || cur.status === 'ng') continue; // 完了/NGは保護
         const captured = (cur.status === 'processing' && cur.startTime)
@@ -9751,7 +10229,11 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                     {totalIncomplete > 0 ? (
                       <button onClick={() => { setIncompleteReason(''); setIncompleteResponsible(currentUserName || ''); setShowIncompleteGuard(true); }} className="px-6 py-2.5 bg-rose-600 text-white hover:bg-rose-700 rounded-lg font-black shadow-lg min-h-[44px] flex items-center gap-2"><AlertTriangle className="w-5 h-5"/> 未完了のまま完了</button>
                     ) : (
-                      <button onClick={() => finalizeComplete()} className="px-6 py-2.5 bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg font-black shadow-lg min-h-[44px] flex items-center gap-2"><CheckCircle2 className="w-5 h-5"/> 完了確定</button>
+                      // ⚠送っている間は押させない。二度押しは同じ完了を2回投げる。
+                      // ⚠⚠ ここに {/* */} は置けない。三項の枝は式ひとつなので、
+                      //     コメントと <button> の2つを並べた事になって構文エラーになる
+                      //     (2026-08-05 の「cond && ( の直後に置けない」と同じ形)。
+                      <button onClick={() => { finalizeComplete(); }} disabled={isFinishing} className="px-6 py-2.5 bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 rounded-lg font-black shadow-lg min-h-[44px] flex items-center gap-2"><CheckCircle2 className="w-5 h-5"/> {isFinishing ? '保存中…' : '完了確定'}</button>
                     )}
                 </div>
             </div>
@@ -9760,18 +10242,21 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   }
 
   // 未完了強制完了ガード: 理由・責任者 必須
+  // 🚨 2026-08-23: この窓だけ高さの上限が無く、画面の低い端末で下のボタン(キャンセル/未完了のまま完了)が
+  //   画面外に出て押せなくなっていた。max-h-[90vh] を付け、本文を flex-1 min-h-0 overflow-y-auto にし、
+  //   見出し帯とボタン帯は shrink-0 で必ず残す(同じファイルの音声ヘルプ max-h-[88vh] と同じ形)。
   if (showIncompleteGuard) {
     return (
       <div data-fs="execution" className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col">
-          <div className="bg-rose-700 text-white p-4 flex items-center gap-3">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-hidden flex flex-col">
+          <div className="bg-rose-700 text-white p-4 flex items-center gap-3 shrink-0">
             <AlertOctagon className="w-7 h-7 shrink-0"/>
             <div>
               <h2 className="text-lg font-black">未完了のまま完了します</h2>
               <p className="text-sm opacity-90 mt-0.5">検査漏れを防ぐため、理由と責任者を必ず記録してください</p>
             </div>
           </div>
-          <div className="p-5 space-y-4">
+          <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4">
             <div className="bg-rose-50 border-2 border-rose-300 rounded-lg p-3">
               <div className="font-bold text-rose-800 mb-1">⚠️ 重要: この記録は監査時に確認されます</div>
               <div className="text-xs text-rose-700">未完了タスクは "skipped" 扱いで保存され、理由・責任者が CSV/Excel/PDF 出力に含まれます</div>
@@ -9793,11 +10278,14 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
               <input type="text" value={incompleteResponsible} onChange={e => setIncompleteResponsible(e.target.value)} placeholder="例: 山田 (主任)" className="w-full border-2 rounded-lg p-2 text-sm"/>
             </div>
           </div>
-          <div className="p-4 border-t bg-slate-50 flex justify-end gap-3">
+          <div className="p-4 border-t bg-slate-50 flex justify-end gap-3 shrink-0">
             <button onClick={() => setShowIncompleteGuard(false)} className="px-5 py-2.5 text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg font-bold min-h-[44px]">キャンセル</button>
             <button
-              disabled={!incompleteReason || !incompleteResponsible.trim()}
-              onClick={() => { finalizeComplete({ reason: incompleteReason, responsibleBy: incompleteResponsible.trim() }); setShowIncompleteGuard(false); }}
+              disabled={isFinishing || !incompleteReason || !incompleteResponsible.trim()}
+              // 🚨 保存が届いた時だけこの窓を閉じる。先に閉じると、届かなかった時に
+              //    理由と担当を打ち直す羽目になる(そして人は次から書かなくなる)。
+              // ⚠ タグの中にはJSXコメント {/* */} を置けない。行コメントで書く。
+              onClick={async () => { if (await finalizeComplete({ reason: incompleteReason, responsibleBy: incompleteResponsible.trim() })) setShowIncompleteGuard(false); }}
               className="px-6 py-2.5 bg-rose-600 text-white hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-lg font-black shadow-lg min-h-[44px] flex items-center gap-2"
             >
               <AlertTriangle className="w-5 h-5"/> 未完了のまま完了
@@ -11566,6 +12054,22 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   // --- Sequential Mode UI (Same as before) ---
   return (
     <div data-fs="execution" className="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-4">
+      {/* 🚨🚨🚨 画面の「済み」とサーバの中身が食い違っている。**この画面を信じてはいけない**状態。
+             2026-08-17 の事故はここが見えなかったので、作業者は最後まで気づけなかった。
+             ⚠× で消せないようにする(消せると意味が無い)。押せるのは「送り直す」だけ。 */}
+      {tasksOutOfSync && (
+        <div className="absolute top-2 left-2 right-2 z-[340] bg-rose-700 text-white px-4 py-3 rounded-xl shadow-2xl border-2 border-rose-300 flex items-center gap-3">
+          <AlertTriangle className="w-6 h-6 shrink-0 animate-pulse"/>
+          <div className="flex-1 text-sm">
+            <div className="font-black text-base">🚨 この画面の記録 {tasksOutOfSync.missing}件 がサーバに入っていません</div>
+            <div className="text-xs opacity-95">画面は「済み」に見えていますが、まだ保存されていません。閉じると失われます。</div>
+          </div>
+          <button
+            onClick={() => { try { onSave({ tasks: tasksRef.current, interruptions }); } catch (e) { console.error(e); } }}
+            className="bg-white text-rose-700 px-3 py-2 rounded-lg font-black text-xs hover:bg-rose-50 flex items-center gap-1 shrink-0"
+          ><RefreshCw className="w-3.5 h-3.5"/> いま送り直す</button>
+        </div>
+      )}
       {showPdf && currentStep.pdfData ? (
         <div className="fixed inset-0 z-[310] bg-black/95 flex flex-col p-4">
           <div className="flex justify-between items-center text-white mb-2"><span className="font-bold">参考資料</span><button onClick={()=>setShowPdf(false)}><X className="w-8 h-8"/></button></div>
@@ -12270,7 +12774,7 @@ const ArrivalPlanningView = ({ onBack, lots, workers, templates, handleMoveLot, 
   );
 };
 
-const PlanningExecutionView = ({ onBack, workers, lots, templates, handleMoveLot, saveData, setDraggedLotId, draggedLotId, setSelectedWorker, handleImageUpload, settings, mapRef, handleDropOnMap, setExecutionLotId, onEditLot, onDeleteLot, saveSettings, mapZones, currentUserName = '' }) => {
+const PlanningExecutionView = ({ onBack, workers, lots, templates, handleMoveLot, saveData, setDraggedLotId, draggedLotId, handleImageUpload, settings, mapRef, handleDropOnMap, setExecutionLotId, onEditLot, onDeleteLot, saveSettings, mapZones, currentUserName = '' }) => {
   const isWorker = currentUserName && !['フリー','管理者'].includes(currentUserName);
   const matchedWorker = isWorker ? workers.find(w => w.name === currentUserName) : null;
   const [filterWorkerId, setFilterWorkerId] = useState(matchedWorker?.id || null);
@@ -12379,8 +12883,21 @@ const PlanningExecutionView = ({ onBack, workers, lots, templates, handleMoveLot
 
 // New View: Map Only (フル画面マップ表示)
 // 画面全体を使うため fixed inset-0 で親レイアウトの padding/header を回避
-const MapOnlyView = ({ onBack, lots, workers, templates, handleMoveLot, saveData, setDraggedLotId, draggedLotId, setExecutionLotId, settings, handleImageUpload, saveSettings, mapZones, onEditLot, onDeleteLot }) => (
-    <div data-fs="dashboard" className="fixed inset-0 z-40 bg-slate-100 flex flex-col">
+//
+// 🚨 2026-08-30 製品検査で清水さんに指摘された「重なりの順番」の壊れ方を、部品にも先に入れておく。
+//   ① 全画面マップが z-40 だと、上のヘッダ(29943行の z-50)に上端が隠れて押せない
+//      → 清水さん(製品にて)「現場マップで切り替えが一番上のタブで隠れて全く見えない」
+//   ② ①を直そうと単純に z-[60] へ上げると、今度は**作業画面(z-50)を覆う**
+//      → 清水さん(製品にて)「型式カードを押しても作業用の画面が出てこない。拡大から戻ったら出てきた」
+//   ⚠「作業画面の中に z-[200] が有るから作業画面の方が上」は**間違い**。
+//     z-50 は積み重ねの入れ物(stacking context)を作るので、その中の z-[200] は
+//     「作業画面の中での順番」でしかなく、外から見れば作業画面ごと 50 のまま。
+//   直し方: 作業画面が開いている間だけ元の z-40 へ下げる。
+//     ・作業画面を開いていない時 … z-[60](ヘッダより上。上端のボタンが押せる)
+//     ・作業画面を開いている時   … z-40 (作業画面 z-50 より下。作業画面が見える)
+//   見張り: scripts/verify-map-z-order.mjs(わざと壊すと赤になる事を確認済み)
+const MapOnlyView = ({ onBack, lots, workers, templates, handleMoveLot, saveData, setDraggedLotId, draggedLotId, setExecutionLotId, settings, handleImageUpload, saveSettings, mapZones, onEditLot, onDeleteLot, execOpen = false }) => (
+    <div data-fs="dashboard" className={`fixed inset-0 ${execOpen ? 'z-40' : 'z-[60]'} bg-slate-100 flex flex-col`}>
        {/* 埋め込み(③司令塔)は閲覧専用: マップだけを表示し、クリック/ドラッグを遮断(ホイールは下へ転送) */}
        {EMBED_MAP && (
          <div className="fixed inset-0 z-[900]" style={{ cursor: 'default' }}
@@ -14467,9 +14984,9 @@ const AIDeepAnalysisSection = ({ payload }) => {
         <div className="bg-rose-50 border border-rose-300 rounded-lg p-3 text-sm text-rose-800">
           <div className="font-bold">❌ エラー</div>
           <div className="text-xs mt-1">{error}</div>
-          {error.includes('VITE_GEMINI_API_KEY') && (
+          {error.includes('VITE_GEMINI_PROXY_URL') && (
             <div className="text-xs mt-2 bg-white p-2 rounded border border-rose-200">
-              💡 .env ファイルに <code className="bg-slate-100 px-1 rounded">VITE_GEMINI_API_KEY=...</code> を設定してビルドし直してください。
+              💡 .env ファイルに <code className="bg-slate-100 px-1 rounded">VITE_GEMINI_PROXY_URL=...</code>（Worker の URL）を設定してビルドし直してください。🚨AIの鍵はブラウザに置きません。
             </div>
           )}
         </div>
@@ -15618,7 +16135,10 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
     try {
       doBackup(); // 復元前に現状を自動バックアップ（ダウンロード）
       const r = await onRestore(rst.parsed, (done, total) => setRstProg({ done, total }));
-      setRstMsg(`復元が完了しました（${(r && r.total) || ''}件を書き込み）。画面のデータは自動で最新化されます。`); setRstPhase('done');
+      // 🚨 関所が止めたロットは **黙って飛ばさない**。「戻したつもり」を作らない(2026-07-26 の教訓)。
+      const blockedN = (r && Array.isArray(r.blocked)) ? r.blocked.length : 0;
+      setRstMsg(`復元が完了しました（${(r && r.total) || ''}件を書き込み）。画面のデータは自動で最新化されます。`
+        + (blockedN ? `\n🚨 ただし ${blockedN}件のロットは、いまの検査記録が消えるため復元していません。` : '')); setRstPhase('done');
     } catch (err) { setRstMsg('復元中にエラーが発生しました: ' + (err.message || err) + '（復元前の自動バックアップは保存済みです）'); setRstPhase('error'); }
   };
   const rstReset = () => { setRstPhase('idle'); setRst(null); setRstMsg(''); setRstConfirm(''); setRstChk(false); };
@@ -17307,6 +17827,24 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     if (!timestamp) return true;
     return isInDefectPeriod(timestamp);
   };
+  // 2026-08-30 直した所(製品検査アプリと同じ物を同時に直した):
+  //   analysisData の deps に期間の4つが入っていなかった。
+  //   ① 中では isInFilterPeriod → isInDefectPeriod が defectFilterMode/Month/Start/End を読んでいる
+  //   ② lots は親の useMemo なので**参照が安定** = 月を変えても deps が変わらない
+  //   ③ よって月を変えても前の期間の集計を返し続ける。
+  //   ⚠この部品アプリ側は警告が見えていた(製品側は規則名なしの `// eslint-disable-line` で
+  //     警告ごと消えていた)。見えていても誰も見ていなかった、という所が同じ。
+  //   兄弟の defectStats/complaintStats は下で4つとも並べてある。ここだけ外れていた。
+  //
+  // 🚨 ただし **いま画面には出ていない**(2026-08-30 実測):
+  //   analysisData を使うのは activeMode === 'process' の3か所(画面・Excel・PDF)だけ。
+  //   だが ANALYSIS_GROUPS のタブに 'process' は無く、activeMode の初期値は 'process-analysis'、
+  //   setActiveMode に渡るのはタブ一覧の t.k と 'pdca' だけ。つまり 'process' へは到達しない。
+  //   → 実害は出ていない。**眠っている欠陥**を、起きた時に正しい様に直しただけ。
+  //   ⚠残すのか消すのかは別の判断。勝手に消さず人に諮る事。
+  //   → 期間を1本の文字列にまとめて deps に入れる(文字列なので毎レンダー新しい参照にならない)。
+  //   🚨片方のアプリだけ直さない事。製品検査アプリ側も同じ日に直してある。
+  const defectPeriodKey = `${defectFilterMode}|${defectFilterMonth}|${defectFilterStart}|${defectFilterEnd}`;
 
   // 前期間 (前月 or 同じ長さの直前期間) を計算するヘルパー — defectStats/complaintStats より前に定義必須 (TDZ 回避)
   const getPrevPeriodChecker = () => {
@@ -17416,7 +17954,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     }).filter(Boolean);
 
     return reports;
-  }, [lots, selectedModel, targetTolerance]);
+    // ⚠defectPeriodKey = 期間の4つをまとめた文字列(上で作っている)。これが無いと期間が効かない。
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isInFilterPeriod は毎レンダー作り直される関数。中身が読む値は defectPeriodKey で代表させている
+  }, [lots, selectedModel, targetTolerance, defectPeriodKey]);
 
   // Daily Worker Progress
   const workerProgress = useMemo(() => {
@@ -17436,6 +17976,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
   // ※ defectFilter* と isInDefectPeriod は冒頭で定義済 (analysisData より前に必要なため)
   const [expandedDefectImage, setExpandedDefectImage] = useState(null);
   const [editModal, setEditModal] = useState({ isOpen: false, type: null, data: null, lotId: null });
+  // ⚠送っている間は押させない(二度押しで同じ修正を2回投げる)。閉じるのは届いてから。
+  const [savingEdit, setSavingEdit] = useState(false);
   const [editLabel, setEditLabel] = useState('');
   const [editCauseProcess, setEditCauseProcess] = useState('');
   const [editPhotos, setEditPhotos] = useState([]);
@@ -17444,6 +17986,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
   const defectStats = useMemo(() => {
     let totalCompletedLots = 0;
     let defectLotCount = 0;
+    // 🚨 2026-08-23: 不具合率の分子。分母(totalCompletedLots)と同じ母集団=「期間内に完了したロット」だけ数える。
+    //   defectLotCount は作業中・一時停止・待機のロットも含むので、率の分子には使えない(100%超えが出ていた)。
+    let defectCompletedLotCount = 0;
     const defects = [];
     const modelCounts = {};
     const stepCounts = {};
@@ -17464,11 +18009,15 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
         if (d.timestamp) { const dd = new Date(d.timestamp); const ym = `${dd.getFullYear()}-${String(dd.getMonth()+1).padStart(2,'0')}`; monthlyCountsAll[ym] = (monthlyCountsAll[ym] || 0) + 1; }
       });
       // 率の分母(完了ロット数)はロット完了月で数える。※不具合自体は下で「不具合のtimestamp」で期間を絞る。
-      if (isInDefectPeriod(lotTime) && (lot.status === 'completed' || lot.location === 'completed')) totalCompletedLots++;
+      const isCompletedLot = (lot.status === 'completed' || lot.location === 'completed');
+      const lotInPeriod = isInDefectPeriod(lotTime);
+      if (lotInPeriod && isCompletedLot) totalCompletedLots++;
       // 不具合は「不具合自身の発生時刻」で期間フィルタする (ロットの updatedAt で丸ごと落とさない=登録したのに出ないバグの根本対策。complaintStats と対称)。
       const lotDefects = lotDefectsAll.filter(d => isInDefectPeriod(d.timestamp));
       if (lotDefects.length > 0) {
-        defectLotCount++;
+        defectLotCount++; // ← 全状態のロット(作業中・一時停止も含む)。一覧・品目別/工程別の件数は今まで通り全部拾う=隠さない。
+        // 🚨 2026-08-23: 率の分子だけは分母と同じ母集団(期間内に完了したロット)で数え直す。
+        if (lotInPeriod && isCompletedLot) defectCompletedLotCount++;
         lotDefects.forEach(d => {
           // workerName が ID(過去データ)でも名前に解決して表示・集計する
           const wname = (workers.find(x => x.id === d.workerName)?.name) || d.workerName || '不明';
@@ -17489,7 +18038,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
       }
     });
 
-    const defectRate = totalCompletedLots > 0 ? ((defectLotCount / totalCompletedLots) * 100).toFixed(1) : 0;
+    // 不具合率 = 期間内に完了したロットのうち不具合が出たロット ÷ 期間内に完了したロット。
+    // ⚠戻り値は必ず **数値**。以前は分母>0で文字列(.toFixed)・分母0で数値0 を返しており、Excel に文字として入って足し算できなかった。
+    const defectRate = totalCompletedLots > 0 ? Number(((defectCompletedLotCount / totalCompletedLots) * 100).toFixed(1)) : 0;
     const sortObj = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
     // 月別推移: 直近 12ヶ月
     const trendMonths = [];
@@ -17503,7 +18054,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     }
     const diff = defects.length - prevCount;
     const diffRate = prevCount > 0 ? ((diff / prevCount) * 100) : (defects.length > 0 ? 100 : 0);
-    return { totalCompletedLots, defectLotCount, totalDefects: defects.length, defectRate, defects: defects.sort((a, b) => b.timestamp - a.timestamp), models: sortObj(modelCounts), steps: sortObj(stepCounts), workers: sortObj(workerCounts), processes: sortObj(processCounts), trendMonths, prevCount, diff, diffRate };
+    return { totalCompletedLots, defectLotCount, defectCompletedLotCount, totalDefects: defects.length, defectRate, defects: defects.sort((a, b) => b.timestamp - a.timestamp), models: sortObj(modelCounts), steps: sortObj(stepCounts), workers: sortObj(workerCounts), processes: sortObj(processCounts), trendMonths, prevCount, diff, diffRate };
   }, [lots, workers, defectFilterMonth, defectFilterMode, defectFilterStart, defectFilterEnd]);
 
   const complaintStats = useMemo(() => {
@@ -17615,12 +18166,22 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
   const defectFilterLabel = defectFilterMode === 'month' ? defectFilterMonth : `${defectFilterStart} ~ ${defectFilterEnd}`;
   const defectFilterSuffix = defectFilterMode === 'month' ? defectFilterMonth : `${defectFilterStart}_${defectFilterEnd}`;
 
-  const triggerDeleteInterruption = (interruptionId, lotId, typeName) => {
+  // 🚨 中断(不具合・待ち)の削除は **ロットの記録そのもの** を書き換える。
+  //   投げっぱなしにすると、届かなかった時に画面だけ消えた事になり、
+  //   人は「消したはず」と思ったまま次へ行く。届いた事を確かめてから知らせる。
+  const triggerDeleteInterruption = async (interruptionId, lotId, typeName) => {
     if (!confirm(`この${typeName}を削除しますか？`)) return;
     const lot = lots.find(l => l.id === lotId);
     if (lot) {
       const newInterruptions = (lot.interruptions || []).filter(i => i.id !== interruptionId);
-      saveData('lots', lotId, { interruptions: newInterruptions });
+      try {
+        await saveData('lots', lotId, { interruptions: newInterruptions });
+      } catch (e) {
+        console.error('🚨 削除がサーバに届きませんでした', e);
+        alert('🚨 削除がサーバに届きませんでした。\n\n'
+          + `${(e && e.message) || e}\n\n`
+          + 'まだ消えていません。つながってから、もう一度お試しください。');
+      }
     }
   };
 
@@ -17631,7 +18192,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     setEditModal({ isOpen: true, type, data, lotId });
   };
 
-  const saveEditInterruption = () => {
+  const saveEditInterruption = async () => {
+    if (savingEdit) return;
     const { data, lotId, type } = editModal;
     const lot = lots.find(l => l.id === lotId);
     if (!lot) return;
@@ -17645,8 +18207,21 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
       }
       return { ...i, label: editLabel };
     });
-    saveData('lots', lotId, { interruptions: updatedInterruptions });
-    setEditModal({ isOpen: false, type: null, data: null, lotId: null });
+    // 🚨 **届いてから閉じる**。先に閉じると、打ち直した内容が手元ごと消える。
+    setSavingEdit(true);
+    try {
+      await saveData('lots', lotId, { interruptions: updatedInterruptions });
+      setEditModal({ isOpen: false, type: null, data: null, lotId: null });
+    } catch (e) {
+      // 🚨 **閉じない**。打った内容は窓に残っているので、送り直せる。
+      console.error('🚨 修正がサーバに届かなかったので、窓はそのままにしました', e);
+      alert('🚨 修正がサーバに届きませんでした。\n\n'
+        + `${(e && e.message) || e}\n\n`
+        + 'この窓は **わざと閉じていません**。打った内容は残っています。\n'
+        + 'つながってから、もう一度「保存」を押してください。');
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const handleDefectExcel = async () => {
@@ -17661,7 +18236,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     ws.getRow(R).getCell(1).value = `不具合分析レポート (${defectFilterLabel})`;
     ws.getRow(R).getCell(1).font = { size: 14, bold: true };
     R += 2;
-    [['完了ロット数', defectStats.totalCompletedLots], ['不具合発生ロット数', defectStats.defectLotCount], ['不具合発生率', `${defectStats.defectRate}%`], ['不具合総数', defectStats.totalDefects]].forEach(([label, value]) => {
+    // 🚨 2026-08-23: 率だけ分子が別の母集団だったので、分子(完了ロットのうち不具合有)も並べて出す。
+    [['完了ロット数', defectStats.totalCompletedLots], ['不具合発生ロット数(全状態)', defectStats.defectLotCount], ['不具合の出た完了ロット(率の分子)', defectStats.defectCompletedLotCount], ['不具合発生率', `${defectStats.defectRate}%`], ['不具合総数', defectStats.totalDefects]].forEach(([label, value]) => {
       const r = ws.getRow(R); r.getCell(1).value = label; r.getCell(1).font = { bold: true }; r.getCell(1).border = allBorder; r.getCell(1).fill = headerFill;
       r.getCell(2).value = value; r.getCell(2).border = allBorder; R++;
     });
@@ -17718,7 +18294,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
              <div className="mb-4"><div className="text-sm font-bold text-slate-700 mb-2">内容</div><textarea className="w-full border rounded p-3 h-28 text-sm" value={editLabel} onChange={e => setEditLabel(e.target.value)} /></div>
              <div className="flex justify-end gap-2">
                <button onClick={() => setEditModal({ isOpen: false, type: null, data: null, lotId: null })} className="px-4 py-2 border rounded font-bold text-slate-600 hover:bg-slate-50">キャンセル</button>
-               <button onClick={saveEditInterruption} className="px-6 py-2 bg-blue-600 text-white rounded font-bold shadow hover:bg-blue-700">保存</button>
+               <button onClick={saveEditInterruption} disabled={savingEdit} className="px-6 py-2 bg-blue-600 text-white rounded font-bold shadow hover:bg-blue-700 disabled:opacity-50">{savingEdit ? '保存中…' : '保存'}</button>
              </div>
            </div>
          </div>
@@ -17798,7 +18374,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                     ws.columns.forEach(c => c.width = 18);
                     // サマリーシート
                     const sm = wb.addWorksheet('不具合サマリー');
-                    sm.addRow(['指標','値']); sm.addRow(['完了ロット数', defectStats.totalCompletedLots]); sm.addRow(['不具合発生ロット', defectStats.defectLotCount]); sm.addRow(['不具合率(%)', defectStats.defectRate]); sm.addRow(['総件数', defectStats.totalDefects]);
+                    sm.addRow(['指標','値']); sm.addRow(['完了ロット数', defectStats.totalCompletedLots]); sm.addRow(['不具合発生ロット(全状態)', defectStats.defectLotCount]); sm.addRow(['不具合の出た完了ロット(率の分子)', defectStats.defectCompletedLotCount]); sm.addRow(['不具合率(%)', defectStats.defectRate]); sm.addRow(['総件数', defectStats.totalDefects]);
                     styleHeader(sm.getRow(1));
                     sm.addRow([]); sm.addRow(['品目別','件数']); defectStats.models.forEach(x => sm.addRow([x.name, x.count]));
                     sm.addRow([]); sm.addRow(['工程別','件数']); defectStats.steps.forEach(x => sm.addRow([x.name, x.count]));
@@ -17874,7 +18450,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                     title = '不具合分析';
                     const dRows = defectStats.defects.map(d => `<tr><td>${d.timestamp ? new Date(d.timestamp).toLocaleString('ja-JP') : '-'}</td><td>${esc(d.lot?.model)}</td><td>${esc(d.lot?.orderNo)}</td><td>${esc(d.stepInfo?.title || '全体')}</td><td>${esc(d.label)}</td><td>${esc(d.causeProcess)}</td><td>${esc(d.workerName)}</td></tr>`).join('');
                     const summary = (arr, title) => arr.length ? `<h2>${title}</h2><table><thead><tr><th>${title}</th><th style="text-align:right">件数</th></tr></thead><tbody>${arr.map(x => `<tr><td>${esc(x.name)}</td><td style="text-align:right">${x.count}</td></tr>`).join('')}</tbody></table>` : '';
-                    body = `<h2>サマリー</h2><div class="kpi-grid"><div class="kpi"><div class="kpi-val" style="color:#3b82f6">${defectStats.totalCompletedLots}</div><div class="kpi-label">完了ロット数</div></div><div class="kpi"><div class="kpi-val" style="color:#dc2626">${defectStats.defectLotCount}</div><div class="kpi-label">不具合ロット</div></div><div class="kpi"><div class="kpi-val" style="color:#dc2626">${defectStats.defectRate}%</div><div class="kpi-label">不具合率</div></div><div class="kpi"><div class="kpi-val" style="color:#dc2626">${defectStats.totalDefects}</div><div class="kpi-label">総件数</div></div></div>${summary(defectStats.models,'品目別')}${summary(defectStats.steps,'工程別')}${summary(defectStats.workers,'作業者別')}${summary(defectStats.processes,'原因工程別')}<h2>明細</h2><table><thead><tr><th>日時</th><th>品目コード</th><th>指図</th><th>工程</th><th>内容</th><th>原因工程</th><th>作業者</th></tr></thead><tbody>${dRows || '<tr><td colspan="7" style="text-align:center;color:#94a3b8">データなし</td></tr>'}</tbody></table>`;
+                    body = `<h2>サマリー</h2><div class="kpi-grid"><div class="kpi"><div class="kpi-val" style="color:#3b82f6">${defectStats.totalCompletedLots}</div><div class="kpi-label">完了ロット数</div></div><div class="kpi"><div class="kpi-val" style="color:#dc2626">${defectStats.defectLotCount}</div><div class="kpi-label">不具合ロット(全状態)</div></div><div class="kpi"><div class="kpi-val" style="color:#dc2626">${defectStats.defectRate}%</div><div class="kpi-label">不具合率 (完了 ${defectStats.defectCompletedLotCount}/${defectStats.totalCompletedLots}件)</div></div><div class="kpi"><div class="kpi-val" style="color:#dc2626">${defectStats.totalDefects}</div><div class="kpi-label">総件数</div></div></div>${summary(defectStats.models,'品目別')}${summary(defectStats.steps,'工程別')}${summary(defectStats.workers,'作業者別')}${summary(defectStats.processes,'原因工程別')}<h2>明細</h2><table><thead><tr><th>日時</th><th>品目コード</th><th>指図</th><th>工程</th><th>内容</th><th>原因工程</th><th>作業者</th></tr></thead><tbody>${dRows || '<tr><td colspan="7" style="text-align:center;color:#94a3b8">データなし</td></tr>'}</tbody></table>`;
                   } else if (activeMode === 'complaints') {
                     title = '軽微不良・改善提案';
                     const cRows = complaintStats.complaints.map(c => {
@@ -17937,10 +18513,14 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                  <div className="bg-gradient-to-br from-rose-50 to-rose-100 border-2 border-rose-200 p-4 rounded-xl shadow-sm">
                    <div className="text-xs font-bold text-rose-600 mb-1">不具合発生ロット</div>
                    <div className="text-3xl font-black text-rose-700">{ds.defectLotCount}<span className="text-sm font-normal ml-1">件</span></div>
+                   {/* 🚨 2026-08-23: 何を数えた数字かを画面に書く(この数は完了していないロットも含む) */}
+                   <div className="text-[10px] text-rose-600/80 mt-0.5">作業中・一時停止も含む全ロット</div>
                  </div>
                  <div className="bg-gradient-to-br from-amber-50 to-amber-100 border-2 border-amber-200 p-4 rounded-xl shadow-sm">
                    <div className="text-xs font-bold text-amber-700 mb-1">不具合率</div>
                    <div className="text-3xl font-black text-amber-700">{ds.defectRate}<span className="text-sm font-normal ml-1">%</span></div>
+                   {/* 🚨 2026-08-23: 分子と分母を必ず添える(以前は分子だけ母集団が違い100%超えが出た) */}
+                   <div className="text-[10px] text-amber-700/80 mt-0.5">完了ロット {ds.defectCompletedLotCount} / {ds.totalCompletedLots} 件</div>
                  </div>
                  <div className="bg-white border-2 border-slate-200 p-4 rounded-xl shadow-sm">
                    <div className="text-xs font-bold text-slate-500 mb-1 flex items-center justify-between">
@@ -21180,7 +21760,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
 // =====================================================================
 // 作業順最適化モーダル
 // - ルールベース: 自動工程の所要時間内に手動工程を詰める
-// - AI モード: Gemini に最適順を生成させる (VITE_GEMINI_API_KEY 必須)
+// - AI モード: Gemini に最適順を生成させる (Worker 経由。VITE_GEMINI_PROXY_URL 必須)
 // - シミュレーション: シーケンシャル vs 最適化 のバー比較
 // =====================================================================
 const WorkOrderOptimizerModal = ({ lot, lots, templates = [], currentExecutionType = 'custom', onSwitchToCustom = null, onApplyToTemplate = null, onApplyToLot = null, onClose }) => {
@@ -21378,7 +21958,7 @@ const WorkOrderOptimizerModal = ({ lot, lots, templates = [], currentExecutionTy
               {mode === 'ai' && (
                 <div className="space-y-4">
                   <div className="text-xs text-slate-500 leading-relaxed bg-slate-50 border rounded-lg px-3 py-2">
-                    💡 ルールベースの結果と実績データを Gemini に投げて、より高度な提案を取得します。VITE_GEMINI_API_KEY が必要。
+                    💡 ルールベースの結果と実績データを Gemini に投げて、より高度な提案を取得します。AIサーバー(Worker)の設定 VITE_GEMINI_PROXY_URL が必要です。
                   </div>
                   {!aiResult && !aiLoading && !aiError && (
                     <div className="text-center py-8">
@@ -22337,6 +22917,28 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
 // --- EditTimeModal: 作業時間の編集 ---
 const EditTimeModal = ({ lot, onClose, onSave }) => {
   const [localTasks, setLocalTasks] = useState(() => JSON.parse(JSON.stringify(lot.tasks || {})));
+  // 🚨 直したセルの鍵だけを覚える(2026-08-30 / 最終検査の EditTimeModal と同じ形)。
+  //   ① 保存で送るのは **この鍵だけ**。tasks を丸ごと送ると、開いてからの間に他の端末が書いた
+  //      ngReason / workerName / やり直しの記録まで **古い写しで押し戻す**。
+  //   ② 1つも直していない時は 1バイトも書かない
+  //      (空マップを送るとサーバの tasks が丸ごと空になる = domain/workTimeGuard.js の blank)。
+  const [dirtyKeys, setDirtyKeys] = useState(() => new Set());
+  const [saving, setSaving] = useState(false);
+  // 🚨 サーバと合わせ直す(2026-08-30)。開いた瞬間の写しのまま居座ると、
+  //   保存が1件も届いていなくても画面はずっと「済み」に見える(2026-08-17 の事故を見えなくした形)。
+  //   ⚠ 直したセル(dirtyKeys)だけは手元の値を守る。人が打っている途中の値をサーバの姿で消さない。
+  useEffect(() => {
+    const server = lot.tasks || {};
+    // ⚠ set-state-in-effect は「描き直しが連鎖する」を心配する規則。ここは
+    //   **中身が同じ時は prev をそのまま返す**ので連鎖しない(上の return の行がその守り)。
+    //   合わせ直しを外すと SS-501 に戻る(＝送れていないのに「済み」に見える)ので、この1行だけ外す。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLocalTasks(prev => {
+      const next = JSON.parse(JSON.stringify(server));
+      dirtyKeys.forEach(k => { const cur = prev[k]; if (cur) next[k] = cur; });
+      return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
+    });
+  }, [lot.tasks, dirtyKeys]);
   const steps = lot.steps || [];
   const qty = lot.quantity || 1;
   // 一貫したタスクキー: 新形式 (stepId-unitIdx) を優先、旧形式 (stepIdx-unitIdx) もフォールバック
@@ -22349,9 +22951,30 @@ const EditTimeModal = ({ lot, onClose, onSave }) => {
   };
   const handleDurationChange = (key, value) => {
     const val = parseInt(value, 10);
-    if (!isNaN(val) && val >= 0) setLocalTasks(prev => ({ ...prev, [key]: { ...prev[key], duration: val } }));
+    if (!isNaN(val) && val >= 0) {
+      setLocalTasks(prev => ({ ...prev, [key]: { ...prev[key], duration: val } }));
+      setDirtyKeys(prev => { const n = new Set(prev); n.add(key); return n; });
+    }
   };
-  const handleSave = () => { onSave({ tasks: localTasks }); onClose(); };
+  // ⚠ この画面は「完了履歴のロットを机上で直す」場所なので await してよい(現場の検査動線ではない)。
+  //   失敗したら **閉じない**。閉じると直した値が丸ごと消える(2026-08-21 と同じ形)。
+  //   ⚠ 失敗の知らせは saveData 側が出している(控えを残す + 同期エラー表示)。ここは二重に出さない。
+  const handleSave = async () => {
+    if (saving) return;
+    const keys = Array.from(dirtyKeys).filter(k => localTasks[k]);
+    if (!keys.length) { onClose(); return; }   // 直した所が無い = 何も書かない
+    const edited = {};
+    keys.forEach(k => { edited[k] = localTasks[k]; });
+    setSaving(true);
+    try {
+      await onSave({ tasks: edited });
+      setSaving(false);
+      onClose();
+    } catch (e) {
+      setSaving(false);
+      console.error('作業時間の保存に失敗しました(画面は開いたままにします)', e);
+    }
+  };
 
   // 工程ごとの合計時間
   const stepTotal = (step, sIdx) => {
@@ -22494,9 +23117,10 @@ const EditTimeModal = ({ lot, onClose, onSave }) => {
             </tbody>
           </table>
         </div>
-        <div className="p-4 border-t flex justify-end gap-2 bg-slate-50 shrink-0">
-          <button onClick={onClose} className="px-4 py-2 text-slate-600 font-bold border rounded hover:bg-white">キャンセル</button>
-          <button onClick={handleSave} className="px-6 py-2 bg-blue-600 text-white font-bold rounded shadow hover:bg-blue-700">保存して更新</button>
+        <div className="p-4 border-t flex justify-end items-center gap-2 bg-slate-50 shrink-0">
+          <span className="mr-auto text-xs text-slate-500">{dirtyKeys.size > 0 ? `直したセル ${dirtyKeys.size}個を保存します（直した所だけ送ります）` : '直したセルはありません'}</span>
+          <button onClick={onClose} disabled={saving} className="px-4 py-2 text-slate-600 font-bold border rounded hover:bg-white disabled:opacity-50">キャンセル</button>
+          <button onClick={handleSave} disabled={saving} className="px-6 py-2 bg-blue-600 text-white font-bold rounded shadow hover:bg-blue-700 disabled:bg-slate-400">{saving ? '保存中…' : '保存して更新'}</button>
         </div>
       </div>
     </div>
@@ -22506,6 +23130,22 @@ const EditTimeModal = ({ lot, onClose, onSave }) => {
 // --- EditMeasurementModal: 測定結果の編集 ---
 const EditMeasurementModal = ({ lot, onClose, onSave }) => {
   const [localMR, setLocalMR] = useState(() => JSON.parse(JSON.stringify(lot.measurementResults || {})));
+  // 🚨 直した欄の鍵だけを覚える(2026-08-30 / EditTimeModal と同じ形)。
+  //   測定結果の鍵は 1台につき2つある: `工程id-台` (計算結果) と `工程id-台-values` (打った数字)。
+  //   両方を控える。丸ごと送ると、開いてからの間に他の端末が直した別の台の値を古い写しで押し戻す。
+  const [dirtyKeys, setDirtyKeys] = useState(() => new Set());
+  const [saving, setSaving] = useState(false);
+  // 🚨 サーバと合わせ直す(2026-08-30)。開いた瞬間の写しのまま居座ると、
+  //   保存が1件も届いていなくても画面はずっと「済み」に見える(2026-08-17 の事故を見えなくした形)。
+  //   ⚠ 直した欄(dirtyKeys)だけは手元の値を守る。人が打っている途中の値をサーバの姿で消さない。
+  useEffect(() => {
+    const server = lot.measurementResults || {};
+    setLocalMR(prev => {
+      const next = JSON.parse(JSON.stringify(server));
+      dirtyKeys.forEach(k => { const cur = prev[k]; if (cur) next[k] = cur; });
+      return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
+    });
+  }, [lot.measurementResults, dirtyKeys]);
   const steps = lot.steps || [];
   const measSteps = steps.filter(s => s.type === 'measurement' && s.measurementConfig);
 
@@ -22526,13 +23166,24 @@ const EditMeasurementModal = ({ lot, onClose, onSave }) => {
       newMR[key] = { values: newValues, calcResults, timestamp: Date.now() };
     }
     setLocalMR(newMR);
+    // 打った数字と、その台の計算結果。どちらも「この端末が直した物」として控える。
+    setDirtyKeys(prev => { const n = new Set(prev); n.add(valuesKey); n.add(key); return n; });
   };
 
-  const handleSave = () => {
+  // ⚠ この画面は「完了履歴のロットを机上で直す」場所なので await してよい(現場の検査動線ではない)。
+  //   失敗したら **閉じない**。閉じると打ち直した値が丸ごと消える(2026-08-21 と同じ形)。
+  //   ⚠ 失敗の知らせは saveData 側が出している(控えを残す + 同期エラー表示)。ここは二重に出さない。
+  const handleSave = async () => {
+    if (saving) return;
     // 保存前に全工程×全台を依存順(steps順=上流が先)で一巡再計算する。
     //   updateValue は編集中工程の calcResults だけ直すため、上流値を参照する下流工程(cross-step)の calcResults/isOk が
     //   古いまま残り、成績表・達成率の合否がずれる。多段依存に備えて2巡し陳腐化を解消する。
+    const server = lot.measurementResults || {};
     const finalMR = JSON.parse(JSON.stringify(localMR));
+    // 🚨 送る鍵の一覧。人が直した欄(dirtyKeys)に加えて、
+    //   **上流を直したせいで計算結果が変わった下流の台** も入れる。ここを入れないと
+    //   サーバに古い合否が残る(前は丸ごと送っていたので、たまたま直っていた)。
+    const send = new Set(dirtyKeys);
     for (let pass = 0; pass < 2; pass++) {
       measSteps.forEach(step => {
         for (let u = 0; u < (lot.quantity || 1); u++) {
@@ -22541,12 +23192,26 @@ const EditMeasurementModal = ({ lot, onClose, onSave }) => {
           if (!values) continue; // 未入力の台は触らない
           const crossVals = collectCrossStepValues({ ...lot, measurementResults: finalMR }, step.id);
           const calcResults = calculateMeasurementResults(values, step.measurementConfig, crossVals);
-          finalMR[key] = { ...(finalMR[key] || {}), values, calcResults, timestamp: finalMR[key]?.timestamp || Date.now() };
+          const nextCell = { ...(finalMR[key] || {}), values, calcResults, timestamp: finalMR[key]?.timestamp || Date.now() };
+          if (JSON.stringify(nextCell) !== JSON.stringify(server[key])) send.add(key);
+          finalMR[key] = nextCell;
         }
       });
     }
-    onSave({ measurementResults: finalMR });
-    onClose();
+    // 🚨 直した所が1つも無ければ 1バイトも書かない(空マップを送るとサーバ側が丸ごと空になる)。
+    const keys = Array.from(send).filter(k => finalMR[k] !== undefined);
+    if (!keys.length) { onClose(); return; }
+    const edited = {};
+    keys.forEach(k => { edited[k] = finalMR[k]; });
+    setSaving(true);
+    try {
+      await onSave({ measurementResults: edited });
+      setSaving(false);
+      onClose();
+    } catch (e) {
+      setSaving(false);
+      console.error('測定結果の保存に失敗しました(画面は開いたままにします)', e);
+    }
   };
 
   return (
@@ -22632,9 +23297,10 @@ const EditMeasurementModal = ({ lot, onClose, onSave }) => {
             );
           })}
         </div>
-        <div className="p-4 border-t flex justify-end gap-2 bg-slate-50">
-          <button onClick={onClose} className="px-4 py-2 text-slate-600 font-bold border rounded hover:bg-white">キャンセル</button>
-          <button onClick={handleSave} className="px-6 py-2 bg-emerald-600 text-white font-bold rounded shadow hover:bg-emerald-700">保存して更新</button>
+        <div className="p-4 border-t flex justify-end items-center gap-2 bg-slate-50">
+          <span className="mr-auto text-xs text-slate-500">{dirtyKeys.size > 0 ? '直した欄だけを保存します' : '直した欄はありません'}</span>
+          <button onClick={onClose} disabled={saving} className="px-4 py-2 text-slate-600 font-bold border rounded hover:bg-white disabled:opacity-50">キャンセル</button>
+          <button onClick={handleSave} disabled={saving} className="px-6 py-2 bg-emerald-600 text-white font-bold rounded shadow hover:bg-emerald-700 disabled:bg-slate-400">{saving ? '保存中…' : '保存して更新'}</button>
         </div>
       </div>
     </div>
@@ -22929,14 +23595,48 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
     }
   `;
 
+  // 🚨 2026-08-23: 印刷用の窓に **インターネット越しの CDN (cdn.tailwindcss.com)** を読ませていた。
+  //   ネットの無い所・社内でCDNが塞がれている端末では、罫線も配置も無い素のHTMLがそのまま紙に出る。
+  //   この紙は品目と一緒に外へ出る物なので、黙って崩れるのが一番まずい。
+  //   → このアプリは Tailwind を **ビルドに同梱** している(package.json devDependencies)。
+  //     いま画面が使っている自分のスタイルシートを、そのまま印刷窓へ持って行く(外部への通信ゼロ)。
+  //     ⚠持って行くのは **同じ住所(origin)の物だけ**。外部の物は持って行かない。
+  const collectAppStyles = () => {
+    let out = '';
+    document.querySelectorAll('link[rel="stylesheet"], style').forEach(node => {
+      if (node.tagName === 'LINK') {
+        if (!node.getAttribute('href')) return;
+        try { if (new URL(node.href, location.href).origin !== location.origin) return; } catch { return; }
+        out += `<link rel="stylesheet" href="${node.href.replace(/"/g, '&quot;')}">`;
+      } else {
+        out += `<style>${node.textContent || ''}</style>`;   // 開発時(vite dev)はこちらに入る
+      }
+    });
+    return out;
+  };
+
   const handlePrint = () => {
     const pw = window.open('', '_blank');
     if (!pw) { alert("ポップアップがブロックされました。"); return; }
     const content = document.getElementById('report-preview-content');
     if (!content) { pw.close(); return; }
     const title = `${lot.orderNo || '不明'}_${lot.model || '不明'}`;
-    pw.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><script src="https://cdn.tailwindcss.com"><\/script><style>${PRINT_STYLES} body { font-family: sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .border, .border-b, .border-t, .border-l, .border-r { border-color: black !important; }</style></head><body>${content.outerHTML}<script>window.onload = () => { setTimeout(() => { window.print(); }, 500); };<\/script></body></html>`);
+    const appStyles = collectAppStyles();
+    pw.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><title>${title}</title>${appStyles}<style>${PRINT_STYLES} body { font-family: sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .border, .border-b, .border-t, .border-l, .border-r { border-color: black !important; }</style></head><body>${content.outerHTML}</body></html>`);
     pw.document.close();
+    // ⚠500ms の決め打ちをやめる。遅い端末では読み込みが間に合わず、崩れた紙が出ていた。
+    //   スタイルシートの読み込みが終わってから発火する load を待って印刷を開く。
+    let printed = false;
+    const doPrint = () => {
+      if (printed) return;
+      printed = true;
+      try { pw.focus(); pw.print(); } catch (e) { console.warn('印刷画面を開けませんでした', e); }
+    };
+    try {
+      pw.addEventListener('load', doPrint, { once: true });
+      if (pw.document.readyState === 'complete') setTimeout(doPrint, 0); // 待つ物が無い時(開発時の inline style など)
+      setTimeout(() => { if (!printed) { console.warn('スタイルの読み込みが終わらないまま印刷を開きます'); doPrint(); } }, 8000); // 最後の保険
+    } catch (e) { console.warn('印刷の待ち受けに失敗', e); doPrint(); }
   };
 
   const handlePdf = () => {
@@ -23191,7 +23891,9 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                     {Array.from({ length: lot.quantity || 1 }).map((_, i) => (
                       <th key={i} className="border border-black px-0.5 py-1 text-center" style={{ minWidth: '14mm' }}>
                         <div className="font-bold">#{i+1}</div>
-                        <div className="font-normal text-[6px] text-slate-500 truncate">{lot.unitSerialNumbers?.[i] || ''}</div>
+                        {/* 🚨 2026-08-23: 機番が text-[6px] + truncate だった。紙で外へ出る物なので
+                            読めない/末尾が黙って消えるのは追跡できないという事。9px へ上げ、切らずに折り返す。 */}
+                        <div className="font-normal text-[9px] text-slate-600 break-all leading-tight">{lot.unitSerialNumbers?.[i] || ''}</div>
                       </th>
                     ))}
                   </tr>
@@ -23239,7 +23941,8 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                             return (
                               <td key={i} className={`border border-black px-0.5 py-0.5 text-center ${cellBg}`}>
                                 <div className={`font-mono font-bold ${textColor}`}>{cr.result.toFixed(cr.precision ?? 3)}</div>
-                                {cr.isOk != null && <div className="text-[6px] font-bold">{cr.isOk ? 'OK' : 'NG'}</div>}
+                                {/* 🚨 2026-08-23: 判定(OK/NG)が 6px で紙では読めなかった。表の地(8px)に合わせる。 */}
+                                {cr.isOk != null && <div className="text-[8px] font-bold">{cr.isOk ? 'OK' : 'NG'}</div>}
                               </td>
                             );
                           })}
@@ -26113,8 +26816,12 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
         </div>
       )}
       {reportLot && <ReportPreview lot={reportLot} workers={workers} onClose={() => setReportLot(null)} />}
-      {editingTimeLot && <EditTimeModal lot={editingTimeLot} onClose={() => setEditingTimeLot(null)} onSave={(data) => { saveData('lots', editingTimeLot.id, data); setEditingTimeLot(null); }} />}
-      {editingMeasLot && <EditMeasurementModal lot={editingMeasLot} onClose={() => setEditingMeasLot(null)} onSave={(data) => { saveData('lots', editingMeasLot.id, data); setEditingMeasLot(null); }} />}
+      {/* 🚨 開いた瞬間の写しでなく **生きたロット** を渡す(2026-08-30)。写しのまま居座ると、
+             保存が届いていなくても画面は「済み」に見え、他の端末が書いた新しい値も古い写しで押し戻す。
+             ⚠一覧から消えた時(削除・絞り込みの外)は写しへ戻す。画面が突然空になる方が危ない。
+             ⚠onSave は保存の約束を **返す**(閉じるのはモーダル側。失敗したら閉じない)。 */}
+      {editingTimeLot && <EditTimeModal lot={(lots || []).find(l => l && l.id === editingTimeLot.id) || editingTimeLot} onClose={() => setEditingTimeLot(null)} onSave={(data) => saveData('lots', editingTimeLot.id, data)} />}
+      {editingMeasLot && <EditMeasurementModal lot={(lots || []).find(l => l && l.id === editingMeasLot.id) || editingMeasLot} onClose={() => setEditingMeasLot(null)} onSave={(data) => saveData('lots', editingMeasLot.id, data)} />}
 
       <div className="flex flex-wrap justify-between items-center bg-white p-3 rounded-xl shadow-sm border border-slate-200 shrink-0 gap-2 mb-4">
         <div className="flex flex-wrap items-center gap-4">
@@ -26235,8 +26942,83 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
 };
 
 
+// --- 「その画面でしか使わない物」を開いた時だけ読む ---------------------------
+// 🚨🚨 前は logs / indirectWork / improvements を **常に全件** 購読していた。
+//   どれも「分析タブ / 達成率タブ / 日次集計」でしか使わないのに、現場が検査だけして
+//   閉じる時も毎回全部読んでいた。しかも通信が切れて繋ぎ直すたびにまた全部読む。
+// ⚠一度読んだら購読を張ったままにする(同じ画面を開くたびに読み直さない)。
+// ⚠戻り値の2つ目 ready が false の間は **数字を出さない**。0件と見分けが付かないため。
+// ⚠この関数はコンポーネントの外に置く(中に書くと毎回作り直され、見張り(eslint)も嫌がる)。
+const useLazyCollection = (ctx, colName, wanted, sortFn) => {
+  const { user, db, countReads, quotaBlockRef, onReadError } = ctx;
+  const [rows, setRows] = useState(null); // null = まだ一度も読んでいない
+  const [everWanted, setEverWanted] = useState(false);
+  useEffect(() => { if (wanted) setEverWanted(true); }, [wanted]);
+  const sortRef = useRef(sortFn);
+  sortRef.current = sortFn;
+  useEffect(() => {
+    if (!everWanted || !user || !db || quotaBlockRef.current) return;
+    const P = DATA(db);
+    let first = true;
+    const unsub = P.watchCollection(ctx.namespace, colName, (r, snap) => {
+      let changes = 0;
+      try { changes = snap && snap.docChanges ? snap.docChanges().length : 0; } catch { changes = 0; }
+      const cached = !!(snap && snap.metadata && snap.metadata.fromCache);
+      countReads(colName, snapshotReads(first, changes, cached));
+      if (!cached) first = false;
+      setRows(sortRef.current ? sortRef.current(r) : r);
+    }, { onError: (e) => onReadError(colName, e) });
+    countReads(colName, 0, { attach: true }); // 張った事は0件でも残す
+    return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [everWanted, colName, user, db]);
+  return [rows || [], rows !== null];
+};
+
+// 端末に残っている「今日の読み取り件数」を1回だけ拾う。
+// ⚠通信は1件も使わない(localStorage だけ)。⚠描画の中で時刻を読まないよう、ここ(読み込み時)で1回だけ。
+const INITIAL_READ_TALLY = (() => {
+  let day = '';
+  try { day = quotaDayKeyOf(Date.now()); } catch { day = ''; }
+  try {
+    const raw = localStorage.getItem(READ_TALLY_STORAGE_KEY);
+    const t = raw ? JSON.parse(raw) : null;
+    if (t && t.day === day && typeof t.total === 'number') return t;
+  } catch { /* シークレットモード等で読めなくても本業は止めない */ }
+  return emptyTally(day);
+})();
+
+// 🚨🚨 過去のデータが揃うまで **数字を出さない** ための画面。
+//   ⚠これが無いと「読み込み中の0件」が本物の0件に見える = 数字が黙って減るのと同じ。
+const DataLoadingPanel = ({ what = 'この画面のデータ' }) => (
+  <div className="h-full flex items-center justify-center">
+    <div className="bg-white rounded-xl border-2 border-blue-200 px-8 py-7 text-center shadow-sm max-w-md">
+      <Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto mb-3" />
+      <div className="text-base font-black text-slate-800">{what}を読み込んでいます</div>
+      <div className="text-xs text-slate-500 mt-2 leading-relaxed">
+        この画面は過去の記録を使います。<b>読み終わるまで数字は出しません</b><br />
+        （途中の数字を出すと、本当より少ない値を正しい値と受け取ってしまうため）
+      </div>
+    </div>
+  </div>
+);
+
+// 読み取り(read)を止められている時の画面。⚠「壊れた」ではなく「いつ直るか」を出す。
+const QuotaStoppedPanel = ({ until }) => (
+  <div className="h-full flex items-center justify-center">
+    <div className="bg-white rounded-xl border-2 border-rose-300 px-8 py-7 text-center shadow-sm max-w-md">
+      <Ban className="w-8 h-8 text-rose-600 mx-auto mb-3" />
+      <div className="text-base font-black text-rose-800">読み取りの上限に達しました（429）</div>
+      <div className="text-xs text-slate-600 mt-2 leading-relaxed">
+        この画面の数字は出せません。<br />
+        枠が戻るのは <b>{formatClock(until)}</b> 頃（米西部の0時）
+      </div>
+    </div>
+  </div>
+);
+
 // --- Main Component ---
- 
+
  export default function App() {
    // State: Current User (端末使用者)
    const [currentUserName, setCurrentUserName] = useState(() => {
@@ -26259,9 +27041,187 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
      window.addEventListener('offline', onOffline);
      return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
    }, []);
-      
+
+   // 🚨🚨🚨 ここから下の4つは「作業の記録が黙って消える」のを止めるための土台。
+   //   2026-08-17 最終検査で 8/12 の検査5ロットの時間取りが丸ごと消え、復旧できなかった。
+   //   その事故を可能にしていたのは、欠陥1つではなく **見えない事** が3つ重なった状態だった。
+   //     ① 読めていないのに保存できた   → 手元が空 → 空で上書き
+   //     ② サーバへ届いたか誰も分からない → 届いていなくても画面は「済み」
+   //     ③ 保存が失敗しても1件しか覚えていない → 2件目以降は取り戻せない
+   //   部品検査も同じ形だったので、3つ全部に手当てする。
+
+   // ① 読めたか。ロットの購読が **一度でも返ってきた** かどうか。
+   //   ⚠ここが false のまま保存すると、手元の空を正として書いてしまう(=事故の形)。
+   //   ⚠読めなかった(権限/読み取り上限/通信)時も false のままにする。
+   const [lotsLoaded, setLotsLoaded] = useState(false);
+   const lotsLoadedRef = useRef(false);
+   // 保存の見張りが突き合わせる「いまサーバに在るロット」。描き直しに巻き込まれない ref で持つ。
+   const rawLotsRef = useRef([]);
+   // 購読が死んだ事を人に見せる。名指しで出す(どのコレクションが読めていないか)。
+   const [readErrors, setReadErrors] = useState({});
+
+   // 🚨🚨🚨 ④ 読み取りの枠(無料枠 50,000件/日・**4アプリで1つ**)。
+   //   2026-08-17、最終検査が枠切れ(429)で 14:36〜15:59 止まった。**誰も件数を見ていなかった**のが一番まずい。
+   //   ⚠数えるのは **この端末の分だけ**。他の端末・他の3アプリの分は原理的に見えない(画面にもそう書く)。
+   //   ⚠数える事自体が読み書きを増やしてはいけない → localStorage(端末の中)だけを使う。
+   const [readTally, setReadTally] = useState(INITIAL_READ_TALLY);
+   const readTallyRef = useRef(INITIAL_READ_TALLY);
+   // 描き直しの嵐を避けるため、数は ref に足して 2秒ごとに画面へ流す。
+   const readTallyDirtyRef = useRef(false);
+   const countReads = useCallback((col, n, opts = {}) => {
+     const add = Math.max(0, Math.round(Number(n) || 0));
+     if (add <= 0 && !opts.attach) return;
+     readTallyRef.current = tallyAdd(readTallyRef.current, quotaDayKeyOf(Date.now()), col, add, { ...opts, at: opts.at ?? Date.now() });
+     readTallyDirtyRef.current = true;
+   }, []);
+   useEffect(() => {
+     const id = setInterval(() => {
+       if (!readTallyDirtyRef.current) return;
+       readTallyDirtyRef.current = false;
+       setReadTally(readTallyRef.current);
+       try { localStorage.setItem(READ_TALLY_STORAGE_KEY, JSON.stringify(readTallyRef.current)); } catch { /* 端末が拒否しても本業は止めない */ }
+     }, 2000);
+     return () => clearInterval(id);
+   }, []);
+
+   // 🚨 枠切れ(429)。**自動で何度も読みに行かない**(枠を更に食う)。人が押すまで止めたままにする。
+   const [quotaBlock, setQuotaBlock] = useState(null); // { at, until, cols: string[] }
+   const quotaBlockRef = useRef(null);
+   const [showReadBudget, setShowReadBudget] = useState(false);
+   // 過去のロットを一度でも要求したか(要求したら張り続ける = 開くたびに読み直さない)。
+   const [lotHistoryWanted, setLotHistoryWanted] = useState(false);
+   // 購読が死んだ時の共通の受け口。⚠名指しで画面に出す + 枠切れなら「もう読みに行かない」印を立てる。
+   const noteReadError = useCallback((colName, e) => {
+     console.error(`🚨 ${colName} が読めません(購読が止まりました)`, e);
+     setReadErrors(prev => ({ ...prev, [colName]: String((e && e.code) || (e && e.message) || e) }));
+     if (isQuotaError(e)) {
+       const rec = { at: Date.now(), until: nextQuotaResetAt(Date.now()), cols: [colName] };
+       quotaBlockRef.current = rec;
+       setQuotaBlock(prev => (prev ? { ...prev, cols: [...new Set([...prev.cols, colName])] } : rec));
+     }
+   }, []);
+   // 「あと何分」を動かすための時計(30秒ごと)。⚠通信は1つも増やさない(描き直すだけ)。
+   const [, setClockTick] = useState(0);
+   useEffect(() => {
+     if (!quotaBlock) return;
+     const id = setInterval(() => setClockTick(t => t + 1), 30000);
+     return () => clearInterval(id);
+   }, [quotaBlock]);
+
+   // ② まだサーバへ届いていない書き込みが在るか。Firestore 自身の申告(hasPendingWrites)を使う。
+   //   ⚠「保存中…」の点滅では足りない。画面を閉じてよいかを人が判断できる形にする。
+   const [pendingWrites, setPendingWrites] = useState(false);
+   const [inflight, setInflight] = useState(0);
+   const inflightRef = useRef(0);
+   const pendingWritesRef = useRef(false);
+
+   // ③ 失敗した保存を1件も落とさない受け皿(前は1件しか覚えていなかった)。
+   const [failedSaves, setFailedSaves] = useState([]);
+   const bumpInflight = (d) => { inflightRef.current = Math.max(0, inflightRef.current + d); setInflight(inflightRef.current); };
+
+   // 🚨🚨 **誰も受け取らなかった失敗** を人に見せる最後の網。
+   //   投げっぱなしの保存(await も catch も無い呼び出し)が 107箇所ある。
+   //   1つずつ直すのは別の危険(29,000行の作業画面を全部書き換える)なので、
+   //   まず **黙って落ちる道を無くす**。ここで受けて画面に出す。
+   //   ⚠これは言い訳ではなく網。呼び出し側を直す時も、この網は残す。
+   const [unhandled, setUnhandled] = useState(null);
+   useEffect(() => {
+     const onRej = (ev) => {
+       const r = ev && ev.reason;
+       const msg = String((r && r.message) || r || '不明なエラー');
+       console.error('🚨 誰も受け取らなかった失敗', r);
+       setUnhandled({ at: Date.now(), name: (r && r.name) || '', msg: msg.slice(0, 400) });
+     };
+     window.addEventListener('unhandledrejection', onRej);
+     return () => window.removeEventListener('unhandledrejection', onRej);
+   }, []);
+
+   // 🚨 未送信のまま画面を閉じさせない。ここが 8/12 に在れば「写真だけ残る」で終わらなかった。
+   useEffect(() => {
+     const onBeforeUnload = (e) => {
+       if (inflightRef.current <= 0 && !pendingWritesRef.current) return;
+       e.preventDefault();
+       e.returnValue = 'まだサーバへ送れていない記録があります。閉じると失われます。';
+       return e.returnValue;
+     };
+     window.addEventListener('beforeunload', onBeforeUnload);
+     return () => window.removeEventListener('beforeunload', onBeforeUnload);
+   }, []);
+
+   // ═══════════════════════════════════════════════════════════════════════
+   // 🚨 この札を index.html の「切り替える」ボタンからも見える所に置く(2026-08-30)。
+   // -----------------------------------------------------------------------
+   // ⚠index.html の中の素のJavaScriptは React を知らない(知りようが無い)。
+   //   window に置く以外に渡す道が無いので、**ここが唯一の受け渡し口**。
+   // ⚠上の beforeunload は「タブを閉じる時」しか止めない。
+   //   「🆕 新しい版が出ました → 切り替える」で読み直す道は **beforeunload を通らない**
+   //   (location.replace で自分から読み直すため)。だから札を window に出して、
+   //   index.html 側の関所(window.__appCanReload)に見てもらう。
+   //   ＝ 2026-08-17 に作業時間が丸ごと消えたのと同じ引き金を塞ぐ。
+   // ⚠ここで「押してよいか」を決めない。決めるのは domain/appVersion.js の canReload 1か所。
+   //   ここは値を渡すだけ(枝を書くと二重管理になり、必ず片方が腐る)。
+   // ═══════════════════════════════════════════════════════════════════════
+   const saveStatus = useMemo(() => ({
+     unsent: inflight, fsPending: pendingWrites, lotsPending: false,
+   }), [inflight, pendingWrites]);
+   useEffect(() => {
+     window.__appSaveStatus = saveStatus;
+     // 画面が消える時は札も片付ける。🚨null にすると canReload が「押してよい」に化けるので
+     //   **分からない印**を置く(落ちた瞬間＝未送信を抱えている、まさにその時)。
+     return () => { if (window.__appSaveStatus === saveStatus) window.__appSaveStatus = { unknown: true }; };
+   }, [saveStatus]);
+
    // State: App Data
-   const [lots, setLots] = useState([]);
+   // 🚨🚨 ロットは **3つに分けて読む**。前は「全ロットの新しい方から500件」を常に読み直していた。
+   //   ① liveLots   : いつも購読する窓(新しい方から LOTS_LIVE_LIMIT 件)
+   //   ② openLots   : 窓に入らないが **まだ終わっていない** ロット(①が上限まで埋まった時だけ)
+   //   ③ historyLots: 過去が要る画面(完了履歴/分析/作業最適化/達成率/完了一覧)を **開いた時だけ** 読む
+   //   合体した `lots` は今までと **1件も違わない**(試験 R20〜R25 で固定)。
+   const [liveLots, setLiveLots] = useState([]);
+   const [openLots, setOpenLots] = useState([]);
+   const [historyLots, setHistoryLots] = useState(null); // null = まだ読んでいない
+   // ①が上限まで埋まらなかった = コレクションを全部読めた。②③は一切要らない。
+   const [lotsWindowWhole, setLotsWindowWhole] = useState(false);
+   // ⚠過去(historyLots)は **今までの購読そのもの**(新しい方から500件)なので、
+   //   届いた後は普段の窓(liveLots)を混ぜない。混ぜると、窓の購読を止めた後に
+   //   **古い姿で新しい姿を上書き**してしまう。過去 ⊇ 窓 なので混ぜる必要も無い。
+   const lots = useMemo(() => {
+     if (lotsWindowWhole) return liveLots;                       // 全部読めている = 今までと同一
+     if (historyLots !== null) return mergeLotsById(historyLots, openLots);
+     return mergeLotsById(liveLots, openLots);
+   }, [lotsWindowWhole, historyLots, openLots, liveLots]);
+   // 過去まで揃っているか。🚨**揃っていない状態で過去の数字を出さない**(黙って減るのが一番まずい)。
+   const historyLoaded = historyLots !== null;
+   const lotsHistoryReady = lotsWindowWhole || historyLoaded;
+   // 🚨🚨 ロットの購読を「どれを張ったままにするか」は domain/readBudget.js の
+   //   planLotSubscriptions **ただ1つ** で決める(試験 R90〜R95)。⚠ここに条件を直書きしない。
+   //   直書きに戻すと、窓と過去が同じ束で同時に引っ込んで **購読が0本** になる道が開く
+   //   (2026-08-30 まで残っていた欠陥。ロットが凍るのに保存の門だけ開いたままになる)。
+   // ⚠3つの useEffect は「この計画の真偽」だけを見る。だから
+   //   windowWhole と historyLoaded が同じ束で立っても、窓の購読は張り直されない
+   //   (= 張り直しぶんの読み取りが増えない)。
+   const lotSubPlan = useMemo(() => planLotSubscriptions({
+     windowWhole: lotsWindowWhole,
+     historyLoaded,
+     historyWanted: lotHistoryWanted,
+     historyWhole: historyLoaded && windowIsWholeCollection(historyLots.length, LOTS_HISTORY_LIMIT),
+   }), [lotsWindowWhole, historyLoaded, lotHistoryWanted, historyLots]);
+
+   // 🚨🚨 保存の見張りが突き合わせる「いまサーバに在るロット」。
+   //   ⚠**スナップショットが届いた瞬間に(同期で)** 更新する。描き直しを待つと、
+   //     その1回ぶん古い姿と突き合わせる事になり、見張りが誤って止める/誤って通す。
+   //     (前のコードも購読の中で同期に入れていた。合体しても同じにする。)
+   const liveLotsRef = useRef([]);
+   const openLotsRef = useRef([]);
+   const historyLotsRef = useRef(null);
+   const windowWholeRef = useRef(false);
+   const recomputeRawLots = () => {
+     rawLotsRef.current = windowWholeRef.current
+       ? liveLotsRef.current
+       : (historyLotsRef.current !== null
+         ? mergeLotsById(historyLotsRef.current, openLotsRef.current)
+         : mergeLotsById(liveLotsRef.current, openLotsRef.current));
+   };
    // === マイグレーション: ロットに残存している optimizedStepOrder フィールドを掃除 ===
    // ※ 2026-05-30 ユーザー指示で「オススメ順の適用」機能を撤去。
    //    以前押された結果として lot.optimizedStepOrder が残っているロットがあるので、起動時に自動除去。
@@ -26269,6 +27229,15 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
    const optimizedOrderCleanupDoneRef = useRef(false);
    useEffect(() => {
      if (optimizedOrderCleanupDoneRef.current) return;
+     // 🚨🚨 2026-08-17(最終検査)と同じ形を塞ぐ。**ロットへ自動で書く処理は、
+     //   ロットが本当に読めた事(lotsLoaded)を待つ。**
+     //   ⚠「lots.length !== 0」は読み込み完了の代わりにならない。購読は
+     //     ①端末のキャッシュから先に一部だけ来る ②枠切れ(429)や権限で途中で死ぬ
+     //     ので、届いていない分を「無い」と思ったまま書きに行ける。
+     //   ⚠読めていない時の書き込みは「古い姿・欠けた姿でサーバを上書き」になる。
+     //     ここは lot ごと丸ごとではなくフィールド1つ(optimizedStepOrder)を消すだけだが、
+     //     読めていない状態で走らせてよい理由にはならない(見張り check-load-guards A3)。
+     if (!lotsLoaded) return;
      if (!lots || lots.length === 0) return;
      const dirty = lots.filter(l => l.optimizedStepOrder !== undefined && l.optimizedStepOrder !== null);
      if (dirty.length === 0) { optimizedOrderCleanupDoneRef.current = true; return; }
@@ -26284,10 +27253,12 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
          console.error('[migration] cleanup failed:', e);
        }
      })();
-   }, [lots]);
+     // ⚠lotsLoaded を並べる。並べないと「読めた」に変わった時にこの処理が走り直さない
+     //   (最初の1回で lots だけ動いて終わり、掃除が一生走らない事になる)。
+   }, [lots, lotsLoaded]);
    const [templates, setTemplates] = useState([]);
    const [workers, setWorkers] = useState([]);
-   const [logs, setLogs] = useState([]);
+   // ⚠logs / indirectWork / improvements は「開いた時だけ読む」へ移した(下の useLazyCollection)。
    const [settings, setSettings] = useState({ mapImage: null, mapZones: INITIAL_MAP_ZONES, defectProcessOptions: DEFAULT_DEFECT_PROCESS_OPTIONS, breakAlerts: [], complaintOptions: DEFAULT_COMPLAINT_OPTIONS, customTargetTimes: {}, targetTimeHistory: [], customLayouts: {}, measurementOverrides: {} });
 
    // State: Break Alert
@@ -26432,7 +27403,6 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
    // 「❓使い方」マニュアル
    const [showHelp, setShowHelp] = useState(false);
    const [helpImages, setHelpImages] = useState({});
-   const [selectedWorker, setSelectedWorker] = useState(null);
    const [draggedLotId, setDraggedLotId] = useState(null);
    const mapRef = useRef(null);
    const [moveLot, setMoveLot] = useState(null); // タッチ移動モーダル用
@@ -26464,13 +27434,39 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
    const [announcements, setAnnouncements] = useState([]);
 
    // State: Indirect Work (間接作業)
-   const [indirectWork, setIndirectWork] = useState([]);
-   const [improvementCards, setImprovementCards] = useState([]); // 改善PDCAカルテ (improvements コレクション)
    const [observationPlans, setObservationPlans] = useState([]); // じっと見るモード=要素作業分割の観測プラン (observationPlans コレクション)
    const [showIndirectModal, setShowIndirectModal] = useState(false);
    const [showDailySummary, setShowDailySummary] = useState(false);
    const [showShiftHandover, setShowShiftHandover] = useState(false);
    const [activeIndirect, setActiveIndirect] = useState(null); // { id, category, startTime }
+
+   // 🚨🚨 いま「過去のロット」が要るか。ここに書き忘れると **その画面の数字が黙って減る**。
+   //   線引きは domain/readBudget.js(試験 R30〜R33 で固定)。ここに条件を直書きしない。
+   const lotHistoryNeededNow = needsLotHistory({
+     activeTab, viewMode,
+     openPanels: [showDailySummary, showShiftHandover, showAnomalyPanel],
+   });
+   // 一度でも要った端末は、そのまま張り続ける(同じ画面を開くたびに読み直さない)。
+   useEffect(() => { if (lotHistoryNeededNow) setLotHistoryWanted(true); }, [lotHistoryNeededNow]);
+
+   // 🚨 「その画面でしか使わない物」は開いた時だけ読む。
+   //   ⚠読み終わるまで ready が false。**false の間は数字を出さない**(0件と見分けが付かない)。
+   const lazyCtx = { user, db, countReads, quotaBlockRef, namespace: APP_DATA_ID, onReadError: noteReadError };
+   const [indirectWork, indirectWorkReady] = useLazyCollection(
+     lazyCtx, 'indirectWork',
+     lotHistoryNeededNow || showDailySummary || showShiftHandover,
+     (rows) => rows.slice().sort((a, b) => (b.startTime || 0) - (a.startTime || 0)));
+   const [improvementCards, improvementsReady] = useLazyCollection(
+     lazyCtx, 'improvements',
+     activeTab === 'analysis' || activeTab === 'optimize',
+     (rows) => rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+   const [logs, logsReady] = useLazyCollection(
+     lazyCtx, 'logs',
+     activeTab === 'analysis',
+     (rows) => rows.slice().sort((a, b) => b.timestamp - a.timestamp));
+   // 分析タブが要る物が全部揃ったか。⚠揃うまで画面を出さない(途中の数字を見せない)。
+   const analysisDataReady = lotsHistoryReady && indirectWorkReady && improvementsReady && logsReady;
+   const progressDataReady = lotsHistoryReady && indirectWorkReady;
 
    // お知らせ通知タイマー
    useEffect(() => {
@@ -26539,15 +27535,77 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
        firestore = getFirestore(app);
      }
 
-     // 🧪 開発時のみ: Firestore/Auth エミュレータへ繋ぐ(製品検査・最終検査と同じ方式)。
-     //   .env.local の VITE_USE_EMULATOR=1 のときだけ有効。本番ビルドでは未設定なので絶対に通らない。
-     //   ⚠これが無いと npm run dev は【本番Firestore】に繋がる。画面の検証はここで行う。
-     if (import.meta.env.DEV && String(import.meta.env.VITE_USE_EMULATOR || '') === '1') {
+     // =====================================================================
+     // 🧪 開発時のみ: Firestore/Auth エミュレータへ繋ぐ。
+     // ---------------------------------------------------------------------
+     // 🚨🚨🚨 2026-08-28(最終検査): 開発サーバが **本番 Firestore に繋がっていて**、
+     //   試しの操作が本番のロットへ書き込まれました。
+     //   その前(2026-08-24)には「港の番号が設定に無いと **空の 8080** へ繋ぎ、
+     //   実データは 8380 に居るのに気づけない」も踏んでいます。
+     //   どちらも根は同じで **黙って違う所に繋いだ** 事です。
+     //
+     // 🚨 だからここでは、繋ぎ先を必ず **声に出します**。
+     //   ・エミュレータへ繋いだ … 何処へ繋いだかを出す
+     //   ・本番へ繋ぐ         … 開発中なら **大きく警告する**(黙って繋がない)
+     //   ⚠ 設定ファイルの有無で「エミュレータのはず」と思い込まない事。
+     //     実際の通信先は _conn_check.mjs で確かめる(思い込みは証明になりません)。
+     //
+     // ⚠ 変数名は最終検査(golden=VITE_EMULATOR_PORT)と **揃えていません**。
+     //   部品検査は Firestore と Auth を別々に指せるようにしてあります:
+     //     VITE_USE_EMULATOR            … 1 のときだけエミュレータへ繋ぐ
+     //     VITE_EMULATOR_HOST           … 既定 127.0.0.1
+     //     VITE_FIRESTORE_EMULATOR_PORT … 既定 8080
+     //     VITE_AUTH_EMULATOR_PORT      … 既定 9099
+     //   見本は .env.example に書いてあります。揃えるなら4アプリ一度に直す事。
+     // =====================================================================
+     const EMU_ON = String(import.meta.env.VITE_USE_EMULATOR || '') === '1';
+     if (import.meta.env.DEV && EMU_ON) {
+       // ⚠ 数として読めない値(打ち間違い)を黙って既定に落とさない。落とすなら言う。
+       const numOr = (raw, dflt, label) => {
+         const s = String(raw ?? '').trim();
+         if (!s) return dflt;
+         const n = Number(s);
+         if (!Number.isInteger(n) || n <= 0 || n > 65535) {
+           console.error(`🚨 ${label} の値「${s}」は港の番号として読めません。既定の ${dflt} を使います。`);
+           return dflt;
+         }
+         return n;
+       };
+       const emuHost = String(import.meta.env.VITE_EMULATOR_HOST || '').trim() || '127.0.0.1';
+       const fsPort = numOr(import.meta.env.VITE_FIRESTORE_EMULATOR_PORT, 8080, 'VITE_FIRESTORE_EMULATOR_PORT');
+       const authPort = numOr(import.meta.env.VITE_AUTH_EMULATOR_PORT, 9099, 'VITE_AUTH_EMULATOR_PORT');
        try {
-         connectFirestoreEmulator(firestore, '127.0.0.1', 8080);
-         connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
-         console.warn('🧪 エミュレータ接続中 (本番Firestoreには繋がっていません)');
-       } catch (e) { console.warn('エミュレータ接続に失敗', e?.message); }
+         connectFirestoreEmulator(firestore, emuHost, fsPort);
+         connectAuthEmulator(auth, `http://${emuHost}:${authPort}`, { disableWarnings: true });
+         // 🚨 何処へ繋いだかを必ず出す。黙って繋がない。
+         console.warn(
+           `%c🧪 エミュレータへ繋ぎました  Firestore=${emuHost}:${fsPort} / Auth=${emuHost}:${authPort}`,
+           'background:#065f46;color:#fff;font-size:14px;padding:4px 8px;border-radius:4px',
+         );
+         console.warn(
+           '   本番 Firestore には繋がっていません。\n'
+           + '   ⚠ 港の番号が違うと「空のエミュレータ」に繋がり、データが無いのを「0件」と読み違えます。\n'
+           + '   ⚠ 実際の通信先は _conn_check.mjs で確かめてください(設定ファイルの有無は証明になりません)。',
+         );
+       } catch (e) {
+         // 🚨 繋げなかったのに黙っていると、そのまま **本番へ** 繋がる。大きく出す。
+         console.error(
+           `%c🚨 エミュレータへ繋げませんでした (${emuHost}:${fsPort})。このまま使うと【本番 Firestore】に繋がります。`,
+           'background:#b91c1c;color:#fff;font-size:16px;padding:6px 10px;border-radius:4px',
+         );
+         console.error(e);
+       }
+     } else if (import.meta.env.DEV) {
+       // 🚨🚨 開発中に本番へ繋ぐのは、いちばん危ない状態。**黙って繋がない。**
+       console.error(
+         '%c🚨🚨 いま【本番 Firestore】に繋ごうとしています（開発サーバ）',
+         'background:#b91c1c;color:#fff;font-size:16px;padding:6px 10px;border-radius:4px',
+       );
+       console.error(
+         '   VITE_USE_EMULATOR が 1 ではありません。ここでの操作は本番のデータを書き換えます。\n'
+         + '   エミュレータで試すなら .env.local に VITE_USE_EMULATOR=1 を書いて、開発サーバを **入れ直して** ください\n'
+         + '   (.env.local を足したり消したりすると、走っている開発サーバは繋ぎ先を作り直します)。',
+       );
      }
 
      setDb(firestore);
@@ -26581,29 +27639,68 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
    }, []);
  
    // --- Data Sync ---
+   // 🚨🚨🚨 読み取り(read)を減らす。無料枠 50,000件/日 は **4アプリで1つ**。
+   //   前は「開くたびに 全ロット(最大500件) + logs全件 + indirectWork全件 + improvements全件」を読み直していた。
+   //   ⚠通信が切れて繋ぎ直すたびに、また全部読み直す(現場のWi-Fiは切れる)。
+   //   → **普段の画面に要らない物は購読から外し、その画面を開いた時に読む**。
+   //   ⚠外すのは「その画面でしか使わない物」だけ。ヘッダーのバッジ(notes/announcements)と
+   //     作業画面が使う物(observationPlans)は常に要るので外さない。
    useEffect(() => {
      if (!user || !db) return;
      // 保管庫の窓口(Phase M1)。中身は Firebase のままだが、置き場所の決定はここへ集約した。
      const P = DATA(db);
-     const watch = (colName, cb) => P.watchCollection(APP_DATA_ID, colName, cb);
+     // 🚨 枠切れの後、この effect が張り直されても **もう読みに行かない**(枠を更に食う)。
+     if (quotaBlockRef.current) return;
+     const firstSeen = new Set();
+     // 🚨 枠切れの時に、張った購読を **その場で全部止める** ための受け皿。
+     //   ⚠止めないと Firestore が裏で繋ぎ直し続け、枠が戻った瞬間にまた全部読む。
+     let unsubs = [];
+     let stopped = false;
+     const stopAll = () => {
+       if (stopped) return;
+       stopped = true;
+       // 自分を呼んでいる最中に配列がまだ埋まっていない事があるので、次の順番で確実に止める。
+       setTimeout(() => { unsubs.forEach(u => { try { u(); } catch { /* 既に止まっていても構わない */ } }); }, 0);
+     };
+     // 🚨🚨 購読が死んだ事を **黙って通さない**。
+     //   2026-08-17 の事故の土台。読み取り上限・権限・通信で購読が止まっても、
+     //   画面は最後に読めた姿を出したままで、誰も気づけなかった。
+     //   ⚠onError が無いと Firestore は console にすら出さない事がある。名指しで画面に出す。
+     const readFailed = (colName) => (e) => {
+       noteReadError(colName, e);
+       // 🚨 ロットが読めない = 手元が空。この状態の保存は「空で上書き」なので保存の門を閉じる。
+       if (colName === 'lots') { lotsLoadedRef.current = false; setLotsLoaded(false); }
+       // 🚨🚨 枠切れ(429)なら **全部の購読を止める**。放っておくと Firestore が
+       //   自動で繋ぎ直し続け、戻った瞬間にまた全部読んで枠を食い直す(枠を更に減らす)。
+       if (isQuotaError(e)) stopAll();
+     };
+     const readOk = (colName) => setReadErrors(prev => (prev[colName] ? (() => { const n = { ...prev }; delete n[colName]; return n; })() : prev));
+     // 🚨 読んだ件数をこの端末で数える。最初のスナップショットは全件、2回目以降は変わった分だけ。
+     //   ⚠端末のキャッシュから出た分は課金されないので数えない(数えると倍に見える)。
+     const meter = (colName, snap) => {
+       const cached = !!(snap && snap.metadata && snap.metadata.fromCache);
+       const first = !firstSeen.has(colName);
+       if (first && !cached) firstSeen.add(colName);
+       let changes = 0;
+       try { changes = snap && snap.docChanges ? snap.docChanges().length : 0; } catch { changes = 0; }
+       countReads(colName, snapshotReads(first, changes, cached));
+     };
+     const watch = (colName, cb) => P.watchCollection(APP_DATA_ID, colName, (rows, snap) => { meter(colName, snap); readOk(colName); cb(rows, snap); }, { onError: readFailed(colName) });
 
-     const unsubs = [
-       // active ロットのみ常時リアルタイム購読 (作業中・待機中・処理中)
-       // 完了ロットは限定件数のみ。Firestore の課金とロード時間を抑える
-       // ⚠並び順・件数・メタデータ変更は「ただの配列/数/真偽」で窓口へ渡す。
-       //   中身は今までと同じ orderBy('createdAt','desc') + limit(500) + includeMetadataChanges。
-       //   行の作り方も今までと同じ {...d.data(), id: d.id}(窓口の既定 = ROW_DOCID_WINS)。
-       P.watchCollection(APP_DATA_ID, 'lots', (rows) => setLots(rows),
-         { orderBy: [['createdAt', 'desc']], limit: 500, includeMetadataChanges: true }),
-       P.watchCollection(APP_DATA_ID, 'templates', (rows) => setTemplates(rows), { includeMetadataChanges: true }),
-       P.watchCollection(APP_DATA_ID, 'workers', (rows) => setWorkers(rows), { includeMetadataChanges: true }),
-       watch('logs', (rows) => setLogs(rows.slice().sort((a, b) => b.timestamp - a.timestamp))),
+     unsubs = [
+       P.watchCollection(APP_DATA_ID, 'templates', (rows, snap) => { meter('templates', snap); readOk('templates'); setTemplates(rows); }, { includeMetadataChanges: true, onError: readFailed('templates') }),
+       P.watchCollection(APP_DATA_ID, 'workers', (rows, snap) => { meter('workers', snap); readOk('workers'); setWorkers(rows); }, { includeMetadataChanges: true, onError: readFailed('workers') }),
+       // ⚠notes / announcements はヘッダーのバッジ(未読件数)で **常に** 使う。外すと数字が黙って0になる。
        watch('notes', (rows) => setNotes(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
        watch('announcements', (rows) => setAnnouncements(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
-       watch('indirectWork', (rows) => setIndirectWork(rows.slice().sort((a, b) => (b.startTime || 0) - (a.startTime || 0)))),
-       watch('improvements', (rows) => setImprovementCards(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
+       // ⚠observationPlans は作業画面(じっと見るモード)が使う。外すと現場が使えない。
        watch('observationPlans', (rows) => setObservationPlans(rows)),
+       // 🚨 ここから外した物 → 下の「開いた時だけ読む」へ移した:
+       //   logs(バックアップ画面だけ) / indirectWork(達成率・分析・日次集計だけ) / improvements(分析だけ)
        P.watchDoc(APP_DATA_ID, 'settings', 'config', (data0, snap) => {
+         // 1件の書類は「最初に1件」「変わるたびに1件」。
+         countReads('settings/config', 1, { attach: !firstSeen.has('settings/config') });
+         firstSeen.add('settings/config');
          if (snap.exists()) {
             const data = data0;
             // ▼ Firestore 上の全フィールドを取り込んでから既知フィールドだけデフォルト適用。
@@ -26632,10 +27729,130 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
               comboPresets: data.comboPresets || []
             });
          }
-       })
+       }, { onError: readFailed('settings') })
      ];
-     return () => unsubs.forEach(u => u());
-   }, [user, db]);
+     // 張った事は0件でも残す(「読んでいない」と「そもそも購読していない」を人が見分けられるように)。
+     ['templates', 'workers', 'notes', 'announcements', 'observationPlans', 'settings/config'].forEach(c => countReads(c, 0, { attach: true }));
+     if (stopped) stopAll(); // 張っている最中に枠切れが来た時の取りこぼし防止
+     return () => { stopped = true; unsubs.forEach(u => { try { u(); } catch { /* 既に止まっていても構わない */ } }); };
+   }, [user, db, countReads, noteReadError]);
+
+   // ① 普段の窓(いつも購読する分)。⚠並び順・件数・メタデータ変更は「ただの配列/数/真偽」で窓口へ渡す。
+   //   行の作り方も今までと同じ {...d.data(), id: d.id}(窓口の既定 = ROW_DOCID_WINS)。
+   //   🚨上限まで埋まらなかったら **それがコレクションの全部**(②③は要らない = 今までと1件も違わない)。
+   //   🚨過去(③)が届いたら **この窓は止める**。③は窓を含む上位互換なので、
+   //     残しておくと同じロットを二重に読み続けて枠を余計に食う。
+   //   🚨🚨 ただし **止めてよいのは「過去が本当に引き継いだ時」だけ**。
+   //     窓が全部読めていた時は合体後の `lots` が読むのは窓の方なので、窓を止めてはいけない
+   //     (止めると過去も同時に引っ込んで購読が0本になり、ロットが凍る)。
+   //     判定は planLotSubscriptions に置いてある。⚠ここで条件を書き直さない事。
+   useEffect(() => {
+     if (!user || !db || quotaBlockRef.current) return;
+     if (!lotSubPlan.live) return; // 過去が引き継いだ = 窓はもう要らない
+     const P = DATA(db);
+     let first = true;
+     const unsub = P.watchCollection(APP_DATA_ID, 'lots', (rows, snap) => {
+       let changes = 0;
+       try { changes = snap && snap.docChanges ? snap.docChanges().length : 0; } catch { changes = 0; }
+       const cached = !!(snap && snap.metadata && snap.metadata.fromCache);
+       countReads('lots(普段の窓)', snapshotReads(first, changes, cached));
+       if (!cached) first = false;
+       liveLotsRef.current = rows;
+       windowWholeRef.current = windowIsWholeCollection(rows.length, LOTS_LIVE_LIMIT);
+       recomputeRawLots(); // 🚨見張り用の姿は同期で更新(描き直しを待たない)
+       setLiveLots(rows);
+       setLotsWindowWhole(windowWholeRef.current);
+       setReadErrors(prev => (prev.lots ? (() => { const n = { ...prev }; delete n.lots; return n; })() : prev));
+       // 🚨 読めた印。ここが立つまでロットの保存は通さない(空で上書きを防ぐ)。
+       if (!lotsLoadedRef.current) { lotsLoadedRef.current = true; setLotsLoaded(true); }
+       // 🚨 まだサーバへ届いていない書き込みが在るか。Firestore 自身の申告をそのまま人へ渡す。
+       const pend = !!(snap && snap.metadata && snap.metadata.hasPendingWrites);
+       if (pendingWritesRef.current !== pend) { pendingWritesRef.current = pend; setPendingWrites(pend); }
+     }, { orderBy: [['createdAt', 'desc']], limit: LOTS_LIVE_LIMIT, includeMetadataChanges: true, onError: (e) => { noteReadError('lots', e); lotsLoadedRef.current = false; setLotsLoaded(false); } });
+     countReads('lots(普段の窓)', 0, { attach: true }); // 張った事は0件でも残す
+     return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } };
+   }, [user, db, lotSubPlan.live, countReads, noteReadError]);
+
+   // 🚨🚨🚨 突き合わせ(直す前 ⇔ 直した後)を **本番のデータで動かしたまま** にする。
+   //   historyLots は **今までの購読そのもの**({orderBy createdAt desc, limit 500})。
+   //   合体した lots がそれと1件も違わない事を、動いている画面の上で常に確かめる。
+   //   ⚠試験(R20〜R25)は作ったデータでの確認。**本物のデータでずれたら気づけないと意味がない。**
+   //   ⚠ずれた時は黙って直さない。数を控えて、通信量の画面に出す。
+   const [lotsMergeDiff, setLotsMergeDiff] = useState(null); // { missing, extra, checkedAt }
+   useEffect(() => {
+     if (historyLots === null) { setLotsMergeDiff(null); return; }
+     // ⚠窓が全部読めていた時は、過去の購読は止めてある(窓が全部 ⊇ 過去なので要らない)。
+     //   止めた後の historyLots は **その時の姿のまま止まっている** ので、
+     //   動いている lots と比べると「増えた/減った」が出てしまう = 嘘の警報になる。
+     //   この時の lots は窓そのもの = コレクション全部なので、比べる相手が要らない。
+     if (lotsWindowWhole) { setLotsMergeDiff(null); return; }
+     const hist = new Set(historyLots.map(l => l && l.id).filter(x => x != null));
+     const now = new Set(lots.map(l => l && l.id).filter(x => x != null));
+     let missing = 0; hist.forEach(id => { if (!now.has(id)) missing++; });
+     let extra = 0; now.forEach(id => { if (!hist.has(id)) extra++; });
+     if (missing > 0) console.error(`🚨 合体後のロットが今までより ${missing}件 少ない。画面の数字が減っている。`);
+     if (extra > 0) console.warn(`⚠ 合体後のロットが今までより ${extra}件 多い(500件の窓の外に居た未完了ロット)。`);
+     setLotsMergeDiff({ missing, extra, checkedAt: Date.now(), base: hist.size, merged: now.size });
+   }, [historyLots, lots, lotsWindowWhole]);
+
+   // 念のための後追い(購読の中の同期更新が本体。ここは取りこぼしの保険)。
+   useEffect(() => { rawLotsRef.current = lots; }, [lots]);
+
+   // --- 過去のロットを「開いた時だけ」読む -------------------------------------
+   // 🚨🚨 完了履歴 / 分析 / 作業最適化 / 達成率 / 完了一覧 / 日次集計 / 引き継ぎ は
+   //   過去のロットを使う。**単純に購読から外すと、それらの数字が黙って減る。**
+   //   → 開いた時に読み、**読み終わるまで数字を出さない**。
+   // ⚠一度読んだら購読を張ったままにする(同じ画面を開くたびに読み直さない)。
+   // ⚠形は **今までの購読と1文字も違わない**({orderBy:[['createdAt','desc']], limit:500})。
+   //   だから合体した後の `lots` は今までと1件も違わない(試験 R22/R23/R81)。
+   useEffect(() => {
+     if (!lotSubPlan.history || !user || !db || quotaBlockRef.current) return;
+     const P = DATA(db);
+     let first = true;
+     const unsub = P.watchCollection(APP_DATA_ID, 'lots', (rows, snap) => {
+       let changes = 0;
+       try { changes = snap && snap.docChanges ? snap.docChanges().length : 0; } catch { changes = 0; }
+       const cached = !!(snap && snap.metadata && snap.metadata.fromCache);
+       countReads('lots(過去)', snapshotReads(first, changes, cached));
+       if (!cached) first = false;
+       historyLotsRef.current = rows;
+       recomputeRawLots(); // 🚨見張り用の姿は同期で更新
+       setHistoryLots(rows);
+       // 🚨 これが届いた後は「普段の窓」を止めるので、**窓が持っていた役目をここが引き継ぐ**。
+       //   ① 読めた印(これが立つまでロットの保存は通さない)
+       //   ② まだサーバへ届いていない書き込みが在るか(Firestore 自身の申告)
+       setReadErrors(prev => (prev.lots ? (() => { const n = { ...prev }; delete n.lots; return n; })() : prev));
+       if (!lotsLoadedRef.current) { lotsLoadedRef.current = true; setLotsLoaded(true); }
+       const pend = !!(snap && snap.metadata && snap.metadata.hasPendingWrites);
+       if (pendingWritesRef.current !== pend) { pendingWritesRef.current = pend; setPendingWrites(pend); }
+     }, { orderBy: [['createdAt', 'desc']], limit: LOTS_HISTORY_LIMIT, includeMetadataChanges: true, onError: (e) => { noteReadError('lots(過去)', e); lotsLoadedRef.current = false; setLotsLoaded(false); } });
+     countReads('lots(過去)', 0, { attach: true }); // 張った事は0件でも残す
+     return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } };
+   }, [lotSubPlan.history, user, db, countReads, noteReadError]);
+
+   // ② 窓に入らないが **まだ終わっていない** ロット。窓が上限まで埋まった時だけ張る。
+   //   ⚠これが無いと、古いまま作業中のロットが作業画面から消える(現場が止まる)。
+   //   ⚠過去(500件)が上限に届かなかった = それがコレクションの全部 → この拾い直しも要らない。
+   useEffect(() => {
+     if (!lotSubPlan.open || !user || !db || quotaBlockRef.current) { openLotsRef.current = []; recomputeRawLots(); setOpenLots([]); return; }
+     const P = DATA(db);
+     let first = true;
+     const unsub = P.watchCollection(APP_DATA_ID, 'lots', (rows, snap) => {
+       let changes = 0;
+       try { changes = snap && snap.docChanges ? snap.docChanges().length : 0; } catch { changes = 0; }
+       const cached = !!(snap && snap.metadata && snap.metadata.fromCache);
+       countReads('lots(未完了)', snapshotReads(first, changes, cached));
+       if (!cached) first = false;
+       openLotsRef.current = rows;
+       recomputeRawLots(); // 🚨見張り用の姿は同期で更新
+       setOpenLots(rows);
+       // 🚨 上限に届いた = 拾い切れていない。**黙って切らない**。
+       if (rows.length >= OPEN_LOTS_LIMIT) console.warn(`⚠ 未完了ロットが ${OPEN_LOTS_LIMIT}件の上限に届きました。拾い切れていない可能性があります。`);
+     }, { where: [['status', '!=', 'completed']], limit: OPEN_LOTS_LIMIT, onError: (e) => noteReadError('lots(未完了)', e) });
+     countReads('lots(未完了)', 0, { attach: true }); // 張った事は0件でも残す
+     return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } };
+   }, [lotSubPlan.open, user, db, countReads, noteReadError]);
+
 
    // --- Font Size Application ---
    useEffect(() => {
@@ -26687,24 +27904,178 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
 
    // 直近の失敗 payload を保持して再試行可能にする
    const lastFailedPayloadRef = useRef(null);
+   // 🚨 失敗を1件も落とさない受け皿。前は ref 1個だけで、2件目が来ると1件目が取り戻せなかった。
+   const rememberFailed = (rec) => {
+     lastFailedPayloadRef.current = rec;
+     setFailedSaves(prev => {
+       const key = `${rec.kind}:${rec.col || ''}:${rec.id || ''}`;
+       const rest = prev.filter(p => `${p.kind}:${p.col || ''}:${p.id || ''}` !== key);
+       return [...rest, { ...rec, at: Date.now() }].slice(-50);
+     });
+   };
+   const forgetFailed = (rec) => {
+     lastFailedPayloadRef.current = null;
+     setFailedSaves(prev => prev.filter(p => !(p.kind === rec.kind && p.col === rec.col && p.id === rec.id)));
+   };
+
+   // 🚨🚨🚨 保存の関所。ロットを書く前に「作業の記録が消えないか」を必ず見る。
+   //   2026-08-17 最終検査: 8/12 の5ロットで tasks が空マップになり、時間取りが全部消えた。
+   //   復旧できなかった(変更履歴なし・バックアップ0件)。**だから通す前に止める。**
+   //   ⚠止めた時は無言で return しない。画面に出して、呼び出し側へ投げ返す
+   //     (握り潰すと呼び出し側は「保存できた」と受け取り、画面を閉じて入力が消える)。
+   const [saveBlocked, setSaveBlocked] = useState(null); // { at, col, id, reason, counts }
+   // 📦 上限に迫っているが「記録だけの保存」なので通した、という控え。人に見せて写真を減らしてもらう。
+   const [capacityWarn, setCapacityWarn] = useState(null); // { at, id, bytes, limit }
+   // 止めずに通した「時間が減る保存」。人の操作なら正しいが、**黙って通さない**ための控え。
+   const [timeShrunk, setTimeShrunk] = useState(null); // { at, id, level, reason, sec }
+   const guardLotSave = (col, id, data) => {
+     if (col !== 'lots') return;
+     const note = (res) => setSaveBlocked({
+       at: Date.now(), col, id,
+       reason: (res && res.reason) ? String(res.reason) : '',
+       counts: (res && res.counts) || null,
+     });
+     try {
+       // ⓪ 🚨🚨 読み取りが枠切れ(429)している間は、ロットを書かない。
+       //   読めていない = 手元のロットが本物か確かめられない。この状態で書くと
+       //   「古い姿 / 空の姿」でサーバを上書きしうる(2026-08-17 と同じ形)。
+       //   ⚠止めた事は必ず画面に出し、呼び出し側へ投げ返す(無言で return しない = 画面が閉じて入力が消える)。
+       if (quotaBlockRef.current) {
+         const until = quotaBlockRef.current.until;
+         const reason = `読み取りの上限(429)に達しているため、ロットの保存を止めています。\n`
+           + `枠が戻るのは ${formatClock(until)} 頃（${formatRemaining(until - Date.now())}）です。\n`
+           + `入力した内容は画面に残っています。画面を閉じないでください。`;
+         note({ reason, counts: null });
+         const e = new Error(reason);
+         e.name = 'ReadQuotaBlocked';
+         throw e;
+       }
+       // ① 読めていない時は保存しない(手元の空をサーバへ書く道を閉じる)
+       assertLotsLoaded(lotsLoadedRef.current, { onBlock: note });
+       // ② 前の姿と突き合わせて、時間を持つ記録が消えるなら止める
+       //   ⚠⚠ allow の線引きは **現場を止めないこと** と両立させる。
+       //     止める(投げる): blank(空のtasks) / wipe(丸ごと空) / drop(時間を持つ項目が消える)
+       //                      ← 2026-08-17 の事故はこの3つのどれか。ここは絶対に通さない。
+       //     通す(記録に残す): erase(いつ始めたかが消える) / shrink(時間が減る)
+       //                      ← 部品検査の正しい操作で実際に起きる
+       //                        (「最初から作業」「該当なし解除」「取り消し」「異常値の修正」)。
+       //                        ここを投げると現場が止まる。**通すが、黙って通さない。**
+       const before = (rawLotsRef.current || []).find(l => l && l.id === id) || null;
+       // ⚠⚠ 線引きは **試験で固定した1箇所**(domain/lotSavePolicy.js)に聞く。
+       //   ここに条件を直書きすると、次に誰かが触った時に必ずずれる。
+       //   要点: 「時間を持つ記録が1件も残らない」形は 2026-08-17 の形なので止める。
+       //         ただし **記録1件のロットで人がやり直しを押した(控えの印つき)** 時だけは
+       //         確認してから通す(止め切ると現場が使えず、見張りごと外される)。
+       const pre = wouldLoseWorkTime(before, data);
+       const policy = decideLotSave(pre);
+       if (policy.action === 'confirm' && !confirm(wipeConfirmMessage(pre))) {
+         note({ reason: '人の確認が得られなかったので保存を止めました（時間の記録が0件になる保存）。', counts: pre.counts });
+         const e = new Error('保存を中止しました（記録はそのまま残っています）。');
+         e.name = 'WorkTimeWipeCancelled';
+         throw e;
+       }
+       const res = assertSafeLotSave(before, data, { allow: policy.allow, onBlock: note });
+       // 通した分も見えるようにする。黙って通すと「気づけない」に戻る。
+       if (res && res.lost) {
+         console.warn('⚠ 記録が減る保存を通しました(人の操作として通す線引き)', col, id, res.level, res.reason);
+         setTimeShrunk({ at: Date.now(), id, level: res.level, reason: res.reason, sec: res.lostSec || 0 });
+       }
+       // ③ 📦 1MBの見張り。⚠差分だけ測っても意味がない: merge:true の結果は「今の姿 ⊕ 差分」。
+       //   差分が5KBでも合体後が1MBを超えれば保存は落ちる。落ちたロットは
+       //   写真どころか **検査記録の保存すらできない凍結状態** になる(最終検査で実際に1件在った)。
+       //   ⚠部品検査には写真の別置き先が無い(lot_images は最終検査だけ)。だから
+       //     「入る前に止める」しか手が無い。止めた時は写真を減らしてもらう。
+       //
+       // 🚨🚨🚨 **止めてよいのは「写真を増やす保存」だけ。**
+       //   前はここが合体後サイズだけを見ていたので、上限に迫ったロットでは
+       //   **写真を1枚も含まない「作業時間だけの保存」まで止まっていた**。
+       //   止まると検査員は写真を減らす前に時間取りを保存できず、
+       //   画面を閉じた時点で記録が消える = 2026-08-17 の事故と結果が同じ。
+       //   「写真を減らしてください」と言いながら、減らす前の保存を全部止めるのは筋が通らない。
+       //   ⚠実測(scratchpad/parts-freeze-door.mjs): 900,356バイトのロットに
+       //     工程1件(73バイト)を足すだけの保存が、いまのコードでは止まっていた。
+       //   ⚠負の対照も測ってある: 写真を1枚足す保存は直した後も止まる。
+       // ⚠⚠ 線引きは **試験で固定した1箇所**(domain/lotCapacityGate.js)に聞く。
+       //   ここに条件を直書きすると、次に誰かが触った時に必ずずれる。
+       if (before) {
+         const merged = capMerge(before, data);
+         const bytes = capBytes(merged);
+         const d = decideCapacity(before, merged, bytes, CAP_DANGER);
+         if (d.action === 'block') {
+           const res = { reason: capacityBlockMessage(bytes, CAP_LIMIT), counts: null };
+           note(res);
+           const e = new Error(res.reason);
+           e.name = 'LotCapacityError';
+           throw e;
+         }
+         // 🚨 通したが、危ない事は **黙らない**。記録は守りつつ、写真を減らす必要を人に見せる。
+         if (d.action === 'warn') {
+           console.warn('📦 上限に迫ったロットの保存を通しました(記録だけ/縮む保存)', id, bytes, d.reason);
+           setCapacityWarn({ at: Date.now(), id, bytes, limit: CAP_LIMIT });
+         }
+       }
+     } catch (e) {
+       console.error('🚨 作業の記録が消える保存を止めました', col, id, e);
+       alert(`🚨 保存を止めました\n\n${e.message}\n\nこの保存を通すと検査記録(時間取り)が失われます。`
+         + `\n画面を開き直して、記録が見えている状態でもう一度お試しください。`);
+       throw e;
+     }
+   };
 
    const saveData = async (col, id, data) => {
+     // 🚨🚨🚨 2026-08-23: サインインが終わっていない間の保存を **黙って捨てない**。
+     //   前はここで無言 return していたので `await` した側には正常に返り、
+     //   画面だけ先へ進んで Firestore には何も行かなかった(2026-08-17 の事故と同じ形)。
+     //   しかも failedSaves に控えが残らないので「全部送り直す」でも戻せなかった。
+     //   → 下の catch と同じ扱い(控えを残す + 同期エラー表示 + throw)に揃える。
      if (!user || !db) {
-         setErrorMsg("Not authenticated. Cannot save data.");
-         return;
+       const rec = { kind: 'doc', col, id, data };
+       rememberFailed(rec);
+       setSyncStatus('error');
+       const msg = 'サインインがまだ終わっていないため保存できませんでした。つながってから「全部送り直す」を押してください。';
+       setErrorMsg(msg);
+       throw new Error(msg);
      }
+     // ⚠関所は try の **外**。中で投げると下の catch が飲み込み、
+     //   「止めたつもりの保存」が失敗扱いで再試行キューに入ってしまう。
+     guardLotSave(col, id, data);
+     const rec = { kind: 'doc', col, id, data };
+     bumpInflight(+1);
      try {
        setSyncStatus('syncing');
        setErrorMsg(null);
 
-       await DATA(db).save(APP_DATA_ID, col, id, { ...cleanUndefined(data), updatedAt: DATA_SERVER_NOW });
+       // 🚨🚨 2026-08-17 の事故対策の関所(domain/saveOrder.js)。
+       //   **記録を先に待ち行列へ入れ、別置き(写真)は後ろへ回し、その間に await を挟まない。**
+       //   ⚠待つ回数は前と同じ1回(記録の1回)だけ。現場の検査動線に await は1つも足していない。
+       //   ⚠部品検査は写真をロット本体に持つ(別置き先が無い)ので blobs は今は必ず空。
+       //     別置きを足す時は **blobs へ入れる**。そうすれば record の後ろに並ぶ事が
+       //     この1本(orderWrites)で保証され、8/17 の形へは戻せなくなる。
+       const h = saveInOrder({
+         record: { id, body: { ...cleanUndefined(data), updatedAt: DATA_SERVER_NOW } },
+         blobs: [],
+         write: (w) => DATA(db).save(APP_DATA_ID, col, w.id, w.body),
+       });
+       // ⚠別置きの結果(h.blobs)は **必ず resolve する**(saveOrder.js の約束)。
+       //   いまは空なので何も起きないが、握り潰しにならないよう名指しで受けておく。
+       h.blobs.then((r) => { if (r && r.failedIds && r.failedIds.length) console.error('🚨 別置きの保存に失敗', col, id, r.failedIds, r.errors); });
+       await h.record;
        setSyncStatus('idle');
-       lastFailedPayloadRef.current = null;
+       forgetFailed(rec);
      } catch (e) {
          console.error(e);
          setSyncStatus('error');
          setErrorMsg(e.message || "Unknown error during save");
-         lastFailedPayloadRef.current = { kind: 'doc', col, id, data };
+         rememberFailed(rec);
+         // 🚨🚨🚨 **握り潰さない。** 前はここで飲み込んで正常に返っていた。
+         //   だから `await saveData(...)` が「保存できた」と嘘をつき、
+         //   呼び出し側は画面を閉じたり次へ進んだりしていた(2026-08-17 の事故と同じ形)。
+         //   ⚠最終検査は 2026-07-26 に投げる形へ直してある。部品検査だけ残っていた。
+         //   ⚠投げても記録は失われない: 中身は failedSaves に控えてあり「全部送り直す」で戻せる。
+         //   ⚠受け取り手のいない呼び出しは window の unhandledrejection が拾って画面に出す。
+         throw e;
+     } finally {
+       bumpInflight(-1);
      }
    };
 
@@ -26716,19 +28087,48 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
      if (p.kind === 'delete') return deleteData(p.col, p.id);
    };
 
+   // 🚨 溜まった失敗を **全部** 送り直す(1件だけの再試行では取りこぼす)。
+   const retryAllFailedSaves = async () => {
+     const list = [...failedSaves];
+     for (const p of list) {
+       try {
+         if (p.kind === 'doc') await saveData(p.col, p.id, p.data);
+         else if (p.kind === 'settings') await saveSettings(p.data);
+         else if (p.kind === 'delete') await deleteData(p.col, p.id);
+       } catch (e) { console.error('再送に失敗', p, e); }
+     }
+   };
+
    const saveSettings = async (newSettings) => {
-     if (!user || !db) return;
+     // 🚨🚨🚨 2026-08-23: サインインが終わっていない間の設定の保存を **黙って捨てない**。
+     //   前はここで無言 return していたので `await` した側には正常に返り、
+     //   画面だけ先へ進んで Firestore には何も行かなかった(2026-08-17 の事故と同じ形)。
+     //   しかも failedSaves に控えが残らないので「全部送り直す」でも戻せなかった。
+     //   → 下の catch と同じ扱い(控えを残す + 同期エラー表示 + throw)に揃える。
+     if (!user || !db) {
+       const rec = { kind: 'settings', data: newSettings };
+       rememberFailed(rec);
+       setSyncStatus('error');
+       const msg = 'サインインがまだ終わっていないため設定を保存できませんでした。つながってから「全部送り直す」を押してください。';
+       setErrorMsg(msg);
+       throw new Error(msg);
+     }
+     const rec = { kind: 'settings', data: newSettings };
+     bumpInflight(+1);
      try {
        setSyncStatus('syncing');
        // undefined を含むキーが Firestore で例外を投げないよう cleanUndefined を通す
        await DATA(db).save(APP_DATA_ID, 'settings', 'config', cleanUndefined(newSettings));
        setSyncStatus('idle');
-       lastFailedPayloadRef.current = null;
+       forgetFailed(rec);
      } catch (e) {
        console.error(e);
        setSyncStatus('error');
        setErrorMsg(e.message || '設定の保存に失敗しました');
-       lastFailedPayloadRef.current = { kind: 'settings', data: newSettings };
+       rememberFailed(rec);
+       throw e; // 🚨 握り潰さない(saveData と同じ理由)。失敗は failedSaves に控えてある。
+     } finally {
+       bumpInflight(-1);
      }
    };
 
@@ -26749,11 +28149,33 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
      ];
      const total = cols.reduce((n, [, a]) => n + (Array.isArray(a) ? a.length : 0), 0) + 1; // +1: settings/config
      let done = 0;
+     // 🚨関所が止めた分。**黙って飛ばさない**(「取れた≠戻せた」の教訓 2026-07-26)。
+     const blocked = [];
      for (const [col, arr] of cols) {
        if (!Array.isArray(arr)) continue;
        for (const raw of arr) {
          if (raw && raw.id) {
            const { id, ...rest } = raw;
+           if (col === 'lots') {
+             // 🚨🚨 ロットは **保存の関所(saveData)を必ず通す**(最終検査 2026-08-17 と同じ直し)。
+             //   ここは以前 保管庫へ直に書いていた = 容量の見張りも作業記録の見張りも
+             //   一切効かない裏道だった。古いバックアップ(tasks が空/少ない)を
+             //   いまのロットへ上書きすると、その場で検査記録が消える。
+             //   ⚠止まった1件で復元を全部やめない。**名指しで控えて、最後に人へ返す。**
+             //     (消えた記録を戻す時は before が空なので、ふつうに通る)
+             try {
+               await saveData('lots', id, { ...cleanUndefined(rest), updatedAt: DATA_SERVER_NOW });
+             } catch (e) {
+               blocked.push({ id, why: String((e && e.message) || e) });
+               console.error('🚨 復元を止めました(この1件だけ):', id, e);
+             }
+             done++; if (onProgress) onProgress(done, total);
+             continue;
+           }
+           // ⚠ここへ lots は来ない(上で必ず関所を通して continue している)。
+           //   将来その形が崩れると **裏道が黙って復活する** ので、その場で止める。
+           //   ⚠ロット以外(お手本・作業者・連絡など)は今までどおり直に書く。
+           if (col === 'lots') throw new Error('復元の不具合: ロットは保存の関所(saveData)しか通らない道になっています');
            await DATA(db).save(APP_DATA_ID, col, id, { ...cleanUndefined(rest), updatedAt: DATA_SERVER_NOW });
          }
          done++; if (onProgress) onProgress(done, total);
@@ -26761,7 +28183,14 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
      }
      await DATA(db).save(APP_DATA_ID, 'settings', 'config', cleanUndefined(parsed.settings || {}));
      done++; if (onProgress) onProgress(done, total);
-     return { total };
+     // 🚨関所で止まった分は必ず知らせる。黙っていると「戻したつもり」になる。
+     if (blocked.length) {
+       console.error('🚨 関所が止めた復元:', blocked);
+       alert(`🚨 ${blocked.length}件のロットは復元しませんでした。\n`
+         + `保存の関所が「いまの検査記録が消える」と判断した分です。\n`
+         + `（いまの記録はそのまま残っています。詳しくは開発者コンソールをご覧ください）`);
+     }
+     return { total, blocked };
    };
 
    // 設定内のネストしたサブキーを削除するヘルパー。
@@ -26771,7 +28200,15 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
    //   ⚠キーの書き方('qualityStandards.qs-xxx' のドット区切り)は今までと1文字も変えない。
    //     窓口は印を Firestore の deleteField() に直すだけで、キーはそのまま渡す。
    const deleteSettingsFields = async (paths) => {
-     if (!user || !db) return;
+     // 🚨 2026-08-23: 無言 return をやめる(消えたつもりで先へ進ませない)。
+     //   ⚠この操作は failedSaves の種類(doc/settings/delete)に無いので再送キューには積めない。
+     //     だから「後で送り直せる」とは言わず、その場で人に見せて操作をやり直してもらう。
+     if (!user || !db) {
+       setSyncStatus('error');
+       const msg = 'サインインがまだ終わっていないため設定を削除できませんでした。つながってからもう一度お試しください。';
+       setErrorMsg(msg);
+       throw new Error(msg);
+     }
      const list = Array.isArray(paths) ? paths : [paths];
      if (list.length === 0) return;
      try {
@@ -26788,17 +28225,34 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
    };
 
    const deleteData = async (col, id) => {
-     if (!user || !db) return;
+     // 🚨🚨🚨 2026-08-23: サインインが終わっていない間の削除を **黙って捨てない**。
+     //   前はここで無言 return していたので `await` した側には正常に返り、
+     //   画面だけ先へ進んで Firestore には何も行かなかった(2026-08-17 の事故と同じ形)。
+     //   しかも failedSaves に控えが残らないので「全部送り直す」でも戻せなかった。
+     //   → 下の catch と同じ扱い(控えを残す + 同期エラー表示 + throw)に揃える。
+     if (!user || !db) {
+       const rec = { kind: 'delete', col, id };
+       rememberFailed(rec);
+       setSyncStatus('error');
+       const msg = 'サインインがまだ終わっていないため削除できませんでした。つながってから「全部送り直す」を押してください。';
+       setErrorMsg(msg);
+       throw new Error(msg);
+     }
+     const rec = { kind: 'delete', col, id };
+     bumpInflight(+1);
      try {
        setSyncStatus('syncing');
        await DATA(db).remove(APP_DATA_ID, col, id);
        setSyncStatus('idle');
-       lastFailedPayloadRef.current = null;
+       forgetFailed(rec);
      } catch (e) {
        console.error(e);
        setSyncStatus('error');
        setErrorMsg(e.message || '削除に失敗しました');
-       lastFailedPayloadRef.current = { kind: 'delete', col, id };
+       rememberFailed(rec);
+       throw e; // 🚨 握り潰さない(saveData と同じ理由)。「消えたつもり」で先へ進ませない。
+     } finally {
+       bumpInflight(-1);
      }
    };
 
@@ -28245,7 +29699,21 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
        });
      } catch (e) { console.warn('optimalByCombo算出失敗', e); }
      return out;
-   }, [lots, templates, strictMaturityUnits]);
+     // 🚨🚨 2026-08-30 直した欠陥(製品検査アプリと同時に直した):
+     //   **品目グループを直しても「データ最適順」が古いまま出ていた。**
+     //   中で sameGroupModels(r.model, settings) が settings.modelGroups を読んでいるのに deps に無かった。
+     //   ⚠それだけなら lots が動けば直るが、**handleOptimalDecide がこの結果を
+     //     settings.strictModeRules[key].optimalOrder.snapshot として保存する**ので、
+     //     グループを直した直後に承認すると **直す前の集計が保存に焼き付き、後から自動で直る道が無い**。
+     //   ⚠settings まるごとは入れない。全ロット×全テンプレを回す重い集計なので、
+     //     無関係な設定を変えるたびに回すと画面が固まる。読む物だけを入れる。
+     //
+     // 🚨🚨 ここで eslint は今も「'settings' が足りない」と言い続けます。**直さないでください。**
+     //   eslint は settings の**どの鍵を読んだか**まで見ないので、いつも丸ごとを要求します。
+     //   警告が出ている事を理由に settings を足すと、上に書いたとおり
+     //   **設定を1つ触るたびに全ロット×全テンプレの集計が回り**ます。
+     //   読んでいるのは modelGroups だけなので、入れるのもそれだけが正しい。
+   }, [lots, templates, strictMaturityUnits, settings.modelGroups]);
 
    // データ最適順の承認/解除。既存の strictModeRules[key] に optimalOrder をマージ(厳密enabledは保持)。
    const handleOptimalDecide = (row, enabled) => {
@@ -28350,10 +29818,15 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
         }
         // This is a zone ID.
         // No-op ガード: 既に同じゾーンに居て担当者の追加割当も無いなら何もしない (誤タップでの無駄な保存防止)
-        if (lot.mapZoneId === newLocation && (lot.location === 'planned' || lot.location === 'completed') && (lot.workerId || !selectedWorker)) return;
-        // Updates: mapZoneId=zoneId, workerId=keep or auto-assign, location='planned' (to keep in list)
+        // ⚠2026-08-23: 元は `&& (lot.workerId || !selectedWorker)` が付いていたが、selectedWorker は永久に null で
+        //   この条件は常に真だった(＝実質『同じゾーンなら常に何もしない』)。意味の無い条件を消し、実際の動きは1つも変えていない。
+        if (lot.mapZoneId === newLocation && (lot.location === 'planned' || lot.location === 'completed')) return;
+        // Updates: mapZoneId=zoneId, location='planned' (to keep in list)
+        // 🚨 2026-08-23: ここに『担当者が空なら selectedWorker を自動で割り当てる』行が有ったが、
+        //   selectedWorker はどこからも設定されず永久に null で、**一度も実行されていなかった**。
+        //   動いていない物をコメントだけ残すと「割り当たるはず」と誤解されるので、行ごと消した。
+        //   (担当者の割当は作業開始ダイアログ / 作業予定の割当画面で行う)
         const updates = { mapZoneId: newLocation };
-        if (!lot.workerId && selectedWorker) updates.workerId = selectedWorker.id;
         // Ensure it stays in 'planned' list so it's visible in both
         // ※ 過去データで location にゾーンIDが直接入っているケースも 'planned' に正規化
         if (lot.location !== 'planned' && lot.location !== 'completed') updates.location = 'planned';
@@ -28552,6 +30025,193 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
            <button onClick={() => setSyncStatus('idle')} className="hover:bg-white/20 rounded p-0.5"><X className="w-3.5 h-3.5"/></button>
          </div>
        )}
+       {/* 🚨🚨 「まだサーバへ送れていません」を人に見せる。
+              2026-08-17 の事故で決定的に足りなかったのがこれ。届いたかを確かめる手段が1つも無く、
+              送れていないのに画面は「済み」だった。× で消せないようにする(消えると意味が無い)。 */}
+       {(pendingWrites || inflight > 0) && (
+         <div className="fixed bottom-4 left-4 z-[460] bg-amber-600 text-white px-3 py-2 rounded-lg shadow-2xl flex items-center gap-2 text-xs font-black border-2 border-amber-300">
+           <Loader2 className="w-4 h-4 animate-spin shrink-0"/>
+           <span>まだサーバへ送れていません{inflight > 0 ? `（送信中 ${inflight}件）` : ''} — この画面を閉じないでください</span>
+         </div>
+       )}
+       {/* 🚨 溜まった保存失敗。**1件も落とさず**、全部まとめて送り直せるようにする。 */}
+       {failedSaves.length > 0 && (
+         <div className="fixed bottom-16 left-4 z-[460] bg-rose-700 text-white px-3 py-2 rounded-lg shadow-2xl flex items-center gap-2 text-xs font-black border-2 border-rose-300">
+           <AlertTriangle className="w-4 h-4 shrink-0"/>
+           <span>保存できていない記録 {failedSaves.length}件</span>
+           <button onClick={retryAllFailedSaves} className="bg-white text-rose-700 px-2 py-0.5 rounded font-black hover:bg-rose-50 flex items-center gap-1"><RefreshCw className="w-3 h-3"/> 全部送り直す</button>
+         </div>
+       )}
+       {/* 🚨 まだ1件も読めていない = 手元は空。この状態で保存すると「空で上書き」になるので保存の門は閉じている。
+              ⚠読めていないのに普通の画面を見せると、人は「0件だ」と受け取る。**読めていないと書く。** */}
+       {user && db && !lotsLoaded && Object.keys(readErrors).length === 0 && (
+         <div className="fixed top-0 left-0 right-0 z-[510] bg-slate-700 text-white px-4 py-2 flex items-center justify-center gap-2 text-sm font-bold shadow-lg">
+           <Loader2 className="w-4 h-4 animate-spin"/> 検査データを読み込み中です（読めるまでロットの保存はできません）
+         </div>
+       )}
+       {/* 🚨🚨🚨 読み取りの枠切れ(429)。**検査画面(作業画面)より上に出す**(z は作業画面より大きい)。
+              ⚠「エラー」ではなく「いつ直るか」を出す。無料枠は米西部の0時に戻る(いまの季節は日本時間16:00)。
+              ⚠この間、自動では読みに行かない(枠を更に食う)。読み直すのは人が押した時だけ。 */}
+       {quotaBlock && (
+         <div className="fixed top-0 left-0 right-0 z-[600] bg-rose-700 text-white px-4 py-3 flex items-start gap-3 shadow-2xl border-b-4 border-rose-300">
+           <Ban className="w-6 h-6 shrink-0 mt-0.5"/>
+           <div className="flex-1 text-sm">
+             <div className="font-black text-base">{quotaBlock.drill ? '🧪 これは練習です（本当は止まっていません）' : '🚨 読み取りの上限に達しました（429）— 画面の数字は当てになりません'}</div>
+             <div className="text-xs opacity-95 mt-1">
+               直るのは <b className="text-base">{formatClock(quotaBlock.until)} 頃</b>（{formatRemaining(quotaBlock.until - Date.now())}）。
+               無料枠は 1日 {FREE_TIER_DAILY_READS.toLocaleString()}件で、<b>4つのアプリで1つ</b>です。
+             </div>
+             <div className="text-xs opacity-95 mt-1">
+               🚨 <b>この間、ロットの保存は止めています</b>（手元が空のまま書くと検査記録が消えるため）。
+               入力した内容は画面に残っています。<b>画面を閉じないでください。</b>
+             </div>
+             <div className="text-[11px] opacity-80 mt-1">止まった読み取り: {quotaBlock.cols.join(' / ')}（自動では読み直しません）</div>
+           </div>
+           <div className="flex flex-col gap-1 shrink-0">
+             <button onClick={() => setShowReadBudget(true)} className="bg-white text-rose-700 px-3 py-1 rounded font-bold text-xs hover:bg-rose-50">通信量を見る</button>
+             <button onClick={() => { const wasDrill = quotaBlock.drill; quotaBlockRef.current = null; setQuotaBlock(null); setReadErrors({}); if (!wasDrill) window.location.reload(); }} className="bg-rose-900 text-white px-3 py-1 rounded font-bold text-xs hover:bg-rose-950 flex items-center gap-1"><RefreshCw className="w-3 h-3"/> {quotaBlock.drill ? '練習を終わる' : 'もう一度読む'}</button>
+           </div>
+         </div>
+       )}
+       {/* 📡 この端末が今日読んだ件数。⚠**この端末の分だけ**(他の端末・他の3アプリの分は見えない)。 */}
+       {showReadBudget && (
+         <div className="fixed inset-0 z-[610] bg-black/50 flex items-center justify-center p-4" onClick={() => setShowReadBudget(false)}>
+           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[88vh] flex flex-col" onClick={e => e.stopPropagation()}>
+             <div className="px-5 py-3 border-b bg-emerald-50 flex items-center justify-between shrink-0">
+               <h3 className="text-lg font-black text-emerald-900 flex items-center gap-2"><Activity className="w-5 h-5"/> 通信量（この端末）</h3>
+               <button onClick={() => setShowReadBudget(false)} className="p-1.5 hover:bg-emerald-100 rounded"><X className="w-5 h-5 text-emerald-700"/></button>
+             </div>
+             <div className="p-5 overflow-y-auto text-sm">
+               <div className="text-center py-3">
+                 <div className="text-4xl font-black text-slate-800">{readTally.total.toLocaleString()}<span className="text-base font-bold text-slate-500 ml-1">件</span></div>
+                 <div className="text-xs text-slate-500 mt-1">この端末が今日読んだ件数（Firestore の読み取り）</div>
+                 <div className={`mt-3 inline-block px-4 py-2 rounded-lg font-black ${quotaPercent(readTally.total) >= 50 ? 'bg-rose-100 text-rose-700' : quotaPercent(readTally.total) >= 20 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                   無料枠の {quotaPercent(readTally.total)}%
+                 </div>
+                 <div className="text-[11px] text-slate-500 mt-1">無料枠 = 1日 {FREE_TIER_DAILY_READS.toLocaleString()}件・<b>4つのアプリで1つ</b></div>
+               </div>
+               <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-[11px] text-amber-900 leading-relaxed">
+                 ⚠ ここに出るのは <b>この端末の分だけ</b> です。他の人の端末や、製品検査・最終検査・司令塔が読んだ分は
+                 このアプリからは分かりません。<b>全部の合計はもっと多い</b>と思ってください（正確な合計は Firebase コンソールの使用量）。
+               </div>
+               <div className="mt-4">
+                 <div className="font-black text-slate-700 mb-1 text-xs">内訳（何をいくつ読んだか）</div>
+                 <div className="border rounded-lg overflow-hidden">
+                   {Object.entries(readTally.byCol).sort((a, b) => b[1] - a[1]).map(([col, n]) => (
+                     <div key={col} className="flex items-center justify-between px-3 py-1.5 border-b last:border-b-0 text-xs">
+                       <span className="font-bold text-slate-700">{col}</span>
+                       <span className="font-black text-slate-800">{n.toLocaleString()}件</span>
+                     </div>
+                   ))}
+                   {Object.keys(readTally.byCol).length === 0 && <div className="px-3 py-3 text-xs text-slate-400 text-center">まだ数えていません</div>}
+                 </div>
+               </div>
+               <div className="mt-4 text-[11px] text-slate-600 leading-relaxed space-y-1">
+                 <div>・繋ぎ直した回数: <b>{readTally.attaches}回</b>（1回ごとに、そのぶんをもう一度読みます）</div>
+                 <div>・枠が戻るのは <b>{formatClock(nextQuotaResetAt(Date.now()))} 頃</b>（米西部の0時）</div>
+                 <div>・数え方: 最初に読んだ件数＋あとで変わった件数。<b>0件でも1件ぶん</b>かかります。</div>
+                 <div>・この画面を見るために通信は<b>1件も</b>使いません（端末の中だけで数えています）。</div>
+                 <div>・いま常に読んでいる物: ロット（新しい方から{LOTS_LIVE_LIMIT}件）／工程テンプレ／作業者／ノート／お知らせ／観測プラン／設定</div>
+                 <div>・開いた時だけ読む物: 過去のロット（{LOTS_HISTORY_LIMIT}件）／間接作業／改善カルテ／ログ／ヘルプ画像／厳密モード履歴</div>
+                 {lotsWindowWhole && <div className="text-emerald-700 font-bold">・いまロットは全部読めています（{LOTS_LIVE_LIMIT}件の窓に収まっている＝過去の読み込みは要りません）</div>}
+               </div>
+               <div className="mt-4">
+                 <div className="font-black text-slate-700 mb-1 text-xs">直す前 ⇔ 直した後 の突き合わせ（ロット件数）</div>
+                 {lotsWindowWhole && <div className="text-[11px] bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-emerald-800">ロットが窓（{LOTS_LIVE_LIMIT}件）に全部収まっているので、<b>今までと同じ物をそのまま出しています</b>（合体すら起きていません）。</div>}
+                 {!lotsWindowWhole && lotsMergeDiff === null && <div className="text-[11px] bg-slate-50 border rounded px-3 py-2 text-slate-500">まだ過去を読んでいないので突き合わせていません（完了履歴・分析・達成率のどれかを開くと読みます）。</div>}
+                 {!lotsWindowWhole && lotsMergeDiff && (
+                   <div className={`text-[11px] rounded px-3 py-2 border ${lotsMergeDiff.missing > 0 ? 'bg-rose-50 border-rose-300 text-rose-800' : lotsMergeDiff.extra > 0 ? 'bg-amber-50 border-amber-300 text-amber-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
+                     今までの読み方（新しい方から{LOTS_HISTORY_LIMIT}件）= <b>{lotsMergeDiff.base}件</b> / いま画面が使っている = <b>{lotsMergeDiff.merged}件</b><br />
+                     {lotsMergeDiff.missing > 0 ? <>🚨 <b>{lotsMergeDiff.missing}件 少ない = 欠陥です。</b>この数字は信じないでください。</>
+                       : lotsMergeDiff.extra > 0 ? <>⚠ {lotsMergeDiff.extra}件 多い（{LOTS_HISTORY_LIMIT}件の窓の外に居た<b>未完了ロット</b>を拾いました。今までは作業画面にも出ていなかった分です）。</>
+                       : <>✅ 1件も違いません（画面の数字は今までと同じです）。</>}
+                   </div>
+                 )}
+               </div>
+               <button onClick={() => { const t = emptyTally(quotaDayKeyOf(Date.now())); readTallyRef.current = t; setReadTally(t); try { localStorage.setItem(READ_TALLY_STORAGE_KEY, JSON.stringify(t)); } catch { /* 端末が拒否しても本業は止めない */ } }}
+                 className="mt-4 w-full py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold text-slate-600">数え直す（0に戻す）</button>
+               {/* 🧪 枠切れの画面を **本番が止まる前に** 見ておくための練習。
+                      ⚠押しても通信は1件も起きない(この端末の画面が変わるだけ)。戻すのも1タップ。
+                      ⚠これが無いと「429の時ちゃんと出るのか」を誰も確かめられない(出番が年に数回だから)。 */}
+               {!quotaBlock && (
+                 <button onClick={() => { const rec = { at: Date.now(), until: nextQuotaResetAt(Date.now()), cols: ['（練習）'], drill: true }; quotaBlockRef.current = rec; setQuotaBlock(rec); setShowReadBudget(false); }}
+                   className="mt-2 w-full py-2 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg text-xs font-bold text-rose-700">🧪 枠切れ（429）の画面を試す — 通信は使いません</button>
+               )}
+             </div>
+           </div>
+         </div>
+       )}
+       {/* 🚨 読めていない事を黙って通さない。名指しで出す(0件に見えているのは「無い」ではなく「読めていない」)。 */}
+       {Object.keys(readErrors).length > 0 && !quotaBlock && (
+         <div className="fixed top-0 left-0 right-0 z-[520] bg-rose-700 text-white px-4 py-3 flex items-start gap-3 shadow-lg">
+           <AlertCircle className="w-5 h-5 shrink-0 mt-0.5"/>
+           <div className="flex-1 text-sm">
+             <div className="font-black">🚨 データが読めていません（画面の件数は当てになりません）</div>
+             <div className="text-xs opacity-90 mt-0.5">{Object.entries(readErrors).map(([k, v]) => `${k}: ${v}`).join(' / ')}</div>
+             <div className="text-xs opacity-90 mt-0.5">検査記録を空で上書きしないため、ロットの保存は止めています。再読み込みしてください。</div>
+           </div>
+           <button onClick={() => window.location.reload()} className="bg-white text-rose-700 px-3 py-1 rounded font-bold text-xs hover:bg-rose-50 flex items-center gap-1 shrink-0"><RefreshCw className="w-3 h-3"/> 再読み込み</button>
+         </div>
+       )}
+       {/* 🚨 関所が止めた保存。何を止めたか(件数)まで出す。「止めました」だけでは現場が判断できない。 */}
+       {saveBlocked && (
+         <div className="fixed inset-x-4 top-4 z-[530] bg-rose-800 text-white px-4 py-3 rounded-xl shadow-2xl border-2 border-rose-300 flex items-start gap-3">
+           <AlertTriangle className="w-6 h-6 shrink-0 mt-0.5"/>
+           <div className="flex-1 text-sm">
+             <div className="font-black text-base">🚨 検査記録が消える保存を止めました</div>
+             <div className="text-xs opacity-95 mt-1 whitespace-pre-wrap">{saveBlocked.reason}</div>
+             {saveBlocked.counts && (
+               <div className="text-xs opacity-95 mt-1">
+                 前: 検査項目 {saveBlocked.counts.beforeTasks}件（時間あり {saveBlocked.counts.beforeWithTime}件）
+                 → 後: {saveBlocked.counts.afterTasks}件（時間あり {saveBlocked.counts.afterWithTime}件）
+               </div>
+             )}
+             <div className="text-xs opacity-95 mt-1">画面を開き直して、記録が見えている状態でやり直してください。</div>
+           </div>
+           <button onClick={() => setSaveBlocked(null)} className="hover:bg-white/20 rounded p-1 shrink-0"><X className="w-4 h-4"/></button>
+         </div>
+       )}
+       {/* 📦 上限に迫っているロット。**記録の保存は通した**が、写真はもう増やせない。
+              ⚠「止めました」ではない。止めると時間取りが保存できず記録が消えるので、
+                記録は通し、写真を減らす必要だけを人に見せる。 */}
+       {capacityWarn && (
+         <div className="fixed inset-x-4 top-4 z-[528] bg-amber-700 text-white px-4 py-3 rounded-xl shadow-2xl border-2 border-amber-300 flex items-start gap-3">
+           <AlertTriangle className="w-6 h-6 shrink-0 mt-0.5"/>
+           <div className="flex-1 text-sm">
+             <div className="font-black text-base">📦 この指図は保存できる容量の上限に迫っています</div>
+             <div className="text-xs opacity-95 mt-1">
+               いま 約{Math.round(capacityWarn.bytes / 1024)}KB ／ 上限 {Math.round(capacityWarn.limit / 1024)}KB。
+               作業時間の記録は保存できました。<span className="font-black">これ以上 不具合写真を足すと保存できなくなります。</span>
+             </div>
+             <div className="text-xs opacity-95 mt-1">不具合写真を減らしてから、写真の追加をやり直してください。</div>
+           </div>
+           <button onClick={() => setCapacityWarn(null)} className="hover:bg-white/20 rounded p-1 shrink-0"><X className="w-4 h-4"/></button>
+         </div>
+       )}
+       {/* 🚨 誰も受け取らなかった失敗。**黙って落ちる道を残さない**ための最後の網。 */}
+       {unhandled && (
+         <div className="fixed top-2 left-2 right-2 z-[525] bg-rose-900 text-white px-4 py-3 rounded-xl shadow-2xl border-2 border-rose-300 flex items-start gap-3">
+           <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5"/>
+           <div className="flex-1 text-sm">
+             <div className="font-black">🚨 処理が失敗しました（受け止められていない失敗）</div>
+             <div className="text-xs opacity-95 mt-1 whitespace-pre-wrap">{unhandled.name ? `${unhandled.name}: ` : ''}{unhandled.msg}</div>
+             <div className="text-xs opacity-95 mt-1">直前の操作が保存されていない可能性があります。記録が残っているか確認してください。</div>
+           </div>
+           <button onClick={() => setUnhandled(null)} className="hover:bg-white/20 rounded p-1 shrink-0"><X className="w-4 h-4"/></button>
+         </div>
+       )}
+       {/* ⚠ 止めずに通した「時間が減る保存」。人の操作なら正しい。**黙って通さない**ために出す。 */}
+       {timeShrunk && (
+         <div className="fixed bottom-4 right-4 z-[470] bg-amber-700 text-white px-3 py-2 rounded-lg shadow-xl flex items-start gap-2 text-xs font-bold max-w-md">
+           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5"/>
+           <div className="flex-1">
+             <div>⚠ 記録した時間が減る保存を通しました（{timeShrunk.level}{timeShrunk.sec ? ` / ${timeShrunk.sec}秒` : ''}）</div>
+             <div className="opacity-90 mt-0.5 whitespace-pre-wrap">{timeShrunk.reason}</div>
+             <div className="opacity-90 mt-0.5">身に覚えが無ければ管理者へ知らせてください。</div>
+           </div>
+           <button onClick={() => setTimeShrunk(null)} className="hover:bg-white/20 rounded p-0.5 shrink-0"><X className="w-3.5 h-3.5"/></button>
+         </div>
+       )}
        {!EMBED_MAP && (
        <header data-fs="header" className="h-14 bg-slate-800 text-white flex items-center justify-between px-6 shadow-md z-50 shrink-0">
          <div className="flex items-center gap-3">
@@ -28594,7 +30254,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
            <div className="flex items-center gap-1">
              <button onClick={(e) => openHdrMenu('docs', e)} className="relative bg-slate-600 hover:bg-slate-500 text-white px-2 py-1.5 rounded-md shadow-sm flex items-center gap-0.5" title="資料 (作業標準 / ノート)">
                <BookOpen className="w-4 h-4" /><ChevronDown className="w-3 h-3" />
-               {notes.filter(n => n.isPersonal && n.author === selectedWorker?.name).length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-[9px] text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{notes.filter(n => n.isPersonal && n.author === selectedWorker?.name).length}</span>}
+               {notes.filter(n => n.isPersonal && n.author === currentUserName).length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-[9px] text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{notes.filter(n => n.isPersonal && n.author === currentUserName).length}</span>}
              </button>
              <button onClick={(e) => openHdrMenu('time', e)} className={`px-2 py-1.5 rounded-md shadow-sm flex items-center gap-1 text-xs font-bold whitespace-nowrap ${activeIndirect ? 'bg-amber-500 hover:bg-amber-600 text-white animate-pulse' : 'bg-amber-600 hover:bg-amber-700 text-white'}`} title="時間 (間接作業 / 日次集計)">
                <Coffee className="w-4 h-4" />{activeIndirect ? <span>{activeIndirect.category}...</span> : null}<ChevronDown className="w-3 h-3" />
@@ -28608,7 +30268,19 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
                {defectNotifyEnabled ? <BellRing className="w-4 h-4"/> : <Bell className="w-4 h-4"/>}
              </button>
              {/* 異常値検出 (ヒューマンエラー): バッジで件数表示、押すと一覧+修正モーダル */}
-             {anomalyCount > 0 && (
+             {/* 🚨 過去のロットがまだ手元に無い間は **件数を出さない**。少ない数を出すと
+                    「異常値は3件だけ」と受け取られる(黙って減るのと同じ)。押せば読みに行く。 */}
+             {!lotsHistoryReady && (
+               <button
+                 onClick={() => setShowAnomalyPanel(true)}
+                 className="relative bg-slate-500 hover:bg-slate-400 text-white p-2 rounded-md shadow-sm"
+                 title="異常値の件数は、過去のロットを読んでから出します（押すと読みに行きます）"
+               >
+                 <AlertTriangle className="w-4 h-4"/>
+                 <span className="absolute -top-1 -right-1 bg-slate-600 text-[9px] text-white rounded-full w-5 h-4 flex items-center justify-center font-black">?</span>
+               </button>
+             )}
+             {lotsHistoryReady && anomalyCount > 0 && (
                <button
                  onClick={() => setShowAnomalyPanel(true)}
                  className="relative bg-amber-500 hover:bg-amber-600 text-white p-2 rounded-md shadow-sm ring-2 ring-amber-300/50 animate-pulse"
@@ -28640,10 +30312,11 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
              </>)}
              {hdrMenu.type === 'docs' && (<>
                <button onClick={() => { setHdrMenu(null); setShowWorkStandardsLib(true); }} className="w-full text-left px-3 py-2 hover:bg-orange-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><BookOpen className="w-4 h-4 text-orange-600" /> 作業標準</button>
-               <button onClick={() => { setHdrMenu(null); setShowNoteModal(true); }} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><FileText className="w-4 h-4 text-slate-600" /> ノート{notes.filter(n => n.isPersonal && n.author === selectedWorker?.name).length > 0 && <span className="ml-auto bg-amber-400 text-[9px] text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{notes.filter(n => n.isPersonal && n.author === selectedWorker?.name).length}</span>}</button>
+               <button onClick={() => { setHdrMenu(null); setShowNoteModal(true); }} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><FileText className="w-4 h-4 text-slate-600" /> ノート{notes.filter(n => n.isPersonal && n.author === currentUserName).length > 0 && <span className="ml-auto bg-amber-400 text-[9px] text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{notes.filter(n => n.isPersonal && n.author === currentUserName).length}</span>}</button>
              </>)}
              {hdrMenu.type === 'more' && (<>
                <button onClick={() => { setHdrMenu(null); setShowHelp(true); }} className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><HelpCircle className="w-4 h-4 text-blue-600" /> 使い方</button>
+               <button onClick={() => { setHdrMenu(null); setShowReadBudget(true); }} className="w-full text-left px-3 py-2 hover:bg-emerald-50 flex items-center gap-2 text-slate-700 text-sm font-bold" title="この端末が今日読んだ件数と、無料枠に対する割合"><Activity className="w-4 h-4 text-emerald-600" /> 通信量（この端末）{readTally.total > 0 && <span className={`ml-auto text-[9px] text-white rounded px-1 font-black ${quotaPercent(readTally.total) >= 20 ? 'bg-rose-500' : 'bg-emerald-500'}`}>{quotaPercent(readTally.total)}%</span>}</button>
                <button onClick={() => { setHdrMenu(null); setShowAnnouncementModal(true); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><Megaphone className="w-4 h-4 text-purple-600" /> お知らせ{(() => { const unread = announcements.filter(a => (a.mode || 'confirm') === 'confirm' && !(a.confirmedBy || []).includes(currentUserName)).length; return unread > 0 ? <span className="ml-auto bg-red-500 text-[9px] text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{unread}</span> : null; })()}</button>
              </>)}
            </div>
@@ -28671,14 +30344,23 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
            <div className="h-full">
              {viewMode === 'dashboard' && <DashboardView onSetMode={setViewMode} lots={lots} workers={workers} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setExecutionLotId={setExecutionLotId} settings={settings} templates={templates} onEditLot={onEditLot} onDeleteLot={onDeleteLot} handleImageUpload={handleImageUpload} saveSettings={saveSettings} mapZones={settings.mapZones} currentUserName={currentUserName} />}
              {viewMode === 'arrival-planning' && <ArrivalPlanningView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} handleAddWorker={handleAddWorker} onEditLot={onEditLot} onDeleteLot={onDeleteLot} mapZones={settings.mapZones} />}
-             {viewMode === 'planning-execution' && <PlanningExecutionView onBack={() => setViewMode('dashboard')} workers={workers} lots={lots} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setSelectedWorker={setSelectedWorker} handleImageUpload={handleImageUpload} settings={settings} mapRef={mapRef} handleDropOnMap={handleDropOnMap} setExecutionLotId={setExecutionLotId} onEditLot={onEditLot} onDeleteLot={onDeleteLot} saveSettings={saveSettings} mapZones={settings.mapZones} currentUserName={currentUserName} />}
-             {viewMode === 'completed-list' && <CompletedListView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} mapZones={settings.mapZones} saveData={saveData} onEditLot={onEditLot} onDeleteLot={onDeleteLot} />}
-             {viewMode === 'map-only' && <MapOnlyView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setExecutionLotId={setExecutionLotId} settings={settings} handleImageUpload={handleImageUpload} saveSettings={saveSettings} mapZones={settings.mapZones} onEditLot={onEditLot} onDeleteLot={onDeleteLot} />}
+             {viewMode === 'planning-execution' && <PlanningExecutionView onBack={() => setViewMode('dashboard')} workers={workers} lots={lots} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} handleImageUpload={handleImageUpload} settings={settings} mapRef={mapRef} handleDropOnMap={handleDropOnMap} setExecutionLotId={setExecutionLotId} onEditLot={onEditLot} onDeleteLot={onDeleteLot} saveSettings={saveSettings} mapZones={settings.mapZones} currentUserName={currentUserName} />}
+             {viewMode === 'completed-list' && (
+               quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
+               : !lotsHistoryReady ? <DataLoadingPanel what="完了したロット" />
+               : <CompletedListView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} mapZones={settings.mapZones} saveData={saveData} onEditLot={onEditLot} onDeleteLot={onDeleteLot} />
+             )}
+             {viewMode === 'map-only' && <MapOnlyView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setExecutionLotId={setExecutionLotId} settings={settings} handleImageUpload={handleImageUpload} saveSettings={saveSettings} mapZones={settings.mapZones} onEditLot={onEditLot} onDeleteLot={onDeleteLot} execOpen={!!executionLotId} />}
            </div>
          )}
-         {activeTab === 'progress' && <ProgressOverviewView lots={lots} workers={workers} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} />}
+         {activeTab === 'progress' && (
+           quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
+           : !progressDataReady ? <DataLoadingPanel what="過去のロットと間接作業" />
+           : <ProgressOverviewView lots={lots} workers={workers} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} />
+         )}
          {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} />}
-         {activeTab === 'analysis' && <AnalysisView lots={lots} logs={logs} workers={workers} saveData={saveData} deleteData={deleteData} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} indirectWork={indirectWork} improvements={improvementCards} observationPlans={observationPlans} templates={templates} notes={notes} announcements={announcements} strictModeHistory={strictModeHistory} onRestore={restoreAllFromBackup} db={db} anomalies={anomalies} onGoOptimize={(view) => { setOptimizeView(view); setActiveTab('optimize'); }} />}
+         {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
+         {activeTab === 'analysis' && analysisDataReady && !quotaBlock && <AnalysisView lots={lots} logs={logs} workers={workers} saveData={saveData} deleteData={deleteData} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} indirectWork={indirectWork} improvements={improvementCards} observationPlans={observationPlans} templates={templates} notes={notes} announcements={announcements} strictModeHistory={strictModeHistory} onRestore={restoreAllFromBackup} db={db} anomalies={anomalies} onGoOptimize={(view) => { setOptimizeView(view); setActiveTab('optimize'); }} />}
          {activeTab === 'optimize' && (
            <div className="h-full flex flex-col gap-3 max-w-[1100px] mx-auto">
              <div className="shrink-0 flex items-center gap-3 flex-wrap">
@@ -28691,10 +30373,11 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
                <span className="text-xs text-slate-400">データから現場を最適化：<b>目標時間</b>→<b>厳密モード</b>→<b>スキル</b>。将来は空き人材・エリアから自動配置の土台に。</span>
              </div>
              <div className="flex-1 min-h-0 overflow-hidden">
-               {optimizeView === 'target' && <ProcessInsightsTab lots={lots} workers={workers} customTargetTimes={settings.customTargetTimes || {}} onSaveSettings={saveSettings} targetTimeHistory={settings.targetTimeHistory || []} settings={settings} saveData={saveData} currentUserName={currentUserName} />}
-               {optimizeView === 'strict' && (currentUserName === '管理者' ? <StrictModeManagerModal embedded lots={lots} templates={templates} rules={settings.strictModeRules || {}} history={strictModeHistory} currentUserName={currentUserName} maturityUnits={strictMaturityUnits} onSetMaturity={(n) => saveSettings({ strictMaturityUnits: n })} onDecide={handleStrictDecide} optimalByCombo={optimalByCombo} onDecideOptimal={handleOptimalDecide} onOpenAnalysis={(row) => setAnalysisCombo({ model: row.model, templateId: row.templateId, templateName: row.templateName })} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">厳密モードの管理は管理者のみです。ヘッダー左上で「管理者」を選択してください。</div>)}
-               {optimizeView === 'skill' && <SkillMapView lots={lots} templates={templates} workers={workers} skills={settings.skills && settings.skills.length ? settings.skills : DEFAULT_SKILLS} workerSkills={settings.workerSkills || {}} canEdit={currentUserName === '管理者'} onSaveSkills={(list) => saveSettings({ skills: list })} onSaveWorkerSkill={(wn, sid, level) => { const ws = settings.workerSkills || {}; saveSettings({ workerSkills: { ...ws, [wn]: { ...(ws[wn] || {}), [sid]: level } } }); }} onSaveTemplateSkills={(tplId, reqSkills) => saveData('templates', tplId, { requiredSkills: reqSkills })} />}
-               {optimizeView === 'modelgroup' && (currentUserName === '管理者' ? <ModelGroupManager lots={lots} settings={settings} saveSettings={saveSettings} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">品目グループの管理は管理者のみです。</div>)}
+               {(quotaBlock || !lotsHistoryReady) && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : <DataLoadingPanel what="過去のロット" />)}
+               {!quotaBlock && lotsHistoryReady && optimizeView === 'target' && <ProcessInsightsTab lots={lots} workers={workers} customTargetTimes={settings.customTargetTimes || {}} onSaveSettings={saveSettings} targetTimeHistory={settings.targetTimeHistory || []} settings={settings} saveData={saveData} currentUserName={currentUserName} />}
+               {!quotaBlock && lotsHistoryReady && optimizeView === 'strict' && (currentUserName === '管理者' ? <StrictModeManagerModal embedded lots={lots} templates={templates} rules={settings.strictModeRules || {}} history={strictModeHistory} currentUserName={currentUserName} maturityUnits={strictMaturityUnits} onSetMaturity={(n) => saveSettings({ strictMaturityUnits: n })} onDecide={handleStrictDecide} optimalByCombo={optimalByCombo} onDecideOptimal={handleOptimalDecide} onOpenAnalysis={(row) => setAnalysisCombo({ model: row.model, templateId: row.templateId, templateName: row.templateName })} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">厳密モードの管理は管理者のみです。ヘッダー左上で「管理者」を選択してください。</div>)}
+               {!quotaBlock && lotsHistoryReady && optimizeView === 'skill' && <SkillMapView lots={lots} templates={templates} workers={workers} skills={settings.skills && settings.skills.length ? settings.skills : DEFAULT_SKILLS} workerSkills={settings.workerSkills || {}} canEdit={currentUserName === '管理者'} onSaveSkills={(list) => saveSettings({ skills: list })} onSaveWorkerSkill={(wn, sid, level) => { const ws = settings.workerSkills || {}; saveSettings({ workerSkills: { ...ws, [wn]: { ...(ws[wn] || {}), [sid]: level } } }); }} onSaveTemplateSkills={(tplId, reqSkills) => saveData('templates', tplId, { requiredSkills: reqSkills })} />}
+               {!quotaBlock && lotsHistoryReady && optimizeView === 'modelgroup' && (currentUserName === '管理者' ? <ModelGroupManager lots={lots} settings={settings} saveSettings={saveSettings} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">品目グループの管理は管理者のみです。</div>)}
              </div>
            </div>
          )}
@@ -28704,7 +30387,11 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
            onSetGuide={() => { const key = strictComboKey(analysisCombo.model, analysisCombo.templateId); const row = (computeStrictEvidence(lots, templates, strictMaturityUnits) || []).find(r => r.key === key); if (row) handleStrictDecide(row, false); }}
            onEditTemplate={() => { const tpl = (templates || []).find(t => t.id === analysisCombo.templateId); if (tpl) { setEditingTemplate(tpl); setActiveTab('template-mgr'); } setAnalysisCombo(null); }}
            onClose={() => setAnalysisCombo(null)} />}
-         {activeTab === 'history' && <HistoryView lots={lots} workers={workers} templates={templates} saveData={saveData} onEditLot={onEditLot} onDeleteLot={onDeleteLot} />}
+         {activeTab === 'history' && (
+           quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
+           : !lotsHistoryReady ? <DataLoadingPanel what="完了したロット" />
+           : <HistoryView lots={lots} workers={workers} templates={templates} saveData={saveData} onEditLot={onEditLot} onDeleteLot={onDeleteLot} />
+         )}
          {activeTab === 'template-mgr' && (
            editingTemplate ? (
              <div className="p-4 h-full flex flex-col overflow-hidden">
@@ -28767,18 +30454,32 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
        )}
 
        {/* Daily Summary Modal */}
-       {showDailySummary && <DailySummaryModal lots={lots} indirectWork={indirectWork} currentUserName={currentUserName} workers={workers} settings={settings} saveData={saveData} onClose={() => setShowDailySummary(false)} />}
-       {showShiftHandover && <ShiftHandoverModal lots={lots} indirectWork={indirectWork} currentUserName={currentUserName} workers={workers} saveData={saveData} onClose={() => setShowShiftHandover(false)} />}
+       {(showDailySummary || showShiftHandover) && !progressDataReady && (
+         <div className="fixed inset-0 z-[300] bg-black/40 flex items-center justify-center p-4" onClick={() => { setShowDailySummary(false); setShowShiftHandover(false); }}>
+           <div className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+             {quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : <DataLoadingPanel what="過去のロットと間接作業" />}
+           </div>
+         </div>
+       )}
+       {showDailySummary && progressDataReady && <DailySummaryModal lots={lots} indirectWork={indirectWork} currentUserName={currentUserName} workers={workers} settings={settings} saveData={saveData} onClose={() => setShowDailySummary(false)} />}
+       {showShiftHandover && progressDataReady && <ShiftHandoverModal lots={lots} indirectWork={indirectWork} currentUserName={currentUserName} workers={workers} saveData={saveData} onClose={() => setShowShiftHandover(false)} />}
 
-       {showNoteModal && <NoteModal notes={notes} templates={templates} workers={workers} selectedWorker={selectedWorker} saveData={saveData} deleteData={deleteData} onClose={() => setShowNoteModal(false)} currentUserName={currentUserName} />}
+       {showNoteModal && <NoteModal notes={notes} templates={templates} workers={workers} saveData={saveData} deleteData={deleteData} onClose={() => setShowNoteModal(false)} currentUserName={currentUserName} />}
 
        {/* Announcement Modal */}
-       {showAnnouncementModal && <AnnouncementModal announcements={announcements} workers={workers} selectedWorker={selectedWorker} saveData={saveData} deleteData={deleteData} onClose={() => setShowAnnouncementModal(false)} currentUserName={currentUserName} />}
+       {showAnnouncementModal && <AnnouncementModal announcements={announcements} workers={workers} saveData={saveData} deleteData={deleteData} onClose={() => setShowAnnouncementModal(false)} currentUserName={currentUserName} />}
 
        {/* 異常値検出パネル */}
        {/* 厳密モードは「作業最適化」タブに内蔵（モーダルは廃止） */}
 
-       {showAnomalyPanel && (
+       {showAnomalyPanel && !lotsHistoryReady && (
+         <div className="fixed inset-0 z-[120] bg-black/50 flex items-center justify-center p-4" onClick={() => setShowAnomalyPanel(false)}>
+           <div className="w-full max-w-md" onClick={e => e.stopPropagation()}>
+             {quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : <DataLoadingPanel what="過去のロット" />}
+           </div>
+         </div>
+       )}
+       {showAnomalyPanel && lotsHistoryReady && (
          <div className="fixed inset-0 z-[120] bg-black/50 flex items-center justify-center p-4" onClick={() => setShowAnomalyPanel(false)}>
            <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
              <div className="px-5 py-3 border-b bg-amber-50 flex items-center justify-between">
@@ -28860,7 +30561,23 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
          <WorkExecutionModal
            lot={lots.find(l => l.id === executionLotId)}
            onClose={() => setExecutionLotId(null)}
-           onSave={(updates) => saveData('lots', executionLotId, updates)}
+           // 🚨🚨 作業画面の onSave は **投げっぱなし(await も catch も無い)が61箇所**ある。
+           //   61箇所を書き換えるのではなく、**入口を1つにして**そこで面倒を見る
+           //   (書き換え漏れが構造的に起こらない)。
+           //
+           // 🚨🚨🚨 前はここが `.catch(...)` の戻り値を返していた。これだと
+           //   **`await onSave(...)` が失敗しても成功して返る**(実測 3箇所: 4317 / 8480 / 8492)。
+           //   保存できていないのに次へ進む = 2026-08-17 の「済みに見える」と同じ形だった。
+           //   → 元の Promise を **そのまま返す**。await している側にはちゃんと投げ返る。
+           //   ⚠ p.catch(...) を別に付けるのは握り潰しではない。付けないと、
+           //     await していない61箇所の失敗が「誰も受け取らない拒否」になって
+           //     console が二重に鳴る。画面への表示は saveData が既にやっている
+           //     (alert / 保存失敗バナー / failedSaves の「全部送り直す」)。
+           onSave={(updates) => {
+             const p = saveData('lots', executionLotId, updates);
+             p.catch((e) => { console.error('🚨 ロットの保存が通りませんでした', executionLotId, e); });
+             return p;
+           }}
            onFinish={() => { setExecutionLotId(null); setActiveTab('history'); }}
            defectProcessOptions={settings.defectProcessOptions}
            complaintOptions={settings.complaintOptions}

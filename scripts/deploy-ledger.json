@@ -1,0 +1,18 @@
+{
+  "app": "parts-inspection-app",
+  "builds": [
+    {
+      "at": "2026-08-17",
+      "by": "bootstrap（本番に HEAD を投げて、1つずつ実測して控えた）",
+      "assets": [
+        "assets/chunk-D-KKor_A.js",
+        "assets/exceljs.min-QeE3ZE3m.js",
+        "assets/index-Caaf1_U_.js",
+        "assets/index-DG2uZch1.css",
+        "assets/jszip.min-Bw4yHhsP.js"
+      ]
+    }
+  ],
+  "lost": [],
+  "site": "parts-inspection-app"
+}

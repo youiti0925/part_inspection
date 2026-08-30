@@ -1,0 +1,55 @@
+{
+  "_これは何": "🚦 eslint の指摘を「今より増やさない」為の基準値。scripts/verify-lint-baseline.mjs が使う。",
+  "_なぜ在るか": "2026-08-20: npm run check の1段目が eslint 395件で落ち、後ろの7段が一度も走っていなかった。規則を無効にせず、後段を動かす為の紙。",
+  "_やってはいけない事": "🚨 赤を消す為にこの数字を上げる事。増えた分は直す。どうしても直せないなら、なぜ増やすのかを人に説明してから上げる事。",
+  "_ここに書けない規則": "🚨 __PARSING_ERROR__ / no-undef / no-use-before-define は基準値を作らない。1件でも赤。白画面を見つける唯一の網なので緩めない。",
+  "_減った時": "node scripts/verify-lint-baseline.mjs --update で下げる。下げないと、また増えても気づけない。",
+  "_数え方": "対象=src（npm run check と同じ範囲）。規則ごとに error/warning を数える。",
+  "_合計": {
+    "err": 195,
+    "warn": 55
+  },
+  "_更新日": "2026-08-30",
+  "rules": {
+    "no-empty": {
+      "err": 23,
+      "warn": 0
+    },
+    "no-irregular-whitespace": {
+      "err": 13,
+      "warn": 0
+    },
+    "no-unused-vars": {
+      "err": 93,
+      "warn": 0
+    },
+    "no-useless-escape": {
+      "err": 18,
+      "warn": 0
+    },
+    "react-hooks/exhaustive-deps": {
+      "err": 0,
+      "warn": 55
+    },
+    "react-hooks/preserve-manual-memoization": {
+      "err": 5,
+      "warn": 0
+    },
+    "react-hooks/purity": {
+      "err": 12,
+      "warn": 0
+    },
+    "react-hooks/set-state-in-effect": {
+      "err": 15,
+      "warn": 0
+    },
+    "react-hooks/static-components": {
+      "err": 5,
+      "warn": 0
+    },
+    "react-refresh/only-export-components": {
+      "err": 11,
+      "warn": 0
+    }
+  }
+}

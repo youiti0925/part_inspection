@@ -33,6 +33,38 @@ import { materialize, withDeletions, DATA_DELETE, DATA_SERVER_NOW } from './sent
 export const ROW_DOCID_WINS = (d) => ({ ...d.data(), id: d.id }); // 既存: {...d.data(), id: d.id}
 export const ROW_DATA_WINS = (d) => ({ id: d.id, ...d.data() });  // 既存: {id: d.id, ...d.data()}
 
+/**
+ * REST の返事(1件)を、画面が使う素の行に戻す。
+ * ⚠REST は値を { stringValue: 'x' } のような包みで返す。ほどくのは **ここ1か所だけ**。
+ *   画面ごとにほどくと、数値と文字が混ざって数字が狂う(そして誰も気づかない)。
+ * ⚠数(integerValue)は文字で返ってくるので **必ず数に戻す**。
+ *   戻さないと合計が文字の連結になり、容量の数字が化ける。
+ */
+export const decodeRestValue = (v) => {
+  if (!v || typeof v !== 'object') return null;
+  if ('stringValue' in v) return v.stringValue;
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return Number(v.doubleValue);
+  if ('booleanValue' in v) return !!v.booleanValue;
+  if ('nullValue' in v) return null;
+  if ('timestampValue' in v) return v.timestampValue;
+  if ('arrayValue' in v) return ((v.arrayValue && v.arrayValue.values) || []).map(decodeRestValue);
+  if ('mapValue' in v) {
+    const out = {};
+    for (const [k, x] of Object.entries((v.mapValue && v.mapValue.fields) || {})) out[k] = decodeRestValue(x);
+    return out;
+  }
+  return null;
+};
+
+/** REST の書類 → { id, …選んだ項目 }。⚠id は書類の名前の最後の区切りから採る。 */
+export const decodeRestDoc = (doc) => {
+  const out = {};
+  for (const [k, v] of Object.entries((doc && doc.fields) || {})) out[k] = decodeRestValue(v);
+  const name = String((doc && doc.name) || '');
+  return { id: name.slice(name.lastIndexOf('/') + 1), ...out };
+};
+
 /** 権利取りの結果。⚠通信失敗・認証失敗・サーバーエラーを「取れなかった」と同一に扱わない。 */
 export const CLAIM = Object.freeze({
   OK: 'ok',           // 取れた
@@ -132,6 +164,66 @@ export const createFirebaseBackend = (db, fs) => {
     getPage: async (ns, col, spec = {}, opts = {}) => {
       const snap = await fs.getDocs(queryRef(ns, col, { ...opts, ...spec }));
       return { rows: snap.docs.map(opts.map || ROW_DOCID_WINS), cursor: snap.docs.length ? snap.docs[snap.docs.length - 1] : null };
+    },
+
+    // ========================================================================
+    // 📉 項目を選んで読む（重い項目を運ばない）
+    // ------------------------------------------------------------------------
+    // 🚨🚨 これで減るのは **通信量と待ち時間だけ**。読み取り件数(＝無料枠の課金)は
+    //   1件も減りません。Firestore は「書類を何件読んだか」で数えるからです。
+    //   実測(2026-08-30・写真2,355件): 全部読み 100.0MB/6.9秒 → 項目を選ぶ読み 1.185MB/0.9秒。
+    //   現場の携帯の通信量に効きます。枠の話と混ぜないでください。
+    //
+    // ⚠⚠ ブラウザ向けの Firestore SDK には「取る項目を選ぶ」機能が **1つもありません**
+    //   (実測: firebase/firestore の export 119個に select / mask に当たる物が無い)。
+    //   REST の runQuery には有るので、**窓口の中でだけ** REST を使います。
+    //   画面は今までどおり窓口しか呼びません(保管庫を差し替えられる形を壊さない)。
+    //
+    // ⚠使えない時(合言葉が取れない・網が繋がらない等)は **今までどおり全件読みへ落ちます**。
+    //   🚨落ちた事は必ず戻り値で言います(projected:false と fellBack)。**黙って落ちません。**
+    //
+    // @param fields    取る項目の名前。例 ['lotId','kind','at','bytes']
+    // @param opts.getToken  async ()=>string  ログインの合言葉を返す係(画面が渡す)
+    // @param opts.where     絞り込み(getPage と同じ形)
+    // @returns { rows, projected, fellBack }
+    // ========================================================================
+    getPageFields: async (ns, col, fields = [], opts = {}) => {
+      const full = async (why) => {
+        const rows = await fs.getDocs(queryRef(ns, col, { where: opts.where }));
+        return { rows: rows.docs.map(ROW_DOCID_WINS), projected: false, fellBack: why };
+      };
+      if (!Array.isArray(fields) || fields.length === 0) return full('取る項目が指定されていません');
+      if (typeof fetch !== 'function') return full('この端末に fetch がありません');
+      if (typeof opts.getToken !== 'function') return full('ログインの合言葉を渡す係(getToken)がありません');
+      const projectId = db && db.app && db.app.options && db.app.options.projectId;
+      if (!projectId) return full('プロジェクトIDが読めません');
+      const st = (db && db._settings) || {};
+      const host = st.host || 'firestore.googleapis.com';
+      const scheme = st.ssl === false ? 'http' : 'https';
+      let token;
+      try { token = await opts.getToken(); } catch (e) { return full(`合言葉が取れません: ${e && e.message}`); }
+      if (!token) return full('合言葉が空です');
+      const segs = dataPath(ns, col);                     // artifacts/{ns}/public/data/{col}
+      const parent = `projects/${projectId}/databases/(default)/documents/${segs.slice(0, -1).join('/')}`;
+      const q = { structuredQuery: { from: [{ collectionId: segs[segs.length - 1] }],
+        select: { fields: fields.map((f) => ({ fieldPath: f })) } } };
+      // ⚠絞り込みの形は getPage と同じ配列。ここで Firestore 固有の値は作らない。
+      const w = (opts.where || []).map(([f, op, v]) => ({ fieldFilter: { field: { fieldPath: f },
+        op: ({ '==': 'EQUAL', '!=': 'NOT_EQUAL', '>=': 'GREATER_THAN_OR_EQUAL', '<=': 'LESS_THAN_OR_EQUAL',
+          '>': 'GREATER_THAN', '<': 'LESS_THAN' })[op],
+        value: typeof v === 'number' ? { integerValue: String(v) } : { stringValue: String(v) } } }));
+      if (w.length === 1) q.structuredQuery.where = w[0];
+      else if (w.length > 1) q.structuredQuery.where = { compositeFilter: { op: 'AND', filters: w } };
+      let res;
+      try {
+        res = await fetch(`${scheme}://${host}/v1/${parent}:runQuery`, { method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(q) });
+      } catch (e) { return full(`通信に失敗しました: ${e && e.message}`); }
+      if (!res.ok) return full(`サーバが断りました(${res.status})`);
+      let body;
+      try { body = await res.json(); } catch (e) { return full(`返事が読めません: ${e && e.message}`); }
+      if (!Array.isArray(body)) return full('返事の形が違います');
+      return { rows: body.filter((x) => x && x.document).map((x) => decodeRestDoc(x.document)), projected: true, fellBack: '' };
     },
 
     save: (ns, col, id, data, opts = {}) => fs.setDoc(docRef(ns, col, id), prep(data), { merge: opts.merge !== false }),
@@ -257,6 +349,8 @@ export const createProvider = ({ backends, providers = DEFAULT_PROVIDERS, onUnkn
     // 絞り込み付きの読み(製品検査・部品検査が使う)。保管庫が違っても同じ答えを返す。
     watchQuery: call('watchQuery'),
     getPage: callAsync('getPage'),
+    // 📉項目を選んで読む(重い項目を運ばない)。⚠読み取り件数は減らない。減るのは通信量と待ち時間。
+    getPageFields: callAsync('getPageFields'),
 
     // --- 書く ---------------------------------------------------------------
     save: callAsync('save'),

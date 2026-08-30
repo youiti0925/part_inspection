@@ -1,0 +1,12 @@
+{
+  "_これは何": "🚦 規則名を書かない eslint-disable を「今より増やさない」為の基準値。scripts/verify-bare-eslint-disable.mjs が使う。",
+  "_なぜ在るか": "2026-08-30: 4アプリで81件の抑制のうち30件が規則名なしで、その中に本物の欠陥が1件隠れていた（製品 analysisData の期間が効かない）。",
+  "_正しい書き方": "// eslint-disable-next-line react-hooks/exhaustive-deps -- なぜ要らないかを1行で",
+  "_やってはいけない事": "🚨 赤を消す為にこの数字を上げる事。新しく足した抑制には必ず規則名を書く事。",
+  "_減った時": "node scripts/verify-bare-eslint-disable.mjs --update で下げる。下げないと、また増えても気づけない。",
+  "_更新日": "2026-08-30",
+  "max": 3,
+  "_内訳": {
+    "src/App.jsx": 3
+  }
+}

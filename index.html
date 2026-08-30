@@ -31,57 +31,363 @@
     <script type="module" src="/src/main.jsx"></script>
 
     <!-- ============================================================
-      🛟 最後の砦: アプリが一度も動き出さなかった時に、白紙のままにしない
+      🛟 最後の砦: 部品(本体のJS)が取れなかった時に、白紙のままにしない
       ------------------------------------------------------------
       ⚠アプリの中に入れた受け皿(ErrorBoundary)では、**この形は拾えない**。
         あれは「Reactが動いている最中の失敗」を受け止めるもの。
         本体の読み込み自体が失敗すると React が一度も動かないので、
         #root は空のまま = 画面は真っ白のまま、何のエラーも出ない。
+        だから **この仕掛けは index.html の中の素のJavaScriptで書く**。
+        アプリの中に書いても、そのアプリ自体が読めていないので手遅れ。
+        (同じ理由で、ここでは => や `文字` などの新しい書き方を使わない。
+         polyfills.js もまだ読めていない前提で、古い端末でも必ず動く書き方にする)
 
-      起きうる原因(現場で区別がつかないもの):
-        ・古いホーム画面のアイコンが、もう無い版のファイルを読みに行っている
-        ・通信が途中で切れて本体を読み切れなかった
-        ・端末が古くて、本体の書き方に対応していない
+      🚨2026-08-17 実際に起きた事故(実測で確定):
+        firebase deploy は dist の中身で本番を**丸ごと置き換える**ので、
+        前のビルドの /assets/index-XXXX.js が本番から消える。
+        しかも firebase.json の rewrites が "source":"**" なので、
+        消えたファイルを取りに行っても index.html(HTML) が 200 で返ってくる。
+        → ブラウザが ＜script＞ として HTML を読み込み **構文エラー** → 起動しない。
+          (⚠この説明文に本物のタグを書くと、道具が中身を切り出す時に誤るので全角にしてある)
+        → 8/12から画面を開いたままだった端末(Edge)が 8/17 に起動しなくなり、
+          起動しないので、その端末に貯まっていた 8/12 の作業の書き込みが
+          送られないままになった。5日で19回デプロイした事が原因。
 
-      やること: 8秒待って中身が空なら、日本語で状況と出口を出す。**勝手に何もしない**
-      (自動再読込は、本当に壊れている時に延々と繰り返すだけなので入れない)。
+      ここでやる事は2つ:
+      【1】読み込みに失敗したら、自動で読み直す
+        ① 失敗を捕まえる(script/stylesheet の error・動的な取り込みの失敗・vite:preloadError)
+        ② 🚨**1回だけ**自動で読み直す(印は sessionStorage。⚠無限に読み直さない)
+        ③ 2回目も駄目なら、日本語で状況と出口を出す。**真っ白で終わらせない**
+        ⚠8秒待っても中身が空だった場合は **自動で読み直さない**。
+          通信が遅いだけの端末を読み直すと、読み込みが最初からやり直しになって
+          もっと遅くなるだけだから。この場合は日本語の出口だけを出す。
+
+      【2】開いたままの画面に「新しい版が出ました」と知らせる
+        5分ごとに index.html だけを取りに行き、**玉(assets のファイル名)が変わっていたら**
+        画面の隅に知らせを出す。
+        ⚠**勝手に切り替えない**(作業中に画面が消えたら大事故)。人が押した時だけ読み直す。
+        ⚠押す物は48px・文字は12px以上(現場はタブレット)。
+        ⚠通信を無駄にしない: 画面を見ていない時・圏外の時は取りに行かない。
     ============================================================= -->
     <script>
       (function () {
-        var shown = false;
-        function boot() {
-          var root = document.getElementById('root');
-          if (shown || !root || root.childElementCount > 0) return;   // 動いていれば何もしない
+        // ---- 調整する数値はここだけ ----
+        var BOOT_TIMEOUT_MS  = 8000;            // これだけ待って中身が空なら、日本語の出口を出す
+        var FAIL_DELAY_MS    = 1200;            // 失敗を捕まえてから「本当に駄目か」を見るまでの猶予
+        var RETRY_KEY        = 'app.bootRetry.v1';
+        var RETRY_WINDOW_MS  = 10 * 60 * 1000;  // この時間内に1回読み直していたら、2回目は行かない
+        var VERSION_CHECK_MS = 5 * 60 * 1000;   // 新しい版が出ていないかを見に行く間隔
+        var SNOOZE_MS        = 30 * 60 * 1000;  // 「あとで」を押された時に黙っている時間
+
+        var shown = false;        // 日本語の出口を出したか
+        var noticeShown = false;  // 「新しい版が出ました」を出しているか
+        var snoozeUntil = 0;      // 「あとで」で黙る期限
+        var failTimer = null;
+
+        function rootEl() { return document.getElementById('root'); }
+        // アプリが何か描けているか。⚠出口の画面を出した後は「描けている」と数えない
+        function hasContent() { var r = rootEl(); return !!(r && r.childElementCount > 0); }
+        function isRunning() { return !shown && hasContent(); }
+
+        // 印を置ける場所を返す。置けない端末では **自動で読み直さない**。
+        // (印が残らないと、同じ失敗で延々と読み直す事になるため)
+        function markStore() {
+          var probe = '__probe' + Date.now();
+          try { window.sessionStorage.setItem(probe, '1'); window.sessionStorage.removeItem(probe); return window.sessionStorage; } catch (e) { /* 使えない */ }
+          try { window.localStorage.setItem(probe, '1'); window.localStorage.removeItem(probe); return window.localStorage; } catch (e) { /* 使えない */ }
+          return null;
+        }
+        function canAutoReload() {
+          var s = markStore();
+          if (!s) return false;                                  // 印が置けない = 自動では読み直さない
+          try {
+            var t = parseInt(s.getItem(RETRY_KEY) || '0', 10);
+            if (!t) return true;                                 // まだ1回も読み直していない
+            return (Date.now() - t) > RETRY_WINDOW_MS;           // 十分前の印なら、もう一度だけ許す
+          } catch (e) { return false; }
+        }
+        function markAutoReload() { try { var s = markStore(); if (s) s.setItem(RETRY_KEY, String(Date.now())); } catch (e) { /* noop */ } }
+        function clearAutoReload() { try { var s = markStore(); if (s) s.removeItem(RETRY_KEY); } catch (e) { /* noop */ } }
+
+        // 今の画面の指定(?live= や ?renraku=1 など)を**保ったまま**、キャッシュを避けて読み直す。
+        // ⚠pathname だけで組み立てると、撮影画面(?live=)などが別の画面になってしまう。
+        function hardReload() {
+          try {
+            var kv = (location.search || '').replace(/^\?/, '').split('&');
+            var keep = [];
+            for (var i = 0; i < kv.length; i++) {
+              if (kv[i] && kv[i].indexOf('__r=') !== 0) keep.push(kv[i]);   // 前回の印は消す
+            }
+            keep.push('__r=' + Date.now());
+            location.replace(location.pathname + '?' + keep.join('&') + location.hash);
+          } catch (e) { location.reload(); }
+        }
+
+        // ------------------------------------------------------------
+        // 【1】読み込みに失敗した時の出口
+        // ------------------------------------------------------------
+        function esc(s) { return String(s).replace(/[<>&]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]; }); }
+
+        function showFallback(kind) {
+          var r = rootEl();
+          if (shown || !r || hasContent()) return;   // 動いていれば何もしない
           shown = true;
+          var isVersion = (kind === 'version');
+          var title = isVersion ? '新しい版が出ています' : 'アプリを読み込めませんでした';
+          var lead  = isVersion
+            ? 'アプリが新しくなったため、いま開いている画面が使っていた部品が見つかりませんでした。'
+              + '<b>この画面を一度閉じて、もう一度開いてください。</b>下のボタンでも読み直せます。'
+            : '通信が不安定なときや、ホーム画面のアイコンが古いままのときに起こります。'
+              + 'まず「読み込み直す」を押してください。';
           var last = '';
-          try { last = localStorage.getItem('app.lastCrash.v1') || ''; } catch (e) {}
-          root.innerHTML =
+          try { last = localStorage.getItem('app.lastCrash.v1') || ''; } catch (e) { /* 無ければ出さない */ }
+          r.innerHTML =
             '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;'
-          + 'background:#f8fafc;font-family:Meiryo,sans-serif">'
+          + 'background:#f8fafc;font-family:Meiryo,system-ui,sans-serif">'
           + '<div style="max-width:620px;width:100%;background:#fff;border:2px solid #fecdd3;border-radius:16px;'
           + 'padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.08)">'
           + '<div style="font-size:40px;line-height:1">🛟</div>'
-          + '<h1 style="font-size:22px;font-weight:900;margin:12px 0 4px;color:#9f1239">アプリを読み込めませんでした</h1>'
-          + '<p style="color:#334155;margin:0 0 4px"><b>作業の記録は消えていません。</b>保存済みの内容はサーバに残っています。</p>'
-          + '<p style="color:#334155;margin:0 0 16px">通信が不安定なときや、ホーム画面のアイコンが古いままのときに起こります。'
-          + 'まず「読み込み直す」を押してください。何度やっても同じ場合は、'
-          + '<b>ホーム画面のアイコンを一度削除して、ブラウザから開き直して入れ直す</b>と直ります。</p>'
+          + '<h1 style="font-size:22px;font-weight:900;margin:12px 0 4px;color:#9f1239">' + title + '</h1>'
+          + '<p style="color:#334155;margin:0 0 4px;font-size:15px"><b>作業の記録は消えていません。</b>保存済みの内容はサーバに残っています。</p>'
+          + '<p style="color:#334155;margin:0 0 16px;font-size:15px">' + lead
+          + '何度やっても同じ場合は、<b>ホーム画面のアイコンを一度削除して、ブラウザから開き直して入れ直す</b>と直ります。</p>'
           + '<button id="__reload" style="background:#e11d48;color:#fff;border:0;border-radius:10px;'
-          + 'padding:12px 20px;font-weight:800;font-size:16px;cursor:pointer">読み込み直す</button>'
+          + 'min-height:48px;padding:12px 20px;font-weight:800;font-size:16px;cursor:pointer">読み込み直す</button>'
           + (last ? '<details style="margin-top:16px;color:#64748b;font-size:12px"><summary style="cursor:pointer">'
                   + '前回この端末で記録された内容</summary><pre style="white-space:pre-wrap;word-break:break-all">'
-                  + String(last).replace(/[<>&]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]; })
-                  + '</pre></details>' : '')
+                  + esc(last) + '</pre></details>' : '')
           + '</div></div>';
           var b = document.getElementById('__reload');
-          // ⚠キャッシュを避けて読み直す(古いファイルを掴んだままの時に効く)
-          if (b) b.onclick = function () { location.replace(location.pathname + '?r=' + Date.now()); };
+          if (b) b.onclick = hardReload;
         }
-        // 本体の読み込みそのものが失敗した時は、待たずに出す
+
+        // 失敗を捕まえたら、すぐには決めない(この後アプリが動き出す事があるため)。
+        // 猶予のあとで、まだ空なら 🚨1回だけ読み直す → 2回目は日本語の出口を出す。
+        function failLater() {
+          if (shown || failTimer) return;
+          failTimer = setTimeout(function () {
+            failTimer = null;
+            if (shown || hasContent()) return;                        // 動き出していれば何もしない
+            if (canAutoReload()) { markAutoReload(); hardReload(); return; }   // 🚨1回だけ
+            showFallback('version');                                  // 2回目は真っ白にせず日本語で出す
+          }, FAIL_DELAY_MS);
+        }
+
+        var LOAD_FAIL = /(dynamically imported module|module script failed|Unable to preload|ChunkLoadError|Loading chunk|Loading CSS chunk|Importing a module script)/i;
+
+        // ① 本体のJS や スタイルシートの読み込みが失敗した(= 消えたファイルを読みに行った)
+        //    ⚠アイコンやマニフェストの失敗まで拾うと誤作動するので、対象を絞る。
         window.addEventListener('error', function (e) {
-          if (e && e.target && e.target.tagName === 'SCRIPT') setTimeout(boot, 300);
+          if (!e) return;
+          var t = e.target || e.srcElement;
+          var tag = t && t.tagName;
+          if (tag === 'SCRIPT') { failLater(); return; }
+          if (tag === 'LINK' && (t.rel === 'stylesheet' || /\.css($|\?)/.test(t.href || ''))) { failLater(); return; }
+          if (!tag && !hasContent()) failLater();   // 読めたが中身がHTMLで構文エラー、等
         }, true);
-        setTimeout(boot, 8000);
+
+        // ② 動的な取り込み(あとから読む部品)の失敗
+        window.addEventListener('unhandledrejection', function (e) {
+          var m = '';
+          try { m = String((e && e.reason && (e.reason.message || e.reason)) || ''); } catch (x) { /* 読めなくてよい */ }
+          if (!LOAD_FAIL.test(m)) return;                       // 普通の通信失敗などでは読み直さない
+          if (isRunning()) showUpdateNotice(); else failLater(); // 動いている最中は勝手に読み直さない
+        });
+
+        // ③ Vite が先読みした部品を取れなかった
+        window.addEventListener('vite:preloadError', function () {
+          if (isRunning()) showUpdateNotice(); else failLater();
+        });
+
+        // ------------------------------------------------------------
+        // 【2】新しい版が出た事の知らせ(勝手に切り替えない)
+        // ------------------------------------------------------------
+        // 🚨🚨 2026-08-30 に足した関所。**ここが無い状態を3か月配ってしまっていた。**
+        //   2026-08-18(事故の翌日)に「新しい版が出ました → 切り替える」を足したが、
+        //   その時この判定を入れ忘れた。つまり **2026-08-17 の事故と同じ引き金**
+        //   (まだサーバへ送れていない保存を抱えたまま画面を読み直す)を、
+        //   対策のつもりで配っていた事になる。最終検査(golden)にだけ関所が在った。
+        //
+        //   判定の中身は src/domain/appVersion.js の canReload ただ1か所。
+        //   ⚠ここに「unsent が…」と枝を書き足さない事。二重管理になり、必ず片方が腐る。
+        //   本体のJSが読めていない時は window.__appCanReload が無い。その時は押させる
+        //   (アプリが動いていない = 保存も進んでいない。読み直す以外に出口が無い)。
+        function reloadGate() {
+          try {
+            if (typeof window.__appCanReload === 'function') return window.__appCanReload();
+          } catch (e) { /* 判定が壊れていても札は出す */ }
+          return { allowed: true, waiting: false, label: '' };
+        }
+
+        function showUpdateNotice() {
+          if (noticeShown || !document.body) return;
+          noticeShown = true;
+          var box = document.createElement('div');
+          box.id = '__update_notice';
+          box.setAttribute('style',
+            'position:fixed;left:12px;right:12px;bottom:12px;bottom:calc(12px + env(safe-area-inset-bottom, 0px));'
+          + 'z-index:2147483000;display:flex;justify-content:flex-end;pointer-events:none;'
+          + 'font-family:Meiryo,system-ui,sans-serif');
+          box.innerHTML =
+            '<div style="pointer-events:auto;max-width:420px;width:100%;background:#0f172a;color:#fff;'
+          + 'border-radius:14px;padding:14px 16px;box-shadow:0 12px 32px rgba(0,0,0,.35)">'
+          + '<div style="font-size:15px;font-weight:800;margin-bottom:4px">🆕 新しい版が出ました</div>'
+          + '<div style="font-size:12px;line-height:1.6;opacity:.85;margin-bottom:10px">'
+          + '押すまで切り替わりません。作業の区切りのよい所で押してください。</div>'
+          + '<div id="__update_warn" style="display:none;font-size:12px;line-height:1.6;'
+          + 'background:#7c2d12;color:#fed7aa;border-radius:8px;padding:8px 10px;margin-bottom:10px">'
+          + '<div id="__update_warn_text" style="font-weight:800"></div>'
+          + '<button id="__update_force" style="margin-top:8px;min-height:40px;padding:0 12px;'
+          + 'background:transparent;color:#fed7aa;border:1px solid rgba(254,215,170,.6);border-radius:8px;'
+          + 'font-size:12px;font-weight:700;cursor:pointer">⚠ それでも読み直す</button>'
+          + '<div id="__update_force_confirm" style="display:none;margin-top:8px">'
+          + '<div style="margin-bottom:8px">本当に読み直しますか？ まだ送れていない保存は'
+          + '<b>消えるかもしれません</b>。送信が詰まっていて、どうしても画面を開き直したい時だけ押してください。</div>'
+          + '<div style="display:flex;gap:8px">'
+          + '<button id="__update_force_no" style="flex:1;min-height:44px;background:#fed7aa;color:#7c2d12;'
+          + 'border:0;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer">やめる</button>'
+          + '<button id="__update_force_yes" style="flex:1;min-height:44px;background:transparent;color:#fed7aa;'
+          + 'border:1px solid rgba(254,215,170,.6);border-radius:8px;font-size:13px;font-weight:700;'
+          + 'cursor:pointer">消えてもよいので読み直す</button>'
+          + '</div></div></div>'
+          + '<div style="display:flex;gap:8px">'
+          + '<button id="__update_go" style="flex:1;min-height:48px;background:#16a34a;color:#fff;border:0;'
+          + 'border-radius:10px;font-size:15px;font-weight:800;cursor:pointer">切り替える</button>'
+          + '<button id="__update_later" style="min-height:48px;padding:0 16px;background:transparent;color:#fff;'
+          + 'border:1px solid rgba(255,255,255,.45);border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">あとで</button>'
+          + '</div></div>';
+          document.body.appendChild(box);
+          var go = document.getElementById('__update_go');
+          var later = document.getElementById('__update_later');
+          var warn = document.getElementById('__update_warn');
+          var warnText = document.getElementById('__update_warn_text');
+          var force = document.getElementById('__update_force');
+          var forceBox = document.getElementById('__update_force_confirm');
+          var gateTimer = null;
+          var forceAsked = false;   // 逃げ道の確かめを開いているか(2秒ごとの塗り直しで閉じない為)
+
+          // 送れていない保存がある間は、押せる見た目にしない(押してから断ると必ず連打される)。
+          function paintGate() {
+            var g = reloadGate();
+            if (!go || !warn) return;
+            if (g.allowed) {
+              go.disabled = false;
+              go.style.background = '#16a34a';
+              go.style.opacity = '1';
+              go.style.cursor = 'pointer';
+              go.textContent = '切り替える';
+              warn.style.display = 'none';
+              forceAsked = false;                                  // 送り終わった = 逃げ道は要らない
+              if (forceBox) forceBox.style.display = 'none';
+              if (force) force.style.display = 'inline-block';
+            } else {
+              go.disabled = true;
+              go.style.background = '#475569';
+              go.style.opacity = '.75';
+              go.style.cursor = 'not-allowed';
+              go.textContent = '送信を待っています…';
+              warn.style.display = 'block';
+              if (warnText) {
+                warnText.textContent = '⏳ ' + (g.label || 'まだ送れていない保存があります')
+                  + '。送り終わるまで切り替えられません（通信が戻れば自動で送られます）。';
+              }
+              // ⚠2秒ごとの塗り直しで、開いている「本当に読み直しますか？」を閉じない。
+              if (!forceAsked) {
+                if (forceBox) forceBox.style.display = 'none';
+                if (force) force.style.display = 'inline-block';
+              }
+            }
+          }
+          paintGate();
+          gateTimer = setInterval(paintGate, 2000);   // 送り終わったら自動で押せるようになる
+
+          function close() {
+            if (gateTimer) { clearInterval(gateTimer); gateTimer = null; }
+            if (box.parentNode) box.parentNode.removeChild(box);
+            noticeShown = false;
+          }
+
+          if (go) go.onclick = function () {
+            // 🚨最後にもう一度見る(表示から押すまでの間に保存が始まっている事がある)。
+            var g = reloadGate();
+            if (!g.allowed) { paintGate(); return; }
+            close();
+            hardReload();
+          };
+
+          // 🚨 逃げ道。送信が永久に詰まると、関所のせいで **画面を開き直せなくなる** 方が危ない。
+          //   ⚠既定にはしない。⚠一発では実行しない(2026-08-21「取り消せない確定をするな」)。
+          //     押す → 何が起きるかを読んでから もう一度押す。**やめる**でいつでも戻れる。
+          if (force) force.onclick = function () {
+            forceAsked = true;
+            force.style.display = 'none';
+            if (forceBox) forceBox.style.display = 'block';
+          };
+          var forceNo = document.getElementById('__update_force_no');
+          var forceYes = document.getElementById('__update_force_yes');
+          if (forceNo) forceNo.onclick = function () {
+            forceAsked = false;
+            if (forceBox) forceBox.style.display = 'none';
+            if (force) force.style.display = 'inline-block';
+          };
+          if (forceYes) forceYes.onclick = function () {
+            close();
+            hardReload();
+          };
+
+          if (later) later.onclick = function () {
+            close();
+            snoozeUntil = Date.now() + SNOOZE_MS;
+          };
+        }
+
+        // いま動いている本体のファイル名(玉の名前)
+        function currentEntry() {
+          var s = document.querySelector('script[type="module"][src]');
+          return s ? s.getAttribute('src') : '';
+        }
+
+        function checkVersion() {
+          if (noticeShown || shown) return;
+          if (Date.now() < snoozeUntil) return;
+          if (document.hidden) return;                 // 見ていない画面で通信しない
+          if (navigator.onLine === false) return;      // 圏外では行かない
+          var mine = currentEntry();
+          if (!mine) return;
+          fetch('/index.html?__v=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
+            .then(function (res) { return res.ok ? res.text() : null; })
+            .then(function (html) {
+              if (!html) return;
+              // ⚠DOMParser は中身を読むだけで、画像やスクリプトを取りに行かない(安全)
+              var doc = new DOMParser().parseFromString(html, 'text/html');
+              var el = doc.querySelector('script[type="module"][src]');
+              var theirs = el ? el.getAttribute('src') : '';
+              if (theirs && theirs !== mine) showUpdateNotice();
+            })
+            .catch(function () { /* 通信できないだけ。何もしない */ });
+        }
+
+        function startVersionWatch() {
+          if (!window.fetch || !window.DOMParser || !document.querySelector) return;  // 古い端末では入れない
+          if (!currentEntry()) return;
+          setInterval(checkVersion, VERSION_CHECK_MS);
+          // 長く放置された画面に戻ってきた時にも見る(⚠戻った直後に毎回は投げない)
+          document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) setTimeout(checkVersion, 1000);
+          });
+        }
+
+        // ------------------------------------------------------------
+        // 見張りの開始
+        // ------------------------------------------------------------
+        var watch = setInterval(function () {
+          if (!isRunning()) return;
+          clearInterval(watch);
+          clearAutoReload();     // ちゃんと動いた = 印を消す(次に何かあれば、また1回だけ読み直せる)
+          startVersionWatch();
+        }, 250);
+        setTimeout(function () { clearInterval(watch); }, 120000);  // 動かなかった時に回し続けない
+        setTimeout(function () { showFallback('timeout'); }, BOOT_TIMEOUT_MS);
       })();
     </script>
   </body>
