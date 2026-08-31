@@ -200,6 +200,11 @@ export const KINDS = {
   watchDoc:        { doc: true,  live: true },
   getAll:          { doc: false, live: false },
   getPage:         { doc: false, live: false },
+  // 🚨🚨 2026-08-31 追加。ここが抜けていたので、**写真の全件読み2口を1件も見ていなかった**。
+  //   `getPageFields(ns, col, fields, opts)` は「運ぶ項目」を選ぶだけで、**読む件数は1件も減らない**
+  //   (Firestore は書類1件を1回として数える。項目を絞っても件数は同じ)。
+  //   → 絞り込みの判定は fields ではなく **opts の where / limit だけ**で行う。
+  getPageFields:   { doc: false, live: false },
   getOne:          { doc: true,  live: false },
   getDocs:         { doc: false, live: false },
 };
@@ -235,7 +240,9 @@ export const scanFile = (rawSrc, file, globalConsts = {}) => {
   const out = [];
   const seen = new Set();
 
-  const RE = /\b(watchCollection|watchQuery|watchDoc|getAll|getPage|getOne|watch)\s*\(/g;
+  // ⚠ getPageFields は getPage より **先** に置く(後ろに置いても `getPage\s*\(` は
+  //   `getPageFields(` に当たらないが、語彙の見落としを二度と作らない為に順番でも守る)。
+  const RE = /\b(watchCollection|watchQuery|watchDoc|getAll|getPageFields|getPage|getOne|watch)\s*\(/g;
   let m;
   while ((m = RE.exec(src))) {
     const kindName = m[1];
@@ -300,7 +307,9 @@ export const scanFile = (rawSrc, file, globalConsts = {}) => {
     //   ここを「絞り込みが無い」と言い切ると **嘘の❌** になり、
     //   見張りが狼少年になって誰も見なくなる(それが一番危ない)。
     //   → 「無い」でも「有る」でもなく **「静的には確かめられない」** として別に出す。
-    const OPT_AT = { watchCollection: 3, watchQuery: 2, getAll: 2, getPage: 2, getDocs: 2 };
+    // ⚠ getPageFields の署名は (ns, col, fields, opts) なので opts は **3番目**。
+    //   2番目(fields)を opts と読み違えると、項目の配列を「絞り込み」と見なして黙って通す。
+    const OPT_AT = { watchCollection: 3, watchQuery: 2, getAll: 2, getPage: 2, getPageFields: 3, getDocs: 2 };
     const optAt = OPT_AT[kind] != null ? OPT_AT[kind] - (kindName === 'watch' ? 1 : 0) : null;
     const optRaw = optAt != null ? (parts[optAt] || '').trim() : '';
     const hasWhere = /\bwhere\s*:/.test(args);
@@ -637,6 +646,30 @@ watch('lots', (rows) => setLots(rows)),
     'onError が在る口を「無い」と言わない');
   say(!r.some((x) => x.col === 'notes'), 'コメントの中の例示を実コードとして数えない');
   say(at('lots', 'watchCollection').length === 1, "別名 watch('lots', cb) を1件として数える");
+
+  // --- (A2) 🚨項目を選ぶ読み(getPageFields)を語彙に持っているか ---------------
+  //   2026-08-31: ここが走査の正規表現から抜けていた。実コードには絞り込みの無い
+  //   getPageFields が2口(写真のメタ読み・容量の手当て)在るのに、見張りは **1件も見ずに
+  //   ✅ 合格**を出していた(＝緑なのに何も守っていない見張り)。
+  //   ⚠ **fields を絞っても件数は1件も減らない。** 絞り込みは opts の where/limit だけ。
+  const PF = `
+DATA(db).getPageFields(APP_DATA_ID, 'lot_images', ['lotId', 'kind', 'at', 'bytes'], { getToken: () => user.getIdToken() });
+DATA(db).getPageFields(APP_DATA_ID, 'lot_images', [], { where: [['lotId', 'in', chunk]] });
+DATA(db).getPageFields(APP_DATA_ID, 'lot_images', [], {});
+DATA(db).getPageFields(APP_DATA_ID, 'lot_images', ['lotId'], spec);
+`;
+  const pf = scanFile(PF, '(memory)').map((s) => ({ ...s, appKey: 'final', docs: 941, docsUnknown: false }));
+  say(pf.length === 4 && pf.every((x) => x.kind === 'getPageFields' && x.col === 'lot_images'),
+    '🚨 getPageFields を読みの口として数える(2026-08-31 まで1件も見ていなかった)');
+  say(pf.filter((x) => x.hasWhere).length === 1,
+    'where で絞った getPageFields は「絞り込み有り」と読む');
+  const pfj = judge({ sites: pf, allows: {}, today: '2026-08-18' });
+  say(pfj.violations.length === 2,
+    '🚨 わざと絞り込みの無い getPageFields を書いたら ❌ になる（項目を絞っても件数は絞れない）');
+  say(pfj.unverifiable.length === 1 && pfj.unverifiable[0].optsVar === 'spec',
+    '🚨 opts が変数の getPageFields は「静的には確かめられない」に置く（fields の配列を opts と読み違えない）');
+  say(scanFile(`  getPageFields: async (ns, col, fields = [], opts = {}) => {`, '(memory)').length === 0,
+    '窓口そのものの定義(getPageFields: async (…) =>)を口として数えない');
 
   // --- (B) 🚨わざと壊した見本で **落ちる** 事 -------------------------------
   const site = (over = {}) => ({

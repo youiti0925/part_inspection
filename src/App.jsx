@@ -86,6 +86,22 @@ import {
   snapshotReads, emptyTally, tallyAdd, quotaPercent,
   READ_TALLY_STORAGE_KEY, FREE_TIER_DAILY_READS, LOTS_LIVE_LIMIT, LOTS_HISTORY_LIMIT, OPEN_LOTS_LIMIT,
 } from './domain/readBudget.js';
+// 📝🖼 メモ・お知らせの写真の別置き(2026-08-31 SS-701)。写真は note_images(1件=1枚)へ、
+//   本体には札(imageRef)だけ。古い doc の inline 写真は displaySrcOf がそのまま出す。
+import {
+  NOTE_IMAGE_COLLECTION, isNoteImageRef, noteImageIdOf, newNoteImageId,
+  noteImageDoc, imageRefPart, hasNoteImage, displaySrcOf, noteImageRefIdsOf,
+} from './domain/noteImages.js';
+// 💾 「保存してから画面を閉じてよいか」(2026-08-17 の是正。製品検査と同一ファイル)
+import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './domain/settleSave.js';
+// 🛌 作業者の休止/復帰(2026-08-31 清水さんの要望)。消すのではなく一旦しまう。復帰したら元どおり。
+//   🚨 使ってよいのは「これから割り当てる先」を絞る所だけ。
+//     過去の記録の名前を引く所(WorkerBadge・分析・成績表)には絶対に使わない。
+import {
+  isPaused as isWorkerPaused, activeWorkersOf, pausedWorkersOf, laneWorkersOf, laneNameOf,
+  pausePatch, resumePatch, remainingWorkOf, pauseConfirmText, resumeConfirmText,
+  pausedSummaryLabel, pausedSinceLabel,
+} from './domain/workerPause.js';
 const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
 const DATA = (db) => providerFor(db, FS_API);
 import {
@@ -2491,7 +2507,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
           </div>
         )}
         {lot.status === 'error' && (
-          <button onClick={(e) => { e.stopPropagation(); saveData('lots', lot.id, { status: 'waiting' }); }} className="w-full mt-0.5 bg-white border border-rose-300 text-rose-600 text-[10px] py-0.5 rounded hover:bg-rose-50 font-medium z-20 relative">復帰</button>
+          <button onClick={(e) => { e.stopPropagation(); saveData('lots', lot.id, { status: 'waiting' }).catch((err) => console.error('🚨 復帰を保存できませんでした(画面の保存失敗バナーと「全部送り直す」が控えています)', lot.id, err)); }} className="w-full mt-0.5 bg-white border border-rose-300 text-rose-600 text-[10px] py-0.5 rounded hover:bg-rose-50 font-medium z-20 relative">復帰</button>
         )}
       </div>
     </div>
@@ -4088,12 +4104,14 @@ const DailySummaryModal = ({ lots, indirectWork, currentUserName, workers, setti
   directDetails.forEach(d => { if (!workerBreakdown[d.worker]) workerBreakdown[d.worker] = { direct: 0, indirect: 0 }; workerBreakdown[d.worker].direct += d.duration; });
   filteredIndirect.forEach(w => { if (!workerBreakdown[w.workerName]) workerBreakdown[w.workerName] = { direct: 0, indirect: 0 }; workerBreakdown[w.workerName].indirect += (w.duration || 0); });
 
-  const handleAddManual = () => {
+  const handleAddManual = async () => {
     if (!addCategory || !addDuration || selectedWorkers.length !== 1) return;
     const dur = parseFloat(addDuration) * 60;
     const id = `iw_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
     const d = new Date(dateFrom); d.setHours(12,0,0,0);
-    saveData('indirectWork', id, { workerName: selectedWorkers[0], category: addCategory, duration: Math.round(dur), startTime: d.getTime(), note: addNote || '手動追加', manual: true, createdAt: Date.now() });
+    // 🚨保存を投げっぱなしにしたまま入力欄を消さない(2026-08-31)。拒否されたら打ち直せる形で残す。
+    const r = await settleSaveBriefly(saveData('indirectWork', id, { workerName: selectedWorkers[0], category: addCategory, duration: Math.round(dur), startTime: d.getTime(), note: addNote || '手動追加', manual: true, createdAt: Date.now() }));
+    if (!mayCloseAfterSave(r)) { alert(SAVE_REFUSED_MESSAGE); return; }
     setAddDuration(''); setAddNote(''); setAddCategory('');
   };
 
@@ -4505,7 +4523,37 @@ const WorkStandardEditModal = ({ editingItem, onClose, onSave, onDelete, current
   );
 };
 
-const NoteModal = ({ notes, templates, workers, saveData, deleteData, onClose, currentUserName = '' }) => {
+// 📝🖼 メモ・お知らせの写真の表示(2026-08-31)。
+//   新しい doc は札(imageRef)しか持たない → loadImage で note_images から1枚だけ読む。
+//   古い doc は inline(image) をそのまま出す。読めるまでは「読み込み中」を出す
+//   (壊れた絵を見せて「消えた」と思わせない)。
+const NoteImageView = ({ doc, loadImage, className }) => {
+  const ref = doc && isNoteImageRef(doc.imageRef) ? doc.imageRef : null;
+  // どの札を読んだ結果か、を一緒に持つ(⚠effectの先頭で同期的にsetStateして白紙に戻す形は
+  //   react-hooks/set-state-in-effect に落ちる。読んだ札と今の札が違えば「未読」と導出する)。
+  const [loaded, setLoaded] = useState({ ref: null, src: null }); // src: ''=読めなかった 文字列=base64
+  useEffect(() => {
+    let alive = true;
+    if (!ref || typeof loadImage !== 'function') return () => { alive = false; };
+    loadImage(noteImageIdOf(ref))
+      .then(d => { if (alive) setLoaded({ ref, src: (d && d.image) || '' }); })
+      .catch(() => { if (alive) setLoaded({ ref, src: '' }); });
+    return () => { alive = false; };
+  }, [ref, loadImage]);
+  const resolved = ref && loaded.ref === ref ? loaded.src : null; // null=まだ読めていない
+  if (!hasNoteImage(doc)) return null;
+  const src = displaySrcOf(doc, resolved);
+  if (!src) {
+    return (
+      <div className={`${className || ''} bg-slate-100 text-slate-400 text-xs font-bold flex items-center justify-center px-3 py-2 min-h-10`}>
+        {resolved === '' ? '📷 写真を読み込めませんでした' : '📷 写真を読み込み中…'}
+      </div>
+    );
+  }
+  return <img src={src} alt="" className={className} />;
+};
+
+const NoteModal = ({ notes, templates, workers, saveData, deleteData, loadImage, onClose, currentUserName = '' }) => {
   const [tab, setTab] = useState('my'); // 'my' | 'shared' | 'create'
   const [model, setModel] = useState('');
   const [stepTitle, setStepTitle] = useState('');
@@ -4557,9 +4605,20 @@ const NoteModal = ({ notes, templates, workers, saveData, deleteData, onClose, c
     const id = `note_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     setBusy(true);
     try {
+      // 🖼 2026-08-31(SS-701): 写真の base64 を notes の本体に入れない。
+      //   note_images(1件=1枚)へ先に置き、本体には札(imageRef)だけを持たせる。
+      //   ⚠先に写真を書くが、await で永久に待たない(settleSaveBriefly)。'pending'(電波なし)は
+      //     端末の待ち行列に入っているので進んでよい(本体も同じ列に並ぶ=順番は崩れない)。
+      let imagePart = {};
+      if (noteImage) {
+        const imgId = newNoteImageId(Date.now(), Math.random().toString(36).slice(2, 7));
+        const ri = await settleSaveBriefly(saveData(NOTE_IMAGE_COLLECTION, imgId, noteImageDoc(noteImage, { kind: 'note', refId: id, nowMs: Date.now() })));
+        if (!mayCloseAfterSave(ri)) { alert(SAVE_REFUSED_MESSAGE); return; }
+        imagePart = imageRefPart(imgId);
+      }
       await saveData('notes', id, {
         author: workerName, model: model.trim(), stepTitle: stepTitle.trim(),
-        content: content.trim(), image: noteImage || null,
+        content: content.trim(), ...imagePart,
         isPersonal: !isShared, createdAt: Date.now()
       });
     } catch {
@@ -4615,10 +4674,15 @@ const NoteModal = ({ notes, templates, workers, saveData, deleteData, onClose, c
                 <div key={n.id} className="border rounded-lg p-3 bg-white shadow-sm">
                   <div className="flex justify-between items-start mb-1">
                     <div className="text-[10px] text-slate-400">{n.model && <span className="bg-blue-100 text-blue-700 px-1.5 rounded mr-1">{n.model}</span>}{n.stepTitle && <span className="bg-emerald-100 text-emerald-700 px-1.5 rounded">{n.stepTitle}</span>}</div>
-                    <button onClick={() => deleteData('notes', n.id)} className="text-slate-300 hover:text-red-500"><Trash2 className="w-3.5 h-3.5"/></button>
+                    <button onClick={() => {
+                      // 🖼 札の先の写真も一緒に片付ける(残すと note_images に宛先の無い1枚が残る)。
+                      //   ⚠写真の削除に失敗しても本体の削除は止めない(ゴミが残るだけ。逆は「消したのに出る」)。
+                      if (isNoteImageRef(n.imageRef)) deleteData(NOTE_IMAGE_COLLECTION, noteImageIdOf(n.imageRef)).catch(() => { /* 掃除は次の機会に(本体の削除は止めない) */ });
+                      deleteData('notes', n.id);
+                    }} className="text-slate-300 hover:text-red-500"><Trash2 className="w-3.5 h-3.5"/></button>
                   </div>
                   <div className="text-sm text-slate-700 whitespace-pre-wrap">{n.content}</div>
-                  {n.image && <img src={n.image} alt="" className="mt-2 max-h-32 rounded border"/>}
+                  <NoteImageView doc={n} loadImage={loadImage} className="mt-2 max-h-32 rounded border"/>
                   <div className="text-[9px] text-slate-300 mt-1">{new Date(n.createdAt).toLocaleString('ja-JP')}</div>
                 </div>
               ))}
@@ -4634,7 +4698,7 @@ const NoteModal = ({ notes, templates, workers, saveData, deleteData, onClose, c
                     <span className="text-[10px] text-amber-600 font-bold">{n.author}</span>
                   </div>
                   <div className="text-sm text-slate-800 whitespace-pre-wrap font-medium">{n.content}</div>
-                  {n.image && <img src={n.image} alt="" className="mt-2 max-h-32 rounded border"/>}
+                  <NoteImageView doc={n} loadImage={loadImage} className="mt-2 max-h-32 rounded border"/>
                   <div className="text-[9px] text-slate-400 mt-1">{new Date(n.createdAt).toLocaleString('ja-JP')}</div>
                 </div>
               ))}
@@ -4647,12 +4711,15 @@ const NoteModal = ({ notes, templates, workers, saveData, deleteData, onClose, c
 };
 
 // --- Announcement Modal ---
-const AnnouncementModal = ({ announcements, workers, saveData, deleteData, onClose, currentUserName = '' }) => {
+const AnnouncementModal = ({ announcements, workers, saveData, deleteData, loadImage, onClose, currentUserName = '' }) => {
   const [view, setView] = useState('list'); // 'list' | 'create' | 'detail' | 'edit'
   const [selectedAnn, setSelectedAnn] = useState(null);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [annImage, setAnnImage] = useState(null);
+  // 🖼 編集で写真に触ったか。触っていなければ更新で写真の鍵を送らない(merge:true で今のまま残る)。
+  //   ⚠昔はここに selectedAnn.image(base64)を写して毎回書き戻していた = 1MB へ直行(SS-701)。
+  const [annImageChanged, setAnnImageChanged] = useState(false);
   const [notifyTime1, setNotifyTime1] = useState('');
   const [notifyTime2, setNotifyTime2] = useState('');
   const [annMode, setAnnMode] = useState('confirm'); // 'confirm' (確認モード) | 'alarm' (アラームモード)
@@ -4672,7 +4739,7 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, onClo
     try {
       const img = await resizeImage(file);
       if (!img) { alert('画像の読込みに失敗しました（この形式は読めないかもしれません）'); return; }
-      setAnnImage(img);
+      setAnnImage(img); setAnnImageChanged(true);
     } catch (err) {
       alert(`画像の読込みに失敗しました: ${err?.message || 'Unknown'}`);
     }
@@ -4688,9 +4755,18 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, onClo
     const notifyTimes = [notifyTime1, notifyTime2].filter(Boolean);
     setBusy(true);
     try {
+      // 🖼 2026-08-31(SS-701): 写真の base64 を announcements の本体に入れない。
+      //   note_images(1件=1枚)へ先に置き、本体には札(imageRef)だけを持たせる。
+      let imagePart = {};
+      if (annImage) {
+        const imgId = newNoteImageId(Date.now(), Math.random().toString(36).slice(2, 7));
+        const ri = await settleSaveBriefly(saveData(NOTE_IMAGE_COLLECTION, imgId, noteImageDoc(annImage, { kind: 'announcement', refId: id, nowMs: Date.now() })));
+        if (!mayCloseAfterSave(ri)) { alert(SAVE_REFUSED_MESSAGE); return; }
+        imagePart = imageRefPart(imgId);
+      }
       await saveData('announcements', id, {
         author: workerName, title: title.trim(), content: content.trim(),
-        image: annImage || null, comments: [], confirmedBy: [], createdAt: Date.now(),
+        ...imagePart, comments: [], confirmedBy: [], createdAt: Date.now(),
         notifyTimes: notifyTimes.length > 0 ? notifyTimes : null,
         mode: annMode // 'confirm' or 'alarm'
       });
@@ -4699,7 +4775,7 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, onClo
     } finally {
       setBusy(false);
     }
-    setTitle(''); setContent(''); setAnnImage(null); setNotifyTime1(''); setNotifyTime2(''); setAnnMode('confirm');
+    setTitle(''); setContent(''); setAnnImage(null); setAnnImageChanged(false); setNotifyTime1(''); setNotifyTime2(''); setAnnMode('confirm');
     setView('list');
   };
 
@@ -4709,12 +4785,28 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, onClo
     const notifyTimes = [notifyTime1, notifyTime2].filter(Boolean);
     setBusy(true);
     try {
-      await saveData('announcements', selectedAnn.id, {
+      const patch = {
         title: title.trim(), content: content.trim(),
-        image: annImage ?? selectedAnn.image ?? null,
         notifyTimes: notifyTimes.length > 0 ? notifyTimes : null,
         mode: annMode // 編集時に mode も保存 (旧コードは反映されなかった)
-      });
+      };
+      // 🖼 写真に触った時だけ写真の鍵を送る(触っていなければ merge:true で今のまま)。
+      //   新しい写真 → note_images へ置いて札に差し替え。inline(昔の base64)は null で片付ける
+      //   (base64 をここへ書く道はもう無い。doc がその分だけ痩せる)。
+      //   写真を消した → 札も inline も null。
+      if (annImageChanged) {
+        if (annImage) {
+          const imgId = newNoteImageId(Date.now(), Math.random().toString(36).slice(2, 7));
+          const ri = await settleSaveBriefly(saveData(NOTE_IMAGE_COLLECTION, imgId, noteImageDoc(annImage, { kind: 'announcement', refId: selectedAnn.id, nowMs: Date.now() })));
+          if (!mayCloseAfterSave(ri)) { alert(SAVE_REFUSED_MESSAGE); return; }
+          patch.imageRef = imageRefPart(imgId).imageRef;
+        } else {
+          patch.imageRef = null;
+        }
+        patch.image = null;
+        // 前の札の先は消しに行かない(他端末がまだ表示中の事がある。宛先の無い1枚が残るだけ)。
+      }
+      await saveData('announcements', selectedAnn.id, patch);
     } catch {
       return; // 直した中身を画面に残したまま止まる(打ち直しにならない)
     } finally {
@@ -4741,7 +4833,9 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, onClo
   const openDetail = (ann) => { setSelectedAnn(ann); setView('detail'); };
   const openEdit = (ann) => {
     setSelectedAnn(ann); setTitle(ann.title); setContent(ann.content || '');
-    setAnnImage(ann.image || null);
+    // 🖼 今の写真は state に写さない(昔ここで base64 を写し、更新のたび本体へ書き戻していた)。
+    //   触るまでは「今のまま」。annImage は「新しく選んだ写真」だけを持つ。
+    setAnnImage(null); setAnnImageChanged(false);
     setNotifyTime1(ann.notifyTimes?.[0] || ''); setNotifyTime2(ann.notifyTimes?.[1] || '');
     setAnnMode(ann.mode || 'confirm'); // 編集時に現在のモードを復元
     setView('edit');
@@ -4759,7 +4853,7 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, onClo
         <div className="bg-purple-700 text-white p-4 flex justify-between items-center shrink-0">
           <h2 className="font-bold flex items-center gap-2"><Megaphone className="w-5 h-5"/> お知らせ</h2>
           <div className="flex items-center gap-2">
-            {view === 'list' && <button onClick={() => { setTitle(''); setContent(''); setAnnImage(null); setNotifyTime1(''); setNotifyTime2(''); setView('create'); }} className="text-xs bg-white/20 hover:bg-white/30 px-3 py-1 rounded font-bold">＋ 投稿</button>}
+            {view === 'list' && <button onClick={() => { setTitle(''); setContent(''); setAnnImage(null); setAnnImageChanged(false); setNotifyTime1(''); setNotifyTime2(''); setView('create'); }} className="text-xs bg-white/20 hover:bg-white/30 px-3 py-1 rounded font-bold">＋ 投稿</button>}
             {(view === 'detail' || view === 'edit' || view === 'create') && <button onClick={() => setView('list')} className="text-xs bg-white/20 hover:bg-white/30 px-3 py-1 rounded font-bold">← 一覧</button>}
             <button onClick={onClose}><X className="w-5 h-5"/></button>
           </div>
@@ -4820,7 +4914,7 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, onClo
                 </div>
               </div>
               {currentAnn.content && <p className="text-sm text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-3 border">{currentAnn.content}</p>}
-              {currentAnn.image && <img src={currentAnn.image} alt="" className="max-h-60 rounded-lg border"/>}
+              <NoteImageView doc={currentAnn} loadImage={loadImage} className="max-h-60 rounded-lg border"/>
 
               {/* モード表示 */}
               <div className="flex items-center gap-2">
@@ -4849,7 +4943,7 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, onClo
               {/* 編集・削除 */}
               <div className="flex gap-2 border-t pt-3">
                 <button onClick={() => openEdit(currentAnn)} className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg font-bold text-xs flex items-center justify-center gap-1"><Pencil className="w-3.5 h-3.5"/> 編集</button>
-                <button onClick={() => { if(confirm('このお知らせを削除しますか？')) { deleteData('announcements', currentAnn.id); setView('list'); } }} className="flex-1 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg font-bold text-xs flex items-center justify-center gap-1"><Trash2 className="w-3.5 h-3.5"/> 削除</button>
+                <button onClick={() => { if(confirm('このお知らせを削除しますか？')) { if (isNoteImageRef(currentAnn.imageRef)) deleteData(NOTE_IMAGE_COLLECTION, noteImageIdOf(currentAnn.imageRef)).catch(() => { /* 掃除は次の機会に(本体の削除は止めない) */ }); deleteData('announcements', currentAnn.id); setView('list'); } }} className="flex-1 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg font-bold text-xs flex items-center justify-center gap-1"><Trash2 className="w-3.5 h-3.5"/> 削除</button>
               </div>
 
               {/* コメント欄（確認モードのみ） */}
@@ -4891,8 +4985,14 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, onClo
               <div><label className="text-xs font-bold text-slate-500">内容</label><textarea value={content} onChange={e=>setContent(e.target.value)} className="w-full border rounded p-2 text-sm h-24" placeholder="詳細を入力..."/></div>
               <div className="flex items-center gap-3">
                 <label className="text-xs flex items-center gap-1 cursor-pointer bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded border"><Camera className="w-4 h-4"/> 画像<input type="file" accept="image/*" onChange={handleImageChange} className="hidden"/></label>
+                {/* 🖼 新しく選んだ写真はその場のプレビュー。触っていない編集では「今の写真」を札からそのまま見せる */}
                 {annImage && <img src={annImage} alt="" className="w-12 h-12 object-cover rounded border"/>}
-                {annImage && <button onClick={() => setAnnImage(null)} className="text-xs text-red-400 hover:text-red-600">削除</button>}
+                {!annImage && !annImageChanged && view === 'edit' && selectedAnn && hasNoteImage(selectedAnn) && (
+                  <NoteImageView doc={selectedAnn} loadImage={loadImage} className="w-12 h-12 object-cover rounded border"/>
+                )}
+                {(annImage || (view === 'edit' && !annImageChanged && selectedAnn && hasNoteImage(selectedAnn))) && (
+                  <button onClick={() => { setAnnImage(null); setAnnImageChanged(true); }} className="text-xs text-red-400 hover:text-red-600">削除</button>
+                )}
               </div>
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <label className="text-xs font-bold text-blue-700 flex items-center gap-1 mb-2"><Bell className="w-3.5 h-3.5"/> 通知時間（画面上部にバナー表示）</label>
@@ -11319,7 +11419,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                         {stepSpecificNotes.length > 0 && (
                           <div className="mb-2 bg-amber-50 border border-amber-200 rounded-lg p-2 flex items-start gap-2">
                             <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5"/>
-                            <div className="text-xs text-amber-800">{stepSpecificNotes.map(n => <div key={n.id}>• {n.content} {n.image && '📷'} <span className="text-amber-500">— {n.author}</span></div>)}</div>
+                            <div className="text-xs text-amber-800">{stepSpecificNotes.map(n => <div key={n.id}>• {n.content} {hasNoteImage(n) && '📷'} <span className="text-amber-500">— {n.author}</span></div>)}</div>
                           </div>
                         )}
                         {step.lotOnce ? (
@@ -12692,9 +12792,10 @@ const DashboardView = ({ onSetMode, lots, workers, handleMoveLot, saveData, setD
       <ZoneList id="buffer" title={`作業予定${currentUserName && !['フリー','管理者'].includes(currentUserName) ? ` (${currentUserName})` : ''}`} icon={Calendar} color="bg-amber-50" border="border-amber-200"
         onClickHeader={() => onSetMode('planning-execution')}
         onDropLot={(id) => handleMoveLot(id, 'buffer')}>
+        {/* 🛌休止中の人はこの並びから外す。ただし作業が残っている間はレーンごと残す(行方不明にしない)。 */}
         {(currentUserName && !['フリー','管理者'].includes(currentUserName)
           ? workers.filter(w => w.name === currentUserName)
-          : workers
+          : laneWorkersOf(workers, lots)
         ).map(worker => (
           <WorkerSummaryCard key={worker.id} worker={worker} lots={lots} />
         ))}
@@ -12744,12 +12845,13 @@ const ArrivalPlanningView = ({ onBack, lots, workers, templates, handleMoveLot, 
               <div className="text-xs font-bold text-slate-400 mb-2 border-b pb-1 shrink-0">未割当 / 未該当エリア</div>
               <div className="flex-1 overflow-y-auto space-y-2 min-h-0">{lots.filter(isUnassignedLot).map(lot => <LotCard key={lot.id} lot={lot} workers={workers} templates={templates} mapZones={mapZones} onOpenExecution={()=>{}} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} onEdit={onEditLot} onDelete={onDeleteLot} minimal={false}/>)}</div>
             </div>
-            {workers.map(w => {
+            {/* 🛌休止中の人はこの並びから外す。ただし作業が残っている間はレーンごと残す(行方不明にしない)。 */}
+            {laneWorkersOf(workers, lots).map(w => {
               const { plannedRemainingSec: wPlannedTime, actualDoneSec: wCompletedTime, inProgressCount: wInProgress, processingCount: wProcessing } = computeWorkerTimes(lots, w.id);
               return (
               <div key={w.id} data-drop-zone="planned" data-worker-id={w.id} className="min-w-[200px] flex-1 border border-blue-100 bg-blue-50/30 rounded-lg p-3 flex flex-col min-h-0" onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>{e.preventDefault(); const id=e.dataTransfer.getData('lotId'); if(id) handleMoveLot(id, 'planned', w.id);}}>
                 <div className="text-sm font-bold text-blue-800 mb-1 flex items-center justify-between shrink-0">
-                  <div className="flex items-center gap-1"><User className="w-4 h-4"/> {w.name}</div>
+                  <div className="flex items-center gap-1" title={isWorkerPaused(w) ? '休止中です。作業がまだ残っているのでレーンを残しています。付け替えると消えます。' : ''}><User className="w-4 h-4"/> {laneNameOf(w, w.name)}</div>
                   <div className="flex items-center gap-1">
                     {wInProgress > 0 && (
                       <span className={`text-[10px] font-bold px-1 rounded inline-flex items-center gap-1 ${wProcessing > 0 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`} title="進行中">
@@ -12790,7 +12892,8 @@ const PlanningExecutionView = ({ onBack, workers, lots, templates, handleMoveLot
              {filterWorkerId && <button onClick={() => setFilterWorkerId(null)} className="text-xs bg-white px-2 py-1 rounded border shadow-sm flex items-center gap-1"><X className="w-3 h-3"/>解除</button>}
           </div>
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
-             {workers.map(w => {
+             {/* 🛌休止中の人は外す。作業が残っている間はレーンごと残す(行方不明にしない)。 */}
+             {laneWorkersOf(workers, lots).map(w => {
                if (filterWorkerId && filterWorkerId !== w.id) return null;
                const workerLots = lots.filter(l => l.location === 'planned' && l.workerId === w.id);
                const { plannedRemainingSec: wPlanTime, actualDoneSec: wDoneTime, inProgressCount: wInProgress, processingCount: wProcessing } = computeWorkerTimes(lots, w.id);
@@ -12801,7 +12904,7 @@ const PlanningExecutionView = ({ onBack, workers, lots, templates, handleMoveLot
                      className={`bg-slate-50 px-3 py-1.5 font-bold text-slate-700 text-sm border-b cursor-pointer hover:bg-slate-100 transition-colors ${filterWorkerId === w.id ? 'bg-blue-100 text-blue-800' : ''}`}
                    >
                      <div className="flex items-center justify-between">
-                       <div className="flex items-center gap-2"><User className="w-4 h-4"/> {w.name}</div>
+                       <div className="flex items-center gap-2" title={isWorkerPaused(w) ? '休止中です。作業がまだ残っているのでレーンを残しています。付け替えると消えます。' : ''}><User className="w-4 h-4"/> {laneNameOf(w, w.name)}</div>
                        <div className="flex items-center gap-1">
                          {wInProgress > 0 && (
                            <span className={`text-[10px] font-bold px-1 rounded inline-flex items-center gap-1 ${wProcessing > 0 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`} title="進行中ロット">
@@ -16056,11 +16159,39 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
   const warnCount = issues.filter(i => i.sev === 'warn').length;
 
   const counts = { lots: lots.length, templates: templates.length, workers: workers.length, 間接作業: (indirectWork || []).length, 改善カルテ: (improvements || []).length, 観測プラン: (observationPlans || []).length, メモ: (notes || []).length, お知らせ: (announcements || []).length, ログ: (logs || []).length };
-  const doBackup = () => {
-    const data = { meta: { app: 'parts-inspection', exportedAt: new Date().toISOString(), by: currentUserName || '', counts }, settings, templates, workers, indirectWork, improvements, observationPlans, lots, notes, announcements, logs };
+
+  // 📝🖼 メモ・お知らせの写真は本体には無く、note_images(1件=1枚)に別置きしてある(2026-08-31 SS-701)。
+  //   🚨🚨 控えに入れ忘れると、戻した時に **札(imageRef)だけ残って写真が永久に出ない**。
+  //     まさに「取っている≠戻せる」(2026-07-26)。だから控えにも移行用にも必ず同梱する。
+  //   ⚠絞り込みの無い全件読み(getAll)は増やさない(読み取りの決まり)。
+  //     **札が指している分だけ** 1枚ずつ読む(読む数 = 写真の付いた メモ+お知らせ の数)。
+  //     札の無い迷子の1枚は、そもそもどの画面からも辿れないので控えの対象にしない。
+  const noteImageRefIds = (noteRows, annRows) => noteImageRefIdsOf(noteRows, annRows);
+  // 札の先の1枚を読む。⚠読めなかった札は **黙って捨てず** missing で返す(欠けを人に見せる為)。
+  const fetchNoteImages = async (ids) => {
+    const rows = [], missing = [];
+    for (let i = 0; i < ids.length; i += 8) {          // 8枚ずつ(端末と回線をふさがない)
+      const chunk = ids.slice(i, i + 8);
+      const got = await Promise.all(chunk.map(async (id) => {
+        try { return await DATA(db).getOne(APP_DATA_ID, NOTE_IMAGE_COLLECTION, id); } catch { return null; } // 読めない=欠けとして数える
+      }));
+      got.forEach((doc, k) => { if (doc && doc.image) rows.push({ id: chunk[k], ...doc }); else missing.push(chunk[k]); });
+    }
+    return { rows, missing };
+  };
+
+  const doBackup = async () => {
+    // 🚨写真を読んでから書き出す(読めなくても控えは作る。件数は必ず meta に残す)。
+    const imgIds = noteImageRefIds(notes, announcements);
+    const imgs = await fetchNoteImages(imgIds);
+    const cnts = { ...counts, 'メモ/お知らせの写真': imgs.rows.length };
+    const data = { meta: { app: 'parts-inspection', exportedAt: new Date().toISOString(), by: currentUserName || '', counts: cnts, noteImagesExpected: imgIds.length, noteImagesMissing: imgs.missing }, settings, templates, workers, indirectWork, improvements, observationPlans, lots, notes, announcements, logs, note_images: imgs.rows };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url;
     a.download = `バックアップ_部品検査_${new Date().toISOString().slice(0, 10)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // 🚨欠けたまま「取れました」と言わない。
+    if (imgs.missing.length) alert(`🚨 メモ/お知らせの写真 ${imgs.missing.length}枚が読めませんでした。\nこの控えから戻すと、その ${imgs.missing.length}件は写真が出ません。\n（控えのファイル自体は保存しています）`);
+    return { noteImages: imgs.rows.length, noteImagesMissing: imgs.missing.length };
   };
 
   // PocketBase移行用エクスポート: 全コレクションを「PocketBaseに取り込みやすい per-collection 配列」でダンプ。
@@ -16071,6 +16202,9 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
     let strictHist = strictModeHistory || [], helpImgs = [];
     try { strictHist = await DATA(db).getAll(APP_DATA_ID, 'strict_mode_history', { map: ROW_DATA_WINS }); } catch (e) { /* state フォールバック */ }
     try { helpImgs = await DATA(db).getAll(APP_DATA_ID, 'help_images', { map: ROW_DATA_WINS }); } catch (e) { /* 空フォールバック */ }
+    // 📝🖼 メモ・お知らせの写真(note_images)。これが無いと移した先で **札だけ残って写真が出ない**。
+    //   ⚠全件読みは増やさない。札が指している分だけ1枚ずつ読む(doBackup と同じ道)。
+    const noteImgs = await fetchNoteImages(noteImageRefIds(notes, announcements));
     const data = {
       forPocketBase: true,
       schemaVersion: 1,
@@ -16078,7 +16212,8 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
       appDataId: 'parts-inspection-v1',
       exportedAt: new Date().toISOString(),
       by: currentUserName || '',
-      counts,
+      counts: { ...counts, 'メモ/お知らせの写真': noteImgs.rows.length },
+      noteImagesMissing: noteImgs.missing,
       collections: {
         settings: settings ? [{ id: 'config', ...settings }] : [],
         lots: lots || [],
@@ -16092,6 +16227,7 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
         logs: logs || [],
         strict_mode_history: strictHist,
         help_images: helpImgs,
+        note_images: noteImgs.rows,
       },
       note: 'PocketBase移行用。各 collections[<名前>] を PocketBase の同名コレクション(キー=実Firestore名)へ取り込む。settings は id="config" の1レコード。取込はリポジトリの pb_import.mjs（README_pocketbase移行.md 参照）。',
     };
@@ -16108,7 +16244,8 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
   const [rstChk, setRstChk] = useState(false);
   const [rstProg, setRstProg] = useState({ done: 0, total: 0 });
   const [rstMsg, setRstMsg] = useState('');
-  const RST_LABELS = { lots: '検査ロット', templates: 'テンプレート', workers: '作業者', indirectWork: '間接作業', improvements: '改善カルテ', observationPlans: '観測プラン', notes: 'メモ', announcements: 'お知らせ', logs: 'ログ' };
+  // 📝🖼 note_images = メモ/お知らせの写真の実体。ここに載せないと「札だけ戻って写真が出ない」。
+  const RST_LABELS = { lots: '検査ロット', templates: 'テンプレート', workers: '作業者', indirectWork: '間接作業', improvements: '改善カルテ', observationPlans: '観測プラン', notes: 'メモ', announcements: 'お知らせ', logs: 'ログ', note_images: 'メモ/お知らせの写真' };
   const curIdSet = (arr) => new Set((arr || []).map(x => x && x.id).filter(Boolean));
   const diffOf = (cur, bk) => {
     const cs = curIdSet(cur); let create = 0, over = 0;
@@ -16123,7 +16260,9 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
       const app = parsed && parsed.meta && parsed.meta.app;
       if (app && app !== 'parts-inspection') { setRst({ err: `このファイルは「${app}」用のバックアップです。部品検査アプリには取り込めません（データ破損防止のためブロックしました）。`, fileName: f.name }); setRstMsg(''); setRstPhase('error'); return; }
       if (!parsed || (!Array.isArray(parsed.lots) && !parsed.settings)) { setRst({ err: 'バックアップ形式ではないようです（lots / settings が見つかりません）。', fileName: f.name }); setRstMsg(''); setRstPhase('error'); return; }
-      const diff = { lots: diffOf(lots, parsed.lots), templates: diffOf(templates, parsed.templates), workers: diffOf(workers, parsed.workers), indirectWork: diffOf(indirectWork, parsed.indirectWork), improvements: diffOf(improvements, parsed.improvements), observationPlans: diffOf(observationPlans, parsed.observationPlans) };
+      // 📝🖼 写真は購読していないので、いまの分は「メモ/お知らせの札が指している id」で数える(読みは増やさない)。
+      const curNoteImgs = noteImageRefIds(notes, announcements).map((id) => ({ id }));
+      const diff = { lots: diffOf(lots, parsed.lots), templates: diffOf(templates, parsed.templates), workers: diffOf(workers, parsed.workers), indirectWork: diffOf(indirectWork, parsed.indirectWork), improvements: diffOf(improvements, parsed.improvements), observationPlans: diffOf(observationPlans, parsed.observationPlans), note_images: diffOf(curNoteImgs, parsed.note_images) };
       setRst({ parsed, diff, fileName: f.name, meta: parsed.meta || {} }); setRstConfirm(''); setRstChk(false); setRstMsg(''); setRstPhase('preview');
     } catch (err) { setRst({ err: 'ファイルの読み込み/解析に失敗しました: ' + (err.message || err), fileName: f.name }); setRstMsg(''); setRstPhase('error'); }
     finally { if (fileRef.current) fileRef.current.value = ''; }
@@ -16133,12 +16272,15 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
     if (rstConfirm.trim() !== '復元' || !rstChk) return;
     setRstPhase('running'); setRstProg({ done: 0, total: 0 });
     try {
-      doBackup(); // 復元前に現状を自動バックアップ（ダウンロード）
+      await doBackup(); // 復元前に現状を自動バックアップ（ダウンロード。⚠写真を読む分だけ待つ）
       const r = await onRestore(rst.parsed, (done, total) => setRstProg({ done, total }));
       // 🚨 関所が止めたロットは **黙って飛ばさない**。「戻したつもり」を作らない(2026-07-26 の教訓)。
       const blockedN = (r && Array.isArray(r.blocked)) ? r.blocked.length : 0;
+      // 🚨🖼 「取っている≠戻せる」。戻した後に **札の先を読み直して** 実体の無い札を数えている。
+      const missImgN = (r && Array.isArray(r.missingImages)) ? r.missingImages.length : 0;
       setRstMsg(`復元が完了しました（${(r && r.total) || ''}件を書き込み）。画面のデータは自動で最新化されます。`
-        + (blockedN ? `\n🚨 ただし ${blockedN}件のロットは、いまの検査記録が消えるため復元していません。` : '')); setRstPhase('done');
+        + (blockedN ? `\n🚨 ただし ${blockedN}件のロットは、いまの検査記録が消えるため復元していません。` : '')
+        + (missImgN ? `\n🚨 メモ/お知らせ ${missImgN}件は、写真の実体が見つかりません（札だけの状態です）。写真を含む控えから戻してください。` : '')); setRstPhase('done');
     } catch (err) { setRstMsg('復元中にエラーが発生しました: ' + (err.message || err) + '（復元前の自動バックアップは保存済みです）'); setRstPhase('error'); }
   };
   const rstReset = () => { setRstPhase('idle'); setRst(null); setRstMsg(''); setRstConfirm(''); setRstChk(false); };
@@ -17473,7 +17615,7 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
     if (sel && sel.median > 0) { const dev = Math.abs(v - sel.median); if ((sel.sigma > 0 && dev > 2 * sel.sigma) && (v > sel.median * 1.5 || v < sel.median * 0.5)) return 'warn'; }
     return '';
   };
-  const saveFix = (newSec) => {
+  const saveFix = async (newSec) => {
     if (!fixEdit || !saveData) return;
     const v = Math.max(0, Math.round(newSec));
     // 修正ツールが異常値を再投入しないよう確認(0=集計から消える / 4時間超=外れ値のまま)。
@@ -17485,7 +17627,10 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
     const { elementDurations, elementMarks, ...keep } = cur;
     const fst = Number(keep.firstStartTime) || Number(keep.startTime) || null;
     const tasks = { ...(lot.tasks || {}), [tk]: { ...keep, duration: v, manualTime: true, ...(fst ? { firstStartTime: fst, endTime: fst + v * 1000, startTime: null } : {}) } };
-    saveData('lots', lot.id, { tasks });
+    // 🚨作業の記録(tasks)の保存を投げっぱなしにしたまま窓を閉じない(2026-08-31)。
+    //   拒否されたら開けたまま=もう一度保存できる(2026-08-17 の「閉じた瞬間に消える」を防ぐ)。
+    const r = await settleSaveBriefly(saveData('lots', lot.id, { tasks }));
+    if (!mayCloseAfterSave(r)) { alert(SAVE_REFUSED_MESSAGE); return; }
     setFixEdit(null);
   };
 
@@ -20971,7 +21116,25 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
 //   前回 onOpenStrictManager を TemplateListSection 側だけに足したので、
 //   ボタンから見ると相変わらず「そんな名前は無い」状態のままだった(ESLint no-undef が出ていた)。
 //   → 受け取る側をここに足し、呼び出し側からも渡すようにした。
- const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [], handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null }) => {
+ // 🛌 休止 / 復帰 (2026-08-31 清水さん「一旦画面から消すっていうボタンも欲しいかな、復帰したら使えるからね」)。
+ //   🚨 削除ではない。deleteData は呼ばない。workers の書類はそのまま、印を1つ足すだけ。
+ //   🚨 印は端末に持たず workers doc(共有)へ置く = 他の端末にも反映される。
+ //     さらに **人ごとの書類の単一フィールド** なので、配列追記のような後勝ちの消滅が起きない(2026-07-17)。
+ //   🚨 まだ作業が残っている人は、休止の前に必ず件数を知らせる。黙って消して行方不明にしない。
+ const pauseWorker = (w, { saveData, lots = [], byName = '' } = {}) => {
+   if (!w || !saveData) return;
+   const remaining = remainingWorkOf(lots, w.id);
+   if (!window.confirm(pauseConfirmText(w.name, remaining.count))) return;
+   saveData('workers', w.id, pausePatch(Date.now(), byName));
+ };
+ const resumeWorker = (w, { saveData } = {}) => {
+   if (!w || !saveData) return;
+   if (!window.confirm(resumeConfirmText(w.name))) return;
+   // ⚠ paused キーを消すのではなく false を書く(merge:true では消えた事にならない)。
+   saveData('workers', w.id, resumePatch(Date.now()));
+ };
+
+ const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null }) => {
   const [newProcessOpt, setNewProcessOpt] = useState('');
   const defectProcessOptions = settings?.defectProcessOptions || DEFAULT_DEFECT_PROCESS_OPTIONS;
   const [localZones, setLocalZones] = useState(mapZones || INITIAL_MAP_ZONES);
@@ -21085,8 +21248,54 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
              <button onClick={() => { const input = document.getElementById('workerInput'); if(input && input.value) { saveData('workers', generateId(), { name: input.value }); input.value = ''; } }} className="bg-slate-800 text-white px-4 py-2 rounded text-sm font-bold">追加</button>
            </div>
            <div className="flex flex-wrap gap-2">
-             {workers.map(w => (<div key={w.id} className="bg-slate-50 border px-3 py-1.5 rounded-full flex items-center gap-2 text-sm">{w.name}<button onClick={() => deleteData('workers', w.id)} className="text-slate-400 hover:text-rose-500"><Trash2 className="w-3 h-3" /></button></div>))}
+             {activeWorkersOf(workers).map(w => (
+               <div key={w.id} className="bg-slate-50 border px-3 py-1.5 rounded-full flex items-center gap-2 text-sm">
+                 {w.name}
+                 <button
+                   onClick={() => pauseWorker(w, { saveData, lots })}
+                   title={`「${w.name}」を休止にして、担当を選ぶ所・マップのレーンから外す（消えません。いつでも復帰できます）`}
+                   className="text-xs px-3 min-h-[36px] rounded border border-sky-300 text-sky-700 hover:bg-sky-50 flex items-center"
+                 >🛌休止</button>
+                 <button onClick={() => deleteData('workers', w.id)} title={`作業者「${w.name}」を削除`} className="ml-1 pl-2 border-l border-slate-300 text-slate-400 hover:text-rose-500 min-h-[36px] min-w-[36px] flex items-center justify-center"><Trash2 className="w-3 h-3" /></button>
+               </div>
+             ))}
            </div>
+           {/* 🛌 休止中の一覧。
+                🚨 黙って消さない。人数は畳んでいても必ず見え、開けば「誰が・いつから」が出る。 */}
+           <details className="mt-4 border border-sky-200 bg-sky-50/60 rounded-lg">
+             <summary className="cursor-pointer select-none px-3 py-2 text-sm font-bold text-sky-800 min-h-[36px] flex items-center">
+               {pausedSummaryLabel(workers)}
+               <span className="ml-2 font-normal text-xs text-sky-700">（開くと一覧が出ます。復帰させるとすぐ元どおり使えます）</span>
+             </summary>
+             <div className="px-3 pb-3">
+               <p className="text-xs text-slate-600 mb-2">
+                 休止中の人は「担当を選ぶ所」「現場マップのレーン」から外れています。
+                 過去の記録・達成率・分析・成績表は<b>1つも変わっていません</b>。
+               </p>
+               {pausedWorkersOf(workers).length === 0
+                 ? <p className="text-xs text-slate-500">休止中の人はいません。</p>
+                 : (
+                   <div className="flex flex-wrap gap-2">
+                     {pausedWorkersOf(workers).map(w => {
+                       const rest = remainingWorkOf(lots, w.id);
+                       return (
+                         <div key={w.id} className="border border-sky-300 bg-white px-3 py-1 rounded-full flex items-center gap-2 text-sm">
+                           <span>🛌</span>
+                           <span className="font-bold">{w.name}</span>
+                           <span className="text-xs text-slate-500">{pausedSinceLabel(w)}</span>
+                           {rest.count > 0 && <span className="text-xs text-amber-700 font-bold" title="この人に割り当たったまま終わっていない作業です。現場マップにはレーンが残っています。">残り{rest.count}件</span>}
+                           <button
+                             onClick={() => resumeWorker(w, { saveData })}
+                             title={`「${w.name}」を復帰させる`}
+                             className="text-xs px-3 min-h-[36px] rounded border border-emerald-400 text-emerald-700 hover:bg-emerald-50 flex items-center font-bold"
+                           >復帰</button>
+                         </div>
+                       );
+                     })}
+                   </div>
+                 )}
+             </div>
+           </details>
          </div>
          {/* 工程テンプレート管理は専用タブに移動 */}
 
@@ -22106,7 +22315,9 @@ const LotAssignmentModal = ({ lot, workers, mapZones, currentUserName, onClose, 
   // lot や mapZones が一時的に undefined になっても落ちないようガード
   if (!lot) return null;
   const safeMapZones = Array.isArray(mapZones) ? mapZones : [];
-  const safeWorkers = Array.isArray(workers) ? workers : [];
+  // 🛌「どの担当者に作業させますか？」= これから割り当てる先。休止中の人は出さない。
+  //   ⚠ここは名前の逆引きではないので、休止中を外しても過去の記録の名前は1文字も変わらない。
+  const safeWorkers = activeWorkersOf(Array.isArray(workers) ? workers : []);
 
   const personalZones = safeMapZones.filter(z => !z.isPersonal || z.name === selectedWorker?.name).concat(
     safeMapZones.filter(z => z.isPersonal && z.name !== selectedWorker?.name)
@@ -25008,7 +25219,9 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
 
   // 各作業者の現在の状況
   const workerStatuses = useMemo(() => {
-    return workers.map(w => {
+    // 🛌 「空いています → 次のロットを割当できます」を出す所なので、休止中の人は外す。
+    //   ただし作業が残っている間は残す(その人のロットが盤から消えない為)。
+    return laneWorkersOf(workers, activeLots, { isOpen: () => true }).map(w => {
       const myLots = activeLots.filter(l => l.workerId === w.id);
       const processing = myLots.find(l => l.status === 'processing');
       const paused = myLots.find(l => l.status === 'paused' && (!processing || l.id !== processing.id));
@@ -26886,7 +27099,9 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
                   <button onClick={(e) => {
                     e.stopPropagation();
                     if (!confirm(`このロット（${lot.model} / ${lot.orderNo}）を検査リストへ復帰しますか？\n完了を取り消し、再度作業ができるようになります（実績は残ります）。`)) return;
-                    saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null });
+                    // 🚨投げっぱなしにしない(2026-08-31)。失敗は saveData が画面の保存失敗バナーと
+                    //   「全部送り直す」の控えで人に知らせる。ここは受け取って console に残す(誰も受け取らない拒否にしない)。
+                    saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }).catch((err) => console.error('🚨 検査リストへの復帰を保存できませんでした', lot.id, err));
                   }} className="text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 px-2 py-0.5 rounded font-bold flex items-center gap-1 shrink-0" title="完了を取り消して検査リストへ戻す"><RotateCcw className="w-3 h-3"/> 検査リストへ復帰</button>
                 </div>
               </div>
@@ -26920,7 +27135,7 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
                     <td className="p-3 text-right">
                       <div className="flex justify-end gap-1.5">
                         <button onClick={() => setViewGridLot(lot)} className="p-1.5 border rounded hover:bg-indigo-50 text-indigo-600 bg-white transition-colors" title="作業表で見る（工程×台）"><LayoutGrid className="w-4 h-4" /></button>
-                        <button onClick={() => { if (!confirm(`このロット（${lot.model} / ${lot.orderNo}）を検査リストへ復帰しますか？\n完了を取り消し、再度作業ができるようになります（実績は残ります）。`)) return; saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }); }} className="p-1.5 border rounded hover:bg-amber-50 text-amber-600 bg-white transition-colors" title="検査リストへ復帰（完了を取り消す）"><RotateCcw className="w-4 h-4" /></button>
+                        <button onClick={() => { if (!confirm(`このロット（${lot.model} / ${lot.orderNo}）を検査リストへ復帰しますか？\n完了を取り消し、再度作業ができるようになります（実績は残ります）。`)) return; saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }).catch((err) => console.error('🚨 検査リストへの復帰を保存できませんでした', lot.id, err)); }} className="p-1.5 border rounded hover:bg-amber-50 text-amber-600 bg-white transition-colors" title="検査リストへ復帰（完了を取り消す）"><RotateCcw className="w-4 h-4" /></button>
                         <button onClick={() => setReportLot(lot)} className="p-1.5 border rounded hover:bg-green-50 text-green-600 bg-white transition-colors" title="成績表プレビュー"><Printer className="w-4 h-4" /></button>
                         <button onClick={() => setEditingTimeLot(lot)} className="p-1.5 border rounded hover:bg-amber-50 text-amber-600 bg-white transition-colors" title="作業時間編集"><Clock className="w-4 h-4" /></button>
                         <button onClick={() => setEditingMeasLot(lot)} className="p-1.5 border rounded hover:bg-emerald-50 text-emerald-600 bg-white transition-colors" title="測定結果編集"><Ruler className="w-4 h-4" /></button>
@@ -28137,6 +28352,16 @@ const QuotaStoppedPanel = ({ until }) => (
      if (!user || !db) throw new Error('ログインしていないため復元できません。');
      if (!parsed || typeof parsed !== 'object') throw new Error('バックアップの内容が不正です。');
      const cols = [
+       // 📝🖼 メモ・お知らせの写真の実体(2026-08-31 SS-701)。ここに無いと、戻した時に
+       //   **札(imageRef)だけ残って写真が永久に出ない**(「取っている≠戻せる」2026-07-26)。
+       //   ⚠⚠ 並びは **札を持つ側(notes / announcements)より先**。製品検査の
+       //     RESTORE_COLLECTIONS と同じ並びに揃えてある(片方のアプリだけ違う形にしない)。
+       //     逆にすると、途中で止まった時に「メモは並ぶのに写真が出ない」が本番に残る。
+       //   ⚠これは「記録が先・写真が後」に反しない。あちらは **その場の保存**の話で、
+       //     写真の受領を待つと記録そのものが二度と戻らないから。復元は控えの紙が手元に
+       //     在るので、止まってももう一度押せば同じ所からやり直せる。
+       //   ⚠古い控え(note_images の鍵が無い)は Array.isArray で今までどおり素通りする。
+       ['note_images', parsed.note_images],
        ['lots', parsed.lots],
        ['templates', parsed.templates],
        ['workers', parsed.workers],
@@ -28183,6 +28408,19 @@ const QuotaStoppedPanel = ({ until }) => (
      }
      await DATA(db).save(APP_DATA_ID, 'settings', 'config', cleanUndefined(parsed.settings || {}));
      done++; if (onProgress) onProgress(done, total);
+     // 🚨🖼「取っている≠戻せる」(2026-07-26)。**戻した後に読み直して**、
+     //   メモ/お知らせの札(imageRef)の先に写真の実体が在るかを1枚ずつ確かめる。
+     //   ここを数えないと「戻したのに写真だけ出ない」を誰も気づけない。
+     //   ⚠全件読みは増やさない。読む数 = 札の数(写真の付いた メモ+お知らせ の数)。
+     const refIds = noteImageRefIdsOf(parsed.notes, parsed.announcements);
+     const missingImages = [];
+     for (let i = 0; i < refIds.length; i += 8) {
+       const chunk = refIds.slice(i, i + 8);
+       const got = await Promise.all(chunk.map(async (rid) => {
+         try { const doc = await DATA(db).getOne(APP_DATA_ID, NOTE_IMAGE_COLLECTION, rid); return (doc && doc.image) ? null : rid; } catch { return rid; } // 読めない=欠けとして数える
+       }));
+       got.forEach((rid) => { if (rid) missingImages.push(rid); });
+     }
      // 🚨関所で止まった分は必ず知らせる。黙っていると「戻したつもり」になる。
      if (blocked.length) {
        console.error('🚨 関所が止めた復元:', blocked);
@@ -28190,7 +28428,8 @@ const QuotaStoppedPanel = ({ until }) => (
          + `保存の関所が「いまの検査記録が消える」と判断した分です。\n`
          + `（いまの記録はそのまま残っています。詳しくは開発者コンソールをご覧ください）`);
      }
-     return { total, blocked };
+     if (missingImages.length) console.error('🚨 写真の実体が無い札(メモ/お知らせ):', missingImages);
+     return { total, blocked, missingImages };
    };
 
    // 設定内のネストしたサブキーを削除するヘルパー。
@@ -28255,6 +28494,11 @@ const QuotaStoppedPanel = ({ until }) => (
        bumpInflight(-1);
      }
    };
+
+   // 📝🖼 メモ・お知らせの写真(note_images)を1枚だけ読む(2026-08-31 SS-701)。
+   //   購読はしない(開いた画面で必要な札のぶんだけ getOne = 読み取りの枠を食わない)。
+   //   ⚠useCallback で識別を固定する(inline の関数を渡すと NoteImageView の effect が毎描画で読み直す)。
+   const loadNoteImage = useCallback((imgId) => DATA(db).getOne(APP_DATA_ID, NOTE_IMAGE_COLLECTION, imgId), [db]);
 
    // --- ヘルプ用スクショ (help_images コレクション。開いたときだけ購読して全端末で共有) ---
    useEffect(() => {
@@ -28670,7 +28914,8 @@ const QuotaStoppedPanel = ({ until }) => (
             totalWorkTime: 0,
             workStartTime: null,
             tasks: buildProfileSkippedTasks(steps, naStepIds, qty), // 品目別プロファイルの該当なし工程を事前スキップ
-            stepTimes: {},
+            // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。merge:true でも空マップは
+            //   その項目を丸ごと空に置き換える。読む側は全て lot.stepTimes || {} で見ている。
             interruptions: [],
             appliedStandard, // 適用された品質規格のスナップショット (null 可)
         };
@@ -29252,7 +29497,7 @@ const QuotaStoppedPanel = ({ until }) => (
            totalWorkTime: 0,
            workStartTime: null,
            tasks: buildProfileSkippedTasks(steps, naStepIds, c.quantity), // 品目別プロファイルの該当なし工程を事前スキップ
-           stepTimes: {},
+           // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。読む側は lot.stepTimes || {}。
            interruptions: [],
            appliedStandard,
          });
@@ -29480,7 +29725,8 @@ const QuotaStoppedPanel = ({ until }) => (
              entryAt: row.entryAt, status: 'waiting', location: 'arrival',
              mapZoneId: null, x: 0, y: 0, workerId: null, createdAt: Date.now(),
              currentStepIndex: 0, steps, totalWorkTime: 0, workStartTime: null,
-             tasks: buildProfileSkippedTasks(steps, naStepIds, row.qty), stepTimes: {}, interruptions: [], // 品目別プロファイルの該当なし工程を事前スキップ
+             // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。読む側は lot.stepTimes || {}。
+             tasks: buildProfileSkippedTasks(steps, naStepIds, row.qty), interruptions: [], // 品目別プロファイルの該当なし工程を事前スキップ
              appliedStandard, // 適用された品質規格のスナップショット
            };
            await saveData('lots', id, lot);
@@ -30227,7 +30473,8 @@ const QuotaStoppedPanel = ({ until }) => (
            ) : (
              <select onChange={e => selectUser(e.target.value)} value="" className="bg-transparent border border-red-400 rounded px-2 py-0.5 text-sm font-bold text-red-400 animate-pulse cursor-pointer">
                <option value="" className="text-slate-800">⚠ 使用者選択</option>
-               {workers.map(w => <option key={w.id} value={w.name} className="text-slate-800">{w.name}</option>)}
+               {/* 🛌休止中の人は使用者の選択肢から外す(2026-08-31)。過去の記録の名前はそのまま残る。 */}
+               {activeWorkersOf(workers).map(w => <option key={w.id} value={w.name} className="text-slate-800">{w.name}</option>)}
                <option value="フリー" className="text-slate-800">フリー</option>
                <option value="管理者" className="text-slate-800">管理者</option>
              </select>
@@ -30464,10 +30711,10 @@ const QuotaStoppedPanel = ({ until }) => (
        {showDailySummary && progressDataReady && <DailySummaryModal lots={lots} indirectWork={indirectWork} currentUserName={currentUserName} workers={workers} settings={settings} saveData={saveData} onClose={() => setShowDailySummary(false)} />}
        {showShiftHandover && progressDataReady && <ShiftHandoverModal lots={lots} indirectWork={indirectWork} currentUserName={currentUserName} workers={workers} saveData={saveData} onClose={() => setShowShiftHandover(false)} />}
 
-       {showNoteModal && <NoteModal notes={notes} templates={templates} workers={workers} saveData={saveData} deleteData={deleteData} onClose={() => setShowNoteModal(false)} currentUserName={currentUserName} />}
+       {showNoteModal && <NoteModal notes={notes} templates={templates} workers={workers} saveData={saveData} deleteData={deleteData} loadImage={loadNoteImage} onClose={() => setShowNoteModal(false)} currentUserName={currentUserName} />}
 
        {/* Announcement Modal */}
-       {showAnnouncementModal && <AnnouncementModal announcements={announcements} workers={workers} saveData={saveData} deleteData={deleteData} onClose={() => setShowAnnouncementModal(false)} currentUserName={currentUserName} />}
+       {showAnnouncementModal && <AnnouncementModal announcements={announcements} workers={workers} saveData={saveData} deleteData={deleteData} loadImage={loadNoteImage} onClose={() => setShowAnnouncementModal(false)} currentUserName={currentUserName} />}
 
        {/* 異常値検出パネル */}
        {/* 厳密モードは「作業最適化」タブに内蔵（モーダルは廃止） */}

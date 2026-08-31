@@ -11,6 +11,24 @@
         "assets/index-DG2uZch1.css",
         "assets/jszip.min-Bw4yHhsP.js"
       ]
+    },
+    {
+      "at": "2026-08-30T16:21:17.883Z",
+      "by": "npm run deploy",
+      "assets": [
+        "assets/chunk-D-KKor_A.js",
+        "assets/exceljs.min-CwHE6dWn.js",
+        "assets/exceljs.min-CZh2XWLn.js",
+        "assets/exceljs.min-mZ3wt5QN.js",
+        "assets/exceljs.min-QeE3ZE3m.js",
+        "assets/index-8IumbqhW.js",
+        "assets/index-Caaf1_U_.js",
+        "assets/index-CiyqqluL.js",
+        "assets/index-C_XHMQeT.css",
+        "assets/index-D-JvV4Vf.js",
+        "assets/index-DG2uZch1.css",
+        "assets/jszip.min-Bw4yHhsP.js"
+      ]
     }
   ],
   "lost": [],

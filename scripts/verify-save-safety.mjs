@@ -262,6 +262,131 @@ export const enclosingFunctions = (src, index, idx, max = 8) => {
   return out;
 };
 
+// ============================================================================
+// 🚨🚨 ②の例外を「根拠つきで」通すための読み取り(ここは見張りを **緩める** 場所)
+// ----------------------------------------------------------------------------
+// なぜ要るか(実測 2026-08-31・部品検査):
+//   作業画面 WorkExecutionModal の中に onSave() の投げっぱなしが 40件ある。
+//   これを1件ずつ包むのは「数を減らすためだけの包み」で、書き換え漏れが必ず出る。
+//   実際の設計は逆で、**部品を置く所を1つにして、そこで面倒を見ている**。
+//
+// ⚠⚠ だが「名前で通す」は絶対にやらない。2026-08-30 に WTG-010 が
+//   関数・ループの境界を見ずに通して、番線の外の書き込みまで素通りさせた。
+//   通すのは、次の4つが **全部** 実コードで確かめられた時だけ:
+//     ① その保存は、その部品が **受け取った prop** である(中で作った関数ではない)
+//     ② その部品は アプリ全体で **1回しか置かれていない**(=配線が1本に決まる)
+//     ③ その1か所の配線が **元の Promise をそのまま返し**、**.catch を付けている**
+//     ④ 配線が呼ぶ保存が **人に届ける道を持ち、投げ直す** 本物の受け止め役
+//   さらに、名前が中で作り直されていたら(shadow)通さない。
+// ⚠ 通した物は **黙って消さない**。SS-2 の見出しに「根拠つきで通した ◯件」と出し、
+//   場所と根拠を1行ずつ並べる(数が減った事に誰も気づかない、を作らない)。
+// 🚨 この判定が緩んでいないかは `--prove` が毎回わざと壊して確かめる。
+// ============================================================================
+
+/** 人に失敗が届く道(画面の帯・警告・再送の控え)。⚠console だけは「届く」と言わない。 */
+const HUMAN_DELIVERY = /setErrorMsg\s*\(|(?<![.\w$])alert\s*\(|rememberFailed\s*\(|setSyncStatus\s*\(\s*['"]error['"]/;
+
+/** その位置から始まる `{ ... }` の中身。無ければ ''。 */
+const blockAt = (src, index, openIdx) => {
+  const k = index.byStart.has(openIdx) ? index.byStart.get(openIdx) : -1;
+  return k >= 0 ? src.slice(index.blocks[k].start, index.blocks[k].end + 1) : '';
+};
+
+/**
+ * 本物の「受け止め役」の名前。= async で、catch の中で **人に届けて**、**投げ直す** 物。
+ * ⚠ 3つのうち1つでも欠けたら名前に入れない(--prove の ③ がこれを確かめる)。
+ */
+export const delivererNamesOf = (src, index) => {
+  const out = new Set();
+  for (const m of src.matchAll(/(?:^|[\s;{])const\s+([\w$]+)\s*=\s*async\s*\([^()]*\)\s*=>\s*\{/g)) {
+    const open = src.indexOf('{', m.index + m[0].length - 1);
+    const body = blockAt(src, index, open);
+    if (!body) continue;
+    const c = /(?<![.\w$])catch\s*(?:\([^()]*\))?\s*\{/.exec(body);
+    if (!c) continue;
+    const cOpen = body.indexOf('{', c.index + c[0].length - 1);
+    // catch の本体は body の中の相対位置なので、body だけを見て取り直す
+    const sub = buildBlocks(body);
+    const cBody = blockAt(body, sub, cOpen);
+    if (!cBody) continue;
+    if (!HUMAN_DELIVERY.test(cBody)) continue;          // 人に届かない = 受け止め役ではない
+    if (!/(?<![.\w$])throw\s/.test(cBody)) continue;    // 握り潰している = 受け止め役ではない
+    out.add(m[1]);
+  }
+  return out;
+};
+
+/** `const Name = ({ a, b }) => {` の部品定義。props は **別名を付けていない** 物だけ。 */
+export const componentDefsOf = (src, index) => {
+  const out = [];
+  for (const m of src.matchAll(/(?:^|\n)\s*(?:export\s+)?const\s+([A-Z][\w$]*)\s*=\s*\(/g)) {
+    const open = src.indexOf('(', m.index + m[0].length - 1);
+    const { inner, end } = readParen(src, open);
+    if (!/^\s*=>\s*\{/.test(src.slice(end + 1, end + 8))) continue;
+    const bOpen = src.indexOf('{', end + 1);
+    const k = index.byStart.has(bOpen) ? index.byStart.get(bOpen) : -1;
+    if (k < 0) continue;
+    const props = new Set();
+    if (/^\s*\{/.test(inner)) {
+      for (const p of splitArgs(inner.replace(/^\s*\{/, '').replace(/\}\s*$/, ''))) {
+        const pm = /^([\w$]+)\s*(?:=|$)/.exec(p.trim());     // ⚠ `a: b` の別名は拾わない
+        if (pm) props.add(pm[1]);
+      }
+    }
+    out.push({ name: m[1], props, start: index.blocks[k].start, end: index.blocks[k].end });
+  }
+  return out;
+};
+
+/**
+ * 「1回しか置かれていない部品の prop が、受け止め役つきの配線に結ばれている」組を解く。
+ * @returns Set<`${部品名}.${propの名前}`>
+ */
+export const resolveCaughtProps = (files) => {
+  const ok = new Set();
+  const deliverers = new Set();
+  const defs = [];
+  const parsed = files.map((f) => {
+    const src = stripComments(f.src);
+    const index = buildBlocks(src);
+    if (!index.balanced) return null;                    // 読めない物からは何も通さない
+    for (const n of delivererNamesOf(src, index)) deliverers.add(n);
+    for (const d of componentDefsOf(src, index)) defs.push({ ...d, file: f.file, src, index });
+    return { file: f.file, src, index };
+  }).filter(Boolean);
+
+  for (const d of defs) {
+    if (!d.props.size) continue;
+    // ② アプリ全体で1回しか置かれていないか(JSXの開き札を全ファイルで数える)
+    let placements = [];
+    for (const p of parsed) {
+      for (const m of p.src.matchAll(new RegExp(`<${d.name}(?![\\w$])`, 'g'))) placements.push({ p, at: m.index });
+    }
+    if (placements.length !== 1) continue;
+    const { p, at } = placements[0];
+    for (const prop of d.props) {
+      // 名前が中で作り直されている / 内側の部品が同じ名前の prop を受け取る → 通さない
+      const body = d.src.slice(d.start, d.end + 1);
+      if (new RegExp(`(?:const|let|var|function)\\s+${prop}(?![\\w$])`).test(body)) continue;
+      if (new RegExp(`\\(\\s*\\{[^{}]*(?<![.\\w$])${prop}(?![\\w$])[^{}]*\\}\\s*\\)\\s*=>`).test(body)) continue;
+      // ③ その1か所の配線を読む
+      const am = new RegExp(`(?<![.\\w$])${prop}\\s*=\\s*\\{`).exec(p.src.slice(at, at + 60000));
+      if (!am) continue;
+      const bOpen = at + am.index + am[0].length - 1;
+      const { inner } = readParen(p.src, bOpen);
+      if (!/=>/.test(inner)) continue;                    // そのまま渡している(包んでいない)
+      const wm = /(?:^|[;{\s])const\s+([\w$]+)\s*=\s*([\w$]+)\s*\(/.exec(inner);
+      if (!wm) continue;
+      const [, v, callee] = wm;
+      if (!deliverers.has(callee)) continue;              // ④ 本物の受け止め役か
+      if (!new RegExp(`(?<![.\\w$])${v}\\s*\\.\\s*catch\\s*\\(`).test(inner)) continue;
+      if (!new RegExp(`return\\s+${v}\\s*;`).test(inner)) continue;   // 元の Promise を返しているか
+      ok.add(`${d.name}.${prop}`);
+    }
+  }
+  return ok;
+};
+
 const lineOfFactory = (src) => {
   const starts = [0];
   for (let i = 0; i < src.length; i++) if (src[i] === '\n') starts.push(i + 1);
@@ -316,6 +441,7 @@ export const analyzeSources = (inputs, opts = {}) => {
   const stats = {
     files: inputs.length, chokes: [], saverCalls: 0, wrappedCalls: 0,
     subscriptions: 0, subsWithError: 0, pendingSignals: 0,
+    passedWiring: [],   // ②で「根拠つきで通した」物。⚠黙って消さず、必ず場所と根拠を出す。
   };
   // 🚨 いま配られていないファイル(main.jsx から辿れない・移植途中の版など)の指摘は
   //   **消さずに名指しするが、出荷は止めない**。止めると「直す気の無い休眠コード」で
@@ -346,6 +472,9 @@ export const analyzeSources = (inputs, opts = {}) => {
   // 「順番の関所」の名前は domain/saveOrder.js が決める(名前を変えられても追えるように)。
   const ORDER_GATES = (opts.orderGateNames && opts.orderGateNames.length ? opts.orderGateNames : ['runLotWrite', 'saveInOrder', 'orderWrites']);
   const ORDER_GATE_RE = new RegExp(`(?<![.\\w$])(?:${ORDER_GATES.join('|')})\\s*\\(`);
+  // 🚨 ②の例外(根拠つきで通す)の materials。**いま配られているファイルだけ** を材料にする。
+  //   休眠版の配線で本番の投げっぱなしを通してしまう事故を作らないため。
+  const caughtProps = resolveCaughtProps(inputs.filter((f) => isLive(f.file)));
 
   for (const input of inputs) {
     const file = input.file;
@@ -409,6 +538,7 @@ export const analyzeSources = (inputs, opts = {}) => {
     // 包み(中で catch して画面に出す関数)の中の呼び出しは「catch がある」= 握り潰しではない。
     // ⚠ 包みの有無は **その呼び出しを囲む関数の中だけ** で見る。ファイル全体で見ると、
     //   別の画面(例: 時間の手直しモーダル)の危ない呼び出しまで安全扱いになる。
+    const compDefs = componentDefsOf(src, index);
     const wrapCache = new Map();
     const wrappedBy = (name, idx) => {
       for (const fn of enclosingFunctions(src, index, idx, 8)) {
@@ -448,6 +578,27 @@ export const analyzeSources = (inputs, opts = {}) => {
             `🚨 包み(catchあり)の中だが、**この直後に画面を閉じている**のに待っていない。`
             + `閉じた瞬間に手元の記録が消えるので、ここは await すること`, lines[line - 1]);
         }
+        continue;
+      }
+      // 🚨 部品を跨ぐ配線を **実コードで** 読んで、本物の受け止め役に結ばれている時だけ通す。
+      //   ⚠ owner は idx を囲む部品のうち **一番内側** を採る(外側の名前で通さない)。
+      //   ⚠ その部品の外に置かれた投げっぱなしは owner が付かない = 通らない。
+      const owner = compDefs
+        .filter((c) => c.start <= m.index && c.end >= m.index && c.props.has(name))
+        .sort((a, b) => b.start - a.start)[0];
+      if (owner && caughtProps.has(`${owner.name}.${name}`)) {
+        if (closesScreen) {
+          add('SS-204', 'error', 2, file, line,
+            `🚨 受け止め役に結ばれてはいるが、**この直後に画面を閉じている**のに待っていない。`
+            + `閉じた瞬間に手元の記録が消えるので、ここは await すること`, lines[line - 1]);
+          continue;
+        }
+        stats.passedWiring.push({
+          file, line, name,
+          why: `${owner.name} の ${name} は、この部品が **アプリ全体で1回しか置かれていない** 所で`
+            + `「元の Promise を返す + .catch を付ける + 保存側が人に届けて投げ直す」形に結ばれている`,
+          code: shortCode(lines[line - 1]),
+        });
         continue;
       }
       if (record || closesScreen) {
@@ -864,7 +1015,73 @@ export const runOnRoot = (root) => {
   });
 };
 
+// ============================================================================
+// 🚨🚨 --prove : ②の「根拠つきで通す」が **緩んでいない事** を、わざと壊して確かめる。
+// ----------------------------------------------------------------------------
+// 2026-08-30 に「根拠つきで通す」を雑に作って見張りを緩めた事故(WTG-010)が起きている。
+// 同じ轍を踏まないため、通す条件を1つずつ壊して **赤になる事** を毎回機械で確かめる。
+//   ① 受け止め役から catch を消す
+//   ② 元の Promise を返さなくする
+//   ③ 人に届ける道を消す(console だけにする)
+//   ④ 受け止め役の外に投げっぱなしを1つ置く
+//   ⑤ 同じ部品を2か所に置く(配線が1本に決まらない)
+// ⚠ 通る見本(①〜⑤の元)も一緒に見る。「全部赤」でも合格に見える物差しにしない。
+// ============================================================================
+const PROVE_BASE = `
+const saveData = async (col, id, data) => {
+  try { await DB.save(col, id, data); }
+  catch (e) { console.error(e); setErrorMsg(e.message); rememberFailed({ col, id, data }); throw e; }
+};
+const WorkModal = ({ onSave, onClose }) => {
+  const go = () => { onSave({ tasks: { 'a-0': { duration: 1 } } }); };
+  return <button onClick={go}>go</button>;
+};
+const App = () => {
+  return <div>
+    <WorkModal onSave={(u) => { const p = saveData('lots', lotId, u); p.catch((e) => { console.error(e); }); return p; }} onClose={() => setOpen(false)} />
+  </div>;
+};
+`;
+const PROVE_CASES = [
+  { name: '見本(通るはず)', want: 0, src: PROVE_BASE },
+  { name: '① 受け止め役から catch を消す', want: 1,
+    src: PROVE_BASE.replace('p.catch((e) => { console.error(e); });', '') },
+  { name: '② 元の Promise を返さなくする', want: 1,
+    src: PROVE_BASE.replace('return p;', 'return null;') },
+  { name: '③ 人に届ける道を消す', want: 1,
+    src: PROVE_BASE.replace('setErrorMsg(e.message); rememberFailed({ col, id, data }); ', '') },
+  { name: '④ 受け止め役の外に投げっぱなしを置く', want: 1,
+    src: PROVE_BASE.replace('const App = () => {',
+      'const Stray = ({ onSave }) => { onSave({ tasks: { \'b-0\': { duration: 2 } } }); return null; };\nconst App = () => {')
+      .replace('</div>;', '<Stray onSave={saveData} /></div>;') },
+  { name: '⑤ 同じ部品を2か所に置く', want: 1,
+    src: PROVE_BASE.replace('</div>;', '<WorkModal onSave={saveData} onClose={() => setOpen(false)} /></div>;') },
+];
+
+export const prove = ({ quiet = false } = {}) => {
+  let ng = 0;
+  const rows = [];
+  for (const c of PROVE_CASES) {
+    const { findings, stats } = analyzeSources([{ file: 'src/App.jsx', src: c.src }], {});
+    const errs = findings.filter((f) => f.group === 2 && f.level === 'error');
+    const ok = errs.length === c.want;
+    if (!ok) ng++;
+    rows.push({ name: c.name, want: c.want, got: errs.length, passed: stats.passedWiring.length, ok,
+      ids: [...new Set(errs.map((f) => f.id))].join(',') });
+  }
+  if (!quiet) {
+    console.log('\n🚨 ②「根拠つきで通す」を わざと壊して確かめる(--prove)');
+    for (const r of rows) {
+      console.log(`   ${r.ok ? '✅' : '❌'} ${r.name.padEnd(34)} 危ない所 ${r.got}件(期待 ${r.want}件)`
+        + ` / 通した ${r.passed}件${r.ids ? ` [${r.ids}]` : ''}`);
+    }
+    console.log(ng ? `\n❌ ${ng}件が期待どおりになりませんでした。**この通し方は緩んでいます**` : '\n✅ 4通り全部わざと壊して赤になりました(通す条件は1つも余分に通していません)');
+  }
+  return ng === 0;
+};
+
 const main = async (args) => {
+  if (args.includes('--prove')) return prove() ? 0 : 1;
   const root = path.resolve(process.env.APP_ROOT || args.find((a) => a.startsWith('--root='))?.slice(7) || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 
   if (args.includes('--selftest')) {
@@ -881,6 +1098,14 @@ const main = async (args) => {
       }
     } catch (e) {
       console.error('❌ 見張り自身の試験が読み込めません:', e.message);
+      return 1;
+    }
+    // 🚨🚨 ②の「根拠つきで通す」が緩んでいないかも、**毎回** わざと壊して確かめる。
+    //   ここを --prove だけにすると、出荷ゲートは通し方が緩んでも気づけない
+    //   (2026-08-30 の WTG-010 が、まさに「誰も壊して試さない通し方」だった)。
+    if (!prove({ quiet: true })) {
+      console.error('❌ ②の「根拠つきで通す」が緩んでいます。実コードの判定はしません'
+        + '(node scripts/verify-save-safety.mjs --prove で どれが通り抜けたか見えます)');
       return 1;
     }
   }
@@ -919,6 +1144,17 @@ const main = async (args) => {
       ? (stats.writesLotRecords ? '' : '（対象外: このアプリは作業の記録を書きません）')
       : '';
     console.log(`${e ? '❌' : (w ? '⚠' : '✅')} ${GROUP_TITLE[g]} … ${e ? `危ない所 ${e}件` : '0件'}${w ? ` / 名指し ${w}件` : ''} ${head}`);
+    // ⚠ 通した物を黙って消さない。**どこを・なぜ通したか** を必ず出す。
+    if (g === 2 && stats.passedWiring.length) {
+      console.log(`   ✅ 根拠つきで通した ${stats.passedWiring.length}件（--prove がわざと壊して確かめています）`);
+      const byWhy = new Map();
+      for (const p of stats.passedWiring) { if (!byWhy.has(p.why)) byWhy.set(p.why, []); byWhy.get(p.why).push(p); }
+      for (const [why, list] of byWhy) {
+        console.log(`      根拠: ${why}`);
+        list.slice(0, CAP).forEach((p) => console.log(`      ・${p.file}:${p.line}  ${p.code}`));
+        if (list.length > CAP) console.log(`      …他 ${list.length - CAP}件（SAVE_SAFETY_MAX_LINES=999 で全部出ます）`);
+      }
+    }
     // ⚠ 種類(ID)だけでまとめない。**重さ(❌/⚠)が違う物を1つの見出しに混ぜると件数が合わなくなる**
     //   (休眠ファイルの分は ⚠ に落としてあるため)。理由が1通りでない時は1件ずつ理由を書く。
     const byId = new Map();

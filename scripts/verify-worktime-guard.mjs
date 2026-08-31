@@ -216,6 +216,164 @@ export const analyze = (rawSrc, file = '(memory)') => {
   // --- ② 関所を迂回して保管庫へ直接書いている所 ----------------------------
   //   例: restoreAllFromBackup が DATA(db).save(APP_DATA_ID, col, docId, ...) を直に呼ぶ。
   //   col が変数でも、その近くで 'lots' を扱っていれば対象になりうる。
+  //
+  // 🚨🚨【黙らせない・根拠つきで通す】(2026-08-31)
+  //   復元(restoreAllFromBackup)の「ロット以外を直に書く行」は、**col が変数** で、
+  //   lots は先に関所(saveData)を通して continue し、直前に
+  //   `if (col === 'lots') throw …` の番線が張ってある = この行にロットは来ない。
+  //   ⚠名前や一覧表(allowlist)で通さない。**その番線が実コードに在る事を毎回読んで**通し、
+  //     何を根拠に通したかを必ず出力する。番線を消せば即 ❌ に戻る。
+  //   ⚠'lots' の直書き(.save(ns, 'lots', …))は番線が在っても絶対に通さない。
+  //   ⚠番線と書き込みの間で col を入れ替えていたら通さない(番線が守っていない)。
+  //
+  // 🚨🚨【あら探しで実測・見張りが緩んでいた】(2026-08-31)
+  //   手前を **文字数(1200文字)だけ** で見ていたので、番線の **支配が届かない所** の
+  //   直接書き込みまで緑で通っていた。実測で次の2形とも通過した:
+  //     (a) 番線の後に **別の関数** を置く
+  //         const rawSave = async (col, id, data) => { await DATA(db).save(ns, col, id, data); };
+  //     (b) 番線の後に **別のループ** を置く
+  //         for (const [col, arr] of extraCols) { await DATA(db).save(ns, col, raw.id, raw); }
+  //   どちらの col も 番線が見た col とは **別物**。見張りを緩めたまま出すのが一番危ない。
+  //   → 通す条件を2つに増やした:
+  //     ① 番線と書き込みが **同じ最内関数本体** に居る事(波括弧を歩いて確かめる。
+  //        間に `=>` や `function(…)` の境界が開いていたら通さない)
+  //     ② 番線と書き込みの間で colVar が **束縛し直されていない** 事
+  //        (代入 / const・let・var / 分割代入 / for の束縛 / 引数 / catch のどれも「別物」)
+  //
+  // 🚨🚨【2回目のあら探しで実測・まだ緩かった】(2026-09-01)
+  //   ①②を入れた後の見張りに、次の3形を食わせたら **3形とも緑で通った**:
+  //     (c) 番線が if の枝の中   `if (strict) { if (col === 'lots') throw …; }`
+  //         → strict が偽なら ロットはそのまま下の直接書き込みへ届く
+  //     (d) 番線を try が握り潰す `try { if (col === 'lots') throw …; } catch (e) {}`
+  //         → 番線は在るのに 1件も止まらない
+  //     (e) 文字列の中の番線     `const memo = "if (col === 'lots') throw …";`
+  //         → 動かない文字を根拠に通していた
+  //   「同じ関数に在る」だけでは足りない。**同じ流れ(この書き込みを必ず通る道)に居る事**が要る。
+  //   → 通す条件を さらに3つ足した:
+  //     ③ 番線が、書き込みを囲む波括弧の **どれかの中に直に** 居る事
+  //        (=書き込みへ行くには必ずその番線を踏む。枝の中・try の中は通さない)
+  //     ④ 番線が **文字列の中でない** 事
+  //     ⑤ 通せなかった時は「どんな番線を、なぜ数えなかったか」を人に言う
+  const bypassPassed = [];
+  /**
+   * その位置を囲む **一番内側の関数の本体** の `{` の位置(無ければ -1 = 一番外側)。
+   * ⚠ if / for / while / switch / catch / do の波括弧は「同じ関数の中」なので飛ばす。
+   *   `=>` や `名前(…)` の波括弧に当たった所で止める = そこが関数の境界。
+   */
+  const enclosingFunctionOpen = (at) => {
+    let depth = 0;
+    for (let i = at; i >= 0; i--) {
+      const c = src[i];
+      if (c === '}') { depth++; continue; }
+      if (c !== '{') continue;
+      if (depth > 0) { depth--; continue; }
+      // 深さ0の `{` = この位置を囲むブロックの開き。関数の本体かどうかを直前の形で見る。
+      let k = i - 1;
+      while (k >= 0 && /\s/.test(src[k])) k--;
+      if (k >= 1 && src[k] === '>' && src[k - 1] === '=') return i;     // … => {
+      if (k >= 0 && src[k] === ')') {
+        let d = 0, j = k;
+        for (; j >= 0; j--) {
+          if (src[j] === ')') d++;
+          else if (src[j] === '(') { d--; if (d === 0) break; }
+        }
+        let p = j - 1;
+        while (p >= 0 && /\s/.test(src[p])) p--;
+        let e = p;
+        while (e >= 0 && /[\w$]/.test(src[e])) e--;
+        const word = src.slice(e + 1, p + 1);
+        if (!/^(if|for|while|switch|catch|do)$/.test(word)) return i;   // function / メソッド / 名前付き
+      }
+      // オブジェクトリテラルや if/for/try の波括弧 → まだ関数の境界ではない。外側へ続ける。
+    }
+    return -1;
+  };
+  /** その位置を囲む **一番内側の波括弧** の `{` の位置。関数でもブロックでも区別しない。無ければ -1。 */
+  const innerBlockOpen = (at) => {
+    let depth = 0;
+    for (let i = at; i >= 0; i--) {
+      const c = src[i];
+      if (c === '}') { depth++; continue; }
+      if (c !== '{') continue;
+      if (depth > 0) { depth--; continue; }
+      return i;
+    }
+    return -1;
+  };
+  /**
+   * 書き込みを囲む波括弧の連なり(内側 → 外側。最後の -1 = ファイルの直下)。
+   * ⚠番線がこの **どれかの中に直に** 居る時だけ「その書き込みへ行くには必ず番線を踏む」と言える。
+   *   if の枝の中や try の中の番線は ここに入らない = 支配していない。
+   */
+  const blockChain = (at) => {
+    const chain = [];
+    for (let cur = at; ;) {
+      const o = innerBlockOpen(cur);
+      if (o < 0) break;
+      chain.push(o);
+      cur = o - 1;
+    }
+    chain.push(-1);
+    return chain;
+  };
+  /**
+   * その位置が **文字列の中** か(同じ行で引用符が閉じていない)。
+   * ⚠動かない文字を「番線が在る」の根拠にしない為。コメントは既に stripComments で消えている。
+   */
+  const insideStringAt = (at) => {
+    const head = src.slice(src.lastIndexOf('\n', at - 1) + 1, at);
+    const odd = (q) => {
+      let n = 0;
+      for (let i = 0; i < head.length; i++) {
+        if (head[i] === '\\') { i++; continue; }
+        if (head[i] === q) n++;
+      }
+      return n % 2 === 1;
+    };
+    return odd("'") || odd('"') || odd('`');
+  };
+  /** 番線と書き込みの間で colVar が束縛し直されていれば、その理由を返す(番線が守っていない)。 */
+  const rebindsBetween = (between, colVar) => {
+    const V = `(?<![.\\w$])${colVar}(?![\\w$])`;
+    const cases = [
+      [new RegExp(`${V}\\s*=(?!=)`), '代入で入れ替えている'],
+      [new RegExp(`(?<![.\\w$])(?:const|let|var)\\s+${colVar}(?![\\w$])`), '同じ名前で宣言し直している'],
+      [new RegExp(`(?<![.\\w$])(?:const|let|var)\\s*[[{][^=;]{0,300}?${V}`), '分割代入(for の束縛を含む)で束縛し直している'],
+      [new RegExp(`(?<![.\\w$])function[\\w\\s$]*\\([^)]{0,300}?${V}`), '関数の引数で束縛し直している'],
+      [new RegExp(`\\([^()]{0,300}?${V}[^()]{0,300}?\\)\\s*=>`), '別の関数の引数で束縛し直している'],
+      [new RegExp(`${V}\\s*=>`), '別の関数の引数で束縛し直している'],
+      [new RegExp(`(?<![.\\w$])catch\\s*\\([^)]{0,120}?${V}`), 'catch の引数で束縛し直している'],
+    ];
+    for (const [re, why] of cases) if (re.test(between)) return why;
+    return null;
+  };
+  /** @returns {{ok:true,line:number,code:string}|{ok:false,why:string}} */
+  const lotsRejectBefore = (writeAt, colVar) => {
+    // ① 書き込みを囲む一番内側の関数本体。番線はこの中に無ければ「支配が届かない」。
+    const fnAt = enclosingFunctionOpen(writeAt);
+    const from = fnAt >= 0 ? fnAt : 0;
+    // ③ 書き込みを囲む波括弧の連なり。番線はこのどれかの中に直に居なければ「同じ流れ」ではない。
+    const chain = new Set(blockChain(writeAt));
+    const win = src.slice(from, writeAt);
+    const re = new RegExp(`if\\s*\\(\\s*${colVar}\\s*===\\s*['"]lots['"]\\s*\\)\\s*throw`, 'g');
+    let g = null, mm, skipped = '';
+    while ((mm = re.exec(win))) {
+      const at = from + mm.index;
+      // 同じ最内関数本体に居る番線だけを採る(間に別の関数が開いていたら別物)。
+      if (enclosingFunctionOpen(at) !== fnAt) { skipped = '別の関数の中に在った'; continue; }
+      // if の枝の中 / try の中の番線は、この書き込みへ行く道を塞いでいない。
+      if (!chain.has(innerBlockOpen(at))) { skipped = 'if や try の枝の中で、この書き込みを必ず通る道に無かった'; continue; }
+      if (insideStringAt(at)) { skipped = '文字列の中で、動かない字だった'; continue; }
+      g = mm;                                              // 一番近い(最後の)番線を採る
+    }
+    if (!g) return { ok: false, why: `${colVar} を止める番線が この書き込みと同じ流れに無い${skipped ? `。見つけた番線は ${skipped}` : ''}` };
+    // ② 番線の後で col を束縛し直していたら、番線はこの書き込みを守っていない。
+    const between = win.slice(g.index + g[0].length);
+    const rebind = rebindsBetween(between, colVar);
+    if (rebind) return { ok: false, why: `番線の後で ${colVar} を${rebind}` };
+    const gAt = from + g.index;
+    return { ok: true, line: lineOf(src, gAt), code: (src.split('\n')[lineOf(src, gAt) - 1] || '').trim().slice(0, 160) };
+  };
   const lines = src.split('\n');
   lines.forEach((ln, i) => {
     const direct = ln.match(/\.save\s*\(\s*[A-Za-z_$][\w$]*\s*,\s*(?:['"]lots['"]|col|colName|collection)\s*,/);
@@ -223,8 +381,19 @@ export const analyze = (rawSrc, file = '(memory)') => {
     // 関所の中の書き込みは迂回ではない(関所そのものの是非は WTG-001 が言う。
     // ⚠二重に出すと「直す所」が水増しされ、本当の迂回が埋もれる)
     if (insideAnyChoke(i, direct.index)) return;
+    // col が **変数** の時だけ、番線(if (col === 'lots') throw)を読む。'lots' の直書きは対象外。
+    const colVar = (direct[0].match(/,\s*(col|colName|collection)\s*,$/) || [])[1] || null;
+    let why = '';
+    if (colVar) {
+      const guard = lotsRejectBefore((lineStart[i] ?? 0) + direct.index, colVar);
+      if (guard.ok) {
+        bypassPassed.push({ file, line: i + 1, code: ln.trim().slice(0, 160), guardLine: guard.line, guardCode: guard.code });
+        return;
+      }
+      why = guard.why ? `（${guard.why}）` : '';
+    }
     add('WTG-010', 'error', i + 1,
-      '保存の関所を通さずに保管庫へロットを直接書いている。容量チェックも見張りも効かない', ln);
+      `保存の関所を通さずに保管庫へロットを直接書いている。容量チェックも見張りも効かない${why}`, ln);
   });
 
   // --- ③ 空のマップを ロットの payload に入れている所 -----------------------
@@ -296,6 +465,8 @@ export const analyze = (rawSrc, file = '(memory)') => {
   return {
     file, findings, exposure,
     guardHelpers: helpers,
+    // 根拠つきで通した「関所の外の直接書き込み」。⚠黙って通さず、必ず人にも見せる。
+    bypassPassed,
     chokes: chokes.map((c) => ({ name: c.name, line: c.line, guarded: passesGuard(c.body) })),
   };
 };
@@ -396,6 +567,150 @@ const lotData = { id, orderNo, steps: finalSteps, tasks: editingLot ? editingLot
   say(!tids.includes('WTG-020'), 'プロパティ参照を「空マップの直書き」と言わない');
   say(tids.includes('WTG-021'), `三項で空マップに落ちる形は捕まえる (${tids.join(',') || 'なし'})`);
 
+  // 🚨🚨 2026-08-31 に足した所: 「関所の外の直接書き込み」を **番線を読んで** 通す形。
+  //   前の担当が「黙らせるのは筋違い」と残した WTG-010(復元のロット以外を書く行)の直し。
+  //   ⚠一覧表(allowlist)や名前では通さない。実コードに `if (col === 'lots') throw` が
+  //     在る時だけ通し、根拠を必ず出す。**番線を消したら赤に戻る**事を毎回確かめる。
+  const TRIPWIRE = `
+const saveData = async (col, id, rawData) => { if (col === 'lots') assertSafeLotSave(cur, rawData); await DATA(db).save(ns, col, id, rawData); };
+const restore = async (parsed) => {
+  for (const [col, arr] of cols) {
+    for (const raw of arr) {
+      if (col === 'lots') { await saveData('lots', raw.id, raw); continue; }
+      if (col === 'lots') throw new Error('復元の不具合: ロットは保存の関所しか通らない道になっています');
+      await DATA(db).save(APP_DATA_ID, col, raw.id, raw);
+    }
+  }
+};
+`;
+  const trip = analyze(TRIPWIRE, '(番線あり)');
+  say(trip.findings.filter((f) => f.id === 'WTG-010').length === 0 && trip.bypassPassed.length === 1,
+    `番線(if (col === 'lots') throw)が手前に在る直接書き込みは、根拠つきで通す (通した ${trip.bypassPassed.length}件 / WTG-010 ${trip.findings.filter((f) => f.id === 'WTG-010').length}件)`);
+  say(!!(trip.bypassPassed[0] && trip.bypassPassed[0].guardLine && trip.bypassPassed[0].guardCode),
+    '通した根拠(番線の行と中身)を人に見せる形で持っている');
+
+  const tripGone = analyze(TRIPWIRE.replace(/ *if \(col === 'lots'\) throw new Error\([^\n]*\n/, ''), '(番線を消した)');
+  say(tripGone.findings.some((f) => f.id === 'WTG-010'),
+    '🚨 わざと番線を消したら ❌ に戻る(黙って通り続けない)');
+
+  const tripLiteral = analyze(TRIPWIRE.replace("await DATA(db).save(APP_DATA_ID, col, raw.id, raw);", "await DATA(db).save(APP_DATA_ID, 'lots', raw.id, raw);"), "('lots' の直書き)");
+  say(tripLiteral.findings.some((f) => f.id === 'WTG-010'),
+    "🚨 'lots' の直書きは、番線が在っても絶対に通さない");
+
+  const tripSwap = analyze(TRIPWIRE.replace('await DATA(db).save(APP_DATA_ID, col, raw.id, raw);',
+    "col = 'lots'; await DATA(db).save(APP_DATA_ID, col, raw.id, raw);"), '(番線の後で col を入れ替え)');
+  say(tripSwap.findings.some((f) => f.id === 'WTG-010'),
+    '🚨 番線の後で col を入れ替えていたら通さない(番線が守っていない)');
+
+  // 🚨🚨 2026-08-31(あら探しで実測): 手前の文字数だけで見ていた頃は、
+  //   番線の **支配の外** に在る直接書き込みが2形とも緑で通っていた。
+  //   ⚠ここが赤にならない限り、この見張りは「番線を読んでいる」と言えない。
+  const tripOtherFn = analyze(TRIPWIRE + `
+const rawSave = async (col, id, data) => { await DATA(db).save(APP_DATA_ID, col, id, data); };
+`, '(番線の外・別の関数)');
+  say(tripOtherFn.findings.some((f) => f.id === 'WTG-010') && tripOtherFn.bypassPassed.length === 1,
+    `🚨 番線の後に置いた **別の関数** の直接書き込みは通さない (WTG-010 ${tripOtherFn.findings.filter((f) => f.id === 'WTG-010').length}件 / 通した ${tripOtherFn.bypassPassed.length}件)`);
+
+  const tripOtherLoop = analyze(TRIPWIRE + `
+const restoreExtra = async (extraCols) => {
+  for (const [col, arr] of extraCols) {
+    for (const raw of arr) {
+      await DATA(db).save(APP_DATA_ID, col, raw.id, raw);
+    }
+  }
+};
+`, '(番線の外・別のループ)');
+  say(tripOtherLoop.findings.some((f) => f.id === 'WTG-010') && tripOtherLoop.bypassPassed.length === 1,
+    `🚨 番線の後に置いた **別のループ** の直接書き込みは通さない (WTG-010 ${tripOtherLoop.findings.filter((f) => f.id === 'WTG-010').length}件 / 通した ${tripOtherLoop.bypassPassed.length}件)`);
+
+  // ⚠同じ関数の中で col を束縛し直した第2ループも「番線の支配外」。
+  const tripSecondLoop = analyze(`
+const saveData = async (col, id, rawData) => { if (col === 'lots') assertSafeLotSave(cur, rawData); await DATA(db).save(ns, col, id, rawData); };
+const restore = async (parsed) => {
+  for (const [col, arr] of cols) {
+    if (col === 'lots') throw new Error('復元の不具合: ロットは保存の関所しか通らない道になっています');
+    await DATA(db).save(APP_DATA_ID, col, arr.id, arr);
+  }
+  for (const [col, arr] of extraCols) {
+    await DATA(db).save(APP_DATA_ID, col, arr.id, arr);
+  }
+};
+`, '(同じ関数の中で束縛し直した第2ループ)');
+  say(tripSecondLoop.findings.filter((f) => f.id === 'WTG-010').length === 1 && tripSecondLoop.bypassPassed.length === 1,
+    `🚨 同じ関数でも col を束縛し直した後の書き込みは通さない (WTG-010 ${tripSecondLoop.findings.filter((f) => f.id === 'WTG-010').length}件 / 通した ${tripSecondLoop.bypassPassed.length}件)`);
+
+  // ⚠負の対照: 番線と書き込みの間に **ただの if / for の波括弧** が在るだけなら通す
+  //   (本物の復元コードがこの形。ここを落とすと「直せない赤」を出す事になる)
+  const tripBlocks = analyze(`
+const saveData = async (col, id, rawData) => { if (col === 'lots') assertSafeLotSave(cur, rawData); await DATA(db).save(ns, col, id, rawData); };
+const restore = async (parsed) => {
+  for (const [col, arr] of cols) {
+    if (!Array.isArray(arr)) continue;
+    if (col === 'lots') throw new Error('復元の不具合: ロットは保存の関所しか通らない道になっています');
+    for (const raw of arr) {
+      if (raw && raw.id) {
+        try { note(raw); } catch (e) { console.error(e); }
+        await DATA(db).save(APP_DATA_ID, col, raw.id, raw);
+      }
+    }
+  }
+};
+`, '(間に if/for/try の波括弧)');
+  say(tripBlocks.findings.filter((f) => f.id === 'WTG-010').length === 0 && tripBlocks.bypassPassed.length === 1,
+    `負の対照: 間に if/for/try の波括弧が在るだけなら通す (WTG-010 ${tripBlocks.findings.filter((f) => f.id === 'WTG-010').length}件 / 通した ${tripBlocks.bypassPassed.length}件)`);
+
+  // 🚨🚨 2026-09-01(2回目のあら探しで実測): 「同じ関数に在る」だけでは まだ緩かった。
+  //   次の3形は 番線が **この書き込みを必ず通る道に無い**(または動かない字)のに、
+  //   直す前は3形とも 緑で通っていた。ここが赤にならない限り、通してよい根拠にならない。
+  const HEAD = `
+const saveData = async (col, id, rawData) => { if (col === 'lots') assertSafeLotSave(cur, rawData); await DATA(db).save(ns, col, id, rawData); };
+`;
+  const tripCond = analyze(HEAD + `
+const restore = async (parsed) => {
+  for (const [col, arr] of cols) {
+    for (const raw of arr) {
+      if (strict) { if (col === 'lots') throw new Error('ロットは保存の関所しか通らない'); }
+      await DATA(db).save(APP_DATA_ID, col, raw.id, raw);
+    }
+  }
+};
+`, '(番線が if の枝の中)');
+  say(tripCond.findings.some((f) => f.id === 'WTG-010') && tripCond.bypassPassed.length === 0,
+    `🚨 番線が if の枝の中(偽ならロットが素通り)なら通さない (WTG-010 ${tripCond.findings.filter((f) => f.id === 'WTG-010').length}件 / 通した ${tripCond.bypassPassed.length}件)`);
+
+  const tripSwallow = analyze(HEAD + `
+const restore = async (parsed) => {
+  for (const [col, arr] of cols) {
+    for (const raw of arr) {
+      try { if (col === 'lots') throw new Error('ロットは保存の関所しか通らない'); } catch (e) { console.error(e); }
+      await DATA(db).save(APP_DATA_ID, col, raw.id, raw);
+    }
+  }
+};
+`, '(番線を try が握り潰す)');
+  say(tripSwallow.findings.some((f) => f.id === 'WTG-010') && tripSwallow.bypassPassed.length === 0,
+    `🚨 番線を try/catch が握り潰していたら通さない (WTG-010 ${tripSwallow.findings.filter((f) => f.id === 'WTG-010').length}件 / 通した ${tripSwallow.bypassPassed.length}件)`);
+
+  const tripInStr = analyze(HEAD + `
+const restore = async (parsed) => {
+  for (const [col, arr] of cols) {
+    const memo = "if (col === 'lots') throw new Error('これは説明の字')";
+    await DATA(db).save(APP_DATA_ID, col, arr.id, arr);
+  }
+};
+`, '(文字列の中の番線)');
+  say(tripInStr.findings.some((f) => f.id === 'WTG-010') && tripInStr.bypassPassed.length === 0,
+    `🚨 文字列の中の番線(動かない字)を根拠にしない (WTG-010 ${tripInStr.findings.filter((f) => f.id === 'WTG-010').length}件 / 通した ${tripInStr.bypassPassed.length}件)`);
+
+  say(/同じ流れ/.test((analyze(HEAD + `
+const restore = async (parsed) => {
+  for (const [col, arr] of cols) {
+    await DATA(db).save(APP_DATA_ID, col, arr.id, arr);
+  }
+};
+`, '(番線なし)').findings.find((f) => f.id === 'WTG-010') || {}).why || ''),
+    '通さなかった時、その理由を人の言葉で言う');
+
   const after = analyze(AFTER_FIX, '(直した後)');
   say(after.findings.length === 0, `直した後: 指摘ゼロになる (実際 ${after.findings.length}件: ${after.findings.map((f) => f.id).join(',')})`);
   say(after.chokes.every((c) => c.guarded), '直した後: 関所が見張りを通っている');
@@ -437,6 +752,18 @@ const main = (args) => {
     return 0;
   }
 
+  // 🚨🚨 多層目(2026-09-01): 「根拠つきで通した所」の **件数を固定** する。
+  //   番線を読んで通す道が在る以上、番線を1本足せば新しい裏道を作れてしまう。
+  //   いま在ってよいのは **復元(restoreAllFromBackup)の 1件だけ**。
+  //   増えても減っても止める:
+  //     増えた → 新しい裏道。番線が在っても、人が中身を見るまで通さない。
+  //     減った → 道が変わったのか、**見張りが読めなくなった**のか区別が付かない。
+  //              「黙って見張りが止まる」を作らない為、これも人に確かめてもらう。
+  //   ⚠ファイルを指定して走らせた時(部分的に見る時)は数えない。
+  const BYPASS_EXPECTED = 1;
+  const pinBypass = !args.filter((a) => !a.startsWith('--')).length;
+  const bypassAll = [];
+
   let errors = 0;
   let exposureTotal = 0;
   for (const f of files) {
@@ -456,10 +783,33 @@ const main = (args) => {
       console.log('   ✅ 危ない所は見つかりませんでした');
     }
 
+    // 🚨黙って通さない。根拠つきで通した物は、その根拠ごと必ず出す(番線を消せば ❌ に戻る)。
+    if (r.bypassPassed && r.bypassPassed.length) {
+      bypassAll.push(...r.bypassPassed);
+      console.log(`   ── 関所の外の直接書き込みで、番線を読んで通した所 ${r.bypassPassed.length}件 ──`);
+      r.bypassPassed.forEach((x) => {
+        console.log(`      ✅ ${x.file}:${x.line}  ${x.code}`);
+        console.log(`         根拠: ${x.file}:${x.guardLine} に \`${x.guardCode}\` が在り、この行に lots は来ない`);
+      });
+    }
+
     if (r.exposure.length) {
       console.log(`   ── tasks のマップ全体を送っている所 ${r.exposure.length}件（関所が見張りを通っていれば全部守られる） ──`);
       r.exposure.forEach((x) => console.log(`      ・${x.file}:${x.line}  ${x.code}`));
       exposureTotal += r.exposure.length;
+    }
+    console.log('');
+  }
+
+  if (pinBypass && bypassAll.length !== BYPASS_EXPECTED) {
+    errors++;
+    console.log(`❌ 関所の外の直接書き込みで「番線を読んで通した所」が ${BYPASS_EXPECTED}件 → ${bypassAll.length}件 に変わりました。`);
+    if (bypassAll.length > BYPASS_EXPECTED) {
+      console.log('   🚨 番線が在っても、増えた分は人が中身を見るまで通しません(番線を1本足せば裏道が作れる為)。');
+      bypassAll.forEach((x) => console.log(`      ・${x.file}:${x.line}  ${x.code}`));
+    } else {
+      console.log('   🚨 復元の道が変わったのか、見張りが読めなくなったのかが区別できません。');
+      console.log('     どちらかを人が確かめてから、この見張りの BYPASS_EXPECTED を直してください。');
     }
     console.log('');
   }

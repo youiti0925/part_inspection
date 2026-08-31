@@ -78,6 +78,8 @@ export const COLLECTION_AREA = Object.freeze({
   // --- 中身が大きいファイル(1MB上限の対策で本体から外へ出したもの) -----------
   lot_images: 'attachments',
   help_images: 'attachments',
+  // 📝🖼 メモ・お知らせの写真(1件=1枚。2026-08-31 SS-701 の直しで新設。domain/noteImages.js)
+  note_images: 'attachments',
   work_standard_files: 'attachments',
   accessory_scan_images: 'attachments',
   video_recipes: 'attachments',
@@ -151,6 +153,8 @@ export const COLLECTION_APPS = Object.freeze({
   config: ['final', 'product', 'parts', 'overview'],
   lot_images: ['final'],
   help_images: ['final', 'product', 'parts', 'overview'],
+  // 📝🖼 メモ・お知らせの写真の別置き(2026-08-31)。今は部品検査だけ(他アプリは写真の入力が無い/未移行)。
+  note_images: ['parts'],
   work_standard_files: ['final', 'product'],
   accessory_scan_images: ['final'],
   video_recipes: ['final', 'product'],

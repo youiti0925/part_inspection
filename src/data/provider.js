@@ -188,9 +188,14 @@ export const createFirebaseBackend = (db, fs) => {
     // @returns { rows, projected, fellBack }
     // ========================================================================
     getPageFields: async (ns, col, fields = [], opts = {}) => {
+      // ⚠fromCache: 全件読みへ落ちた時、その返事が **端末の控え(キャッシュ)だけ** だったかを言う。
+      //   通信が死んでいると SDK は黙って控えを返す。それを「全部読めた」と信じると
+      //   枚数・容量・「全部そろった」の判定が静かに嘘になる(2026-08-31 実機で発生)。
+      //   呼び元は fromCache:true を「読めなかった」として扱うこと。
       const full = async (why) => {
-        const rows = await fs.getDocs(queryRef(ns, col, { where: opts.where }));
-        return { rows: rows.docs.map(ROW_DOCID_WINS), projected: false, fellBack: why };
+        const snap = await fs.getDocs(queryRef(ns, col, { where: opts.where }));
+        return { rows: snap.docs.map(ROW_DOCID_WINS), projected: false, fellBack: why,
+          fromCache: !!(snap.metadata && snap.metadata.fromCache) };
       };
       if (!Array.isArray(fields) || fields.length === 0) return full('取る項目が指定されていません');
       if (typeof fetch !== 'function') return full('この端末に fetch がありません');
@@ -223,7 +228,8 @@ export const createFirebaseBackend = (db, fs) => {
       let body;
       try { body = await res.json(); } catch (e) { return full(`返事が読めません: ${e && e.message}`); }
       if (!Array.isArray(body)) return full('返事の形が違います');
-      return { rows: body.filter((x) => x && x.document).map((x) => decodeRestDoc(x.document)), projected: true, fellBack: '' };
+      // REST で読めた返事はサーバ本体の物(控えではない)。形をそろえる為 fromCache:false を明示する。
+      return { rows: body.filter((x) => x && x.document).map((x) => decodeRestDoc(x.document)), projected: true, fellBack: '', fromCache: false };
     },
 
     save: (ns, col, id, data, opts = {}) => fs.setDoc(docRef(ns, col, id), prep(data), { merge: opts.merge !== false }),

@@ -7,9 +7,9 @@
   "_数え方": "対象=src（npm run check と同じ範囲）。規則ごとに error/warning を数える。",
   "_合計": {
     "err": 195,
-    "warn": 55
+    "warn": 53
   },
-  "_更新日": "2026-08-30",
+  "_更新日": "2026-08-31",
   "rules": {
     "no-empty": {
       "err": 23,
@@ -29,7 +29,7 @@
     },
     "react-hooks/exhaustive-deps": {
       "err": 0,
-      "warn": 55
+      "warn": 53
     },
     "react-hooks/preserve-manual-memoization": {
       "err": 5,
