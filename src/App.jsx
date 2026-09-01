@@ -25125,9 +25125,14 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
     const next = cur === 'present' ? 'off' : cur === 'off' ? 'other' : 'present';
     const roster = { ...(settings?.workerRoster || {}) };
     const day = { ...(roster[ymd] || {}) };
-    if (next === 'present') delete day[worker]; else day[worker] = next;
-    if (Object.keys(day).length === 0) delete roster[ymd]; else roster[ymd] = day;
-    saveSettings && saveSettings({ workerRoster: roster });
+    // 🚨2026-09-01 清水さん「ボタン連打しても休みとか他が戻ってこないから、ミスしても直せないよ」
+    //   ⚠「出勤に戻す」= キーを消す操作。merge:true は**送らなかったキーを消さない**ので、
+    //     消す印(__deleteMapKeys)を明示しないと保存が素通りし、他工場のまま焼き付いて二度と戻せない。
+    //     最終検査は直っていたが、製品検査と部品検査に残っていた(片方だけ直す の逆)。
+    const dead = [];
+    if (next === 'present') { delete day[worker]; dead.push(['workerRoster', ymd, worker]); } else day[worker] = next;
+    if (Object.keys(day).length === 0) { delete roster[ymd]; dead.push(['workerRoster', ymd]); } else roster[ymd] = day;
+    saveSettings && saveSettings({ workerRoster: roster, ...(dead.length ? { __deleteMapKeys: dead } : {}) });
   };
   const DOW = ['日', '月', '火', '水', '木', '金', '土'];
   const cellOf = (s) => s === 'off' ? { t: '休', c: 'bg-slate-200 text-slate-500' } : s === 'other' ? { t: '他', c: 'bg-amber-100 text-amber-700' } : { t: '出', c: 'bg-emerald-100 text-emerald-700' };

@@ -69,13 +69,16 @@ const answers = ({ missing404 = true, control = true } = {}) => ({
 const makeTree = (name, opt = {}) => {
   const root = join(BASE, name);
   put(root, '.firebaserc', { projects: { default: SITE } });
-  put(root, 'firebase.json', {
-    hosting: {
-      public: 'dist',
-      predeploy: ['npm run build', 'node scripts/keep-old-assets.mjs'],
-      rewrites: opt.rewrites || GOOD_REWRITE,
-    },
-  });
+  // ⚠ noFirebaseJson … 出し先が読めない木。門の **順番** を試す為だけに使う（ng-19）。
+  if (!opt.noFirebaseJson) {
+    put(root, 'firebase.json', {
+      hosting: {
+        public: 'dist',
+        predeploy: ['npm run build', 'node scripts/keep-old-assets.mjs'],
+        rewrites: opt.rewrites || GOOD_REWRITE,
+      },
+    });
+  }
   put(root, 'package.json', {
     name,
     scripts: opt.scripts || { build: 'vite build', deploy: 'node scripts/deploy.mjs' },
@@ -131,14 +134,26 @@ const makeTree = (name, opt = {}) => {
  *   作り物の木には node_modules が無いので、既定では自前の読みの方が試される。
  *   **両方の道を試す**（片方しか試さないと、もう片方が腐る）。
  */
-const runVerify = (root, args = [], matcher = false) => {
+const runVerify = (root, args = [], matcher = false, extraEnv = null) => {
   const env = {
     ...process.env,
     DEPLOY_SAFETY_ROOT: root,
     DEPLOY_SAFETY_FIXTURE: join(root, 'fixture.json'),
     // 🔁 引き直しの待ち時間を 1ms×2回 にする（試験を待たせない。本物の既定は 300ms/1200ms）
     DEPLOY_SAFETY_RETRY_MS: '1,1',
+    // 🚨🚨 2026-09-01(その2): 上の2つ(ROOT / FIXTURE)は **本番の答えと見に行く先を差し替える**物。
+    //   本物のデプロイに渡すと「確かめた」と言いながら中身が作り物になる（実測で緑になった）。
+    //   → 見張り側は「この印が無ければ受け付けない」形にしたので、試験だけが印を付ける。
+    DEPLOY_SAFETY_SELFTEST: '1',
   };
+  // 🚨🚨 2026-09-01: ここは `DEPLOY_SETTLE_STEPS_MS: '1,1,1'` を渡していた。
+  //   その為に **「待ちを0にすると赤になる」を一度も試験できず**、しかも同じ環境変数を
+  //   本物のデプロイに渡せば見張りを丸ごと無力化できた（`DEPLOY_SETTLE_STEPS_MS=0 npm run deploy`）。
+  //   → 刻みは **本物の既定のまま**にする。作り物の答え(fixture)で測っている間は
+  //     見張り側が実際には眠らないので、試験は今まで通り速い。
+  //   ⚠ 環境から漏れ込むと試験の意味が消えるので、必ず消してから渡す。
+  delete env.DEPLOY_SETTLE_STEPS_MS;
+  if (extraEnv) for (const [k, v] of Object.entries(extraEnv)) env[k] = v;
   if (matcher) env.DEPLOY_SAFETY_MATCHER_FROM = join(HERE, '..');
   else delete env.DEPLOY_SAFETY_MATCHER_FROM;
   const r = spawnSync(process.execPath, [VERIFY, ...args], { env, encoding: 'utf8' });
@@ -324,6 +339,64 @@ const CASES = [
     mustHave: ['⚠ D6', '確かめられなかった'],
     mustNotHave: ['❌ D6'],
   },
+  // ---- ⏳ 反映待ちの試験3件（2026-09-01 追記。上の既存の試験は触っていない） ----
+  //   2026-08-31 実測: 司令塔③の「出した後の照合」が2回とも赤。中身は
+  //   「今まさに出した部品が404」＝ Firebase Hosting の反映待ちで、数十秒後は全部200だった。
+  //   正しく出せているのに赤が出る → 人が「どうせ反映待ち」と読み飛ばす → **本物の404を見逃す**。
+  //   🚨 だからと言って 404 を緑にはしない。**待って測り直して、それでも駄目なら赤**。
+  {
+    name: 'ok-9 … 1回目だけ404（反映待ち）→ 待って測り直したら200 なら緑。待っている事を画面に出す',
+    tree: () => makeTree('ok-9', {
+      fixtureExtra: {
+        [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        // 印なし: 1回目=404（まだ届いていない）→ 2回目から 200（seq は最後の答えを繰り返す）
+        // 印あり: 本体には先に届いている
+        [`${BASE_URL}/assets/index-OLD.js`]: { seq: [
+          { status: 404, contentType: 'text/html; charset=utf-8' },
+          { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        ] },
+        [`${BASE_URL}/assets/index-OLD.js#fresh`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+      },
+    }),
+    args: ['--after'],
+    want: { code: 0 },
+    mustHave: ['⏳ 反映を待っています', '✅ D6', '待ったら届いた'],
+    mustNotHave: ['❌'],
+  },
+  {
+    name: 'ng-11 … 在りもしない名前は、待って測り直しても 赤のまま（緑にしてはいけない）',
+    tree: () => makeTree('ng-11', {
+      fixtureExtra: {
+        [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        [`${BASE_URL}/assets/index-OLD.js`]: { status: 404, contentType: 'text/html; charset=utf-8' },
+      },
+    }),
+    args: ['--after'],
+    want: { code: 1 },
+    mustHave: ['⏳ 反映を待っています', '❌ D6', '/assets/index-OLD.js', '測り直しても駄目'],
+  },
+  {
+    // 🚨 手前(CDN)だけが古い形。本体には有るのに、現場と同じ聞き方では返らない。
+    //   2026-09-01 実測: 本番の404は max-age=31536000 + x-cache:HIT で、194秒 見張っても
+    //   MISS に戻らなかった＝**印を付けずに聞き直しても永久に変わらない**。
+    //   ここを緑にすると「本体に有るから大丈夫」と言って、端末が動かないまま出す事になる。
+    name: 'ng-12 … 本体には届いたのに現場の聞き方では404のままなら 赤（本体に有る＝緑 にしない）',
+    tree: () => makeTree('ng-12', {
+      fixtureExtra: {
+        [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        // 🚨 印なし(現場と同じ聞き方)は **ずっと404**。印あり(本体へ聞き直す)だけ 200。
+        //   ＝ 本番の手前(CDN)が「無い」を覚えたまま の形。2026-09-01 実測の通り、
+        //     印を付けずに聞き直しても 194秒 見張って一度も変わらなかった。
+        //   ⚠ この2本を分けておかないと、「印を付けずに聞き直す」作りに戻した時に
+        //     試験が **緑のまま** になる（実測で1回そうなった。だからここを分けている）。
+        [`${BASE_URL}/assets/index-OLD.js`]: { status: 404, contentType: 'text/html; charset=utf-8' },
+        [`${BASE_URL}/assets/index-OLD.js#fresh`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+      },
+    }),
+    args: ['--after'],
+    want: { code: 1 },
+    mustHave: ['❌ D6', '本体には届いている', '現場と同じ聞き方'],
+  },
   // ---- 🚨 D4 の判定の試験1件（2026-08-30 追記。上の既存の試験は触っていない） ----
   //   2026-08-29 に D4 の判定を「404 かつ 非HTML」→「危険なのは 200+HTML」へ訂正したのに、
   //   **その訂正を元に戻しても 17件とも緑のままだった**(2026-08-30 実測)。
@@ -339,6 +412,149 @@ const CASES = [
     want: { code: 0 },
     mustHave: ['✅ D4', '危険なのは 200+HTML'],
     mustNotHave: ['❌'],
+  },
+  // ---- 🚨🚨 反映待ちを環境変数で消せない事（2026-09-01 追記） ------------------
+  //   この日の わざと壊す試験で、次の2つが **どちらも緑** で通った(実測):
+  //     DEPLOY_SETTLE_STEPS_MS=0,0,0,0,0,0  … 6回 測り直すが 待ち0秒
+  //     DEPLOY_SETTLE_STEPS_MS=1            … 1回・1ミリ秒
+  //   しかも自己試験は「24件とも狙い通り。この見張りは信用してよい」と言い続けた。
+  //   ＝ 待つ直しが **コードを1文字も変えずに** 消せた。ここで下限を固定する。
+  {
+    name: 'ng-13 … 待ちを0秒にしたら 赤で止まる（環境変数で見張りを無力化できない）',
+    tree: () => makeTree('ng-13', {
+      fixtureExtra: {
+        [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        [`${BASE_URL}/assets/index-OLD.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+      },
+    }),
+    args: ['--after'],
+    env: { DEPLOY_SETTLE_STEPS_MS: '0,0,0,0,0,0' },
+    want: { code: 1 },
+    mustHave: ['反映を待つ刻みが、下限より短い', '1回の待ちが短すぎる', '待ちの合計が'],
+    // 🚨 止まったのに「照合した」と言っていない事（8/31 の嘘の合格と同じ形にしない）
+    mustNotHave: ['✅ 出してよい', '✅ D6'],
+  },
+  {
+    name: 'ng-14 … 待ち1ミリ秒×1回も 赤で止まる（回数の下限にも当たる）',
+    tree: () => makeTree('ng-14', {
+      fixtureExtra: {
+        [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        [`${BASE_URL}/assets/index-OLD.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+      },
+    }),
+    args: ['--after'],
+    env: { DEPLOY_SETTLE_STEPS_MS: '1' },
+    want: { code: 1 },
+    mustHave: ['反映を待つ刻みが、下限より短い', '測り直しが 1回'],
+    mustNotHave: ['✅ 出してよい', '✅ D6'],
+  },
+  {
+    name: 'ng-15 … 数字として読めない刻みも 赤（黙って既定に戻さない）',
+    tree: () => makeTree('ng-15', {
+      fixtureExtra: {
+        [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        [`${BASE_URL}/assets/index-OLD.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+      },
+    }),
+    args: ['--after'],
+    env: { DEPLOY_SETTLE_STEPS_MS: 'はやく' },
+    want: { code: 1 },
+    mustHave: ['数字の並びとして読めない'],
+    mustNotHave: ['✅ 出してよい', '✅ D6'],
+  },
+  {
+    // ⚠ 短くするのだけ止める。慎重にする側（長くする）は通す。
+    name: 'ok-10 … 待ちを **長く** するのは通る（急ぐ側だけ止めている）',
+    tree: () => makeTree('ok-10', {
+      fixtureExtra: {
+        [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        [`${BASE_URL}/assets/index-OLD.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+      },
+    }),
+    args: ['--after'],
+    env: { DEPLOY_SETTLE_STEPS_MS: '30000,30000,30000,30000,30000,30000' },
+    want: { code: 0 },
+    mustHave: ['✅ D6', '反映を待つ刻み: 30秒→30秒'],
+    mustNotHave: ['❌'],
+  },
+  {
+    // 🚨 環境変数を渡さない＝本物の既定(2/4/8/15/30/30秒)で走る。
+    //   自己試験がここを通るという事は、**本物のデプロイと同じ刻み**で判定の道を通した という事。
+    name: 'ok-11 … 何も渡さなければ 本物の既定(2/4/8/15/30/30秒)で走る',
+    tree: () => makeTree('ok-11', {
+      fixtureExtra: {
+        [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        [`${BASE_URL}/assets/index-OLD.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+      },
+    }),
+    args: ['--after'],
+    want: { code: 0 },
+    mustHave: ['反映を待つ刻み: 2秒→4秒→8秒→15秒→30秒→30秒', '合計 89秒', '✅ D6'],
+    mustNotHave: ['❌'],
+  },
+  // ---- 🚨🚨 試験用の切り替えを本物のデプロイで使えない事（2026-09-01 その2） ---------
+  //   待ちの下限を入れた直後に、**同じ形でもっと大きい穴**が実測で出た:
+  //     DEPLOY_SAFETY_FIXTURE=<自分で書いた見本> node scripts/verify-deploy-safety.mjs --after
+  //       → 「合格 7件 / 不合格 0件」終了値 0。本番へは1回も聞いていない（0.58秒）。
+  //   待ちを0にするのは「短くなる」だけだが、こちらは **答えそのものが作り物に化ける**。
+  //   ⚠ ここの試験は、runVerify が既定で付けている印(DEPLOY_SAFETY_SELFTEST=1)を
+  //     **わざと外して**走らせる。外した時に赤くならなければ、この直しは効いていない。
+  {
+    name: 'ng-16 … 試験の印が無ければ、作り物の答え(FIXTURE)は受け付けず 赤で止まる',
+    tree: () => makeTree('ng-16', {
+      fixtureExtra: {
+        [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        [`${BASE_URL}/assets/index-OLD.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+      },
+    }),
+    args: ['--after'],
+    env: { DEPLOY_SAFETY_SELFTEST: '' },
+    want: { code: 1 },
+    mustHave: ['試験用の切り替えが渡されています', 'DEPLOY_SAFETY_FIXTURE', 'DEPLOY_SAFETY_ROOT'],
+    // 🚨 止まったのに「照合した」と言っていない事
+    mustNotHave: ['✅ 出してよい', '✅ D6'],
+  },
+  {
+    name: 'ng-17 … 印が無い時は 引数の --base=… でも 赤（環境変数だけ塞いでも意味が無い）',
+    tree: () => makeTree('ng-17', {
+      fixtureExtra: {
+        [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        [`${BASE_URL}/assets/index-OLD.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+      },
+    }),
+    args: ['--after', '--base=https://example.invalid'],
+    env: { DEPLOY_SAFETY_SELFTEST: '' },
+    want: { code: 1 },
+    mustHave: ['試験用の切り替えが渡されています', '--base='],
+    mustNotHave: ['✅ 出してよい', '✅ D6'],
+  },
+  {
+    name: 'ng-18 … 印を真似た値(0)では通らない（1 ちょうどだけ）',
+    tree: () => makeTree('ng-18', {
+      fixtureExtra: {
+        [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+        [`${BASE_URL}/assets/index-OLD.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' },
+      },
+    }),
+    args: ['--after'],
+    env: { DEPLOY_SAFETY_SELFTEST: '0' },
+    want: { code: 1 },
+    mustHave: ['試験用の切り替えが渡されています'],
+    mustNotHave: ['✅ 出してよい', '✅ D6'],
+  },
+  {
+    // 🚨 順番の試験。この門を firebase.json の検査の **後ろ** に置いていた時は、
+    //   見に行く先を別のフォルダに向けると「hosting が無い」が先に赤になり、
+    //   この門は一度も通らなかった（赤は出るので、直したつもりで気付けない形）。
+    //   ＝ 赤かどうかだけでなく **どの理由で赤か** を見る。
+    name: 'ng-19 … 見に行く先が hosting の無いフォルダでも、先に「試験用の切り替え」で止まる（順番）',
+    tree: () => makeTree('ng-19', { noFirebaseJson: true }),
+    args: ['--pre'],
+    env: { DEPLOY_SAFETY_SELFTEST: '' },
+    want: { code: 1 },
+    mustHave: ['試験用の切り替えが渡されています', 'DEPLOY_SAFETY_ROOT'],
+    // 🚨 「hosting が無い」が先に出ていたら、この門は通っていない
+    mustNotHave: ['hosting が無い', '✅ 出してよい'],
   },
 ];
 
@@ -369,7 +585,7 @@ let skipped = 0;
 for (const c of CASES) {
   if (c.matcher && !HAS_MATCHER) { console.log(`⚪ ${c.name}（判定器が無いので飛ばした）`); skipped++; continue; }
   const root = c.tree();
-  const { code, out } = runVerify(root, c.args || [], !!c.matcher);
+  const { code, out } = runVerify(root, c.args || [], !!c.matcher, c.env || null);
   const miss = [];
   if (code !== c.want.code) miss.push(`終了コードが ${code}（欲しいのは ${c.want.code}）`);
   for (const m of c.mustHave || []) if (!out.includes(m)) miss.push(`出ていない文字: ${m}`);

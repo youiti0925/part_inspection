@@ -28,20 +28,110 @@
 //   node scripts/verify-read-budget.mjs --manifest <manifest.json>
 //
 // ⚠この数字は **見積り**。本物は Firebase コンソールの使用量。食い違ったら実測を信じる事。
-// ⚠この見張りは 4アプリ全部を見る。どのアプリから走らせても同じ判定になる。
+//
+// 🚨🚨 2026-09-01 の直し（**この見張りは、いま直している中身を1バイトも見ていなかった**）:
+//   ここには 4アプリぶんの `C:/Users/anrw3/…` という **決め打ちの道** が書いてあった。その為に
+//     ・作業用の写しに「絞り込みの無い読み口」を足しても **合格**（写しを見ていない）
+//     ・最終/製品/部品の src を丸ごと読めなくしても **合格**（決め打ちの本物を見ていた）
+//     ・GitHub の CI は Linux なので、この道は **中身と関わりなく必ず赤**
+//   → **走らせた場所（このファイルが入っているリポジトリ）の src を必ず見る** 形にした。
+//   → 他の3アプリは「近所を探して、在れば見る」。**無ければ赤ではなく「見ていない」と出す**。
+//      🚨 黙って合格にはしない。「4アプリ中 ◯アプリしか見ていません」を必ず画面に出す。
+//   → 自分の src が読めない時は **赤**（見張りが何も食っていない、が一番危ない）。
 // ============================================================================
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const FREE_READS_PER_DAY = 50_000;
 
-export const APPS = [
-  { key: 'final',   label: '最終検査(golden)', ns: 'final-inspection-v1',   dir: 'C:/Users/anrw3/.gemini/antigravity/playground/golden-meteoroid/src' },
-  { key: 'product', label: '製品検査',          ns: 'product-inspection-v1', dir: 'C:/Users/anrw3/product-inspection-app/src' },
-  { key: 'parts',   label: '部品検査',          ns: 'parts-inspection-v1',   dir: 'C:/Users/anrw3/parts-inspection-app/src' },
-  { key: 'overview',label: '司令塔③',           dir: 'C:/Users/anrw3/factory-overview-app/src', ns: 'overview-app-v1' },
+// 走らせた場所 = このファイルの1つ上（scripts/ の親）。Windows でも Linux でも同じに出る。
+export const SELF_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// ---------------------------------------------------------------------------
+// 4アプリの覚え書き。**道は書かない**（道は走らせた場所から探す）。
+//   pkg    … package.json の name（走らせた場所がどのアプリかを決める手がかり）
+//   where  … 近所を探す時の相対の置き場所（golden だけ深い所に居る）
+//   marker … そのフォルダが本当にそのアプリである事の目印。これが無い所は見に行かない。
+// ---------------------------------------------------------------------------
+export const APP_DEFS = [
+  { key: 'final',   label: '最終検査(golden)', ns: 'final-inspection-v1',   pkg: 'golden-meteoroid',
+    where: ['golden-meteoroid', '.gemini/antigravity/playground/golden-meteoroid'], marker: 'src/App.firebase.jsx' },
+  { key: 'product', label: '製品検査',          ns: 'product-inspection-v1', pkg: 'product-inspection-app',
+    where: ['product-inspection-app'], marker: 'src/App.jsx' },
+  { key: 'parts',   label: '部品検査',          ns: 'parts-inspection-v1',   pkg: 'parts-inspection-app',
+    where: ['parts-inspection-app'], marker: 'src/App.jsx' },
+  { key: 'overview',label: '司令塔③',           ns: 'overview-app-v1',       pkg: 'factory-overview-app',
+    where: ['factory-overview-app'], marker: 'src/App.jsx' },
 ];
+
+export const envKeyOf = (key) => `READ_BUDGET_DIR_${key.toUpperCase()}`;
+
+/** 走らせた場所がどのアプリか。package.json の name → フォルダ名 の順で決める。 */
+export const detectSelfKey = (root = SELF_ROOT, defs = APP_DEFS, readText = null) => {
+  const read = readText || ((p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } });
+  const txt = read(path.join(root, 'package.json'));
+  let name = '';
+  if (txt) { try { name = String(JSON.parse(txt).name || ''); } catch { name = ''; } }
+  const byPkg = defs.find((d) => d.pkg === name);
+  if (byPkg) return byPkg.key;
+  const base = path.basename(root);
+  const byDir = defs.find((d) => d.where.some((w) => w.split('/').pop() === base));
+  return byDir ? byDir.key : null;
+};
+
+/** 近所を探す時に見る親フォルダ（上へ6段 ＋ ホーム）。Windows/Linux 共通。 */
+export const searchBases = (root = SELF_ROOT, home = null) => {
+  const out = [];
+  let cur = path.resolve(root);
+  for (let i = 0; i < 6; i++) {
+    const up = path.dirname(cur);
+    if (!up || up === cur) break;
+    out.push(up); cur = up;
+  }
+  const h = home === null ? (() => { try { return os.homedir(); } catch { return ''; } })() : home;
+  if (h && !out.includes(path.resolve(h))) out.push(path.resolve(h));
+  return out;
+};
+
+/**
+ * 4アプリの src の道を決める。
+ *   ・自分（走らせた場所）… 必ず見る。無ければ **赤**（missing かつ self）
+ *   ・他の3つ … 環境変数 → 近所 の順に探す。見つからなければ **見ていない**（赤にしない）
+ * ⚠ファイルを触る所は差し替えられる（exists/readText）ので、この関数はそのまま試験できる。
+ */
+export const resolveApps = ({ selfRoot = SELF_ROOT, defs = APP_DEFS, env = process.env,
+                              exists = fs.existsSync, readText = null, home = null } = {}) => {
+  const selfKey = detectSelfKey(selfRoot, defs, readText);
+  const join = (root, rel) => path.join(root, ...String(rel).split('/'));
+  return defs.map((d) => {
+    if (d.key === selfKey) {
+      return { ...d, self: true, root: selfRoot, dir: path.join(selfRoot, 'src'), how: '走らせた場所（このリポジトリ）' };
+    }
+    const ev = String(env[envKeyOf(d.key)] || '').trim();
+    if (ev) {
+      return exists(join(ev, d.marker))
+        ? { ...d, self: false, root: ev, dir: path.join(ev, 'src'), how: `環境変数 ${envKeyOf(d.key)}` }
+        : { ...d, self: false, root: null, dir: null,
+            notSeen: `環境変数 ${envKeyOf(d.key)} の指す ${ev} に ${d.marker} が無い` };
+    }
+    for (const base of searchBases(selfRoot, home)) {
+      for (const rel of d.where) {
+        const cand = path.join(base, ...rel.split('/'));
+        if (exists(join(cand, d.marker))) {
+          return { ...d, self: false, root: cand, dir: path.join(cand, 'src'), how: '近所を探して見つけた' };
+        }
+      }
+    }
+    return { ...d, self: false, root: null, dir: null,
+      notSeen: `この端末に見つからない（${envKeyOf(d.key)} に置き場所を渡せば見ます）` };
+  });
+};
+
+// ⚠他のスクリプト(report-read-budget.mjs など)がそのまま import している。形は変えない。
+export const APPS = resolveApps();
+export const SELF_KEY = detectSelfKey();
 
 // ---------------------------------------------------------------------------
 // 前提(見積りの入力)。🚨**ここに書いていない数字は使わない。必ず画面に出す。**
@@ -233,10 +323,191 @@ export const constStrings = (src) => {
   return m;
 };
 
-export const scanFile = (rawSrc, file, globalConsts = {}) => {
+/**
+ * そのファイルの中の `const LOTS_LIVE_LIMIT = 120` を集める(limit の数を解く為)。
+ * ⚠ 実コードの limit は **ほとんどが名前付きの定数**(LOTS_LIVE_LIMIT / OPEN_LOTS_LIMIT …)で、
+ *   しかも **別のファイル**(src/domain/readBudget.js)に居る。ここを解かないと、
+ *   本物の絞り込みが全部「数が読めない」に落ちて、見張りが何も言えなくなる。
+ */
+export const constNumbers = (src) => {
+  const m = {};
+  for (const x of src.matchAll(/\b(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(-?\d+(?:\.\d+)?)\s*[;,\n]/g)) {
+    m[x[1]] = Number(x[2]);
+  }
+  return m;
+};
+
+// ---------------------------------------------------------------------------
+// 🚨🚨 2026-09-01 追加: 「絞ってある形か」ではなく「**絞りが効いているか**」を見る
+// ---------------------------------------------------------------------------
+//   この日の わざと壊す試験で、次の2つが **どちらも緑** で通った(実測):
+//     M1  watchQuery(ns,'lots',{ where: [['id','!=','']] })   … 形は where。**必ず全件返る**
+//     M2  getPage(ns,'lots',{ limit: 100000 })                … 棚ぜんぶより大きい limit
+//   どちらも「読み口が1つ増えた」と数えた上で **絞り込み有り** として素通りしていた。
+//   ＝ 見張りは `where:` `limit:` という **字面** しか見ていなかった。
+//
+//   ⚠ Firestore の `!=` は **その欄が無い書類を外す**。`['id','!=','']` は「全件返る」だけでなく
+//     「欄の無い書類だけ黙って消える」という、意味の面でも危ない形。
+// ---------------------------------------------------------------------------
+
+/**
+ * 1つの読み口が1回で読んでよい上限（件）。**これは実測ではなく、置いた線**。
+ * 根拠(2026-08-30 の控えの実測): いちばん大きい棚は lot_images 2,355件、次が lots 633件。
+ *   1つの画面が一度に使う件数は多くても数百。**1,000件を超える limit は「上限」として意味を成さない**。
+ * ⚠ 棚が実測0件の物にだけ使う(まだ空なので「棚より小さいか」を測れない)。
+ *   棚に中身が在る時は、線ではなく **実測の件数** と比べる。
+ */
+export const LIMIT_CEILING = 1000;
+
+/** `{ where: [...], limit: 500 }` の中から、key の値の**字面**を括弧の対応を見て取り出す。 */
+export const valueOfKey = (text, key) => {
+  const re = new RegExp(`\\b${key}\\s*:`, 'g');
+  let m;
+  while ((m = re.exec(String(text)))) {
+    const s = String(text);
+    let i = m.index + m[0].length;
+    while (i < s.length && /\s/.test(s[i])) i++;
+    let depth = 0, q = null, out = '';
+    for (; i < s.length; i++) {
+      const c = s[i];
+      if (q) { out += c; if (c === '\\') { out += s[++i] || ''; continue; } if (c === q) q = null; continue; }
+      if (c === '"' || c === "'" || c === '`') { q = c; out += c; continue; }
+      if ('([{'.includes(c)) { depth++; out += c; continue; }
+      if (')]}'.includes(c)) { if (depth === 0) break; depth--; out += c; continue; }
+      if (c === ',' && depth === 0) break;
+      out += c;
+    }
+    const v = out.trim();
+    if (v) return v;
+  }
+  return '';
+};
+
+/** 字面が「その場で読み切れる値」なら中身を返す。変数や式なら lit:false。 */
+export const literalOf = (raw) => {
+  const t = String(raw == null ? '' : raw).trim();
+  let mm;
+  if ((mm = t.match(/^'([^']*)'$/)) || (mm = t.match(/^"([^"]*)"$/))) return { lit: true, v: mm[1] };
+  if (/^-?\d+(?:\.\d+)?$/.test(t)) return { lit: true, v: Number(t) };
+  if (t === 'true' || t === 'false') return { lit: true, v: t === 'true' };
+  if (t === 'null') return { lit: true, v: null };
+  if (t === 'undefined') return { lit: true, v: undefined };
+  if (t === 'Infinity') return { lit: true, v: Infinity };
+  if (t === '-Infinity') return { lit: true, v: -Infinity };
+  if (t === 'Number.MAX_SAFE_INTEGER') return { lit: true, v: Number.MAX_SAFE_INTEGER };
+  if (t === 'Number.MIN_SAFE_INTEGER') return { lit: true, v: Number.MIN_SAFE_INTEGER };
+  return { lit: false, v: undefined };
+};
+
+/**
+ * `[['status','!=','completed'], ['a','==',1]]` を条件の一覧にほどく。
+ * ほどけない形(変数・入れ子の式)は **null**(＝「静的には読めない」)。空配列は「条件が0個」。
+ */
+export const parseWhereClauses = (raw) => {
+  const t = String(raw || '').trim();
+  if (!t.startsWith('[') || !t.endsWith(']')) return null;
+  const items = splitArgs(t);
+  const out = [];
+  for (const it of items) {
+    const s = it.trim();
+    if (!s.startsWith('[') || !s.endsWith(']')) return null;
+    const p = splitArgs(s);
+    if (p.length !== 3) return null;
+    const f = literalOf(p[0]); const op = literalOf(p[1]); const v = literalOf(p[2]);
+    if (!f.lit || !op.lit || typeof op.v !== 'string') return null;
+    out.push({ field: String(f.v), op: op.v, value: v.v, valueLiteral: v.lit, valueRaw: p[2].trim() });
+  }
+  return out;
+};
+
+/**
+ * その条件が **必ず真**(＝1件も外さない)なら、その理由の文。そうでなければ null。
+ * 🚨 値が変数の時は null(＝「常に真とは言えない」)。決めつけて嘘の❌を出さない。
+ */
+export const alwaysTrueWhy = (c) => {
+  if (!c || !c.valueLiteral) return null;
+  const { op, value: v, field, valueRaw } = c;
+  const isNum = typeof v === 'number';
+  const empty = v === '' || v === null || v === undefined;
+  if ((op === '!=' || op === 'not-in') && empty) {
+    return `${field} ${op} ${valueRaw} … 空/null と違う書類しか無いので、必ず全件返る`;
+  }
+  if (op === '>=' && (v === 0 || v === '' || v === null || v === -Infinity || (isNum && v <= Number.MIN_SAFE_INTEGER))) {
+    return `${field} >= ${valueRaw} … どの値もこれ以上なので、必ず全件返る`;
+  }
+  if (op === '>' && ((isNum && v <= -1) || v === -Infinity)) {
+    return `${field} > ${valueRaw} … どの値もこれより大きいので、必ず全件返る`;
+  }
+  if (op === '<=' && (v === Infinity || (isNum && v >= Number.MAX_SAFE_INTEGER)
+      || (typeof v === 'string' && /^9999/.test(v)) || v === '')) {
+    return `${field} <= ${valueRaw} … どの値もこれ以下なので、必ず全件返る`;
+  }
+  if (op === '<' && (v === Infinity || (isNum && v >= Number.MAX_SAFE_INTEGER))) {
+    return `${field} < ${valueRaw} … どの値もこれより小さいので、必ず全件返る`;
+  }
+  return null;
+};
+
+/** `limit: 500` / `limit: LOTS_LIVE_LIMIT` の数を解く。解けなければ null。 */
+export const limitNumberOf = (raw, nums = {}) => {
+  const t = String(raw || '').trim();
+  if (!t) return null;
+  if (/^-?\d+$/.test(t)) return Number(t);
+  if (Object.prototype.hasOwnProperty.call(nums, t) && Number.isFinite(nums[t])) return nums[t];
+  return null;
+};
+
+/**
+ * 🚦 その読み口の絞り込みが **効いているか**。画面もファイルも触らない純粋な関数。
+ * 返す物: { where, limit, effective, unknown, why, notes }
+ *   where/limit … 'none'(書いていない) / 'effective'(効いている) / 'dead'(書いてあるが効かない)
+ *                 / 'unknown'(静的に読めない) / 'unknownShelf'(棚の件数が分からない＝赤)
+ */
+export const filterEffect = (s, { ceiling = LIMIT_CEILING } = {}) => {
+  const notes = [];
+  let w = 'none'; let wWhy = '';
+  if (s.hasWhere) {
+    const cl = s.whereClauses === undefined ? null : s.whereClauses;
+    if (cl == null) { w = 'unknown'; wWhy = `where の中身が静的に読めない（where: ${s.whereRaw || '?'}）`; }
+    else if (!cl.length) { w = 'dead'; wWhy = 'where が空（条件が1つも入っていない＝全件返る）'; }
+    else {
+      const whys = cl.map(alwaysTrueWhy);
+      if (whys.every((x) => x)) { w = 'dead'; wWhy = `🚨 where が常に真: ${whys.join(' / ')}`; }
+      else w = 'effective';
+    }
+  }
+  let l = 'none'; let lWhy = '';
+  if (s.hasLimit) {
+    const n = s.limitNum == null ? null : Number(s.limitNum);
+    if (n == null || !Number.isFinite(n)) { l = 'unknown'; lWhy = `limit の数が静的に読めない（limit: ${s.limitRaw || '?'}）`; }
+    else if (n <= 0) { l = 'dead'; lWhy = `limit ${n} … 1件以上を読む問い合わせになっていない`; }
+    else if (s.docsUnknown) {
+      l = 'unknownShelf';
+      lWhy = `🚨 limit ${n} と書いてあるが、この棚の実測件数が分からない`
+        + '（＝絞りが効いているか **確かめられません**。黙っては通しません）';
+    } else if (Number(s.docs) > 0 && n >= Number(s.docs)) {
+      l = 'dead'; lWhy = `🚨 limit ${n} ≧ 棚の実測 ${s.docs}件 … 1件も絞っていない`;
+    } else if (Number(s.docs) === 0 && n > ceiling) {
+      l = 'dead';
+      lWhy = `🚨 limit ${n} … 棚は実測0件。${ceiling}件を超える limit は上限として意味を成さない`;
+    } else {
+      l = 'effective';
+      if (Number(s.docs) === 0) notes.push(`いま棚は実測0件。limit ${n} は「増えた時の上限」としてだけ効く`);
+    }
+  }
+  const effective = w === 'effective' || l === 'effective';
+  const unknown = !effective && (w === 'unknown' || l === 'unknown');
+  const why = [wWhy, lWhy].filter(Boolean).join(' / ')
+    || (s.hasWhere || s.hasLimit ? '' : 'where も limit も無い');
+  return { where: w, limit: l, effective, unknown, why, notes };
+};
+
+export const scanFile = (rawSrc, file, globalConsts = {}, globalNums = {}) => {
   const src = stripComments(rawSrc);
   const lines = src.split('\n');
   const consts = { ...globalConsts, ...constStrings(src) };
+  // ⚠ limit の数は **別のファイルの定数**の事が多い(LOTS_LIVE_LIMIT など)。両方を混ぜて解く。
+  const nums = { ...globalNums, ...constNumbers(src) };
   const out = [];
   const seen = new Set();
 
@@ -254,7 +525,13 @@ export const scanFile = (rawSrc, file, globalConsts = {}) => {
     const after = src.slice(open + args.length, open + args.length + 6);
     if (/^\s*=>/.test(after)) continue;
     const before = src.slice(Math.max(0, m.index - 30), m.index);
-    if (/[:=]\s*$/.test(before)) continue;
+    // 🚨🚨 2026-09-01: ここは `[:=]` だった。つまり **`const u = watchCollection(ns,'logs',cb)` を
+    //   まるごと数えていなかった**（受け取り手の名前を付けただけの、ごく普通の読み口）。
+    //   わざと絞り込みの無い口をこの形で足しても、門は緑のままだった（実測）。
+    //   → 数えないのは **object の書き方(`watchCollection: …`)だけ** にする。
+    //   ⚠ 4アプリの実コードにこの形は今のところ0箇所（＝この直しで判定は1つも動かない。
+    //     動かないうちに塞ぐのが狙い。明日この形で書かれたら、今度は捕まえる）。
+    if (/:\s*$/.test(before)) continue;
     // `watch(el, cb)`(ResizeObserver の道具)は Firestore ではない
     if (kindName === 'watch' && !/^\(\s*['"]/.test(args)) continue;
 
@@ -314,6 +591,11 @@ export const scanFile = (rawSrc, file, globalConsts = {}) => {
     const optRaw = optAt != null ? (parts[optAt] || '').trim() : '';
     const hasWhere = /\bwhere\s*:/.test(args);
     const hasLimit = /\blimit\s*:/.test(args);
+    // 🚨 ここから下が 2026-09-01 の追加。**字面ではなく中身**を取り出して持ち回る。
+    const whereRaw = hasWhere ? valueOfKey(args, 'where') : '';
+    const limitRaw = hasLimit ? valueOfKey(args, 'limit') : '';
+    const whereClauses = hasWhere ? parseWhereClauses(whereRaw) : null;
+    const limitNum = hasLimit ? limitNumberOf(limitRaw, nums) : null;
     const optsVar = !hasWhere && !hasLimit && !!optRaw
       && !optRaw.startsWith('{') && /^[A-Za-z_$][\w$]*(\.[\w$]+)*$/.test(optRaw) ? optRaw : '';
 
@@ -326,6 +608,10 @@ export const scanFile = (rawSrc, file, globalConsts = {}) => {
       singleDoc: KINDS[kind].doc,
       hasWhere,
       hasLimit,
+      whereRaw,                      // where の値の字面(そのまま)
+      limitRaw,                      // limit の値の字面(そのまま)
+      whereClauses,                  // ほどけた条件の一覧。null = 静的には読めない
+      limitNum,                      // limit の数。null = 静的には読めない
       optsVar,                       // '' なら「引数を全部読めた」。文字が入っていれば「読めない」
       hasOrderBy: /\borderBy\s*:/.test(args),
       hasOnError: /\bonError\b/.test(args),
@@ -336,29 +622,67 @@ export const scanFile = (rawSrc, file, globalConsts = {}) => {
 };
 
 export const scanApp = (app) => {
-  if (!fs.existsSync(app.dir)) return { ...app, sites: [], missing: true };
+  // 道が見つからなかった = **見ていない**（赤にはしない。ただし画面に必ず出す）
+  if (!app.dir) return { ...app, sites: [], missing: true, files: 0 };
+  // 🚨自分のリポジトリなのに src が無い/読めない = **赤**（判定は main 側。ここは印だけ付ける）
+  if (!fs.existsSync(app.dir)) {
+    return { ...app, sites: [], missing: true, files: 0,
+      notSeen: app.notSeen || `${app.dir} が無い（フォルダごと読めない）` };
+  }
   const files = walk(app.dir);
+  if (!files.length) {
+    return { ...app, sites: [], missing: true, files: 0,
+      notSeen: `${app.dir} に .js/.jsx が1つも無い（読む物が無い）` };
+  }
   // ⚠コレクション名の定数は **別のファイル** に居る(`src/domain/appFeedback.js` の FEEDBACK_COL など)。
   //   1ファイルだけ見ると「(変数)」になって、その口が何件読むのか分からなくなる。
   const globalConsts = {};
-  for (const f of files) Object.assign(globalConsts, constStrings(stripComments(readSrc(f))));
+  const globalNums = {};
+  for (const f of files) {
+    const s = stripComments(readSrc(f));
+    Object.assign(globalConsts, constStrings(s));
+    Object.assign(globalNums, constNumbers(s));
+  }
   const sites = [];
   for (const f of files) {
     // 窓口そのもの(src/data/*)は「口の定義」なので数えない。実際に呼ぶ画面だけを数える。
     if (/[\\/]src[\\/]data[\\/]/.test(f)) continue;
     const rel = path.relative(path.dirname(app.dir), f).split(path.sep).join('/');
-    sites.push(...scanFile(readSrc(f), `src/${rel.replace(/^src\//, '')}`, globalConsts));
+    sites.push(...scanFile(readSrc(f), `src/${rel.replace(/^src\//, '')}`, globalConsts, globalNums));
   }
-  return { ...app, sites };
+  return { ...app, sites, files: files.length };
 };
 
 // ---------------------------------------------------------------------------
 // 実測の件数(バックアップの manifest)
 // ---------------------------------------------------------------------------
-export const DEFAULT_MANIFEST = 'C:/Users/anrw3/inspection-audit-local/backups/2026-08-11_0530/manifest.json';
+// 🚨🚨 2026-09-01: ここも `C:/Users/anrw3/…/2026-08-11_0530/manifest.json` の決め打ちだった。
+//   道が決め打ち = ①CI(Linux)では永久に見つからない ②**日付まで焼き込んであった**ので、
+//   3週間前の件数をずっと見ていた（新しい控えを取っても見張りの数字は増えない）。
+//   → 探し方だけを書く: 環境変数 → 近所の inspection-audit-local/backups の **いちばん新しい控え**。
+//   ⚠見つからない時は「件数の実測が無い」と画面に出して 0件として数える（推測で埋めない）。
+export const MANIFEST_ENV = 'READ_BUDGET_MANIFEST';
+
+export const findManifest = ({ selfRoot = SELF_ROOT, env = process.env,
+                               exists = fs.existsSync, listDirs = null, home = null } = {}) => {
+  const ev = String(env[MANIFEST_ENV] || '').trim();
+  if (ev) return exists(ev) ? ev : null;
+  const ls = listDirs || ((p) => { try { return fs.readdirSync(p); } catch { return []; } });
+  for (const base of searchBases(selfRoot, home)) {
+    const backups = path.join(base, 'inspection-audit-local', 'backups');
+    const dirs = ls(backups)
+      .filter((d) => /^\d{4}-\d{2}-\d{2}_\d{4}$/.test(d))
+      .filter((d) => exists(path.join(backups, d, 'manifest.json')))
+      .sort();
+    if (dirs.length) return path.join(backups, dirs[dirs.length - 1], 'manifest.json');
+  }
+  return null;
+};
+
+export const DEFAULT_MANIFEST = findManifest();
 
 export const loadCounts = (manifestPath = DEFAULT_MANIFEST) => {
-  if (!fs.existsSync(manifestPath)) return null;
+  if (!manifestPath || !fs.existsSync(manifestPath)) return null;
   const j = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   return { stamp: j.stamp, ns: j.namespaces || {}, totals: j.totals, path: manifestPath };
 };
@@ -373,10 +697,15 @@ export const docsOf = (counts, ns, col) => Number(((counts?.ns?.[ns] || {})[col]
 // ---------------------------------------------------------------------------
 export const ALLOW_MIN_WHY = 20;      // 理由の最低文字数。これ未満は「書いていない」と同じ。
 
-export const allowPathOf = (app) => path.join(path.dirname(app.dir), 'scripts', 'read-budget-allow.json');
+// ⚠ 道が見つからなかったアプリ(dir=null)は例外の紙も読めない。null を返す。
+export const allowPathOf = (app) => {
+  const root = app.root || (app.dir ? path.dirname(app.dir) : null);
+  return root ? path.join(root, 'scripts', 'read-budget-allow.json') : null;
+};
 
 export const loadAllow = (app) => {
   const p = allowPathOf(app);
+  if (!p) return { path: null, entries: [], missing: true };
   if (!fs.existsSync(p)) return { path: p, entries: [], missing: true };
   let j;
   try { j = JSON.parse(fs.readFileSync(p, 'utf8')); }
@@ -410,9 +739,15 @@ export const judge = ({ sites, allows = {}, today = todayLocal() }) => {
   // 絞り込みの無い「コレクションの読み」= 件数が青天井の口。1件の doc を読む口(watchDoc/getOne)は数えない。
   // ⚠ 絞り込みが変数で渡されている口(optsVar)は **ここに入れない**。
   //   静的には「無い」と言えないので、❌にも✅にもせず、別の一覧に出して人に見てもらう。
-  const collectionReads = sites.filter((s) => !s.singleDoc);
-  const unverifiable = collectionReads.filter((s) => !s.hasWhere && !s.hasLimit && s.optsVar);
-  const risky = collectionReads.filter((s) => !s.hasWhere && !s.hasLimit && !s.optsVar);
+  // 🚨🚨 2026-09-01: ここは `!hasWhere && !hasLimit` だった＝「絞ってある**形**か」しか見ていなかった。
+  //   `where: [['id','!=','']]`(必ず全件返る) と `limit: 100000`(棚ぜんぶより大きい) が
+  //   どちらも「絞り込み有り」として素通りしていた(実測)。
+  //   → filterEffect で **効いているか** を見る。
+  const collectionReads = sites.filter((s) => !s.singleDoc)
+    .map((s) => ({ ...s, eff: filterEffect(s) }));
+  // 静的に読めない物は ❌ にも ✅ にもしない(嘘の❌を出さない)。ただし必ず画面に出す。
+  const unverifiable = collectionReads.filter((s) => !s.eff.effective && (s.optsVar || s.eff.unknown));
+  const risky = collectionReads.filter((s) => !s.eff.effective && !s.optsVar && !s.eff.unknown);
   const violations = [];
   const excused = [];
   const problems = [];
@@ -421,7 +756,10 @@ export const judge = ({ sites, allows = {}, today = todayLocal() }) => {
   for (const s of risky) {
     const bag = allows[s.appKey] || { entries: [] };
     const idx = bag.entries.findIndex((e) => sameSite(e, s));
-    if (idx < 0) { violations.push({ site: s, why: '例外の届け出が無い' }); continue; }
+    if (idx < 0) {
+      violations.push({ site: s, why: `例外の届け出が無い（${s.eff ? s.eff.why : ''}）` });
+      continue;
+    }
     const e = bag.entries[idx];
     usedEntries.add(`${s.appKey}#${idx}`);
 
@@ -489,9 +827,16 @@ export const estimatePerOpen = (counts) => {
  * ⚠⚠ 一覧と間隔を **手で写さない**。③の実コードから取り出す。
  *   手で写すと、あちらを直した時にこの見積りが黙って嘘になる。
  */
-export const estimateOverview = (counts, srcOverride = null) => {
-  const ovApp = APPS.find((a) => a.key === 'overview');
-  const ovSrcPath = path.join(ovApp.dir, 'App.jsx');
+export const estimateOverview = (counts, srcOverride = null, apps = APPS) => {
+  const ovApp = apps.find((a) => a.key === 'overview');
+  // 🚨 ③の置き場所が **この端末に無い** 時は「読めない(赤)」ではなく「見ていない」。
+  //   道が無いだけで赤にすると、CI(Linux)も他アプリの手元も、中身と関わりなく永久に赤になる。
+  if (srcOverride === null && (!ovApp || !ovApp.dir)) {
+    return { unreadable: false, notSeen: true,
+      why: (ovApp && ovApp.notSeen) || '司令塔③の置き場所がこの端末に無い' };
+  }
+  // ⚠試験用に中身を直接渡された時は、道を1つも触らない。
+  const ovSrcPath = srcOverride !== null ? null : path.join(ovApp.dir, 'App.jsx');
   const ovSrc = srcOverride !== null ? stripComments(srcOverride)
     : (fs.existsSync(ovSrcPath) ? stripComments(readSrc(ovSrcPath)) : '');
   const arrOf = (name) => {
@@ -529,26 +874,34 @@ export const estimateOverview = (counts, srcOverride = null) => {
            lotsWindowed, uncounted, perTabDay: full + light * refreshes };
 };
 
-export const estimateDay = (counts) => {
+export const estimateDay = (counts, apps = APPS) => {
   const perOpen = estimatePerOpen(counts);
-  const ov = estimateOverview(counts);
+  const ov = estimateOverview(counts, null, apps);
   if (ov.unreadable) return { unreadable: true, perOpen };
   const A = ASSUME.overview;
   let day = 0; const bill = [];
+  const notCounted = [];
+  // 🚨件数の実測(控え)が無い時は、全部0件で数えている＝この合計は **合計ではない**。
+  if (!counts) notCounted.push('件数の実測(控え)がこの端末に無いので、全コレクションを0件として数えている（＝実際はもっと多い）');
   for (const [key, a] of Object.entries(ASSUME.openPerDay)) {
-    const app = APPS.find((x) => x.key === key);
+    const app = apps.find((x) => x.key === key);
     const n = (perOpen[key]?.total || 0) * a.people * a.opens;
     day += n;
     bill.push([`${app.label} ${a.people}人 × ${a.opens}回 × ${(perOpen[key]?.total || 0).toLocaleString('en-US')}件`, n, a.why]);
   }
-  const ovDay = ov.perTabDay * A.tabs;
+  // 🚨③のコードを見ていない時は、③自身の読みを **数えない**（作り物の数字を足さない）。
+  const ovDay = ov.notSeen ? 0 : ov.perTabDay * A.tabs;
   day += ovDay;
-  bill.push([`司令塔③ ${A.tabs}タブ × ${ov.perTabDay.toLocaleString('en-US')}件/日`, ovDay, A.why]);
+  if (ov.notSeen) {
+    notCounted.push(`司令塔③のコードをこの端末で見ていないので、③自身の読み(1日ぶん)は0として数えている … ${ov.why}`);
+  } else {
+    bill.push([`司令塔③ ${A.tabs}タブ × ${ov.perTabDay.toLocaleString('en-US')}件/日`, ovDay, A.why]);
+  }
   // 🚨 ③の iframe(?embed=map)。**止めている購読の分は引く**(EMBED_STOPS。実コードで裏を取ってある)。
   //   引ける根拠が消えたら checkEmbedFresh() が赤にするので、黙って小さい数字にはならない。
   const embedCut = [];
   const ifrPerOpen = ASSUME.overviewIframes.apps.reduce((s, k) => {
-    const app = APPS.find((x) => x.key === k);
+    const app = apps.find((x) => x.key === k);
     let n = perOpen[k]?.total || 0;
     for (const st of (EMBED_STOPS[k] || [])) {
       const d = docsOf(counts, app.ns, st.col);
@@ -563,7 +916,7 @@ export const estimateDay = (counts) => {
 
   // 🚨数えられない読みが1つでも在れば、この合計は「合計」ではなく **下限** になる。
   //   下限だと分かるように印を立てる。「合計」の顔をした足りない数字を出さない。
-  const uncounted = [...(ov.uncounted || [])];
+  const uncounted = [...(ov.uncounted || []), ...notCounted];
   return { unreadable: false, perOpen, ov, day, bill, iframes: ifr, uncounted,
            lowerBound: uncounted.length > 0,
            pct: Math.round((day / FREE_READS_PER_DAY) * 100), over: day > FREE_READS_PER_DAY };
@@ -576,9 +929,10 @@ export const estimateDay = (counts) => {
 export const checkStartupFresh = (apps, counts = null) => {
   const gone = [];       // 見積りに書いてあるのに実コードに購読が無い → 見積りが **多すぎる** 方に嘘をつく
   const extra = [];      // 実コードに購読が在るのに見積りに入っていない → 見積りが **足りない** 方に嘘をつく
+  const notChecked = []; // 🚨そのアプリのコードを見ていない → 突き合わせを **していない**（黙って通さない為に出す）
   for (const [key, plan] of Object.entries(STARTUP)) {
     const app = apps.find((a) => a.key === key);
-    if (!app || app.missing) continue;
+    if (!app || app.missing) { notChecked.push(key); continue; }
     const live = app.sites.filter((s) => s.live && !s.singleDoc && !s.col.startsWith('(変数'));
     const liveCols = new Set(live.map((s) => s.col));
     for (const col of plan.always) {
@@ -592,7 +946,7 @@ export const checkStartupFresh = (apps, counts = null) => {
       extra.push({ key, col, docs: docsOf(counts, app.ns, col), at: at ? `${at.file}:${at.line}` : '' });
     }
   }
-  return { gone, extra, extraDocs: extra.reduce((s, x) => s + x.docs, 0) };
+  return { gone, extra, notChecked, extraDocs: extra.reduce((s, x) => s + x.docs, 0) };
 };
 
 // ---------------------------------------------------------------------------
@@ -604,6 +958,78 @@ export const selftest = () => {
   let bad = 0;
   const say = (ok, what) => { console.log(`${ok ? '  ✅' : '  ❌'} ${what}`); if (!ok) bad++; };
   console.log('🧪 見張り自身の試験');
+
+  // --- (A0) 🚨🚨 どこを見るか（2026-09-01。ここが決め打ちだったので何も見ていなかった）----
+  //   ⚠ファイルには触らない。exists / readText を差し替えて、道の決め方だけを試す。
+  {
+    const sep = path.sep;
+    const P = (...xs) => xs.join(sep);
+    const HOME = P('C:', 'Users', 'taro');
+    const GOLD = P(HOME, '.gemini', 'antigravity', 'playground', 'golden-meteoroid');
+    const PROD = P(HOME, 'product-inspection-app');
+    const PARTS = P(HOME, 'parts-inspection-app');
+    const OVER = P(HOME, 'factory-overview-app');
+    const world = new Set([
+      P(GOLD, 'src', 'App.firebase.jsx'), P(PROD, 'src', 'App.jsx'),
+      P(PARTS, 'src', 'App.jsx'), P(OVER, 'src', 'App.jsx'),
+    ]);
+    const exists = (p) => world.has(path.normalize(p));
+    const pkgOf = (name) => (p) => (path.basename(p) === 'package.json'
+      ? JSON.stringify({ name }) : null);
+
+    const fromGold = resolveApps({ selfRoot: GOLD, exists, readText: pkgOf('golden-meteoroid'), home: HOME, env: {} });
+    say(fromGold.find((a) => a.key === 'final').self === true
+      && fromGold.find((a) => a.key === 'final').dir === path.join(GOLD, 'src'),
+      '🚨 走らせた場所(golden)を「自分」として、そのリポジトリの src を見る');
+    say(fromGold.every((a) => a.dir), '🚨 近所に他の3アプリが在れば、道を書かなくても見つける');
+
+    const fromProd = resolveApps({ selfRoot: PROD, exists, readText: pkgOf('product-inspection-app'), home: HOME, env: {} });
+    say(fromProd.find((a) => a.key === 'product').self === true
+      && fromProd.find((a) => a.key === 'final').dir === path.join(GOLD, 'src'),
+      '🚨 製品から走らせても、深い所に居る golden を見つける（どの場所からでも同じ）');
+
+    // 🚨 負の対照①: 他アプリの道が無い時 → **赤ではなく「見ていない」**。合格の数が減る。
+    const lonely = new Set([P(PROD, 'src', 'App.jsx')]);
+    const alone = resolveApps({ selfRoot: PROD, exists: (p) => lonely.has(path.normalize(p)),
+      readText: pkgOf('product-inspection-app'), home: HOME, env: {} });
+    say(alone.filter((a) => a.dir).length === 1 && alone.find((a) => a.key === 'product').self,
+      '🚨 他アプリが無い所(CI=Linux など)では「自分1つだけ見た」になる（4つとも赤にしない）');
+    say(alone.filter((a) => !a.dir).every((a) => String(a.notSeen || '').length > 0),
+      '🚨 見ていないアプリには「なぜ見ていないか」が必ず付く（黙って消さない）');
+
+    // 🚨 負の対照②: 走らせた場所が4アプリのどれでもない → 自分が決まらない(main が赤にする)
+    say(detectSelfKey(P(HOME, 'zzz-nanika'), APP_DEFS, () => null) === null,
+      '🚨 4アプリのどれでもない所で走らせたら「自分」が決まらない（main はこれを赤にする）');
+    say(detectSelfKey(GOLD, APP_DEFS, () => null) === 'final',
+      'package.json が読めなくても、フォルダ名から「自分」を決められる');
+
+    // 環境変数で他アプリの置き場所を渡せる／渡した先が違えば「見ていない」
+    const byEnv = resolveApps({ selfRoot: PROD, exists, readText: pkgOf('product-inspection-app'), home: HOME,
+      env: { [envKeyOf('final')]: GOLD } });
+    say(byEnv.find((a) => a.key === 'final').how === `環境変数 ${envKeyOf('final')}`,
+      `他アプリの置き場所は ${envKeyOf('final')} でも渡せる`);
+    const byBadEnv = resolveApps({ selfRoot: PROD, exists, readText: pkgOf('product-inspection-app'), home: HOME,
+      env: { [envKeyOf('final')]: P(HOME, 'karappo') } });
+    say(!byBadEnv.find((a) => a.key === 'final').dir,
+      '🚨 環境変数の指す先に目印(src/App.firebase.jsx)が無ければ、見に行かない');
+
+    // 🚨 Windows と Linux の両方で動く形か（道を文字で組み立てていないか）
+    say(!/[A-Za-z]:[\\/]/.test(SELF_ROOT.replace(/^[A-Za-z]:/, '')) && path.isAbsolute(SELF_ROOT),
+      '走らせた場所は path で組み立てている（区切り文字を手で書いていない）');
+    say(APP_DEFS.every((d) => !/^[A-Za-z]:/.test(d.where[0]) && !d.where.some((w) => w.includes('\\'))),
+      '🚨 アプリの覚え書きに **絶対の道(C:/… )** を1つも書いていない（CI=Linux でも同じに動く）');
+
+    // 控え(manifest)も決め打ちにしない: いちばん新しい物を選ぶ／無ければ null
+    const mBase = P(HOME, 'inspection-audit-local', 'backups');
+    const mWorld = new Set([P(mBase, '2026-08-11_0530', 'manifest.json'), P(mBase, '2026-08-30_1211', 'manifest.json')]);
+    const found = findManifest({ selfRoot: PROD, env: {}, home: HOME,
+      exists: (p) => mWorld.has(path.normalize(p)),
+      listDirs: (p) => (path.normalize(p) === path.normalize(mBase) ? ['2026-08-11_0530', '2026-08-30_1211', 'zzz'] : []) });
+    say(found === P(mBase, '2026-08-30_1211', 'manifest.json'),
+      '🚨 件数の控えは **いちばん新しい物** を毎回さがす（日付を焼き込まない）');
+    say(findManifest({ selfRoot: PROD, env: {}, home: HOME, exists: () => false, listDirs: () => [] }) === null,
+      '控えがどこにも無ければ null（作り話の道を返さない）');
+  }
 
   // --- (A) 数え方 ----------------------------------------------------------
   const FIX = `
@@ -647,6 +1073,26 @@ watch('lots', (rows) => setLots(rows)),
   say(!r.some((x) => x.col === 'notes'), 'コメントの中の例示を実コードとして数えない');
   say(at('lots', 'watchCollection').length === 1, "別名 watch('lots', cb) を1件として数える");
 
+  // --- (A1) 🚨受け取り手に名前を付けただけの読み口を数える(2026-09-01) --------
+  //   わざと壊す試験の途中で見つかった穴。`const u = watchCollection(...)` を数えていなかった。
+  const NAMED = `
+const u1 = watchCollection(APP_DATA_ID, 'logs', (rows) => setLogs(rows));
+let u2 = P.watchQuery(APP_DATA_ID, 'lots', { limit: 500 }, cb);
+const provider = { watchCollection: call('watchCollection'), getAll: call('getAll') };
+`;
+  const nm = scanFile(NAMED, '(memory)');
+  say(nm.some((x) => x.col === 'logs' && x.kind === 'watchCollection' && !x.hasWhere && !x.hasLimit),
+    "🚨 `const u = watchCollection(ns,'logs',cb)` を読み口として数える(2026-09-01 まで見ていなかった)");
+  say(nm.some((x) => x.col === 'lots' && x.hasLimit), '`let u = watchQuery(…, {limit})` も数える');
+  say(nm.length === 2, '窓口の一覧(`watchCollection: call(…)`)は今まで通り数えない');
+  // ⚠ 棚の件数を口ごとに分けてある: lots は 900件(limit 500 が本当に絞る側)、logs は 179件。
+  //   ここを一律 179件にすると、limit 500 が「棚より大きい＝絞れていない」に当たってしまい、
+  //   この試験が見たい物(**絞り込みの無い口が ❌ になるか**)がぼやける。
+  const nmj = judge({ sites: nm.map((s) => ({ ...s, appKey: 'final', docs: s.col === 'lots' ? 900 : 179, docsUnknown: false })),
+    allows: {}, today: '2026-08-18' });
+  say(nmj.violations.length === 1,
+    '🚨 名前を付けただけの「絞り込みの無い読み口」は、ちゃんと ❌ になる');
+
   // --- (A2) 🚨項目を選ぶ読み(getPageFields)を語彙に持っているか ---------------
   //   2026-08-31: ここが走査の正規表現から抜けていた。実コードには絞り込みの無い
   //   getPageFields が2口(写真のメタ読み・容量の手当て)在るのに、見張りは **1件も見ずに
@@ -670,6 +1116,88 @@ DATA(db).getPageFields(APP_DATA_ID, 'lot_images', ['lotId'], spec);
     '🚨 opts が変数の getPageFields は「静的には確かめられない」に置く（fields の配列を opts と読み違えない）');
   say(scanFile(`  getPageFields: async (ns, col, fields = [], opts = {}) => {`, '(memory)').length === 0,
     '窓口そのものの定義(getPageFields: async (…) =>)を口として数えない');
+
+  // --- (A3) 🚨🚨 「絞りが **効いているか**」(2026-09-01 追加) -------------------
+  //   この日の わざと壊す試験で、下の2つが **どちらも緑** で素通りした(実測):
+  //     M1  watchQuery(ns,'lots',{ where: [['id','!=','']] })  … 形は where。必ず全件返る
+  //     M2  getPage(ns,'lots',{ limit: 100000 })               … 棚ぜんぶより大きい limit
+  //   ＝ 見張りは `where:` `limit:` という **字面** しか見ていなかった。
+  {
+    const one = (code, over = {}) => scanFile(code, '(memory)')
+      .map((s) => ({ ...s, appKey: 'final', docs: 633, docsUnknown: false, ...over }));
+    const vio = (code, over) => judge({ sites: one(code, over), allows: {}, today: '2026-08-18' });
+
+    // M1 … 必ず全件返る where
+    const M1 = `Q.watchQuery(APP_DATA_ID, 'lots', { where: [['id','!=','']] }, cb);`;
+    say(one(M1)[0].hasWhere && one(M1)[0].whereClauses.length === 1,
+      "where: [['id','!=','']] の中身をほどける");
+    say(vio(M1).violations.length === 1 && /常に真/.test(vio(M1).violations[0].why),
+      "🚨 M1: where: [['id','!=','']]（必ず全件返る）は ❌ になる");
+    const M1b = `Q.watchQuery(APP_DATA_ID, 'lots', { where: [['createdAt','>=',0]] }, cb);`;
+    say(vio(M1b).violations.length === 1, "🚨 常に真の where その2: createdAt >= 0 は ❌ になる");
+    const M1c = `Q.watchQuery(APP_DATA_ID, 'lots', { where: [['createdAt','<=',Infinity]] }, cb);`;
+    say(vio(M1c).violations.length === 1, "🚨 常に真の where その3: createdAt <= Infinity は ❌ になる");
+    const M1d = `Q.watchQuery(APP_DATA_ID, 'lots', { where: [] }, cb);`;
+    say(vio(M1d).violations.length === 1, '🚨 where が空配列（条件0個）も ❌ になる');
+
+    // M2 … 棚ぜんぶより大きい limit
+    const M2 = `const p = await DATA(db).getPage(APP_DATA_ID, 'lots', { limit: 100000 });`;
+    say(one(M2)[0].limitNum === 100000, 'limit の数(100000)を字面から読み取る');
+    say(vio(M2).violations.length === 1 && /1件も絞っていない/.test(vio(M2).violations[0].why),
+      '🚨 M2: 棚 633件に limit 100000（棚ぜんぶより大きい）は ❌ になる');
+    say(vio(M2, { docs: 0 }).violations.length === 1,
+      `🚨 棚が実測0件でも、limit 100000 は ❌（線 ${LIMIT_CEILING}件 を超えている）`);
+
+    // 🚨 棚の件数が分からない時は「分かりません」＝赤。黙っては通さない。
+    say(vio(`Q.watchQuery(APP_DATA_ID, 'lots', { limit: 20 }, cb);`, { docsUnknown: true }).violations.length === 1,
+      '🚨 棚の件数が分からない口の limit は「確かめられません」として ❌（黙って通さない）');
+
+    // --- ⚠ 正しい絞り込みは **緑のまま** である事（ここが赤くなると狼少年になる） ---
+    const green = (code, over) => vio(code, over).violations.length === 0;
+    say(green(`Q.watchQuery(APP_DATA_ID, 'lots', { limit: 20 }, cb);`),
+      '⚠ 棚 633件に limit 20 は 緑のまま');
+    say(green(`const r = await DATA(db).getAll(APP_DATA_ID, 'lots', { where: [['lotId','in',ids]] });`),
+      "⚠ lotId in [...] は 緑のまま");
+    say(green(`Q.watchQuery(APP_DATA_ID, 'lots', { where: [['status','!=','completed']] }, cb);`),
+      "⚠ status != 'completed'（本当に絞る != ）は 緑のまま"),
+    say(green(`Q.watchQuery(APP_DATA_ID, 'lots', { where: [['createdAt','>=',since]] }, cb);`),
+      '⚠ 期間(createdAt >= since。値が変数)は 緑のまま');
+    say(green(`Q.watchQuery(APP_DATA_ID, 'lots', { where: [['createdAt','>=',0],['status','==','open']] }, cb);`),
+      '⚠ 常に真の条件が混ざっていても、本当に絞る条件が1つ在れば 緑');
+    say(green(`Q.watchQuery(APP_DATA_ID, 'skill_marks', { orderBy: [['at','desc']], limit: 500 }, cb);`, { docs: 0 }),
+      `⚠ 棚が実測0件 + limit 500（線 ${LIMIT_CEILING}件 以下）は 緑（増えた時の上限として効く）`);
+
+    // --- limit が名前付きの定数（実コードはほとんどこれ） ---
+    const CONSTS = `
+export const LOTS_LIVE_LIMIT = 120;
+const unsub = P.watchCollection(APP_DATA_ID, 'lots', cb, { orderBy: [['createdAt','desc']], limit: LOTS_LIVE_LIMIT });
+`;
+    const cs = scanFile(CONSTS, '(memory)').map((s) => ({ ...s, appKey: 'final', docs: 633, docsUnknown: false }));
+    say(cs[0].limitNum === 120, '🚨 limit: LOTS_LIVE_LIMIT のような **名前付きの定数** の数も解く');
+    say(judge({ sites: cs, allows: {}, today: '2026-08-18' }).violations.length === 0,
+      '⚠ 定数で書いた limit 120（棚 633件より小さい）は 緑のまま');
+
+    // --- 数が読めない limit は ❌ にも ✅ にもしない（嘘の❌を出さない） ---
+    const VARLIM = `const page = await OPS(db).getPage(APP_DATA_ID, 'lots', { orderBy: [['createdAt','desc']], limit: pageSize });`;
+    const vl = judge({ sites: one(VARLIM), allows: {}, today: '2026-08-18' });
+    say(vl.violations.length === 0 && vl.unverifiable.length === 1,
+      '🚨 limit: pageSize（数が静的に読めない）は「確かめられません」に置く（嘘の❌にしない）');
+    const VARWHERE = `P.watchQuery(APP_DATA_ID, 'lots', { where: ACTIVE_LOTS_SPEC.where }, cb);`;
+    const vw = judge({ sites: one(VARWHERE), allows: {}, today: '2026-08-18' });
+    say(vw.violations.length === 0 && vw.unverifiable.length === 1,
+      '🚨 where の中身が変数の口も「確かめられません」に置く（緑と言い切らない）');
+
+    // --- 部品の試験（純粋な関数を直に叩く） ---
+    say(alwaysTrueWhy({ op: '!=', value: '', valueLiteral: true, field: 'id', valueRaw: "''" }) !== null,
+      "部品: != '' は「常に真」と判る");
+    say(alwaysTrueWhy({ op: '!=', value: 'completed', valueLiteral: true, field: 'status', valueRaw: "'completed'" }) === null,
+      "部品: != 'completed' は「常に真」ではない");
+    say(alwaysTrueWhy({ op: '>=', value: undefined, valueLiteral: false, field: 'createdAt', valueRaw: 'since' }) === null,
+      '部品: 値が変数なら「常に真」と決めつけない');
+    say(parseWhereClauses('SOME_SPEC.where') === null, '部品: ほどけない where は null（＝分からない）');
+    say(valueOfKey("{ where: [['a','==',1]], limit: 20 }", 'limit') === '20',
+      '部品: limit の字面を括弧の対応を見て取り出す');
+  }
 
   // --- (B) 🚨わざと壊した見本で **落ちる** 事 -------------------------------
   const site = (over = {}) => ({
@@ -803,6 +1331,17 @@ const APPS=[{ id: 'final-inspection-v1' }];`;
   say(oGone.unreadable === true,
     '🚨 ③の軽い読みの一覧がどこにも無い時は、数字を出さずに「当てにするな」と言う');
 
+  // 🚨 2026-09-01: 「③がこの端末に無い」と「③が在るのに読めない」を混ぜない。
+  //   無い＝見ていない(赤にしない)／在るのに読めない＝赤。混ぜると CI が中身と関わりなく赤になる。
+  const oNotHere = estimateOverview(fakeCounts, null, [{ key: 'overview', dir: null, notSeen: 'この端末に無い' }]);
+  say(oNotHere.notSeen === true && oNotHere.unreadable === false,
+    '🚨 ③の置き場所がこの端末に無い時は「見ていない」（赤にしない・数字も作らない）');
+  const dNotHere = estimateDay(fakeCounts, [{ key: 'overview', dir: null, notSeen: 'この端末に無い' },
+    { key: 'final', label: '最終', ns: 'final-inspection-v1' }, { key: 'product', label: '製品', ns: 'product-inspection-v1' },
+    { key: 'parts', label: '部品', ns: 'parts-inspection-v1' }]);
+  say(dNotHere.lowerBound === true && dNotHere.uncounted.some((u) => /司令塔③/.test(u)),
+    '🚨 ③を見ていない日の合計は「合計」ではなく **下限** として出す（何を数えていないかも名指し）');
+
   console.log(bad === 0 ? '🧪 見張り自身の試験: 合格\n' : `🧪 見張り自身の試験: ❌ ${bad}件 失敗\n`);
   return bad === 0;
 };
@@ -839,12 +1378,21 @@ export const main = () => {
     }
   }
   const allows = {};
-  for (const app of apps) allows[app.key] = loadAllow(app);
+  for (const app of apps) { if (!app.missing) allows[app.key] = loadAllow(app); }
 
-  const est = estimateDay(counts);
+  const est = estimateDay(counts, apps);
   const fresh = checkStartupFresh(apps, counts);
   const embedBad = checkEmbedFresh(apps);
   const verdict = judge({ sites, allows, today });
+
+  // --- 🚨 どこを見たか（見ていない物を黙って合格にしない） -------------------
+  const selfApp = apps.find((a) => a.self);
+  const seenApps = apps.filter((a) => !a.missing);
+  const unseenApps = apps.filter((a) => a.missing);
+  const coverage = `${apps.length}アプリ中 ${seenApps.length}アプリ`;
+  const coverageLine = unseenApps.length
+    ? `**${coverage}しか見ていません**（見ていないアプリの読み口は1つも数えていません）`
+    : `**${coverage}** を見ました（4つとも読みました）`;
 
   if (wantJson) {
     console.log(JSON.stringify({
@@ -855,9 +1403,17 @@ export const main = () => {
       overviewLightName: est.ov?.lightName ?? null,
       freeQuota: FREE_READS_PER_DAY, pct: est.pct ?? null,
       unfiltered: verdict.risky.length, violations: verdict.violations.length,
+      // 🚨 where/limit は書いてあるのに 1件も絞れていない口(2026-09-01 追加)
+      deadFilters: verdict.risky.filter((s) => s.hasWhere || s.hasLimit).length,
+      limitCeiling: LIMIT_CEILING,
       unverifiable: verdict.unverifiable.length,
       excused: verdict.excused.length, allowProblems: verdict.problems.length,
       startupStale: fresh.gone.length, startupMissingFromEstimate: fresh.extra.length,
+      // 🚨「どこを見たか」も数字で出す。見ていない物を黙って合格にしない為。
+      selfKey: selfApp ? selfApp.key : null, selfRoot: SELF_ROOT,
+      appsTotal: apps.length, appsSeen: seenApps.length,
+      appsNotSeen: unseenApps.map((a) => a.key),
+      filesRead: seenApps.reduce((s, a) => s + (a.files || 0), 0),
     }, null, 2));
   }
 
@@ -867,8 +1423,26 @@ export const main = () => {
   console.log(`   (projectId=inspection-time-c4fd3 が1個。どれか1つが使い切れば4つ全部が止まる)`);
   console.log(counts
     ? `   件数の出どころ: ${counts.path}\n                   = 実測 ${counts.stamp}（合計 ${num(counts.totals?.docs || 0)}件）`
-    : `   ⚠件数の実測が見つからない。件数は全部0として扱う（推測で埋めない）。`);
+    : `   ⚠件数の実測(控え)が見つからない。件数は全部0として扱う（推測で埋めない）。`
+      + `\n     置き場所を渡すなら ${MANIFEST_ENV}=<manifest.json> か --manifest <manifest.json>`);
   console.log('==========================================================================\n');
+
+  // --- 🚨 このゲートが「どこを見たか」。合格でも不合格でも必ず先に出す --------
+  console.log('■ 🚨 このゲートが見た範囲');
+  console.log(`   走らせた場所: ${SELF_ROOT}`);
+  console.log(`   → ${selfApp ? `${selfApp.label} として読みました` : '🚨 4アプリのどれか分かりません'}`);
+  console.log(`   ${coverageLine}`);
+  for (const a of apps) {
+    const mark = a.missing ? '🚫 見ていない' : '👀 見た';
+    const what = a.missing ? (a.notSeen || '道が見つからない')
+      : `${a.dir}（${a.how}${a.self ? '・自分' : ''} / ${num(a.files || 0)}ファイル / 読み口 ${num(a.sites.length)}箇所）`;
+    console.log(`   ${pad(mark, 14)} ${pad(a.label, 20)} ${what}`);
+  }
+  if (unseenApps.length) {
+    console.log('   ⚠ 見ていないアプリは、そのアプリのリポジトリの中で同じ物を走らせてください');
+    console.log(`     (この端末に置いてあるなら ${envKeyOf('product')} などに置き場所を渡せば、ここでも一緒に見ます)`);
+  }
+  console.log('');
 
   // --- 仮定を全部画面に出す（🚨隠れた前提を作らない） -----------------------
   console.log('■ この見積りが置いている仮定（🚨全部ここに出す。変えるなら scripts/verify-read-budget.mjs の ASSUME）');
@@ -885,6 +1459,9 @@ export const main = () => {
   console.log(`   ${pad('③の中の iframe', 20)} ${ASSUME.overviewIframes.apps.join('/')} を ?embed=map で抱える`);
   console.log(`     ↳ ${ASSUME.overviewIframes.why}`);
   console.log('   ⚠端末に控え(キャッシュ)が在る時はこれより少ない。**その分は測っていない**。');
+  console.log(`   ${pad('limit の線', 20)} 棚が実測0件の口だけ、limit ${num(LIMIT_CEILING)}件を上限とみなす`);
+  console.log('     ↳ 🚨これは実測ではなく **置いた線**。棚に中身が在る口は、線ではなく実測の件数と比べます');
+  console.log('       (実測でいちばん大きい棚は lot_images 2,355件・次が lots 633件。1画面が一度に使うのは多くても数百)');
   console.log('     新しい端末・別ブラウザ・シークレット窓・控えを消した後・別の住所は毎回この数。\n');
 
   // --- ① 1回開くと何件読むか ----------------------------------------------
@@ -892,15 +1469,19 @@ export const main = () => {
   console.log('① 1人が1回開くと何件読むか（冷たい状態=端末の控えが無い時の上限）');
   console.log('--------------------------------------------------------------------------');
   for (const [key, v] of Object.entries(est.perOpen || {})) {
-    const app = APPS.find((a) => a.key === key);
+    const app = apps.find((a) => a.key === key);
     console.log(`\n  ${app.label}: 起動時 ${num(v.startup)}件 + 遅れて張る ${num(v.lazy)}件 = **${num(v.total)}件/回**`);
+    if (app.missing) console.log('    🚫 このアプリのコードはこの端末で見ていません。下の数字は STARTUP の覚え書き＋控えの件数だけで出した物です。');
     console.log(`    (${v.why})`);
     v.rows.slice().sort((a, b) => b[1] - a[1]).slice(0, 5).forEach(([c, n]) => console.log(`      ${String(num(n)).padStart(6)}  ${c}`));
     const rest = v.rows.slice().sort((a, b) => b[1] - a[1]).slice(5);
     if (rest.length) console.log(`      ${String(num(rest.reduce((s, r) => s + r[1], 0))).padStart(6)}  その他 ${rest.length}コレクション`);
     v.lazyRows.forEach(([c, n, why]) => console.log(`      ${String(num(n)).padStart(6)}  ${c} … ${why}`));
   }
-  if (!est.unreadable) {
+  if (est.ov && est.ov.notSeen) {
+    console.log('\n  🚫 司令塔③: この端末で見ていないので、③自身の読みは **数えていません**（0として置いてある）。');
+    console.log(`     ${est.ov.why}`);
+  } else if (!est.unreadable) {
     const ov = est.ov;
     console.log(`\n  司令塔③: 開いた時 ${num(ov.full)}件 ・ 自動更新1回 ${num(ov.light)}件`);
     console.log(`    (③の実コードから取り出した: 名前空間 ${ov.OV_NS.length}個 × ${ov.OV_FULL.length}コレクション / 軽い読み ${ov.lightName} = ${ov.OV_LIGHT.join(',')})`);
@@ -915,6 +1496,7 @@ export const main = () => {
   // --- ② 4アプリ合計 ------------------------------------------------------
   console.log('\n--------------------------------------------------------------------------');
   console.log(`② 4アプリ合計の1日見積り  ／  無料枠 ${num(FREE_READS_PER_DAY)}`);
+  console.log(`   （コードを見たのは ${coverage}。件数は控えから。見ていないアプリぶんは STARTUP の覚え書きで数えています）`);
   console.log('--------------------------------------------------------------------------');
   if (!est.unreadable) {
     for (const [what, n] of est.bill.slice().sort((a, b) => b[1] - a[1])) {
@@ -932,10 +1514,14 @@ export const main = () => {
   }
 
   // --- ③ 見積りの土台がずれていないか -------------------------------------
-  if (fresh.gone.length || fresh.extra.length) {
+  if (fresh.gone.length || fresh.extra.length || fresh.notChecked.length) {
     console.log('\n--------------------------------------------------------------------------');
     console.log('③ 見積りの土台(STARTUP)と実コードのずれ  🚨ここがずれると数字が黙って嘘になる');
     console.log('--------------------------------------------------------------------------');
+    for (const k of fresh.notChecked) {
+      const a = apps.find((x) => x.key === k);
+      console.log(`   🚫 ${a ? a.label : k}: コードを見ていないので、STARTUP の突き合わせを **していません**`);
+    }
     for (const g of fresh.gone) {
       console.log(`   ❌ 見積りに在るが実コードに購読が無い: ${g.key} / ${g.col}（実測 ${num(g.docs)}件ぶん**多く**数えている）`);
       console.log(`      → 直った/遅延に移したなら、scripts/verify-read-budget.mjs の STARTUP.${g.key}.always から ${g.col} を外す`);
@@ -951,7 +1537,11 @@ export const main = () => {
 
   // --- ④ 🚨絞り込みの無い読み口を名指し ------------------------------------
   console.log('\n--------------------------------------------------------------------------');
-  console.log(`④ 🚨 where も limit も無い読み口 ${verdict.risky.length}箇所（件数が青天井＝増えるほど毎日悪くなる）`);
+  const dead = verdict.risky.filter((s) => s.hasWhere || s.hasLimit);
+  console.log(`④ 🚨 絞りが効いていない読み口 ${verdict.risky.length}箇所（件数が青天井＝増えるほど毎日悪くなる）`);
+  console.log(`      うち ${dead.length}箇所は **where / limit は書いてあるのに 1件も絞れていない**`);
+  console.log(`      （2026-09-01 まで、この ${dead.length}箇所は「絞り込み有り」として素通りしていました）`);
+  console.log(`   🚫 これは **見た ${coverage}** の中の数です。見ていないアプリの読み口は1つも入っていません。`);
   console.log('--------------------------------------------------------------------------');
   console.log(`   ${pad('件数(実測)', 12)} ${pad('アプリ', 20)} ${pad('コレクション', 24)} ${pad('種類', 16)} 場所`);
   const byWeight = verdict.risky.slice().sort((a, b) => (b.docs - a.docs) || a.col.localeCompare(b.col));
@@ -959,19 +1549,24 @@ export const main = () => {
   for (const s of shown) {
     const n = s.docsUnknown ? '?' : num(s.docs);
     console.log(`   ${pad(n, 12)} ${pad(s.appLabel, 20)} ${pad(s.col, 24)} ${pad(s.kind, 16)} ${s.file}:${s.line}`);
+    if (s.hasWhere || s.hasLimit) console.log(`   ${' '.repeat(12)} ↳ ${s.eff.why}`);
   }
   const zero = byWeight.filter((s) => !s.docsUnknown && s.docs === 0);
   console.log(`   ── いま実測0件だが、増えたらそのまま全件読む物 ${zero.length}箇所 ──`);
-  for (const s of zero) console.log(`   ${pad('0', 12)} ${pad(s.appLabel, 20)} ${pad(s.col, 24)} ${pad(s.kind, 16)} ${s.file}:${s.line}`);
+  for (const s of zero) {
+    console.log(`   ${pad('0', 12)} ${pad(s.appLabel, 20)} ${pad(s.col, 24)} ${pad(s.kind, 16)} ${s.file}:${s.line}`);
+    if (s.hasWhere || s.hasLimit) console.log(`   ${' '.repeat(12)} ↳ ${s.eff.why}`);
+  }
 
   // 🚨 静的には確かめられない口（絞り込みが変数の中に居る）
   if (verdict.unverifiable.length) {
     console.log('');
-    console.log(`   ⚠ 絞り込みが **変数で渡されている** 読み口 ${verdict.unverifiable.length}箇所`);
+    console.log(`   ⚠ 絞り込みの中身が **静的には読めない** 読み口 ${verdict.unverifiable.length}箇所`);
     console.log('     ここは中身が静的に読めないので ❌ にも ✅ にもしません。**現物を人が見て確かめる事。**');
     console.log('     （「無い」と言い切ると嘘の❌になり、見張りが信用されなくなります）');
     for (const s of verdict.unverifiable.sort((a, b) => b.docs - a.docs)) {
-      console.log(`     ${pad(s.docsUnknown ? '?' : num(s.docs), 8)} ${pad(s.appLabel, 20)} ${pad(s.col, 22)} ${pad(s.kind, 14)} 絞り込み=${s.optsVar}  ${s.file}:${s.line}`);
+      const why = s.optsVar ? `絞り込み=${s.optsVar}` : (s.eff ? s.eff.why : '');
+      console.log(`     ${pad(s.docsUnknown ? '?' : num(s.docs), 8)} ${pad(s.appLabel, 20)} ${pad(s.col, 22)} ${pad(s.kind, 14)} ${why}  ${s.file}:${s.line}`);
     }
   }
 
@@ -1004,11 +1599,26 @@ export const main = () => {
   for (const [k, a] of Object.entries(allows)) {
     if (a.broken) reasons.push(`例外の紙が読めない(${k}): ${a.path} … ${a.broken}`);
   }
-  if (verdict.violations.length) reasons.push(`絞り込みの無い読み口が ${verdict.violations.length}箇所 残っている`);
+  // 🚨🚨 走らせた場所を **必ず** 食う。ここが赤くならないと「見張りが何も読んでいないのに緑」に戻る。
+  if (!selfApp) {
+    reasons.push(`走らせた場所(${SELF_ROOT})が4アプリのどれか分からない`
+      + '（package.json の name も フォルダ名も一致しない）。この見張りは4アプリの中で走らせる物です');
+  } else if (selfApp.missing) {
+    reasons.push(`🚨 自分(${selfApp.label})のコードを1バイトも読めていない: ${selfApp.notSeen || selfApp.dir}`);
+  } else if (!selfApp.sites.length) {
+    reasons.push(`🚨 自分(${selfApp.label})の src から読み口を1件も見つけられなかった`
+      + `（${num(selfApp.files || 0)}ファイル読んだのに0箇所＝数え方が壊れている疑い）`);
+  }
+  if (verdict.violations.length) {
+    const dw = verdict.violations.filter((v) => v.site.hasWhere || v.site.hasLimit).length;
+    reasons.push(`絞りが効いていない読み口が ${verdict.violations.length}箇所 残っている`
+      + (dw ? `（うち ${dw}箇所は where / limit を書いてあるのに 1件も絞れていない）` : ''));
+  }
   if (verdict.problems.length) reasons.push(`成り立っていない例外が ${verdict.problems.length}件 ある`);
   if (fresh.gone.length) reasons.push(`見積りの土台が実コードとずれている(${fresh.gone.length}件)`);
   // 🚨「?embed=map で読まない」は **見積りを小さくする** 側の申告。裏が取れない申告は通さない。
   for (const b of embedBad) reasons.push(`?embed=map で読まない、と書いてあるのに実コードに証拠が無い: ${b.key} / ${b.col} … ${b.why}`);
+  // ⚠③が **この端末に無い** のは赤にしない(見ていない)。**在るのに読めない** のは赤。
   if (est.unreadable) reasons.push('司令塔③の実コードを読めず、見積りが出せない');
   if (!est.unreadable && est.over) reasons.push(`1日の見積り ${num(est.day)}件 が無料枠 ${num(FREE_READS_PER_DAY)} を超えている(${est.pct}%)`);
 
@@ -1018,11 +1628,17 @@ export const main = () => {
     return 0;
   }
   if (!reasons.length) {
-    console.log('🚦 ✅ 合格。絞り込みの無い読み口は無く、見積りも無料枠の中です。');
+    console.log(`🚦 ✅ 合格（見た範囲で）。${coverageLine}`);
+    console.log(`   見た: ${seenApps.map((a) => a.label).join(' / ') || '(なし)'}`);
+    if (unseenApps.length) {
+      console.log(`   🚫 見ていない: ${unseenApps.map((a) => a.label).join(' / ')}`);
+      console.log('      → そのアプリのリポジトリの中で同じ物を走らせるまで、そこは何も確かめていません。');
+    }
+    console.log('   見た範囲では、絞り込みの無い読み口は無く、見積りも無料枠の中です。');
     console.log('==========================================================================');
     return 0;
   }
-  console.log('🚦 ❌ 不合格。出荷しないでください。');
+  console.log(`🚦 ❌ 不合格。出荷しないでください。（見たのは ${coverage}）`);
   reasons.forEach((r, i) => console.log(`   ${i + 1}. ${r}`));
   console.log('');
   console.log('   直し方は2つだけです。');
@@ -1032,9 +1648,9 @@ export const main = () => {
   console.log('          「普段は最近の分だけ購読し、過去が要る画面を開いた時だけ読む」形にする事。');
   console.log('          直す前と直した後で **画面の数字を突き合わせて、1つも変わらない事を示す** 事。');
   console.log('   (B) どうしても絞れないなら、理由を書いて例外にする。');
-  for (const app of APPS) {
+  for (const app of apps) {
     const a = allows[app.key];
-    if (a) console.log(`       ${pad(app.label, 20)} ${a.path}`);
+    console.log(`       ${pad(app.label, 20)} ${a && a.path ? a.path : '(この端末に置き場所が無いので開けません)'}`);
   }
   console.log('       1件につき { app, file, col, who, why(20文字以上), maxDocs, until(任意) }。');
   console.log('       🚨maxDocs は「この件数までなら許す」という約束。実測が追い越したら例外は自動で切れます。');

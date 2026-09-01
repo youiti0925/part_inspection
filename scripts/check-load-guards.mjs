@@ -44,6 +44,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// 🚨 受け皿が「本当に働くか」の物差しは verify-save-safety.mjs と **共有する**(2026-09-01)。
+//   2本の見張りで別々に数えると、片方だけ字面の判定に戻っても誰も気づかない。
+import { errorHandlerExprs, isLiveHandler, subscriptionHasLiveErrorHandler } from './verify-save-safety.mjs';
 
 // ---------------------------------------------------------------------------
 // 下ごしらえ
@@ -91,7 +94,17 @@ const lineOf = (src, idx) => src.slice(0, idx).split('\n').length;
  * @param {string} name   `...name(` の name
  */
 /** 受け口の**鍵の形**。`onErrorX:` や `onErrorNote:` は別物なので通さない。 */
-const ON_ERROR_KEY = /(^|[^\w$])onError\s*:/;
+// 🚨🚨 2026-09-01: **字が在るかだけ**では足りなかった。
+//   `onError: undefined` / `null` / `() => {}` は「受け皿の名前だけ残して中身を消した」形で、
+//   読み取りが 429・権限・回線で死んでも誰も気づかない。それでもこの見張りは緑だった(実測)。
+//   → verify-save-safety.mjs と同じ物差しで「本当に働くか」まで見る。
+//   ⚠ 呼ぶ側は `.test(…)` のままで済むように、同じ形の入れ物にしてある。
+const ON_ERROR_KEY = {
+  test: (text) => {
+    const exprs = errorHandlerExprs(String(text || ''));
+    return exprs.length > 0 && exprs.some(isLiveHandler);
+  },
+};
 export const helperHasOnError = (source, name) => {
   if (!/^[A-Za-z_$][\w$]*$/.test(String(name || ''))) return false;
   const at = source.indexOf(`const ${name} = `);
@@ -380,7 +393,9 @@ export const analyze = (rawSrc, file = '(memory)') => {
     //   `watch(headerElRef.current, cb)`(ResizeObserver)も同じ理由で外れる。
     const col = lit ? lit[1] : (/^[A-Z][A-Z0-9_]*$/.test(colArg) ? colArg : '');
     if (!col) continue;
-    if (/onError/.test(args)) continue;
+    // 🚨 「onError という字が在るか」ではなく **働く受け皿が在るか**(2026-09-01)。
+    //   字だけの判定だと `onError: undefined` の1行でこの見張りが黙る(実測: 壊す係 K1)。
+    if (subscriptionHasLiveErrorHandler(args.replace(/^\(/, '').replace(/\)\s*$/, ''))) continue;
     // 🚨 失敗の受け口を **道具ごと** 渡している形(`...subPair(名札, 中身)`)。
     //   ⚠道具の中身に onError が在る事まで確かめてから通す(helperHasOnError)。
     //     名前だけで通すと、偽物の道具1つで全部の購読が素通りする。
@@ -664,6 +679,27 @@ watch('notes', ...subPairX('メモ', (rows) => setNotes(rows))),
   const pairLookAlike = analyze(PAIR_REAL.replace('{ onError: onSubError(label) }', '{ onErrorX: 1 }'), '(似た名前の受け口)');
   say(pairLookAlike.problems.filter((p) => p.kind === 'A5').length === 2,
     `🚨 onErrorX のような **別の名前** では通さない (実際 ${pairLookAlike.problems.filter((p) => p.kind === 'A5').length}/2件)`);
+  //   ③2026-09-01: **受け皿の名前だけ残して中身を消した** 形が全部素通りしていた。
+  //     `onError: onSubError(label)` → `onError: undefined` に書き換えても緑(実測)。
+  for (const dead of ['undefined', 'null', '() => {}', 'async () => {}', 'function (e) {}', '() => undefined', '(e) => { return; }']) {
+    const r = analyze(`
+const lotsLoaded = true;
+watch('lots', (rows) => setLots(rows), { onError: ${dead} }),
+watch('notes', (rows) => setNotes(rows), { onError: ${dead} }),
+`, `(働かない受け皿 ${dead})`);
+    say(r.problems.filter((p) => p.kind === 'A4').length === 1 && r.problems.filter((p) => p.kind === 'A5').length === 1,
+      `🚨 受け皿の字だけ(onError: ${dead})では通さない (実際 A4=${r.problems.filter((p) => p.kind === 'A4').length}/1 A5=${r.problems.filter((p) => p.kind === 'A5').length}/1件)`);
+  }
+  // ⚠ 正しい形は通す。ここを落とす直しは「うるさいだけの見張り」になる。
+  for (const live of ["readFailed('lots')", '(e) => setReadError(e)', '(e) => { setReadError(e); setLotsLoaded(false); }', 'async (e) => { await note(e); }']) {
+    const r = analyze(`
+const lotsLoaded = true;
+watch('lots', (rows) => setLots(rows), { onError: ${live} }),
+watch('notes', (rows) => setNotes(rows), { onError: ${live} }),
+`, `(働く受け皿 ${live})`);
+    say(r.problems.filter((p) => p.kind === 'A4' || p.kind === 'A5').length === 0,
+      `正しい形(onError: ${live})は通す (実際 ${r.problems.filter((p) => p.kind === 'A4' || p.kind === 'A5').length}/0件)`);
+  }
   //   ②中身の奥の `{ ...shape(r) }` を拾って、onError を1つも持たない購読が免除されていた
   const nestedSpread = analyze(`
 const lotsLoaded = true;

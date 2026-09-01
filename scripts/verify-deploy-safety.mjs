@@ -66,6 +66,51 @@ const MODE = hasFlag('--after') ? 'after' : hasFlag('--post') ? 'post' : hasFlag
 const OFFLINE = hasFlag('--offline') || process.env.DEPLOY_SAFETY_OFFLINE === '1';
 const BASE_OVERRIDE = valOf('--base', process.env.DEPLOY_SAFETY_BASE || '');
 
+/**
+ * 🚨🚨 2026-09-01(その2)。待ちの下限(SETTLE_MIN_*)を入れた直後に、**同じ形の穴が
+ *   もっと大きく空いている**のが実測で出た。
+ *
+ *   実測（本番へは1回も聞いていない。0.58秒で終わった）:
+ *     DEPLOY_SAFETY_FIXTURE=<自分で書いた見本> node scripts/verify-deploy-safety.mjs --after
+ *       → 「✅ D6 出した後の照合 / 合格 7件 / 不合格 0件」 終了値 **0**
+ *   待ちを0にするより悪い。待ちは「短くなる」だけだが、こちらは
+ *   **本番の答えそのものが作り物に化ける**。deploy.mjs は子へ環境をそのまま渡すので、
+ *   `DEPLOY_SAFETY_FIXTURE=… npm run deploy` で「出した後の照合」が丸ごと嘘になる。
+ *
+ *   同じ形の切り替えが他に3つ:
+ *     DEPLOY_SAFETY_ROOT         … 見に行くフォルダを別の所にする（別の dist を照合する）
+ *     DEPLOY_SAFETY_BASE / --base=… … 聞きに行く住所を別の所にする（自分の立てた所へ聞ける）
+ *     DEPLOY_SAFETY_MATCHER_FROM … 照合の物差しを別の所から読む
+ *
+ * → 試験用の切り替えは **DEPLOY_SAFETY_SELFTEST=1 と一緒でなければ 赤で止まる**。
+ *   🚨 黙って無視しない。無視すると今度は逆に
+ *     「作り物で測っているつもりが、実は本番に聞いていた」が起きる。どちらも嘘になる。
+ *
+ * ⚠ ここに入れない物と、その理由（実測で確かめた）:
+ *   ・`--offline` / DEPLOY_SAFETY_OFFLINE … 答えが status 0 ＝「分からない」になる。
+ *     この見張りは「分からない」を合格にしないので、これで緑は作れない。
+ *   ・DEPLOY_SAFETY_RETRY_MS … 引き直すのは通信エラー(status 0)だけで、
+ *     404 や型違いは引き直さない。短くしても長くしても緑は作れない。
+ */
+export const SELFTEST_ONLY_SWITCHES = [
+  ['DEPLOY_SAFETY_FIXTURE', '本番の答えを丸ごと作り物に差し替える'],
+  ['DEPLOY_SAFETY_ROOT', '見に行くフォルダを別の所にする'],
+  ['DEPLOY_SAFETY_BASE', '聞きに行く住所を別の所にする'],
+  ['DEPLOY_SAFETY_MATCHER_FROM', '照合の物差しを別の所から読む'],
+];
+
+/** 試験用の切り替えが、試験の印(DEPLOY_SAFETY_SELFTEST=1)無しで渡されていないか。 */
+export const selftestOnlyMisuse = (env = process.env, argv = ARGS) => {
+  if (String(env.DEPLOY_SAFETY_SELFTEST || '').trim() === '1') return [];
+  const bad = SELFTEST_ONLY_SWITCHES
+    .filter(([k]) => String(env[k] == null ? '' : env[k]).trim() !== '')
+    .map(([k, why]) => `${k} … ${why}`);
+  if (argv.some((a) => a === '--base' || a.startsWith('--base='))) {
+    bad.push('--base=… … 聞きに行く住所を別の所にする');
+  }
+  return bad;
+};
+
 const readText = (rel) => {
   const p = join(ROOT, rel);
   return existsSync(p) ? readFileSync(p, 'utf8') : null;
@@ -259,22 +304,30 @@ const FIXTURE = process.env.DEPLOY_SAFETY_FIXTURE
 // 見本は `seq: [答え1, 答え2, …]` の形も読める（同じ URL を聞くたびに順に返し、最後の答えを繰り返す）。
 // 「1回目は通信エラー・2回目は 200」のような **一過性のエラー** を selftest で作る為。
 const fixtureSeqCount = new Map();
-const fixtureAnswer = (url) => {
+const fixtureAnswer = (url0) => {
   if (!FIXTURE) return null;
-  const pick = (v) => {
+  // 🔁 印(?nc1fresh=…)は **聞き方**であって、聞いている物ではない。外してから見本を引く。
+  //    ⚠ ただし「印を付けて聞いた時だけの答え」は分けて持てる様にする(鍵の後ろに `#fresh`)。
+  //      本番の手前(CDN)は 404 を覚えるので、印なしは古い答え・印ありは本体の答えになる。
+  //      ここを分けられないと、**印を付けずに聞き直す作りに戻しても試験が緑のまま**になる
+  //      (2026-09-01 実測で確認した穴)。
+  const isFresh = /[?&]nc1fresh=/.test(String(url0));
+  const url = String(url0).split('?')[0];
+  const pick = (key, v) => {
     if (v && Array.isArray(v.seq)) {
-      const n = fixtureSeqCount.get(url) || 0;
-      fixtureSeqCount.set(url, n + 1);
+      const n = fixtureSeqCount.get(key) || 0;
+      fixtureSeqCount.set(key, n + 1);
       return v.seq[Math.min(n, v.seq.length - 1)];
     }
     return v;
   };
-  if (FIXTURE[url]) return pick(FIXTURE[url]);
+  if (isFresh && FIXTURE[`${url}#fresh`]) return pick(`${url}#fresh`, FIXTURE[`${url}#fresh`]);
+  if (FIXTURE[url]) return pick(url, FIXTURE[url]);
   for (const [k, v] of Object.entries(FIXTURE)) {
-    if (k === '*') continue;
-    if (k.endsWith('*') && url.startsWith(k.slice(0, -1))) return pick(v);
+    if (k === '*' || k.endsWith('#fresh')) continue;
+    if (k.endsWith('*') && url.startsWith(k.slice(0, -1))) return pick(k, v);
   }
-  return pick(FIXTURE['*']) || { status: 0, error: '見本に載っていない' };
+  return FIXTURE['*'] ? pick('*', FIXTURE['*']) : { status: 0, error: '見本に載っていない' };
 };
 
 const askOnce = async (url, { body = false } = {}) => {
@@ -309,7 +362,18 @@ const askOnce = async (url, { body = false } = {}) => {
  */
 export const RETRY_MS = (process.env.DEPLOY_SAFETY_RETRY_MS || '300,1200')
   .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n >= 0);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/**
+ * ⏳ 待つ。
+ * 🚨🚨 2026-09-01: 自己試験は今まで `DEPLOY_SETTLE_STEPS_MS=1,1,1` で待ちを潰していた。
+ *   その為に **「待ちを 0 にすると赤になる」を試験できず**、しかも同じ環境変数を
+ *   本物のデプロイに渡せば見張りを丸ごと無力化できた（実測で緑のまま通った）。
+ *   → 待ちの刻みは **本物のまま**にして、代わりに
+ *     「作り物の答え(fixture)で測っている＝本番に一切触っていない」時だけ、
+ *     実際に眠るのをやめる。刻みの数も回数も本物と同じ道を通る。
+ *   ⚠ fixture が入っている時は そもそも通信の答えが全部 作り物なので、
+ *     ここで眠らない事によって新しく素通りできる物は無い。
+ */
+const sleep = (ms) => (FIXTURE ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)));
 
 export const ask = async (url, { body = false } = {}) => {
   let r = await askOnce(url, { body });
@@ -321,6 +385,98 @@ export const ask = async (url, { body = false } = {}) => {
   }
   return { ...r, retried: tries };
 };
+
+/**
+ * 🔁🚨 手前(CDN)を通り抜けて、**本体**に聞き直す。
+ *
+ * ⚠⚠ なぜ要るか（2026-09-01 実測。4サイトとも同じ）:
+ *   本番が返す 404 には `cache-control: public, max-age=31536000, immutable` が付いていて、
+ *   2回目からは `x-cache: HIT` になる。**手前が「その名前は無い」を覚える。**
+ *   `Cache-Control: no-cache` を送っても HIT のまま。3分14秒(19回)見張って一度も MISS に戻らなかった。
+ *   → **同じ名前をただ聞き直しても、覚えた答えが返るだけ。待っても一生 変わらない。**
+ *      「404 が出たら少し待って もう一度」を素直に書くと、緑になる事が無い見張りになる。
+ *
+ *   毎回ちがう印を付けると 手前を素通りする(実測: 12回とも x-cache: MISS)。
+ *   在る玉に同じ印を付けても 200 + 正しい型で返る(実測: 4サイト4件とも)ので、
+ *   **印を付けた測り方でも嘘にならない**。
+ */
+let freshSeq = 0;
+export const askFresh = async (url) => {
+  freshSeq += 1;
+  const mark = `nc1fresh=${Date.now().toString(36)}${freshSeq}`;
+  const r = await ask(url.includes('?') ? `${url}&${mark}` : `${url}?${mark}`);
+  return { ...r, fresh: true };
+};
+
+/**
+ * ⏳ 反映を待つ刻み(ミリ秒)。既定 2/4/8/15/30/30秒 = 待ちの合計 89秒・測り直し6回。
+ *
+ * ⚠ この数字の出どころ（決めうちではない・全部 2026-09-01 の実測）:
+ *   ・1回聞くのに掛かる時間 … 中央 0.20〜2.1秒 / 最長 3.3秒（4サイト・HEAD・打ち切りは10秒）
+ *     → 6回 測り直しても 通信ぶんは最悪でも 20秒ほど。89秒の待ちに対して十分小さい。
+ *   ・手前(CDN)が 404 を覚えている間は 印なしで聞き直しても無駄（上に書いた194秒の実測）。
+ *     → 89秒は「手前が忘れるのを待つ」時間ではない。**本体に届くのを待つ**時間。
+ *   ・8/31 の実際の赤は「今まさに出した部品が404 → 数十秒後は全部200」だった。
+ *     89秒はその「数十秒」を包む。
+ *   🚨 ここはまだ **本物のデプロイでは測れていない**（この作業ではデプロイしない決まり）。
+ *     出した後の照合は、待った時は必ず「何秒で届いたか」を画面に出す。
+ *     次に本物を出した時のその数字で、この刻みを直す事。
+ */
+export const DEFAULT_SETTLE_STEPS_MS = [2000, 4000, 8000, 15000, 30000, 30000];
+
+/**
+ * 🚨🚨 2026-09-01 の わざと壊す試験で見つかった穴。
+ *   `DEPLOY_SETTLE_STEPS_MS=0,0,0,0,0,0` … 6回 測り直すが **待ちは0秒**  → 緑のまま
+ *   `DEPLOY_SETTLE_STEPS_MS=1`           … 1回・1ミリ秒                  → 緑のまま
+ *   ＝ 今夜入れた「反映を待つ」直しは、**コードを1文字も変えずに環境変数だけで消せた**。
+ *     deploy.mjs は子へ環境をそのまま渡すので `DEPLOY_SETTLE_STEPS_MS=0 npm run deploy` で
+ *     8/31 の形(404 即赤)に戻り、しかも自己試験は「信用してよい」と言い続けた。
+ *
+ * → **下限を作る**。下限より小さい値を渡したら **赤で止まる**。
+ *   🚨 黙って下限へ丸めない。丸めると「0 を渡したのに 89秒 待った」という嘘になる。
+ *   ⚠ **長くするのは通す**（急ぎたい時に短くするのを止めるのが狙いで、慎重にするのは止めない）。
+ *
+ * 下限の出どころ(2026-09-01 の実測。決めうちではない):
+ *   ・1回聞くのに掛かる時間 … 中央 0.20〜2.1秒 / 最長 3.3秒(4サイト・HEAD)
+ *     → 1回の待ちが 2秒 を切ると「待った」と言えない(通信そのものの揺れに埋もれる)。
+ *   ・8/31 の実際の赤は「今まさに出した部品が404 → 数十秒後は全部200」だった。
+ *     → 合計が 60秒 を切ると、その「数十秒」を包めない。
+ *   ・1回きりでは「たまたま」と区別が付かない → 測り直しは 4回以上。
+ */
+export const SETTLE_MIN_STEP_MS = 2000;
+export const SETTLE_MIN_TOTAL_MS = 60_000;
+export const SETTLE_MIN_STEPS = 4;
+
+/**
+ * 反映待ちの刻みを読む。**画面もファイルも触らない純粋な関数**(だから試験できる)。
+ * @returns {{ steps:number[]|null, ok:boolean, why:string, source:string }}
+ */
+export const parseSettleSteps = (raw, {
+  minStep = SETTLE_MIN_STEP_MS, minTotal = SETTLE_MIN_TOTAL_MS, minSteps = SETTLE_MIN_STEPS,
+} = {}) => {
+  const txt = String(raw == null ? '' : raw).trim();
+  if (!txt) return { steps: DEFAULT_SETTLE_STEPS_MS.slice(), ok: true, why: '', source: '既定' };
+  const parts = txt.split(',').map((s) => s.trim()).filter((s) => s !== '');
+  const nums = parts.map(Number);
+  if (!parts.length || nums.some((n) => !Number.isFinite(n))) {
+    return { steps: null, ok: false, source: 'DEPLOY_SETTLE_STEPS_MS',
+      why: `DEPLOY_SETTLE_STEPS_MS=${txt} が数字の並びとして読めない` };
+  }
+  const bad = [];
+  if (nums.length < minSteps) bad.push(`測り直しが ${nums.length}回（下限 ${minSteps}回）`);
+  const shortOnes = nums.filter((n) => n < minStep);
+  if (shortOnes.length) bad.push(`1回の待ちが短すぎる: ${shortOnes.join(',')}ms（下限 ${minStep}ms）`);
+  const total = nums.reduce((a, b) => a + b, 0);
+  if (total < minTotal) bad.push(`待ちの合計が ${total}ms（下限 ${minTotal}ms）`);
+  if (bad.length) {
+    return { steps: null, ok: false, source: 'DEPLOY_SETTLE_STEPS_MS',
+      why: `DEPLOY_SETTLE_STEPS_MS=${txt} … ${bad.join(' / ')}` };
+  }
+  return { steps: nums, ok: true, why: '', source: 'DEPLOY_SETTLE_STEPS_MS' };
+};
+
+export const SETTLE = parseSettleSteps(process.env.DEPLOY_SETTLE_STEPS_MS);
+export const SETTLE_STEPS_MS = SETTLE.steps || DEFAULT_SETTLE_STEPS_MS.slice();
 
 /**
  * 本番の index.html を読んで、いま名指しされている玉を返す。
@@ -765,40 +921,107 @@ const checkFrequency = () => {
 //             （⚠合格にはしない。unknown も不合格の原則は変えない → 従来どおり exit 1）
 //     ok    … 全部 200/正しい型。引き直しで通った物が在れば注記する（一過性のエラーだった証拠）
 // ---------------------------------------------------------------------------
+const rightAnswer = (a, r) => r.status === 200 && rightKind(a, r.contentType);
+
+/**
+ * 部品1個を本番で測る。⏳ **404 は待って測り直す**（8/31 の赤2件は全部これだった）。
+ *
+ * ⚠ 返す物は4通り。「分からない」を合格にしない原則は変えない。
+ *   ok        … 200 + 正しい型。waitedMs>0 なら「待ったら届いた」
+ *   bad       … 待ち切っても本体に無い ＝ 本当に出せていない → ❌
+ *   edgeStale … 本体には届いたのに、印なしの聞き方では まだ古い答えが返る
+ *               ＝ 現場の端末には まだ届いていない → ❌（緑にしない）
+ *   flaky     … 通信エラーのまま ＝ 確かめられなかった → ⚠(不合格)
+ */
+const measureAsset = async (baseUrl, a, say) => {
+  const url = `${baseUrl}/${a}`;
+  // ① まず 現場の端末と同じ聞き方(印なし)。緑ならここで終わり＝今までと同じ通信量。
+  let last = await ask(url);
+  if (last.status === 0) return { kind: 'flaky', r: last };
+  if (rightAnswer(a, last)) return { kind: 'ok', r: last, waitedMs: 0, tries: 0 };
+
+  const t0 = Date.now();
+  let phase = 'origin';   // origin=本体に届くのを待つ / edge=本体には有る。手前が追いつくのを待つ
+  for (let i = 0; i < SETTLE_STEPS_MS.length; i++) {
+    // 🚨 黙って待たない。待っている事と、いま何が返っているかを その場で出す。
+    say(`   ⏳ 反映を待っています（${i + 1}回目 / 経過 ${Math.round((Date.now() - t0) / 1000)}秒）`
+      + ` … /${a} → いまは ${last.status || last.error}`
+      + (phase === 'edge' ? '（本体には届いています。手前の入れ替わり待ち）' : ''));
+    await sleep(SETTLE_STEPS_MS[i]);
+    if (phase === 'origin') {
+      const f = await askFresh(url);
+      last = f;
+      if (f.status === 0) continue;
+      if (!rightAnswer(a, f)) continue;     // まだ本体に無い
+      phase = 'edge';
+      const plain = await ask(url);
+      last = plain;
+      if (rightAnswer(a, plain)) return { kind: 'ok', r: plain, waitedMs: Date.now() - t0, tries: i + 1 };
+    } else {
+      const plain = await ask(url);
+      last = plain;
+      if (rightAnswer(a, plain)) return { kind: 'ok', r: plain, waitedMs: Date.now() - t0, tries: i + 1 };
+    }
+  }
+  const waitedMs = Date.now() - t0;
+  if (last.status === 0) return { kind: 'flaky', r: last, waitedMs };
+  if (phase === 'edge') return { kind: 'edgeStale', r: last, waitedMs };
+  return { kind: 'bad', r: last, waitedMs };
+};
+
 const checkAfterDeploy = async (cfgs) => {
   for (const c of cfgs) {
     const who = c.target ? `[${c.target}]` : '';
     if (OFFLINE || !c.baseUrl) { add('D6', `出した後の照合 ${who}`, 'skip', '通信しない指定'); continue; }
     const want = new Set([...ledgerAlive(), ...(distAssets(c.publicDir) || []).filter((a) => a.startsWith('assets/'))]);
-    const bad = [];        // 404 / 型違い … 本当に壊れている
-    const flaky = [];      // 通信エラーが引き直しても続いた … 確かめられなかった
+    const bad = [];        // 待ち切っても駄目 … 本当に壊れている
+    const stale = [];      // 本体には有るのに 現場の聞き方では返らない
+    const flaky = [];      // 通信エラーが続いた … 確かめられなかった
     const retriedOk = [];  // 一度は通信エラーだったが、引き直しで 200 が返った（一過性）
+    const settled = [];    // 待ったら届いた（何秒で届いたかを控える）
+    const say = (s) => console.log(s);
     for (const a of want) {
-      const r = await ask(`${c.baseUrl}/${a}`);
-      if (r.status === 0) {
-        flaky.push(`  /${a} → 通信エラー(${r.error})。${RETRY_MS.length}回 引き直しても届かなかった`);
+      const m = await measureAsset(c.baseUrl, a, say);
+      const sec = (ms) => (ms / 1000).toFixed(1);
+      if (m.kind === 'flaky') {
+        flaky.push(`  /${a} → 通信エラー(${m.r.error})。${RETRY_MS.length}回 引き直しても届かなかった`);
         continue;
       }
-      if (r.status !== 200 || !rightKind(a, r.contentType)) {
-        bad.push(`  /${a} → ${r.status || r.error} ${r.contentType}`);
+      if (m.kind === 'bad') {
+        bad.push(`  /${a} → ${m.r.status || m.r.error} ${m.r.contentType}`
+          + `（${sec(m.waitedMs)}秒 待って ${SETTLE_STEPS_MS.length}回 測り直しても駄目）`);
         continue;
       }
-      if (r.retried) retriedOk.push(`  /${a} … 1回目は通信エラー → 引き直しで 200（一過性）`);
+      if (m.kind === 'edgeStale') {
+        stale.push(`  /${a} → 本体には届いている（印を付けて聞くと 200）のに、`
+          + `現場と同じ聞き方では ${m.r.status} のまま（${sec(m.waitedMs)}秒 待った）`);
+        continue;
+      }
+      if (m.waitedMs > 0) settled.push(`  /${a} … ${sec(m.waitedMs)}秒 待ったら届いた（測り直し ${m.tries}回目）`);
+      if (m.r.retried) retriedOk.push(`  /${a} … 1回目は通信エラー → 引き直しで 200（一過性）`);
     }
-    if (bad.length) {
-      add('D6', `出した後の照合 ${who}`, 'ng', `本番で ${bad.length}個の部品が正しく返ってこない（404/型違い）`,
-        [...bad, ...flaky]);
+    const settleNote = settled.length
+      ? [`⏳ ${settled.length}個は 反映を待ってから届いた。**この秒数が、待ち時間を決め直す唯一の実測**`,
+        ...settled,
+        `   いまの刻み: ${SETTLE_STEPS_MS.map((n) => `${n / 1000}秒`).join('→')}（環境変数 DEPLOY_SETTLE_STEPS_MS で変えられる）`]
+      : [];
+    if (bad.length || stale.length) {
+      add('D6', `出した後の照合 ${who}`, 'ng',
+        `本番で ${bad.length + stale.length}個の部品が正しく返ってこない（404/型違い。待って測り直した後の話）`,
+        [...bad, ...stale, ...flaky, ...settleNote]);
     } else if (flaky.length) {
       add('D6', `出した後の照合 ${who}`, 'unknown',
         `通信エラーで ${flaky.length}個の部品を確かめられなかった（404/型違いは無い）`,
         [...flaky,
           '⚠「確かめられなかった」は「大丈夫」ではない。回線が落ち着いてから もう一度 --after を流す事',
-          '  node scripts/verify-deploy-safety.mjs --after']);
+          '  node scripts/verify-deploy-safety.mjs --after',
+          ...settleNote]);
     } else {
       add('D6', `出した後の照合 ${who}`, 'ok', `本番で ${want.size}個の部品が全部 生きている`,
-        retriedOk.length
+        [...(retriedOk.length
           ? [`⚠うち ${retriedOk.length}個は 引き直しで通った（通信エラーは一過性だった）`, ...retriedOk]
-          : []);
+          : []),
+        ...settleNote]);
     }
   }
 };
@@ -814,10 +1037,47 @@ const main = async () => {
   console.log('⚠「確かめられなかった」は合格にしない。');
   console.log(line);
 
+  // 🚨🚨 試験用の切り替えを本物のデプロイに渡して、答えごと作り物にする道を **止める**（2026-09-01 その2）。
+  //   実測: DEPLOY_SAFETY_FIXTURE=<自分で書いた見本> で --after が「合格7件/不合格0件」終了値0。
+  //         本番へは1回も聞いていない（0.58秒）。待ちを0にするより悪い穴だった。
+  // 🚨 **いちばん先に見る。** 最初ここを firebase.json の検査の後ろに置いていて、
+  //   DEPLOY_SAFETY_ROOT を別のフォルダに向けた時は そちらが先に赤になり、
+  //   この門は **一度も通っていなかった**（赤は出るが、理由が違う＝直しが効いた証拠にならない）。
+  //   切り替えの検分は、見に行く先を使う前に済ませる。
+  const misuse = selftestOnlyMisuse();
+  if (misuse.length) {
+    console.log('❌ 試験用の切り替えが渡されています。**この設定では測りません。**');
+    for (const m of misuse) console.log(`   ・${m}`);
+    console.log('   これらは 本番の答え・見に行く先・照合の物差し を差し替える物なので、');
+    console.log('   本物のデプロイで使うと「確かめた」と言いながら **中身は作り物** になります。');
+    console.log('   見張り自身の試験(node scripts/selftest-deploy-safety.mjs)は');
+    console.log('   DEPLOY_SAFETY_SELFTEST=1 を付けて呼んでいるので、そのまま動きます。');
+    console.log('   ⚠ 黙って無視はしません（無視すると今度は「作り物のつもりで本番に聞いていた」が起きます）。');
+    console.log(line);
+    process.exit(1);
+  }
+
   if (!cfgs.length) {
     console.log('❌ firebase.json に hosting が無い。出し先が分からない。');
     process.exit(1);
   }
+
+  // 🚨🚨 反映待ちを短くして見張りを無力化する道を、ここで **止める**（2026-09-01）。
+  //   黙って下限へ丸めない＝「0 を渡したのに待った事にする」という嘘をつかない。
+  if (!SETTLE.ok) {
+    console.log('❌ 反映を待つ刻みが、下限より短い。**この設定では測りません。**');
+    console.log(`   ${SETTLE.why}`);
+    console.log(`   下限: 1回 ${SETTLE_MIN_STEP_MS}ms 以上 / 合計 ${SETTLE_MIN_TOTAL_MS}ms 以上 / 測り直し ${SETTLE_MIN_STEPS}回 以上`);
+    console.log('   ⚠ 長くするのは通ります。短くするのだけ止めています。');
+    console.log('     (待ちを0にすると「出した直後の404」を そのまま赤にしてしまい、');
+    console.log('      しかも見張りは「確かめた」と言い続けます＝嘘の判定になります)');
+    console.log(`   既定に戻すなら DEPLOY_SETTLE_STEPS_MS を外してください（既定 ${DEFAULT_SETTLE_STEPS_MS.join(',')}）`);
+    console.log(line);
+    process.exit(1);
+  }
+  console.log(`   ⏳ 反映を待つ刻み: ${SETTLE_STEPS_MS.map((n) => `${n / 1000}秒`).join('→')}`
+    + `（合計 ${SETTLE_STEPS_MS.reduce((a, b) => a + b, 0) / 1000}秒 / ${SETTLE.source}`
+    + `${FIXTURE ? ' / 作り物の答えで測っているので実際には眠りません' : ''}）`);
 
   checkOneDoor();
   checkRewrites(cfgs);

@@ -367,6 +367,41 @@ export const selftest = ({ quiet = false } = {}) => {
   say(ids(w1).includes('SS-302'), 'その他の購読も名指しする', ids(w1).join(','));
   const w2 = run(WATCH_GOOD);
   say(!ids(w2).includes('SS-301') && !ids(w2).includes('SS-302'), 'onError 付きなら文句を言わない', ids(w2).join(',') || '0件');
+  // 🚨🚨 受け皿の「字だけ」を見ていた頃(2026-09-01 まで)は、ここが**全部 緑**だった。
+  //   壊す係 K1: `onError: onLotsError('active')` → `onError: undefined` で 0(緑)・指摘も動かず。
+  //   だから「わざと壊した見本で落ちる」をこの形ごとに1件ずつ並べる。
+  const DEAD_HANDLERS = [
+    ['onError: undefined', `const un = [ watch('lots', (rows) => setLots(rows), { onError: undefined }) ];`],
+    ['onError: null', `const un = [ watch('lots', (rows) => setLots(rows), { onError: null }) ];`],
+    ['onError: () => {}', `const un = [ watch('lots', (rows) => setLots(rows), { onError: () => {} }) ];`],
+    ['onError: async () => {}', `const un = [ watch('lots', (rows) => setLots(rows), { onError: async () => {} }) ];`],
+    ['onError: (e) => { }', `const un = [ watch('lots', (rows) => setLots(rows), { includeMetadataChanges: true, onError: (e) => { } }) ];`],
+    ['onError: function (e) {}', `const un = [ watch('lots', (rows) => setLots(rows), { onError: function (e) {} }) ];`],
+    ['onError: () => undefined', `const un = [ watch('lots', (rows) => setLots(rows), { onError: () => undefined }) ];`],
+    ['onError: (e) => { return; }', `const un = [ watch('lots', (rows) => setLots(rows), { onError: (e) => { return; } }) ];`],
+    ['中身の無い catch', `const un = [ watch('lots', (rows) => { try { setLots(rows); } catch (e) {} }) ];`],
+    ['中身の無い .catch(() => {})', `const un = [ watch('lots', (rows) => { save(rows).catch(() => {}); }) ];`],
+  ];
+  for (const [what, src] of DEAD_HANDLERS) {
+    const r = run(src);
+    say(ids(r).includes('SS-301'), `受け皿の字だけ(${what})を「付いている」と数えない`, ids(r).join(',') || '0件');
+    say(r.stats.subsWithError === 0, `　同上 — onError付きの件数に足さない(${what})`, `${r.stats.subsWithError}件`);
+  }
+  // ⚠ 正しい形は緑のまま。ここが赤くなる直しは「うるさいだけの見張り」になる。
+  const LIVE_HANDLERS = [
+    ["名前付きを渡す(readFailed('lots'))", `const un = [ watch('lots', (rows) => setLots(rows), { onError: readFailed('lots') }) ];`],
+    ["窓口を通して渡す(onLotsError('active'))", `const un = [ watch('lots', (rows) => setLots(rows), { onError: onLotsError('active') }) ];`],
+    ['その場で札を出す', `const un = [ watch('lots', (rows) => setLots(rows), { onError: (e) => setLotsReadError(String(e)) }) ];`],
+    ['中身のある関数', `const un = [ watch('lots', (rows) => setLots(rows), { onError: (e) => { setLotsReadError(String(e)); setLotsLoaded(false); } }) ];`],
+    ['async で中身がある', `const un = [ watch('lots', (rows) => setLots(rows), { onError: async (e) => { await note(e); } }) ];`],
+    ['位置で渡す onSnapshot(ref, next, onErr)', `const un = [ onSnapshot(ref, (snap) => setLots(snap), onLotsErr) ];`],
+    ['中身のある catch', `const un = [ watch('lots', (rows) => { try { setLots(rows); } catch (e) { setLotsReadError(String(e)); } }) ];`],
+  ];
+  for (const [what, src] of LIVE_HANDLERS) {
+    const r = run(src);
+    say(!gIds(r, 3).includes('SS-301') && !gIds(r, 3).includes('SS-302'), `正しい形(${what})は緑のまま`, gIds(r, 3).join(',') || '0件');
+    say(r.stats.subsWithError === 1, `　同上 — 働く受け皿として1件数える(${what})`, `${r.stats.subsWithError}件`);
+  }
   const w3 = run(WATCH_RESIZE);
   say(w3.stats.subscriptions === 0, '負の対照: 画面の大きさを見る watch(el,set) を購読と数えない', `${w3.stats.subscriptions}件`);
   // ⚠負の対照: 窓口(src/data/*)は「呼んだ側の onError をそのまま渡すだけ」。ここを欠陥と言わない。

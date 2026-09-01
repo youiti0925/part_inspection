@@ -193,6 +193,124 @@ export const splitArgs = (inner) => {
   return out.map((s) => s.trim()).filter((s, i2, a) => s !== '' || i2 < a.length - 1);
 };
 
+// ---------------------------------------------------------------------------
+// 🚨🚨 受け皿が「本当に働くか」を見る (2026-09-01 追加)
+// ---------------------------------------------------------------------------
+// これまでは `if (/onError|onErr\b|\bcatch\b/.test(inner))` ＝ **onError という字が
+// 在るかどうか** だけで「受け皿あり」と数えていた。実測(壊す係 K1):
+//     onError: onLotsError('active')  →  onError: undefined
+// に書き換えても、この見張りは 0(緑)のまま・指摘の件数も1件も動かなかった。
+// つまり **受け皿の名前だけ残して中身を消す** と、読み取りが 429・権限・回線で
+// 死んでも誰も気づかない状態に、1行で戻せてしまう。
+//
+// ここで見るのは「渡された式が本当に何かするか」。
+//   ❌ 受け皿ではない … undefined / null / () => {} / async () => {} /
+//                      function (e) {} / () => undefined / 中身の無い catch
+//   ✅ 受け皿である   … 名前(readFailed('lots')) / 呼び出し / 中身のある関数 /
+//                      位置で渡す onSnapshot(ref, next, onErr) / 中身のある catch
+// ---------------------------------------------------------------------------
+
+/** 関数の本体(`=>` の右側 / `{...}`)が何かするか。 */
+export const handlerBodyActs = (raw) => {
+  const s = String(raw || '').trim();
+  if (!s) return false;
+  if (s.startsWith('{')) {
+    const { inner } = readParen(s, 0);
+    const t = inner.replace(/[\s;]/g, '');
+    if (t === '') return false;                                  // () => {}
+    if (/^return(undefined|null|void0)?$/.test(t)) return false;  // () => { return; }
+    return true;
+  }
+  // 省略形の本体( `=>` の右がそのまま値)
+  return !/^(undefined|null|void\s*0|void\s*\(\s*0\s*\)|\(\s*\)|\(\s*\{\s*\}\s*\)|\{\s*\}|''|""|``|0|false|true|NaN)$/.test(s);
+};
+
+/**
+ * 渡された式が「働く受け皿」か。**字が在るだけの物は false**。
+ * ⚠ 名前・メンバ・呼び出しは中身を追えないので true にする(正しい形を赤にしない)。
+ */
+export const isLiveHandler = (raw) => {
+  let s = String(raw || '').trim();
+  // `(fn)` のように丸括弧で包んだだけの物は剥がす。`( ) => …` は剥がさない。
+  for (let n = 0; n < 4 && s.startsWith('('); n++) {
+    const { end } = readParen(s, 0);
+    if (end !== s.length - 1) break;
+    const bare = s.slice(1, end).trim();
+    if (!bare) return false;
+    s = bare;
+  }
+  if (!s) return false;
+  if (/^(undefined|null|void\s*0|void\s*\(\s*0\s*\)|false|true|0|NaN|''|""|``|\{\s*\}|\[\s*\])$/.test(s)) return false;
+  const body = s.replace(/^async\b\s*/, '');
+  const fn = /^function\b\s*\*?\s*[\w$]*\s*\(/.exec(body);
+  if (fn) {
+    const { end } = readParen(body, fn[0].length - 1);
+    return handlerBodyActs(body.slice(end + 1));
+  }
+  if (body.startsWith('(')) {
+    const { end } = readParen(body, 0);
+    const rest = body.slice(end + 1).trim();
+    if (rest.startsWith('=>')) return handlerBodyActs(rest.slice(2));
+    return true;                       // 上で剥がせなかった丸括弧 = ただの式
+  }
+  const arrow = /^[\w$]+\s*=>/.exec(body);
+  if (arrow) return handlerBodyActs(body.slice(arrow[0].length));
+  return true;                         // 名前 / メンバ / 呼び出し
+};
+
+/** 引数の中から `onError:` `onErr:` の **値の式** を全部取り出す。 */
+export const errorHandlerExprs = (inner) => {
+  const out = [];
+  for (const m of String(inner || '').matchAll(/(?<![\w$.])(onError|onErr)\s*:/g)) {
+    let i = m.index + m[0].length, depth = 0;
+    const start = i;
+    for (; i < inner.length; i++) {
+      const e = skipLiteralAt(inner, i);
+      if (e > i) { i = e - 1; continue; }
+      const c = inner[i];
+      if ('([{'.includes(c)) depth++;
+      else if (')]}'.includes(c)) { if (depth === 0) break; depth--; }
+      else if (c === ',' && depth === 0) break;
+    }
+    out.push(inner.slice(start, i).trim());
+  }
+  return out;
+};
+
+/** try/catch と .catch(…)。**中で何もしない catch は受け皿と数えない**。 */
+export const hasLiveCatch = (text) => {
+  const s = String(text || '');
+  for (const m of s.matchAll(/(?<![\w$])catch\b/g)) {
+    const chained = /[.?]\s*$/.test(s.slice(Math.max(0, m.index - 2), m.index));
+    let i = m.index + m[0].length;
+    while (i < s.length && /\s/.test(s[i])) i++;
+    if (chained) {                                   // `.catch(受け皿)`
+      if (s[i] !== '(') continue;
+      const { inner } = readParen(s, i);
+      if (splitArgs(inner).some(isLiveHandler)) return true;
+      continue;
+    }
+    if (s[i] === '(') { const { end } = readParen(s, i); i = end + 1; while (i < s.length && /\s/.test(s[i])) i++; }
+    if (s[i] !== '{') continue;
+    const { inner } = readParen(s, i);
+    if (inner.replace(/[\s;]/g, '') !== '') return true;
+  }
+  return false;
+};
+
+/** 購読の引数に「働く受け皿」が付いているか。 */
+export const subscriptionHasLiveErrorHandler = (inner) => {
+  const exprs = errorHandlerExprs(inner);
+  // ⚠ onError の字が在るのに全部が空 → **ここで打ち切る**。
+  //   「別の所に catch が在るから」で緑にすると、K1(onError: undefined)がまた通る。
+  if (exprs.length) return exprs.some(isLiveHandler);
+  // 位置で渡す形 onSnapshot(ref, next, onErr)
+  const args = splitArgs(inner);
+  const last = args[args.length - 1] || '';
+  if (args.length >= 3 && /^[\w$.]+$/.test(last) && /err/i.test(last)) return true;
+  return hasLiveCatch(inner);
+};
+
 /** その位置から「1つの文」を取り出す(深さ0の `;` まで。閉じ括弧に当たったらそこまで)。 */
 export const statementFrom = (src, idx, cap = 8000) => {
   let depth = 0;
@@ -616,23 +734,34 @@ export const analyzeSources = (inputs, opts = {}) => {
     // ========================================================================
     // ③ SS-3 購読の onError — 読み取りが死んでも誰も気づかない所を数えて名指し
     // ========================================================================
-    // ⚠ `P.watchCollection(` `DATA(db).watchDoc(` のように **窓口越し** に呼ぶ形が多い。
+    // ⚠ `P.watchCollection(` `DATA(db).watchDoc(` `Q.watchQuery(` のように **窓口越し** に呼ぶ形が多い。
     //   直前の `.` を除いてしまうと、その購読を1件も数えられない(＝③が丸ごと空振りする)。
     // ⚠⚠ 窓口(src/data/*)そのものは数えない。あそこは
     //   `onErr ? fs.onSnapshot(ref, next, onErr) : fs.onSnapshot(ref, next)` のように
     //   **呼んだ側の onError をそのまま渡すだけ**。ここを欠陥と言うのは嘘になる(実測 ③司令塔で2件)。
     //   見るべきは「呼ぶ側が onError を渡しているか」なので、画面側だけを数える。
-    for (const m of /^src[\\/]data[\\/]/.test(file) ? [] : src.matchAll(/(?<![\w$])(watch|watchCollection|watchDoc|onSnapshot)\s*\(/g)) {
+    for (const m of /^src[\\/]data[\\/]/.test(file) ? [] : src.matchAll(/(?<![\w$])(watch|watchCollection|watchDoc|watchQuery|onSnapshot)\s*\(/g)) {
       const open = m.index + m[0].length - 1;
       const { inner } = readParen(src, open);
       const args = splitArgs(inner);
       const first = args[0] || '';
       // ⚠ 画面の大きさを見る `watch(el, set)` のような同名の別物を数えない。
       const isCollection = /^['"][\w-]+['"]$/.test(first) || /^[A-Z][A-Z0-9_]*(COL|COLLECTION|NS)[A-Z0-9_]*$/.test(first)
-        || m[1] === 'watchCollection' || m[1] === 'watchDoc' || m[1] === 'onSnapshot';
+        || m[1] === 'watchCollection' || m[1] === 'watchDoc' || m[1] === 'onSnapshot'
+        // 🚨 watchQuery は第1引数が名前空間(APP_DATA_ID)なので、上の「1個目が文字列か」では
+        //   一生ひっかからない。ここに足さないと **最終検査・製品検査のロット購読が1件も数えられない**
+        //   (2026-09-01 実測: lots の onError を外しても③は緑・指摘数も動かなかった)。
+        || m[1] === 'watchQuery';
       if (!isCollection) continue;
       stats.subscriptions++;
-      if (/onError|onErr\b|\bcatch\b/.test(inner)) { stats.subsWithError++; continue; }
+      // 🚨 ここは「onError という字が在るか」ではなく **働く受け皿が在るか** を見る。
+      //   字だけの判定に戻すと `onError: undefined` の1行で見張りが黙る(2026-09-01 実測)。
+      const deadExprs = errorHandlerExprs(inner);
+      if (subscriptionHasLiveErrorHandler(inner)) { stats.subsWithError++; continue; }
+      const deadHandler = deadExprs.length > 0;
+      const deadNote = deadHandler
+        ? `**onError の字は在るが受け皿として働かない**(${deadExprs.join(' / ')})。`
+        : '';
       const colName = (args.find((a) => /^['"][\w-]+['"]$/.test(a)) || first).replace(/['"]/g, '');
       const line = lineOf(m.index);
       const critical = /^(lots|lot_images|tasks)$/.test(colName);
@@ -646,7 +775,8 @@ export const analyzeSources = (inputs, opts = {}) => {
         continue;
       }
       add(critical ? 'SS-301' : 'SS-302', critical ? 'error' : 'warn', 3, file, line,
-        `${critical ? '🚨 ' : ''}${m[1]}(${colName}) に onError が無い。`
+        `${critical ? '🚨 ' : ''}${m[1]}(${colName}) に${deadHandler ? '「働く」' : ''} onError が無い。`
+        + deadNote
         + `読み取りが 429・権限・回線で止まっても誰も気づかない。`
         + (critical ? '**しかも手元のキャッシュで動き続けるので、空の手元のまま本番を上書きできる**' : ''),
         lines[line - 1]);
@@ -1124,7 +1254,7 @@ const main = async (args) => {
   console.log(`\n🚨 保存の安全 見張り  ${app}`);
   console.log(`   ${root}`);
   console.log(`   見たファイル ${stats.files}本 / ロット保存の関所 ${stats.chokes.length}個 / 保存の呼び出し ${stats.saverCalls}件`
-    + `(包み済み ${stats.wrappedCalls}件) / 購読 ${stats.subscriptions}件(onError付き ${stats.subsWithError}件)`);
+    + `(包み済み ${stats.wrappedCalls}件) / 購読 ${stats.subscriptions}件(**働く** onError 付き ${stats.subsWithError}件)`);
   console.log(stats.writesLotRecords
     ? '   このアプリは作業の記録(ロット)を書きます → ⑥⑧も見ます'
     : '   このアプリは作業の記録(ロット)を書きません → ⑥⑧は対象外(黙って合格にせず、ここに書いています)');

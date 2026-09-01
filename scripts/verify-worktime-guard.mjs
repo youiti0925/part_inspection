@@ -128,13 +128,112 @@ export const helperNamesWhere = (src, test) => {
   return names;
 };
 
+// ===========================================================================
+// 🚨🚨 読み込みの門(assertLotsLoaded)を **実コードで** 追う道具 (2026-09-01)
+// ---------------------------------------------------------------------------
+// あら探しで実測: 保存の関所から `assertLotsLoaded(…)` の **1行を消しても**
+//   check-load-guards.mjs / verify-save-safety.mjs / verify-worktime-guard.mjs /
+//   verify-promises.mjs の4本が **全部 緑のまま** だった。
+//   ・check-load-guards の A0 は「旗(lotsLoaded)が在るか」しか見ない → 旗は残るので緑
+//   ・A3 は自動処理だけを見る → 関所は見ていない
+//   ・WTG-001 は assertSafeLotSave だけを見る → そちらは残るので緑
+//   ・単体試験は純関数だけで **配線を見ていない**
+//   つまり「読み込みが終わる前に保存しない」という約束を、誰も見ていなかった。
+//   これは 2026-08-17(作業時間が丸ごと消えた)と 2026-08-28(門が黙って外れる)の族。
+//
+// ⚠⚠ **「その行が在るか」だけで判定しない。** 次の4つを全部見る:
+//   ① 関所が門を通っているか(**別の関数に任せていても1段は追う**)
+//   ② 渡している旗が本物か(true の直書き・`|| true` は門を開きっぱなしにする)
+//   ③ その旗が **下りる道** が在るか(一度も false にならない旗は門ではない)
+//   ④ 保存より **前** で呼んでいるか(後ろで呼んでも手遅れ)
+// ===========================================================================
+
+/** `名前(` の直後から、深さ1の `,` または閉じ `)` までを1つ目の引数として切り出す。 */
+export const firstArgOf = (src, afterOpenParen) => {
+  let depth = 1, q = null, out = '';
+  for (let i = afterOpenParen; i < src.length; i++) {
+    const c = src[i];
+    if (q) { out += c; if (c === '\\') { out += src[i + 1] || ''; i++; continue; } if (c === q) q = null; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; out += c; continue; }
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') { depth--; if (depth === 0) break; }
+    if (c === ',' && depth === 1) break;
+    out += c;
+  }
+  return out.trim();
+};
+
+// 「右側がいつも真」= `x || true` `x ?? 1` のような素通し。
+const FORCED_TRUE = /(?:\|\||\?\?)\s*(?:true|1|!0|!!1)\s*$/;
+// 変数として数えない語(これしか出てこない引数は **動かない値** = いつも同じ)。
+const NOT_A_FLAG = /^(?:true|false|null|undefined|NaN|Boolean|Number|String|Object|Array)$/;
+
+/**
+ * assertLotsLoaded(…) の1つ目の引数が **本物の旗** かを見る。
+ * ⚠ここが甘いと「条件を常に真にして素通しさせる」壊し方に気づけない。
+ * @returns {{ok:true,expr:string}|{ok:false,why:string}}
+ */
+export const classifyLoadedArg = (arg) => {
+  const a = String(arg || '').trim();
+  if (!a) return { ok: false, why: '旗を1つも渡していない（引数が空）＝何も見ていない' };
+  if (FORCED_TRUE.test(a)) return { ok: false, why: `\`${a}\` は右側でいつも真になる＝門が開きっぱなし` };
+  // 文字列の中身を消してから、変数らしい語が1つでも残るかを見る。
+  const bare = a.replace(/(['"`])(?:\\.|(?!\1).)*\1/g, ' ');
+  const names = bare.match(/[A-Za-z_$][\w$]*/g) || [];
+  if (!names.some((n) => !NOT_A_FLAG.test(n))) {
+    return { ok: false, why: `\`${a}\` は動かない値（いつも同じ）＝門が開きっぱなし` };
+  }
+  return { ok: true, expr: a };
+};
+
+/** その本文に「本物の旗を渡した assertLotsLoaded(…)」が在るか。 */
+export const hasGenuineLoadedCall = (body) => {
+  const re = /(?<![\w$.])assertLotsLoaded\s*\(/g;
+  let mm;
+  while ((mm = re.exec(body))) {
+    if (classifyLoadedArg(firstArgOf(body, mm.index + mm[0].length)).ok) return true;
+  }
+  return false;
+};
+
+const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * その旗が **下りる道** が在るか。
+ * ⚠ 一度も false にならない旗を渡していれば、門は在っても永久に開いている。
+ *   `lotsLoadedRef.current = false` / `= ok`(何かを入れる) / `setLotsLoaded(false)` のどれかを探す。
+ */
+export const flagCanFall = (src, expr) => {
+  const E = escRe(expr);
+  if (new RegExp(`${E}\\s*=\\s*(?!=)(?!\\s*true\\b)`).test(src)) return true;
+  const root = (String(expr).match(/[A-Za-z_$][\w$]*/) || [''])[0];
+  // 🚨🚨 2026-09-01 実測(最終検査の実物で確かめた): ここで set…(false) を
+  //   **控え(ref)にも** 効くものとして数えていたので、
+  //   `lotsLoadedRef.current = false` を `= true` に書き換えても 緑のままだった。
+  //   関所が読むのは **控えの方**。画面用の値が下りても控えが上がりっぱなしなら門は開いている。
+  //   → 控えを読んでいる時(名前が Ref で終わる / .current を読む)は、
+  //     **その控えそのものに下りる道が在る事** だけを認める。
+  if (/\.current\b/.test(String(expr)) || /Ref$/.test(root)) return false;
+  if (!root) return false;
+  const setter = `set${root.charAt(0).toUpperCase()}${root.slice(1)}`;
+  return new RegExp(`${escRe(setter)}\\s*\\(\\s*false\\s*\\)`).test(src);
+};
+
 /** 中身が **本物の見張り** を呼んでいる関数の名前(＝見張り役として数えてよい)。 */
 export const guardHelperNames = (src) => helperNamesWhere(src, (body) => GUARD_CALLS.test(body));
+/**
+ * 中身が **本物の読み込みの門** を通している関数の名前。
+ * 🚨 これが無いと、関所が門を別関数(guardLotSave など)に任せた形を追えない
+ *   (2026-08-30 に「関所が別関数に任せていると検査対象から外れる」で素通りした前科)。
+ */
+export const loadedHelperNames = (src) =>
+  helperNamesWhere(src, hasGenuineLoadedCall).filter((n) => !/assertLotsLoaded/.test(n));
 /** 中身が **ロットを名指ししている** 関数の名前(＝ロットを扱う関所の一部)。 */
 export const lotHelperNames = (src) => helperNamesWhere(src, (body) => /['"]lots['"]/.test(body));
 
 export const analyze = (rawSrc, file = '(memory)') => {
   const src = stripComments(rawSrc);
+  const lines = src.split('\n');
   // 🚨 見張りを任されている関数(guardLotSave など)。中身まで見て決める。
   const helpers = guardHelperNames(src);
   const lotHelpers = lotHelperNames(src);
@@ -143,6 +242,11 @@ export const analyze = (rawSrc, file = '(memory)') => {
   const LOT_HELPER_CALL = callRe(lotHelpers);
   /** 関所が見張りを通っているか。**自分で呼ぶ** か **本物の見張り役に任せている** か。 */
   const passesGuard = (body) => GUARD_CALLS.test(body) || !!(HELPER_CALL && HELPER_CALL.test(body));
+  // 🚨 読み込みの門を通している関数(guardLotSave など)。**中身まで見て** 決める。
+  const loadedHelpers = loadedHelperNames(src);
+  const LOADED_HELPER_CALL = callRe(loadedHelpers);
+  /** 関所が読み込みの門を通っているか。**自分で呼ぶ** か **本物の門役に任せている** か。 */
+  const passesLoaded = (body) => hasGenuineLoadedCall(body) || !!(LOADED_HELPER_CALL && LOADED_HELPER_CALL.test(body));
   const findings = [];
   const exposure = [];
   const add = (id, level, line, why, code) =>
@@ -178,6 +282,7 @@ export const analyze = (rawSrc, file = '(memory)') => {
     const handlesLots = /['"]lots['"]/.test(c.body)
       || /col\s*===\s*['"]lots['"]/.test(c.body)
       || !!(LOT_HELPER_CALL && LOT_HELPER_CALL.test(c.body));
+    c.handlesLots = handlesLots;   // ①-b(読み込みの門)でも同じ判定を使う
     if (!handlesLots) continue;
     if (!passesGuard(c.body)) {
       add('WTG-001', 'error', c.line,
@@ -210,6 +315,77 @@ export const analyze = (rawSrc, file = '(memory)') => {
     add('WTG-001', 'error', chokes[0].line,
       `見張り役(${(named.length ? named : helpers).join(' / ')})がこのファイルに在るのに、`
       + `保存の関所(${chokes.map((c) => c.name).join(' / ')})が1つも呼んでいない。`
+      + '門を作っただけで、誰も通していない状態', '');
+  }
+
+  // --- ①-b 読み込みの門(読み込みが終わる前に保存させない) -------------------
+  //   🚨 2026-09-01 実測: 関所から assertLotsLoaded(…) の1行を消しても
+  //     見張り4本が全部 緑だった。ここが「誰も見ていなかった約束」。
+  //   ⚠ 行が在るかだけを見ない。旗が本物か・旗が下りるか・保存より前か まで見る。
+  const loadedCalls = [];
+  {
+    const re = /(?<![\w$.])assertLotsLoaded\s*\(/g;
+    let mm;
+    while ((mm = re.exec(src))) {
+      const arg = firstArgOf(src, mm.index + mm[0].length);
+      loadedCalls.push({ at: mm.index, line: lineOf(src, mm.index), arg, ...classifyLoadedArg(arg) });
+    }
+  }
+  // ② 旗が本物か。true の直書き・`|| true` は「門を素通しにする壊し方」そのもの。
+  for (const lc of loadedCalls) {
+    if (lc.ok) continue;
+    add('WTG-004', 'error', lc.line,
+      `🚨 読み込みの門 assertLotsLoaded(…) に本物の旗を渡していない: ${lc.why}。`
+      + '読めていない手元(空)のまま保存が通り、サーバの検査記録をそのまま消す(2026-08-17 の形)',
+      lines[lc.line - 1] || '');
+  }
+  // ③ 旗が下りる道が在るか。一度も false にならない旗は、門ではなく飾り。
+  for (const lc of loadedCalls) {
+    if (!lc.ok) continue;
+    if (flagCanFall(src, lc.expr)) continue;
+    add('WTG-004', 'error', lc.line,
+      `🚨 読み込みの門に渡している旗 \`${lc.expr}\` が、このファイルのどこでも下りない`
+      + '（false になる所も set…(false) も無い）。門は在るが永久に開いている',
+      lines[lc.line - 1] || '');
+  }
+  // ① 関所が門を通っているか(別の関数に任せていても1段は追う)
+  for (const c of chokes) {
+    if (!c.handlesLots) continue;
+    if (!passesLoaded(c.body)) {
+      add('WTG-003', 'error', c.line,
+        `${c.name}() が「ロットを読み込めたか」を1つも見ていない。読み込みが終わる前(手元が空)のまま`
+        + '保存すると、サーバの検査記録を空で上書きする(2026-08-17 の事故そのもの)。'
+        + '保存より前に assertLotsLoaded(読めた旗) を通すこと',
+        `const ${c.name} = async (col, id, rawData) => { ... }`);
+      continue;
+    }
+    // ④ 保存より前で呼んでいるか。後ろで呼んでも手遅れ。
+    const liSelf = (() => {
+      const re = /(?<![\w$.])assertLotsLoaded\s*\(/g;
+      let mm;
+      while ((mm = re.exec(c.body))) {
+        if (classifyLoadedArg(firstArgOf(c.body, mm.index + mm[0].length)).ok) return mm.index;
+      }
+      return -1;
+    })();
+    const liHelper = LOADED_HELPER_CALL ? c.body.search(LOADED_HELPER_CALL) : -1;
+    const cands2 = [liSelf, liHelper].filter((n) => n >= 0);
+    const li = cands2.length ? Math.min(...cands2) : -1;
+    const si2 = c.body.search(/\.save\s*\(/);
+    if (si2 >= 0 && li > si2) {
+      add('WTG-005', 'error', c.line,
+        `${c.name}() は保管庫へ書いた後で読み込みの門を呼んでいる(手遅れ)。書く前に呼ぶこと`, '');
+    }
+  }
+  // 🚨🚨 門の仕掛けはファイルに在るのに、**どの関所も通していない**。
+  //   ⚠これが無いと「呼び出しの1行だけ消す」壊し方で黙る。関所がロットを扱っている事は
+  //     その呼び出しから分かっている場合があり(部品検査の guardLotSave)、消すと
+  //     関所ごと検査対象から外れてしまう。
+  if ((loadedHelpers.length || loadedCalls.some((lc) => lc.ok)) && chokes.length
+      && !chokes.some((c) => passesLoaded(c.body))) {
+    add('WTG-003', 'error', chokes[0].line,
+      `読み込みの門(${loadedHelpers.length ? loadedHelpers.join(' / ') : 'assertLotsLoaded'})がこのファイルに在るのに、`
+      + `保存の関所(${chokes.map((c) => c.name).join(' / ')})が1つも通していない。`
       + '門を作っただけで、誰も通していない状態', '');
   }
 
@@ -374,7 +550,6 @@ export const analyze = (rawSrc, file = '(memory)') => {
     const gAt = from + g.index;
     return { ok: true, line: lineOf(src, gAt), code: (src.split('\n')[lineOf(src, gAt) - 1] || '').trim().slice(0, 160) };
   };
-  const lines = src.split('\n');
   lines.forEach((ln, i) => {
     const direct = ln.match(/\.save\s*\(\s*[A-Za-z_$][\w$]*\s*,\s*(?:['"]lots['"]|col|colName|collection)\s*,/);
     if (!direct) return;
@@ -395,6 +570,230 @@ export const analyze = (rawSrc, file = '(memory)') => {
     add('WTG-010', 'error', i + 1,
       `保存の関所を通さずに保管庫へロットを直接書いている。容量チェックも見張りも効かない${why}`, ln);
   });
+
+  // --- ①-c 🚨🚨 門が投げた物を **握り潰していないか** ------------------------
+  //   (2026-09-02 あら探しで実測。今回いちばん危なかった1件)
+  //
+  //   実測(製品・最終・部品の3アプリとも): 保存の関所の門を
+  //       try { assertLotsLoaded(…); } catch (e) { console.warn(e); }
+  //   と **囲むだけ** で、この見張りは 0(緑)。しかも
+  //   「読み込みの門 ✅ 通っている」と印字していた。中身の見張り(assertSafeLotSave)も同じ。
+  //   最終検査は 既に在る catch から **最後の `throw e;` を1行消す** だけで緑だった。
+  //
+  //   根っこ: この見張りは「門を **呼んでいるか**」しか見ていなかった。
+  //     門は **投げる事でしか** 保存を止められない。投げた物が saveData の外へ出なければ、
+  //     呼び出し側は「保存できた」と受け取って画面を閉じる = 2026-08-17 と同じ結末
+  //     (作業時間が丸ごと消えた事故)。「保存が止まって面倒だから とりあえず包んだ」は
+  //     現場で一番起きる直し方なので、ここを見ない見張りは飾りでしかない。
+  //
+  //   ⚠⚠ **正しい形の try/catch まで赤にしない。**
+  //     正しい形 = 投げてから catch で人に札を出し、**最後に再送出する**。
+  //     最終検査 src/App.firebase.jsx の関所 と 部品検査の guardLotSave が実際にこの形で、
+  //     ここを一律に赤にすると 現場に出ている正しいコードを直させる事になる。
+  //   ⚠ `throw` の字が在るかでは見ない。`if (x) throw e;` は偽の時に飲む。
+  //     **catch の最後の文が throw** である事だけを認め、途中に return が在れば赤。
+  //   ⚠ 見るのは **関所の中** と **関所が実際に呼んでいる見張り役の中** だけ。
+  //     「本物の見張りを中に含む関数」で数えると、関所そのものや大きな画面部品まで
+  //     名前に入って、関係のない try/catch を何十件も赤にする(実測で25件出た)。
+
+  /** `(` から対応する `)` の次の位置。文字列は飛ばす。 */
+  const parenEnd = (openIdx) => {
+    let d = 0, q = null;
+    for (let i = openIdx; i < src.length; i++) {
+      const c = src[i];
+      if (q) { if (c === '\\') { i++; continue; } if (c === q) q = null; continue; }
+      if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+      if (c === '(') d++;
+      else if (c === ')') { d--; if (d === 0) return i + 1; }
+    }
+    return src.length;
+  };
+
+  /**
+   * 波括弧の中身を「深さ0の文」に割る(文字列は飛ばす)。
+   * ⚠文の切れ目は **`;` と、深さ0へ戻る `}`** だけ。`)` で切ると
+   *   `const note = (res) => { … };` が2つに割れて、判定が狂う。
+   */
+  const topStatements = (blockText) => {
+    const inner = blockText.slice(1, -1);
+    const out = [];
+    let depth = 0, q = null, cur = '';
+    const push = () => { if (cur.trim()) out.push(cur.trim()); cur = ''; };
+    for (let i = 0; i < inner.length; i++) {
+      const c = inner[i];
+      if (q) { cur += c; if (c === '\\') { cur += inner[i + 1] || ''; i++; continue; } if (c === q) q = null; continue; }
+      if (c === '"' || c === "'" || c === '`') { q = c; cur += c; continue; }
+      if (c === '(' || c === '[' || c === '{') { depth++; cur += c; continue; }
+      if (c === ')' || c === ']') { depth--; cur += c; continue; }
+      if (c === '}') { depth--; cur += c; if (depth <= 0) { depth = 0; push(); } continue; }
+      if (c === ';' && depth === 0) { cur += ''; push(); continue; }
+      cur += c;
+    }
+    push();
+    // ⚠ `if (…) { … } else { … }` は1つの文として扱う。
+    //   でないと人に見せる文言が「else で終わっている」になり、読んだ人が意味を取り違える。
+    for (let i = out.length - 1; i > 0; i--) {
+      if (/^else(?![\w$])/.test(out[i])) { out[i - 1] = `${out[i - 1]} ${out[i]}`; out.splice(i, 1); }
+    }
+    return out;
+  };
+
+  /** その `try {` に付いている catch の中身(無ければ null = finally だけ ＝ 投げは外へ出る)。 */
+  const catchOfTry = (tryOpenIdx) => {
+    const body = blockFrom(src, tryOpenIdx);
+    let i = tryOpenIdx + body.length;
+    while (i < src.length && /\s/.test(src[i])) i++;
+    if (!/^catch(?![\w$])/.test(src.slice(i, i + 6))) return null;
+    i += 5;
+    while (i < src.length && /\s/.test(src[i])) i++;
+    if (src[i] === '(') { i = parenEnd(i); while (i < src.length && /\s/.test(src[i])) i++; }
+    if (src[i] !== '{') return null;
+    return { open: i, body: blockFrom(src, i) };
+  };
+
+  /**
+   * その catch が **投げ返しているか**。
+   * ⚠「throw の字が在るか」で見ない。`if (x) throw e;` は偽の時に飲む。
+   *   認めるのは「**最後の文が throw**」だけ(＝どの道を通っても最後に投げ返す)。
+   * ⚠途中に return が在れば、その先の throw は踏まれない = 飲んでいる。
+   */
+  const catchRethrows = (catchBlock) => {
+    const st = topStatements(catchBlock.body);
+    if (!st.length) return { ok: false, why: 'catch の中が空で、何もせず飲んでいる' };
+    const ret = st.find((s) => /^return(?![\w$])/.test(s));
+    if (ret) return { ok: false, why: `catch の中で \`${ret.slice(0, 40)}\` して飲んでいる` };
+    const last = st[st.length - 1];
+    if (!/^throw(?![\w$])/.test(last)) {
+      return { ok: false, why: `catch の最後が \`${last.replace(/\s+/g, ' ').slice(0, 48)}\` で、投げ返していない` };
+    }
+    return { ok: true };
+  };
+
+  // ファイル中の `try {` を全部拾っておく(内側/外側の入れ子を歩く為)。
+  const tryBlocks = [];
+  {
+    const re = /(?<![\w$.])try\s*\{/g;
+    let t;
+    while ((t = re.exec(src))) {
+      const open = src.indexOf('{', t.index);
+      if (open < 0) continue;
+      const body = blockFrom(src, open);
+      tryBlocks.push({ kw: t.index, open, end: open + body.length });
+    }
+  }
+  /**
+   * その位置を囲む try を **内側から外側へ** 全部見て、
+   * 1つでも投げ返さない catch が在れば その理由を返す(＝投げは外へ出ない)。
+   * ⚠内側が正しく投げ返していても、外側が飲んでいれば結果は同じ。だから全部見る。
+   * @param fromIdx この位置より前に始まる try は「その関数の外」なので見ない
+   */
+  const swallowingTryAround = (at, fromIdx) => {
+    const around = tryBlocks
+      .filter((t) => at >= t.open && at < t.end && t.kw >= fromIdx)
+      .sort((a, b) => b.open - a.open);
+    for (const t of around) {
+      const cc = catchOfTry(t.open);
+      if (!cc) continue;                       // finally だけ ＝ 投げはそのまま外へ出る
+      const r = catchRethrows(cc);
+      if (!r.ok) return { line: lineOf(src, t.kw), why: r.why };
+    }
+    return null;
+  };
+
+  /** `const 名前 = (…) => { … }` の本体の範囲。見張り役の中まで追う為。 */
+  const arrowBodyRange = (name) => {
+    const re = new RegExp(`(?<![\\w$.])const\\s+${escRe(name)}\\s*=\\s*(?:async\\s*)?\\(`, 'g');
+    let mm2;
+    while ((mm2 = re.exec(src))) {
+      let i = parenEnd(mm2.index + mm2[0].length - 1);
+      while (i < src.length && /\s/.test(src[i])) i++;
+      if (src.slice(i, i + 2) !== '=>') continue;
+      i += 2;
+      while (i < src.length && /\s/.test(src[i])) i++;
+      if (src[i] !== '{') continue;
+      const body = blockFrom(src, i);
+      return { open: i, end: i + body.length };
+    }
+    return null;
+  };
+
+  // 🚨 見張り役として **中まで追う** のは「ロットを扱う関所が実際に呼んでいる物」だけ。
+  //   helperNamesWhere は「本物の見張りを中に含む関数」を全部返すので、関所そのものや
+  //   大きな画面部品も混じる。そのまま使うと関係のない try/catch を何十件も赤にする。
+  const chokeNameSet = new Set(chokes.map((c) => c.name));
+  const delegates = [...new Set([...helpers, ...loadedHelpers])].filter((h) => {
+    if (chokeNameSet.has(h)) return false;
+    const re = new RegExp(`(?<![\\w$.])${escRe(h)}\\s*\\(`);
+    return chokes.some((c) => c.handlesLots && re.test(c.body));
+  });
+  const GATE_NAMES = ['assertLotsLoaded', 'assertSafeLotSave', 'wouldLoseWorkTime', ...delegates];
+  const GATE_CALL_SRC = `(?<![\\w$.])(${GATE_NAMES.map(escRe).join('|')})\\s*\\(`;
+  const swallowAt = [];   // 握り潰しが見つかった位置(関所の ✅/❌ 表示にも使う)
+  /** ある関数本体 [from,to) の中の門の呼び出しが、握り潰されていないかを見る。 */
+  const scanSwallow = (whereName, from, to) => {
+    const re = new RegExp(GATE_CALL_SRC, 'g');
+    const region = src.slice(from, to);
+    let mm2;
+    while ((mm2 = re.exec(region))) {
+      const at = from + mm2.index;
+      const sw = swallowingTryAround(at, from);
+      if (!sw) continue;
+      const li = lineOf(src, at);
+      swallowAt.push(at);
+      add('WTG-006', 'error', li,
+        `🚨 ${whereName} の中の ${mm2[1]}(…) を try が囲んでいて、その catch(${sw.line}行目の try)が投げ返していない`
+        + `（${sw.why}）。門は投げる事でしか保存を止められないので、この形だと`
+        + '**門は在るのに1件も止まらない**。呼び出し側は「保存できた」と受け取って画面を閉じ、'
+        + '入力と検査記録がそのまま消える(2026-08-17 の事故と同じ結末)。'
+        + 'catch で人に札を出すのは正しい。**最後に必ず投げ返す**こと',
+        lines[li - 1] || '');
+    }
+  };
+  for (const c of chokes) {
+    if (!c.handlesLots) continue;
+    scanSwallow(`関所 ${c.name}()`, c.start, c.end);
+  }
+  for (const h of delegates) {
+    const r = arrowBodyRange(h);
+    if (!r) continue;
+    scanSwallow(`見張り役 ${h}()`, r.open, r.end);
+  }
+
+  // --- ①-d 🚨 await を外して「投げが呼び出し側へ届かない」形 -----------------
+  //   実測(2026-09-01): 復元の `await saveData('lots', …)` から **await だけ外す** と、
+  //   関所が止めても その投げは その場の catch へ届かない(Promise が拒否されるだけ)。
+  //   ＝「止めた件数」が人に1件も出ないまま、復元が終わったように見える。
+  //   ⚠見るのは **ロットの保存** で、しかも **try で受けている所** だけ。
+  //     ここを広げると お知らせ・型式・作業者の保存まで赤になり、直せない赤が増える
+  //     (実測: 広げた形で3アプリ合わせて10件の的外れな赤が出た)。
+  //   ⚠他の呼び出しの引数に渡している形(`await settleSaveBriefly(saveData(…))`)は
+  //     受け取った側が待つので対象外。
+  const chokeNames = [...new Set(chokes.filter((c) => c.handlesLots).map((c) => c.name))];
+  if (chokeNames.length) {
+    const re = new RegExp(`(?<![\\w$.])(${chokeNames.map(escRe).join('|')})\\s*\\(`, 'g');
+    let mm2;
+    while ((mm2 = re.exec(src))) {
+      const at = mm2.index;
+      if (chokes.some((c) => at >= c.start - 200 && at < c.end)) continue;   // 定義そのもの/関所の中
+      const argHead = src.slice(at + mm2[0].length, at + mm2[0].length + 24);
+      if (!/^\s*(['"]lots['"]|col|colName|collection)\s*,/.test(argHead)) continue;  // ロットの保存だけ
+      // 失敗を受ける気が在る所(catch を持つ try の中)だけを見る。
+      const inTry = tryBlocks.filter((t) => at >= t.open && at < t.end).some((t) => !!catchOfTry(t.open));
+      if (!inTry) continue;
+      const head = src.slice(Math.max(0, at - 48), at).replace(/\s+$/, '');
+      if (/(?:await|return|yield|void)$/.test(head)) continue;               // 待っている / 返している
+      if (/[([,?:=&|]$/.test(head)) continue;                                // 他へ渡している
+      const after = parenEnd(at + mm2[0].length - 1);
+      if (/^\s*\.\s*(then|catch|finally)\b/.test(src.slice(after, after + 24))) continue;
+      const li = lineOf(src, at);
+      add('WTG-007', 'error', li,
+        `🚨 try で受けているのに \`${mm2[1]}('lots'…)\` を await していない。`
+        + '関所がその保存を止めても、投げは この catch へ届かない(約束が拒否されるだけ)。'
+        + '＝「何件止めた／落ちた」が人に1件も出ないまま先へ進む。'
+        + 'await を付けるか、この try で受けない形にすること',
+        lines[li - 1] || '');
+    }
+  }
 
   // --- ③ 空のマップを ロットの payload に入れている所 -----------------------
   //   `tasks: {}` は merge:true でも **既存の tasks を丸ごと消す**。
@@ -465,9 +864,23 @@ export const analyze = (rawSrc, file = '(memory)') => {
   return {
     file, findings, exposure,
     guardHelpers: helpers,
+    loadedHelpers,
     // 根拠つきで通した「関所の外の直接書き込み」。⚠黙って通さず、必ず人にも見せる。
     bypassPassed,
-    chokes: chokes.map((c) => ({ name: c.name, line: c.line, guarded: passesGuard(c.body) })),
+    chokes: chokes.map((c) => ({
+      name: c.name, line: c.line, guarded: passesGuard(c.body),
+      // 🚨「読み込みが終わる前に保存しない」を、この関所が実際に見ているか。
+      loadedGuarded: passesLoaded(c.body),
+      // ⚠ロットを扱わない保存関数は判定の対象外。人に見せる時に ❌ と紛らわしいので区別する。
+      handlesLots: !!c.handlesLots,
+      // 🚨 門を呼んでいても、その投げを try/catch が握り潰していれば「通っている」ではない。
+      swallowed: swallowAt.some((p) => p >= c.start && p < c.end)
+        || [...new Set([...helpers, ...loadedHelpers])].some((h) => {
+          if (!new RegExp(`(?<![\\w$.])${escRe(h)}\\s*\\(`).test(c.body)) return false;
+          const r = arrowBodyRange(h);
+          return !!r && swallowAt.some((p) => p >= r.open && p < r.end);
+        }),
+    })),
   };
 };
 
@@ -490,10 +903,19 @@ const lotData = { id, model, ...(existingLot ? {} : { tasks: {}, interruptions: 
 await DATA(db).save(APP_DATA_ID, col, docId, { ...cleanUndefined(body), updatedAt: DATA_SERVER_NOW });
 `;
 
-const AFTER_FIX = `
+// ⚠「読めた旗」の配線。直した後のコードには **必ず** これが在る。
+//   (旗を立てる所・下ろす所・関所で見る所 の3つで1組)
+const LOADED_WIRING = `
+const lotsLoadedRef = useRef(false);
+const onLotsError = () => { lotsLoadedRef.current = false; setLotsLoaded(false); };
+const onLotsRows = (rows) => { lotsLoadedRef.current = true; setLotsLoaded(true); };
+`;
+
+const AFTER_FIX = LOADED_WIRING + `
 const saveData = async (col, id, rawData) => {
     let data = withDeletions(rawData);
     if (col === 'lots') {
+        assertLotsLoaded(lotsLoadedRef.current, { onBlock: note });
         assertSafeLotSave((rawLots || []).find(l => l.id === id) || null, data);
         data = await dehydrateLotUpdate(id, data, w);
     }
@@ -548,9 +970,108 @@ const saveData = async (col, id, data) => { await DATA(db).save(ns, col, id, dat
   say(delegLate.findings.some((f) => f.id === 'WTG-002'),
     '🚨 任せた見張りを **保存した後** で呼んでいたら落とす(手遅れ)');
 
+  // ═════════════════════════════════════════════════════════════════════════
+  // 🚨🚨 読み込みの門(WTG-003 / 004 / 005) 2026-09-01
+  // -------------------------------------------------------------------------
+  // 実測: 保存の関所から assertLotsLoaded(…) の **1行を消しても** 見張り4本が
+  //   全部 緑だった。ここは「わざと壊して赤になる」を4通り以上で毎回確かめる。
+  // ═════════════════════════════════════════════════════════════════════════
+  const has = (r, id) => r.findings.some((f) => f.id === id);
+  const cnt = (r, id) => r.findings.filter((f) => f.id === id).length;
+
+  const LOADED_OK = LOADED_WIRING + `
+const saveData = async (col, id, rawData) => {
+  if (col === 'lots') {
+    assertLotsLoaded(lotsLoadedRef.current, { onBlock: note });
+    assertSafeLotSave(before, rawData, { onBlock: note });
+  }
+  await DATA(db).save(ns, col, id, rawData);
+};
+`;
+  const okR = analyze(LOADED_OK, '(読み込みの門あり)');
+  say(!has(okR, 'WTG-003') && !has(okR, 'WTG-004') && !has(okR, 'WTG-005') && okR.chokes.every((c) => c.loadedGuarded),
+    `負の対照: 関所が読み込みの門を通っていれば通す (指摘 ${okR.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ── 壊し方 その1: その1行を消す ──────────────────────────────────────
+  const brk1 = analyze(LOADED_OK.replace(/^.*assertLotsLoaded\(lotsLoadedRef\.current.*$\n/m, ''), '(門の1行を消した)');
+  say(has(brk1, 'WTG-003'),
+    '🚨 壊し方1: 関所から assertLotsLoaded(…) の1行を消したら ❌(4本の見張りが全部緑だった形)');
+
+  // ── 壊し方 その2: 別の関数に任せて、その **呼び出しだけ** 消す ─────────
+  //   ⚠この形は 関所の中に 'lots' の字が1つも無くなる。だから「関所がロットを扱っている」
+  //     の判定ごと外れて、per-関所 の検査が黙る。**ファイル全体で見る一手** が要る。
+  const DELEG_LOADED = LOADED_WIRING + `
+const guardLotSave = (col, id, data) => {
+  if (col !== 'lots') return;
+  assertLotsLoaded(lotsLoadedRef.current, { onBlock: note });
+  assertSafeLotSave(before, data, { onBlock: note });
+};
+const saveData = async (col, id, data) => { guardLotSave(col, id, data); await DATA(db).save(ns, col, id, data); };
+`;
+  const delegOk = analyze(DELEG_LOADED, '(門を別関数に任せる・本物)');
+  say(!has(delegOk, 'WTG-003') && !has(delegOk, 'WTG-004') && delegOk.chokes.every((c) => c.loadedGuarded),
+    `負の対照: 門を別の関数(guardLotSave)に任せた関所も追えている (指摘 ${delegOk.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  const brk2 = analyze(DELEG_LOADED.replace('guardLotSave(col, id, data); ', ''), '(任せる呼び出しだけ消した)');
+  say(has(brk2, 'WTG-003'),
+    '🚨 壊し方2: 別関数に任せた門の **呼び出しだけ** 消したら ❌');
+
+  // ── 壊し方 その3: 別の関数へ移して、どこからも呼ばない ────────────────
+  const brk3 = analyze(LOADED_OK.replace(/^.*assertLotsLoaded\(lotsLoadedRef\.current.*$\n/m, '')
+    + `
+const gateLots = (id) => { assertLotsLoaded(lotsLoadedRef.current, { onBlock: note }); };
+`, '(門を別関数へ移して呼ばない)');
+  say(has(brk3, 'WTG-003'),
+    '🚨 壊し方3: 門を別の関数へ移して、どこからも呼んでいなければ ❌');
+
+  // ── 壊し方 その4: 条件を常に真にして素通しさせる ─────────────────────
+  const brk4a = analyze(LOADED_OK.replace('assertLotsLoaded(lotsLoadedRef.current,', 'assertLotsLoaded(true,'), '(旗に true を直書き)');
+  say(has(brk4a, 'WTG-004') && has(brk4a, 'WTG-003'),
+    `🚨 壊し方4a: assertLotsLoaded(true, …) は ❌ (${brk4a.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  const brk4b = analyze(LOADED_OK.replace('assertLotsLoaded(lotsLoadedRef.current,', 'assertLotsLoaded(lotsLoadedRef.current || true,'), '(|| true で素通し)');
+  say(has(brk4b, 'WTG-004'),
+    `🚨 壊し方4b: \`旗 || true\` で素通しにしたら ❌ (${brk4b.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ⚠🚨 これは **最終検査の実物を壊して初めて見つかった穴**(2026-09-01)。
+  //   画面用の値(setLotsLoaded(false))は残したまま、関所が読む **控え** だけを
+  //   上がりっぱなしにすると、直す前のこの見張りは 緑のままだった。
+  const brk4c = analyze(LOADED_OK.replace('lotsLoadedRef.current = false;', 'lotsLoadedRef.current = true;'), '(控えの旗が一度も下りない)');
+  say(has(brk4c, 'WTG-004'),
+    `🚨 壊し方4c: 関所が読む控えの旗が一度も下りないなら ❌（画面用の set…(false) が残っていても通さない） (${brk4c.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ⚠負の対照: 関所が **画面用の値そのもの** を読んでいて、set…(false) で下りるなら通す
+  const stateFlag = analyze(`
+const [lotsLoaded, setLotsLoaded] = useState(false);
+const onLotsError = () => { setLotsLoaded(false); };
+const saveData = async (col, id, rawData) => {
+  if (col === 'lots') { assertLotsLoaded(lotsLoaded, { onBlock: note }); assertSafeLotSave(before, rawData); }
+  await DATA(db).save(ns, col, id, rawData);
+};
+`, '(画面用の値を読む門)');
+  say(!has(stateFlag, 'WTG-004') && !has(stateFlag, 'WTG-003'),
+    `負の対照: set…(false) で下りる画面用の旗は通す (${stateFlag.findings.map((f) => f.id).join(',') || '指摘なし'})`);
+
+  // ── 壊し方 その5: 保管庫へ書いた **後** で門を呼ぶ(手遅れ) ────────────
+  const brk5 = analyze(LOADED_WIRING + `
+const saveData = async (col, id, rawData) => {
+  await DATA(db).save(ns, col, id, rawData);
+  if (col === 'lots') { assertLotsLoaded(lotsLoadedRef.current); assertSafeLotSave(before, rawData); }
+};
+`, '(保存の後で門を呼ぶ)');
+  say(has(brk5, 'WTG-005'),
+    `🚨 壊し方5: 保管庫へ書いた後で門を呼んでいたら ❌ (${brk5.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ⚠負の対照: ロットを扱わない保存関数に「門が無い」と言わない(直せない赤を出さない)
+  const notLots = analyze(LOADED_WIRING + `
+const saveDoc = async (col, id, body) => { await DATA(db).save(ns, 'announcements', id, body); };
+`, '(ロットを扱わない関所)');
+  say(cnt(notLots, 'WTG-003') === 0,
+    `負の対照: ロットを扱わない保存関数に門を求めない (WTG-003 ${cnt(notLots, 'WTG-003')}件)`);
+
   // ⚠負の対照 ①: **手元の作業用の変数** を「本番が消える」と言わない
-  const localVar = analyze(`
-const saveData = async (col, id, rawData) => { if (col === 'lots') assertSafeLotSave(cur, rawData); await DATA(db).save(ns, col, id, rawData); };
+  const localVar = analyze(LOADED_WIRING + `
+const saveData = async (col, id, rawData) => { if (col === 'lots') { assertLotsLoaded(lotsLoadedRef.current); assertSafeLotSave(cur, rawData); } await DATA(db).save(ns, col, id, rawData); };
 let _skip = { plan: {}, tasks: {}, decisions: [] };
 const counters = { tasks: {}, lots: {} };
 `, '(手元の変数)');
@@ -711,15 +1232,171 @@ const restore = async (parsed) => {
 `, '(番線なし)').findings.find((f) => f.id === 'WTG-010') || {}).why || ''),
     '通さなかった時、その理由を人の言葉で言う');
 
+  // ═════════════════════════════════════════════════════════════════════════
+  // 🚨🚨 握り潰し(WTG-006) と await 外し(WTG-007)  2026-09-02
+  // -------------------------------------------------------------------------
+  // 実測: 保存の関所の門を `try { … } catch (e) { console.warn(e); }` と
+  //   **囲むだけ** で、この見張りは 製品・最終・部品の3アプリとも 0(緑)だった。
+  //   最終検査に至っては 既に在る catch から **`throw e;` を1行消す** だけで緑。
+  //   門は投げる事でしか保存を止められないので、これは「門が1件も止まらない」形。
+  //   ここは **6通り以上 わざと壊して、全部赤になる**事を毎回確かめる。
+  // ⚠⚠ 同じだけ大事な事: **正しい形(札を出して再送出する)が緑のまま**である事。
+  //   最終検査の関所と 部品検査の guardLotSave が実際にこの形なので、
+  //   ここを一律に赤にすると 現場に出ている正しいコードを直させる事になる。
+  // ═════════════════════════════════════════════════════════════════════════
+  const SWALLOW_OK = LOADED_WIRING + `
+const saveData = async (col, id, rawData) => {
+  if (col === 'lots') {
+    try {
+      assertLotsLoaded(lotsLoadedRef.current, { onBlock: note });
+      assertSafeLotSave(before, rawData, { onBlock: note });
+    } catch (e) {
+      console.error('🚨 作業の記録が消える保存を止めました', col, id, e);
+      alert('🚨 保存を止めました');
+      throw e;
+    }
+  }
+  await DATA(db).save(ns, col, id, rawData);
+};
+`;
+  const okSw = analyze(SWALLOW_OK, '(札を出して投げ返す・正しい形)');
+  say(!has(okSw, 'WTG-006') && okSw.findings.length === 0 && okSw.chokes.every((c) => !c.swallowed),
+    `負の対照: catch で札を出して **再送出する** 正しい形は緑のまま (${okSw.findings.map((f) => f.id).join(',') || '指摘なし'})`);
+
+  // ── 握り潰し1: 既に在る catch から `throw e;` を1行消す(最終検査で実測した形) ──
+  const swb1 = analyze(SWALLOW_OK.replace('      throw e;\n', ''), '(throw e; を1行消した)');
+  say(has(swb1, 'WTG-006'),
+    `🚨 壊し方6-1: catch の最後の \`throw e;\` を1行消したら ❌ (${swb1.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ── 握り潰し2: catch の中で return して飲む ──────────────────────────
+  const swb2 = analyze(SWALLOW_OK.replace('      throw e;', '      return;'), '(catch の中で return)');
+  say(has(swb2, 'WTG-006'),
+    `🚨 壊し方6-2: catch の中で return して飲んだら ❌ (${swb2.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ── 握り潰し3: 読み込みの門だけを try/catch で囲む(3アプリで緑だった本命) ──
+  const swb3 = analyze(LOADED_OK.replace(
+    'assertLotsLoaded(lotsLoadedRef.current, { onBlock: note });',
+    'try { assertLotsLoaded(lotsLoadedRef.current, { onBlock: note }); } catch (e) { console.warn("門", e); }'),
+  '(門だけを try/catch で囲む)');
+  say(has(swb3, 'WTG-006'),
+    `🚨 壊し方6-3: 読み込みの門を try/catch で囲んで console.warn だけしたら ❌ (${swb3.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ── 握り潰し4: 中身の見張りを try/catch で囲む(製品で実測した本命) ────
+  const swb4 = analyze(LOADED_OK.replace(
+    'assertSafeLotSave(before, rawData, { onBlock: note });',
+    'try { assertSafeLotSave(before, rawData, { onBlock: note }); } catch (e) { console.warn("見張り", e); }'),
+  '(中身の見張りを try/catch で囲む)');
+  say(has(swb4, 'WTG-006'),
+    `🚨 壊し方6-4: 中身の見張りを try/catch で囲んで飲んだら ❌ (${swb4.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ── 握り潰し5: try を関数の外側へ広げて **丸ごと** 包む ───────────────
+  const swb5 = analyze(LOADED_WIRING + `
+const saveData = async (col, id, rawData) => {
+  try {
+    if (col === 'lots') {
+      assertLotsLoaded(lotsLoadedRef.current, { onBlock: note });
+      assertSafeLotSave(before, rawData, { onBlock: note });
+    }
+    await DATA(db).save(ns, col, id, rawData);
+  } catch (e) {
+    console.warn('保存に失敗しました', e);
+  }
+};
+`, '(関所を丸ごと try で包む)');
+  say(has(swb5, 'WTG-006'),
+    `🚨 壊し方6-5: 関所の中身を丸ごと try で包んで飲んだら ❌ (${swb5.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ── 握り潰し6: 見張りを任せた **呼び出しの側** を囲む(部品検査の形) ───
+  const swb6 = analyze(DELEG_LOADED.replace(
+    'guardLotSave(col, id, data);',
+    'try { guardLotSave(col, id, data); } catch (e) { console.warn(e); }'),
+  '(任せた門の呼び出しを囲む)');
+  say(has(swb6, 'WTG-006'),
+    `🚨 壊し方6-6: 別関数に任せた門を、呼び出しの側で囲んで飲んだら ❌ (${swb6.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ── 握り潰し7: 内側は正しく投げ返すが、**外側** が飲む ────────────────
+  const swb7 = analyze(LOADED_WIRING + `
+const saveData = async (col, id, rawData) => {
+  try {
+    if (col === 'lots') {
+      try { assertLotsLoaded(lotsLoadedRef.current, { onBlock: note }); assertSafeLotSave(before, rawData); }
+      catch (e) { alert(e.message); throw e; }
+    }
+    await DATA(db).save(ns, col, id, rawData);
+  } catch (e) { console.warn('保存に失敗しました', e); }
+};
+`, '(内側は投げ返すが外側が飲む)');
+  say(has(swb7, 'WTG-006'),
+    `🚨 壊し方6-7: 内側が投げ返しても **外側の try** が飲んでいたら ❌ (${swb7.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ── 握り潰し8: 枝の中でだけ投げ返す(それ以外は飲む) ──────────────────
+  const swb8 = analyze(SWALLOW_OK.replace('      throw e;', "      if (e && e.name === 'FatalError') throw e;"),
+    '(枝の中でだけ投げ返す)');
+  say(has(swb8, 'WTG-006'),
+    `🚨 壊し方6-8: \`if (…) throw e;\` は偽の時に飲むので ❌ (${swb8.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ⚠負の対照: catch を持たない try(finally だけ)は、投げがそのまま外へ出る = 緑
+  const swOkFinally = analyze(LOADED_WIRING + `
+const saveData = async (col, id, rawData) => {
+  if (col === 'lots') {
+    try { assertLotsLoaded(lotsLoadedRef.current, { onBlock: note }); assertSafeLotSave(before, rawData); }
+    finally { bumpInflight(-1); }
+  }
+  await DATA(db).save(ns, col, id, rawData);
+};
+`, '(finally だけ)');
+  say(!has(swOkFinally, 'WTG-006'),
+    `負の対照: finally だけの try は投げが外へ出るので緑 (${swOkFinally.findings.map((f) => f.id).join(',') || '指摘なし'})`);
+
+  // ⚠負の対照: **別の言葉にして** 投げ返すのも正しい形
+  const swOkNew = analyze(SWALLOW_OK.replace('      throw e;', "      throw new Error('保存を止めました: ' + e.message);"),
+    '(言い換えて投げ返す)');
+  say(!has(swOkNew, 'WTG-006'),
+    `負の対照: 別の言葉にして投げ返す形も緑 (${swOkNew.findings.map((f) => f.id).join(',') || '指摘なし'})`);
+
+  // ── await 外し(WTG-007) ───────────────────────────────────────────────
+  const AWAIT_OK = LOADED_WIRING + `
+const saveData = async (col, id, rawData) => {
+  if (col === 'lots') { assertLotsLoaded(lotsLoadedRef.current, { onBlock: note }); assertSafeLotSave(before, rawData); }
+  await DATA(db).save(ns, col, id, rawData);
+};
+const restore = async (parsed) => {
+  for (const raw of parsed.lotRows) {
+    try { await saveData('lots', raw.id, raw); ok++; }
+    catch (e) { blocked++; console.error('復元を止めました(この1件だけ)', raw.id, e); }
+  }
+};
+`;
+  const awOk = analyze(AWAIT_OK, '(復元が await している)');
+  say(!has(awOk, 'WTG-007'),
+    `負の対照: try で受けて await している復元は緑 (${awOk.findings.map((f) => f.id).join(',') || '指摘なし'})`);
+
+  const awBad = analyze(AWAIT_OK.replace("await saveData('lots', raw.id, raw);", "saveData('lots', raw.id, raw);"),
+    '(await だけ外した)');
+  say(has(awBad, 'WTG-007'),
+    `🚨 壊し方6-9: try で受けているのに await を外したら ❌（止めた件数が人に出なくなる） (${awBad.findings.map((f) => f.id).join(',') || 'なし'})`);
+
+  // ⚠負の対照: ロット以外の保存には言わない(直せない赤を増やさない)
+  const awOther = analyze(AWAIT_OK.replace("await saveData('lots', raw.id, raw);", "saveData('templates', raw.id, raw);"),
+    '(ロット以外の保存)');
+  say(!has(awOther, 'WTG-007'),
+    `負の対照: ロット以外の保存には await を求めない (${awOther.findings.map((f) => f.id).join(',') || '指摘なし'})`);
+
+  // ⚠負の対照: 他の呼び出しの引数に渡している形(受け取った側が待つ)
+  const awArg = analyze(AWAIT_OK.replace("await saveData('lots', raw.id, raw);", "await settleSaveBriefly(saveData('lots', raw.id, raw));"),
+    '(引数として渡す)');
+  say(!has(awArg, 'WTG-007'),
+    `負の対照: \`await 他の関数(saveData(…))\` は対象外 (${awArg.findings.map((f) => f.id).join(',') || '指摘なし'})`);
+
   const after = analyze(AFTER_FIX, '(直した後)');
   say(after.findings.length === 0, `直した後: 指摘ゼロになる (実際 ${after.findings.length}件: ${after.findings.map((f) => f.id).join(',')})`);
   say(after.chokes.every((c) => c.guarded), '直した後: 関所が見張りを通っている');
 
   // ⚠誤検出よけ: コメントの中の例示コードを実コードとして数えない
-  const commented = analyze(`
+  const commented = analyze(LOADED_WIRING + `
 // 例: saveData('lots', id, { tasks: {} })  ← これは説明。実コードではない
 /* if (lot.tasks) update.tasks = lot.tasks; */
-const saveData = async (col, id, rawData) => { if (col === 'lots') assertSafeLotSave(cur, rawData); await DATA(db).save(ns, col, id, rawData); };
+const saveData = async (col, id, rawData) => { if (col === 'lots') { assertLotsLoaded(lotsLoadedRef.current); assertSafeLotSave(cur, rawData); } await DATA(db).save(ns, col, id, rawData); };
 `, '(コメントだけ)');
   say(commented.findings.length === 0, `コメントの中の例示を実コードとして数えない (実際 ${commented.findings.length}件)`);
 
@@ -769,7 +1446,12 @@ const main = (args) => {
   for (const f of files) {
     const r = analyze(fs.readFileSync(f, 'utf8'), f);
     console.log(`📄 ${path.normalize(f)}`);
-    r.chokes.forEach((c) => console.log(`   関所 ${c.name}() @${c.line} … ${c.guarded ? '✅ 見張りを通っている' : '❌ 通っていない'}`));
+    r.chokes.forEach((c) => console.log(
+      `   関所 ${c.name}() @${c.line} … `
+      + (c.handlesLots
+        ? `${c.guarded ? (c.swallowed ? '⚠ 見張りは呼んでいるが投げを握り潰している' : '✅ 見張りを通っている') : '❌ 通っていない'}`
+          + ` / 読み込みの門 ${c.loadedGuarded ? '✅ 通っている' : '❌ 通っていない'}`
+        : '（ロットを扱わない保存関数なので対象外）')));
 
     if (r.findings.length) {
       console.log(`   ── 危ない所 ${r.findings.length}件 ──`);
