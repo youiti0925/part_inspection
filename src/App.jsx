@@ -94,6 +94,11 @@ import {
 } from './domain/noteImages.js';
 // 💾 「保存してから画面を閉じてよいか」(2026-08-17 の是正。製品検査と同一ファイル)
 import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './domain/settleSave.js';
+// 工場の暦(祝日・全社休業・休日出勤)。4アプリで同じ物(md5 一致)。
+//   🚨 登録が空なら 月〜金 = 今までと1ミリも同じ挙動。
+//   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
+//   この部品検査アプリは **読むだけ**(登録する画面は製品検査/最終検査にある)。
+import { isWorkdayYmd } from './domain/factoryCalendar.js';
 // 🛌 作業者の休止/復帰(2026-08-31 清水さんの要望)。消すのではなく一旦しまう。復帰したら元どおり。
 //   🚨 使ってよいのは「これから割り当てる先」を絞る所だけ。
 //     過去の記録の名前を引く所(WorkerBadge・分析・成績表)には絶対に使わない。
@@ -289,6 +294,10 @@ const gridToWsShim_pl = (grid) => ({
 // --- Global Constants & Config ---
 // 修正: IDを固定化して、どの端末からでも同じデータを参照できるようにする
 const APP_DATA_ID = "parts-inspection-v1"; // 部品検査アプリ専用の名前空間 (製品/最終とは別)
+// 検査アプリ共通の棚。工場の暦(祝日表)はここに1つだけ置く = どのアプリで登録しても全部に効く。
+//   🚨 このアプリは **読むだけ**。登録する画面は製品検査/最終検査にある(1つの物を2か所で直させない)。
+//   ⚠ 新しいコレクションも名前空間も作らない(firestore.rules の knownApp に既に載っている)。
+const CONTACT_SHARED_NS = 'contact-shared-v1';
 
 // Firebase: 製品・最終検査アプリと「同じプロジェクト」を再利用 (inspection-time-c4fd3)。
 //  データは APP_DATA_ID="parts-inspection-v1" の別名前空間 (artifacts/parts-inspection-v1/...) に入るので、
@@ -990,9 +999,17 @@ const computeElapsedWorkSeconds = (startMs, endMs, schedule, includeOvertime = t
   const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
   const lastDay = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
 
+  // 🚨 工場の暦(祝日・全社休業・休日出勤)。schedule に載っていれば効く。
+  //   登録が空なら「土日だけ休み」= 今までと1ミリも同じ答え。
+  //   ⚠ 週の形(何曜日に働くか)の持ち主は勤務表(daysPerWeek)のまま。暦は登録した日だけを上書きする。
+  const factoryCalendar = sch.factoryCalendar || null;
+  const baseWorkdays = excludeWeekend ? [1, 2, 3, 4, 5] : [0, 1, 2, 3, 4, 5, 6];
+  const calWithBase = { ...(factoryCalendar || {}), workdays: baseWorkdays };
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const isFactoryOpen = (day) => isWorkdayYmd(`${day.getFullYear()}-${pad2(day.getMonth() + 1)}-${pad2(day.getDate())}`, calWithBase);
+
   while (cursor.getTime() <= lastDay.getTime()) {
-    const dow = cursor.getDay();
-    if (excludeWeekend && (dow === 0 || dow === 6)) {
+    if (!isFactoryOpen(cursor)) {
       cursor.setDate(cursor.getDate() + 1);
       continue;
     }
@@ -5605,7 +5622,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                 if (!confirm('このカスタムプリセットを削除しますか？')) return;
                 const newLayouts = { ...customLayouts };
                 delete newLayouts[key];
-                onSaveLayouts?.(newLayouts);
+                // ⚠「消す印」(__deleteMapKeys)を渡さないと merge:true では消えず、次の同期で一覧に戻る
+                onSaveLayouts?.(newLayouts, key);
                 if (measurementConfig.layout === `custom_${key}`) setMeasurementConfig({ ...measurementConfig, layout: 'custom' });
               };
               const handleRenameCustomPreset = (key, newName) => {
@@ -7981,15 +7999,27 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     // step.id ベースのキーを正準とする (テンプレ並び替え時の不整合防止)
     const taskKey = currentStep?.id ? `${currentStep.id}-${currentUnitIdx}` : `${currentStepIdx}-${currentUnitIdx}`;
     const legacyKey = `${currentStepIdx}-${currentUnitIdx}`;
+    const removedKeys = [];
     if (!tasks[taskKey] || tasks[taskKey].status !== 'completed') {
       // 開始時刻 = stepUnitStartRef.current の以前値 (= now - unitDuration*1000)、終了 = now
       const firstStart = now - unitDuration * 1000;
       const newTasks = { ...tasks, [taskKey]: { status: 'completed', duration: unitDuration, startTime: null, firstStartTime: firstStart, endTime: now, workerName: inspectorName } };
       // 旧 numeric キーが残っていたら削除（重複防止）
-      if (taskKey !== legacyKey && newTasks[legacyKey]) delete newTasks[legacyKey];
+      // ⚠消したキーは __deleteMapKeys で明示しないとFirestoreに残り続ける(二重計上の元)
+      // ⚠名指しで消すのは、旧い数値キーが **記録を1秒も持っていない** 時だけ。
+      //   秒数や時刻を持つ物まで名指しで消すと、保存の関所が「時間が消える保存」として
+      //   この保存ごと止めてしまう(消したいのは二重の札であって、記録そのものではない)。
+      if (taskKey !== legacyKey && newTasks[legacyKey]) {
+        const old = newTasks[legacyKey];
+        const hasRecord = (Number(old && old.duration) || 0) > 0
+          || !!(old && (old.firstStartTime || old.endTime || old.startTime));
+        delete newTasks[legacyKey];
+        if (!hasRecord) removedKeys.push(legacyKey);
+      }
       setTasks(newTasks);
       tasksRef.current = newTasks;
     }
+    const delKeys = removedKeys.length ? { __deleteMapKeys: { tasks: removedKeys } } : {};
 
     // 工程全体の合計時間を計算して保存
     let stepTotal = 0;
@@ -8004,10 +8034,10 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     if (next) {
       setCurrentStepIdx(next.step);
       setCurrentUnitIdx(next.unit);
-      onSave({ currentStepIndex: next.step, currentUnitIndex: next.unit, totalWorkTime: elapsed, stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes, measurementResults, tasks: tasksRef.current });
+      onSave({ currentStepIndex: next.step, currentUnitIndex: next.unit, totalWorkTime: elapsed, stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes, measurementResults, tasks: tasksRef.current, ...delKeys });
     } else {
       // 全工程×全台完了
-      onSave({ totalWorkTime: elapsed, stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes, measurementResults, tasks: tasksRef.current });
+      onSave({ totalWorkTime: elapsed, stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes, measurementResults, tasks: tasksRef.current, ...delKeys });
       handleCompleteTrigger();
     }
   };
@@ -8847,6 +8877,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
       const completedAt = Date.now();
       const skippedTasks = { ...tasksRef.current };
       const meta = {};
+      const deadTaskKeys = []; // ⚠消したキーは __deleteMapKeys で明示しないとFirestoreに残り続ける(二重計上の元)
       if (overrideMeta) {
           // 未完了タスクを 'skipped' として明示記録
           // ※ 旧データ ({sIdx}-{u} 数値キー) のみ存在する場合は、新キーに skipped を書きつつ
@@ -8871,8 +8902,16 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   if (!t || (t.status !== 'completed' && t.status !== 'skipped')) {
                       // skipped でも firstStartTime/endTime を記録 (時刻 = スキップ確定時刻)
                       skippedTasks[key] = { status: 'skipped', duration: 0, skipReason: overrideMeta.reason, skipBy: overrideMeta.responsibleBy, skipAt: completedAt, firstStartTime: completedAt, endTime: completedAt };
+                      // ⚠名指しで消すのは、旧い数値キーが **記録を1秒も持っていない** 時だけ。
+                      //   秒数や時刻を持つ物まで消すと、保存の関所が完了確定そのものを止める
+                      //   (時間が消える保存だから)。止まったら作業者は完了できない。
+                      //   持っている時は今までどおり残す = サーバの中身は今までと1バイトも変わらない。
                       if (key !== numKey && skippedTasks[numKey]) {
+                          const old = skippedTasks[numKey];
+                          const hasRecord = (Number(old && old.duration) || 0) > 0
+                              || !!(old && (old.firstStartTime || old.endTime || old.startTime));
                           delete skippedTasks[numKey];
+                          if (!hasRecord) deadTaskKeys.push(numKey);
                       }
                   }
               }
@@ -8894,6 +8933,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
               currentStepIndex: localSteps.length,
               stepTimes, stepUnitTimes,
               tasks: skippedTasks,
+              ...(deadTaskKeys.length ? { __deleteMapKeys: { tasks: deadTaskKeys } } : {}),
               interruptions, measurementResults,
               completedAt,
               ...meta
@@ -10070,7 +10110,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
       const ngr = (reworkEditor.ngReason || '').trim();
       if (ngr) updated.ngReason = ngr; else delete updated.ngReason;
       const nt = { ...tasks, [reworkEditor.key]: updated };
-      setTasks(nt); onSave({ tasks: nt, status: 'processing' });
+      setTasks(nt); onSave({ tasks: nt, status: 'processing', ...(ngr ? {} : { __deleteMapKeys: [['tasks', reworkEditor.key, 'ngReason']] }) });
       setReworkEditor(null);
     };
     return (
@@ -11380,13 +11420,15 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                                      if (!confirm(`「${step.title}」の該当なし指定を解除して「未着手」に戻しますか？`)) return;
                                      const newTasks = { ...tasks };
                                      // step.id ベース + 旧数値キー 両方を削除 (古いデータに対応)
+                                     // ⚠消したキーは __deleteMapKeys で明示しないとFirestoreに残り、次の同期で該当なしが復活する
+                                     const removed = [];
                                      allKeys.forEach((k, u) => {
                                        const numKey = `${sIdx}-${u}`;
-                                       if (newTasks[k]?.status === 'skipped') delete newTasks[k];
-                                       if (newTasks[numKey]?.status === 'skipped') delete newTasks[numKey];
+                                       if (newTasks[k]?.status === 'skipped') { delete newTasks[k]; removed.push(k); }
+                                       if (newTasks[numKey]?.status === 'skipped') { delete newTasks[numKey]; removed.push(numKey); }
                                      });
                                      setTasks(newTasks);
-                                     onSave({ tasks: newTasks });
+                                     onSave({ tasks: newTasks, ...(removed.length ? { __deleteMapKeys: { tasks: removed } } : {}) });
                                    } else {
                                      // 該当なしに設定
                                      if (anyCompleted) {
@@ -13136,21 +13178,25 @@ const MeasurementOverridesPanel = ({ templates, lots, measurementOverrides, save
             && (merged.toleranceUpper === undefined || merged.toleranceUpper === '')
             && (merged.toleranceLower === undefined || merged.toleranceLower === '')
             && (merged.toleranceEnabled === undefined);
+        // ⚠消す時は「消す印」(__deleteMapKeys)を明示。merge:true は「送らなかったキー」を消さないので、
+        //   単に next から delete しただけでは次の同期で古いオーバーライドが復活する。
+        const dead = [];
         if (isEmpty) {
             delete next[model][stepId][calcId];
-            if (Object.keys(next[model][stepId]).length === 0) delete next[model][stepId];
-            if (Object.keys(next[model]).length === 0) delete next[model];
+            dead.push(['measurementOverrides', model, stepId, calcId]);
+            if (Object.keys(next[model][stepId]).length === 0) { delete next[model][stepId]; dead.push(['measurementOverrides', model, stepId]); }
+            if (Object.keys(next[model]).length === 0) { delete next[model]; dead.push(['measurementOverrides', model]); }
         } else {
             next[model][stepId][calcId] = merged;
         }
-        saveSettings({ measurementOverrides: next });
+        saveSettings({ measurementOverrides: next, ...(dead.length ? { __deleteMapKeys: dead } : {}) });
     };
 
     const removeModel = (model) => {
         if (!confirm(`品目コード「${model}」のオーバーライド設定を全て削除しますか？`)) return;
         const next = { ...(measurementOverrides || {}) };
         delete next[model];
-        saveSettings({ measurementOverrides: next });
+        saveSettings({ measurementOverrides: next, __deleteMapKeys: [['measurementOverrides', model]] });
         if (selectedModel === model) setSelectedModel('');
     };
 
@@ -13697,7 +13743,9 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
             delete nextQs[qsId];
             const nextMap = { ...(modelStandardMap || {}) };
             usedModels.forEach(m => delete nextMap[m]);
-            await saveSettings({ qualityStandards: nextQs, modelStandardMap: nextMap });
+            // 🚨 消す印が要る。merge:true は送らなかった鍵を消さないので、印が無いと
+            //   消したはずの規格・割り当てが次の同期で戻ってくる(2026-09-01 ロスターと同じ形)。
+            await saveSettings({ qualityStandards: nextQs, modelStandardMap: nextMap, __deleteMapKeys: [['qualityStandards', qsId], ...usedModels.map(m => ['modelStandardMap', m])] });
         }
         if (selectedQsId === qsId) setSelectedQsId('');
     };
@@ -13764,7 +13812,8 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
         } else {
             const next = { ...(modelStandardMap || {}) };
             delete next[model];
-            await saveSettings({ modelStandardMap: next });
+            // 🚨 消す印が要る(上と同じ理由)。無いと解除したはずの割り当てが戻ってくる。
+            await saveSettings({ modelStandardMap: next, __deleteMapKeys: [['modelStandardMap', model]] });
         }
     };
 
@@ -20356,7 +20405,8 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
     if (!confirm(`カスタムプリセット「${customLayouts[key]?.label}」を削除しますか？`)) return;
     const newLayouts = { ...customLayouts };
     delete newLayouts[key];
-    saveSettings({ customLayouts: newLayouts });
+    // ⚠「消す印」(__deleteMapKeys)を明示しないと merge:true で消えず、次の同期で一覧に戻ってくる
+    saveSettings({ customLayouts: newLayouts, __deleteMapKeys: [['customLayouts', key]] });
   };
 
   const hideBuiltIn = (key) => {
@@ -20369,7 +20419,8 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
     if (!confirm(`組み込みプリセット「${MEASUREMENT_LAYOUTS[key]?.label}」をデフォルトに戻しますか？`)) return;
     const newOverrides = { ...builtInOverrides };
     delete newOverrides[key];
-    saveSettings({ builtInOverrides: newOverrides });
+    // ⚠「消す印」(__deleteMapKeys)を明示しないと「デフォルトに戻す」が効かない(上書きが残り続ける)
+    saveSettings({ builtInOverrides: newOverrides, __deleteMapKeys: [['builtInOverrides', key]] });
   };
 
   const restoreAllHidden = () => {
@@ -25106,11 +25157,15 @@ const rosterStatusOf = (settings, ymd, worker) => ((settings?.workerRoster || {}
 const rosterDayStats = (settings, names, ymd) => { let present = 0, off = 0, other = 0; (names || []).forEach(w => { const s = rosterStatusOf(settings, ymd, w); if (s === 'off') off++; else if (s === 'other') other++; else present++; }); return { present, off, other, total: (names || []).length }; };
 // 期間[fromMs,toMs]の平日について、基準人数(baseline=上書き or 登録)から その日の休み/他工場の人数を引いた平均。
 // 記録の無い日は baseline のまま=ロスター未入力なら従来挙動と一致。anyEntry=その期間に休/他の記録があるか。
-const rosterAdjustedAvailable = (settings, names, fromMs, toMs, baseline) => {
+const rosterAdjustedAvailable = (settings, names, fromMs, toMs, baseline, factoryCalendar = null) => {
   let sum = 0, days = 0, anyEntry = false;
+  // 🚨 工場が休みの日(土日 + 暦に登録した祝日・全社休業)は平均に入れない。
+  //   入れると「誰も居ない日」を頭数の平均に混ぜる事になり、処理能力を低く見せる。
+  //   休日出勤を登録した土曜は逆に数える。登録が空なら今までと1ミリも同じ(土日だけ外す)。
   for (let t = fromMs; t <= toMs + 1; t += 86400000) {
-    const d = new Date(t); const dow = d.getDay(); if (dow === 0 || dow === 6) continue;
-    const ymd = rymd(t); const st = rosterDayStats(settings, names, ymd);
+    const ymd = rymd(t);
+    if (!isWorkdayYmd(ymd, factoryCalendar)) continue;
+    const st = rosterDayStats(settings, names, ymd);
     if (st.off + st.other > 0) anyEntry = true;
     sum += Math.max(0, baseline - st.off - st.other); days++;
   }
@@ -25174,7 +25229,7 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
   );
 };
 
-const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSettings, indirectWork = [] }) => {
+const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSettings, indirectWork = [], factoryCalendar = null }) => {
   const [tickN, setTickN] = useState(0);
   // 週次仕事量で展開中の週 (null = なし)
   const [expandedWeekIdx, setExpandedWeekIdx] = useState(null);
@@ -25356,7 +25411,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
   const overrideWorkers = settings?.workloadEffectiveWorkers;
   // 基準人数 = 手動上書き(あれば) or 登録作業者数。ロスターはこの基準から「その日 休み/他工場」を引いて日次の欠員を反映する。
   const baselineWorkers = (overrideWorkers && Number(overrideWorkers) > 0) ? Number(overrideWorkers) : registeredWorkers;
-  const rosterWeek = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); const t0 = d.getTime(); return rosterAdjustedAvailable(settings, (workers || []).map(w => w.name).filter(Boolean), t0, t0 + 6 * 86400000, baselineWorkers); }, [settings, workers, baselineWorkers]);
+  const rosterWeek = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); const t0 = d.getTime(); return rosterAdjustedAvailable(settings, (workers || []).map(w => w.name).filter(Boolean), t0, t0 + 6 * 86400000, baselineWorkers, factoryCalendar); }, [settings, workers, baselineWorkers, factoryCalendar]);
   // ロスターに今週の休/他の記録があればそれで補正、無ければ基準のまま。
   const totalWorkers = rosterWeek.anyEntry ? Math.max(1, Math.round(rosterWeek.avg * 10) / 10) : baselineWorkers;
   const isWorkerOverride = (overrideWorkers && Number(overrideWorkers) > 0 && Number(overrideWorkers) !== registeredWorkers);
@@ -27479,7 +27534,17 @@ const QuotaStoppedPanel = ({ until }) => (
    const [templates, setTemplates] = useState([]);
    const [workers, setWorkers] = useState([]);
    // ⚠logs / indirectWork / improvements は「開いた時だけ読む」へ移した(下の useLazyCollection)。
+   // 工場の暦(祝日・全社休業・休日出勤)。null = まだ読めていない / 登録なし。
+   //   🚨 null でも「登録が空」と同じ答えになる(月〜金)。読めるまで画面が止まる事は無い。
+   const [factoryCalendar, setFactoryCalendar] = useState(null);
    const [settings, setSettings] = useState({ mapImage: null, mapZones: INITIAL_MAP_ZONES, defectProcessOptions: DEFAULT_DEFECT_PROCESS_OPTIONS, breakAlerts: [], complaintOptions: DEFAULT_COMPLAINT_OPTIONS, customTargetTimes: {}, targetTimeHistory: [], customLayouts: {}, measurementOverrides: {} });
+
+   // 勤務表 + 工場の暦 を1つにした物(WorkScheduleContext に流す)。
+   // 🚨 毎描画で新しい物を作ってはいけない。文脈の値が変わったと見なされ、
+   //   この文脈を読む札が全部描き直される(2026-08-30「札の描き直し 370枚→2枚」と同じ穴)。
+   const workScheduleWithCalendar = useMemo(
+     () => ({ ...(settings.workSchedule || DEFAULT_WORK_SCHEDULE), factoryCalendar }),
+     [settings.workSchedule, factoryCalendar]);
 
    // State: Break Alert
    const [showBreakAlert, setShowBreakAlert] = useState(null);
@@ -27949,10 +28014,16 @@ const QuotaStoppedPanel = ({ until }) => (
               comboPresets: data.comboPresets || []
             });
          }
-       }, { onError: readFailed('settings') })
+       }, { onError: readFailed('settings') }),
+       // 工場の暦(祝日表)。書類1件だけ。⚠ ここでは **読むだけ**(このアプリからは書かない)。
+       P.watchDoc(CONTACT_SHARED_NS, 'settings', 'config', (data) => {
+         countReads('contact_shared/settings', 1, { attach: !firstSeen.has('contact_shared/settings') });
+         firstSeen.add('contact_shared/settings');
+         setFactoryCalendar((data && data.factoryCalendar) || null);
+       }, { onError: readFailed('contact_shared/settings') })
      ];
      // 張った事は0件でも残す(「読んでいない」と「そもそも購読していない」を人が見分けられるように)。
-     ['templates', 'workers', 'notes', 'announcements', 'observationPlans', 'settings/config'].forEach(c => countReads(c, 0, { attach: true }));
+     ['templates', 'workers', 'notes', 'announcements', 'observationPlans', 'settings/config', 'contact_shared/settings'].forEach(c => countReads(c, 0, { attach: true }));
      if (stopped) stopAll(); // 張っている最中に枠切れが来た時の取りこぼし防止
      return () => { stopped = true; unsubs.forEach(u => { try { u(); } catch { /* 既に止まっていても構わない */ } }); };
    }, [user, db, countReads, noteReadError]);
@@ -30206,7 +30277,7 @@ const QuotaStoppedPanel = ({ until }) => (
    };
  
    return (
-     <WorkScheduleContext.Provider value={settings.workSchedule || DEFAULT_WORK_SCHEDULE}>
+     <WorkScheduleContext.Provider value={workScheduleWithCalendar}>
      <LotCardDisplayContext.Provider value={settings.lotCardDisplay || DEFAULT_LOT_CARD_DISPLAY}>
      {/* グローバル CSS: 作業中ロット用の強い点滅アニメーション (Tailwind animate-pulse より強力) */}
      <style>{`
@@ -30608,7 +30679,7 @@ const QuotaStoppedPanel = ({ until }) => (
          {activeTab === 'progress' && (
            quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
            : !progressDataReady ? <DataLoadingPanel what="過去のロットと間接作業" />
-           : <ProgressOverviewView lots={lots} workers={workers} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} />
+           : <ProgressOverviewView lots={lots} workers={workers} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} />
          )}
          {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} />}
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
@@ -30647,7 +30718,7 @@ const QuotaStoppedPanel = ({ until }) => (
          {activeTab === 'template-mgr' && (
            editingTemplate ? (
              <div className="p-4 h-full flex flex-col overflow-hidden">
-               <TemplateEditor template={editingTemplate} onSave={handleSaveTemplate} onCancel={() => setEditingTemplate(null)} customLayouts={settings?.customLayouts || {}} onSaveLayouts={(layouts) => saveSettings({ customLayouts: layouts })} comboPresets={settings?.comboPresets || []} builtInOverrides={settings?.builtInOverrides || {}} hiddenBuiltIns={settings?.hiddenBuiltIns || []} />
+               <TemplateEditor template={editingTemplate} onSave={handleSaveTemplate} onCancel={() => setEditingTemplate(null)} customLayouts={settings?.customLayouts || {}} onSaveLayouts={(layouts, deadKey) => saveSettings({ customLayouts: layouts, ...(deadKey ? { __deleteMapKeys: [['customLayouts', deadKey]] } : {}) })} comboPresets={settings?.comboPresets || []} builtInOverrides={settings?.builtInOverrides || {}} hiddenBuiltIns={settings?.hiddenBuiltIns || []} />
              </div>
            ) : (
              <TemplateListSection

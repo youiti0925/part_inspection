@@ -289,14 +289,17 @@ const CASES = [
   //   D6 は本番へ HEAD を直列で 124〜161本 連射する（実測）。まれに混ざる一過性の
   //   通信エラー(fetch failed = status 0)だけ引き直す。404 は確定した答えなので引き直さない。
   {
-    name: 'ok-5 … 出した後(--after)、本番の部品が全部 200 なら緑',
+    name: 'ok-5 … 出した後(--after)、本番の部品が全部 200 なら緑。待っていないのに「待った」と言わない',
     tree: () => makeTree('ok-5', {
       fixtureExtra: { [`${BASE_URL}/assets/index-NEXT.js`]: { status: 200, contentType: 'text/javascript; charset=utf-8' } },
     }),
     args: ['--after'],
     want: { code: 0 },
     mustHave: ['✅ D6', '全部 生きている'],
-    mustNotHave: ['❌'],
+    // 🚨 2026-09-02 追記。ok-9 の裏側。1回目で 200 が返った時は
+    //   「待った」も「待ったら届いた」も出してはいけない（出したら嘘の実測になる）。
+    //   ⚠ これを書かずに ok-9 だけ直すと、判定を `if (true)` にしても両方 緑で通る。
+    mustNotHave: ['❌', '待ったら届いた', '⏳ 反映を待っています'],
   },
   {
     name: 'ok-6 … 一過性の通信エラー(1回目だけ status 0)は引き直しで緑＋注記',

@@ -997,7 +997,14 @@ const checkAfterDeploy = async (cfgs) => {
           + `現場と同じ聞き方では ${m.r.status} のまま（${sec(m.waitedMs)}秒 待った）`);
         continue;
       }
-      if (m.waitedMs > 0) settled.push(`  /${a} … ${sec(m.waitedMs)}秒 待ったら届いた（測り直し ${m.tries}回目）`);
+      // 🚨🚨 2026-09-02: ここは `m.waitedMs > 0` だった＝**壁の時計が1ミリ秒 進んだかどうか**で
+      //   「待ったら届いた」を出すか決めていた。作り物の答えで測る時は実際に眠らないので、
+      //   同じ試験(ok-9)が **走らせるたびに緑になったり赤になったり** した
+      //   (実測 2026-09-02: 製品5回中1回赤 / 最終3回中1回赤。中身は1行も変えていない)。
+      //   ＝「待ちを0にすると赤になる」を確かめる自己試験そのものが、当てにならなかった。
+      //   → 時計ではなく **測り直したかどうか(tries)** で決める。
+      //     tries は 1回目の(印なしの)問い合わせで届いた時だけ 0。待ちの輪に入ったら必ず 1以上。
+      if (m.tries > 0) settled.push(`  /${a} … ${sec(m.waitedMs)}秒 待ったら届いた（測り直し ${m.tries}回目）`);
       if (m.r.retried) retriedOk.push(`  /${a} … 1回目は通信エラー → 引き直しで 200（一過性）`);
     }
     const settleNote = settled.length

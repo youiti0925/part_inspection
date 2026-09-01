@@ -220,14 +220,24 @@ export const STARTUP = {
   },
   product: {
     always: ['lots', 'templates', 'workers', 'contact_requests', 'arrival_times', 'push_tokens',
-             'controllers', 'order_motors', 'motor_ledger', 'spare_motors', 'logs', 'notes',
+             'controllers', 'order_motors', 'motor_ledger', 'spare_motors', 'notes',
              'announcements', 'indirectWork', 'improvements', 'minor_reports', 'observationPlans',
              'video_recipes', 'model_templates',
              // ⭐星取表の指名の印+🎓教育の出来事(2026-08-29)。どちらも新しい順500件のみ購読(App.jsx側にlimit:500)
              'skill_marks', 'education_events'],
     docs: [['product-inspection-v1', 'settings'], ['contact-shared-v1', 'settings']],
     shared: [['contact-shared-v1', 'app_feedback'], ['contact-shared-v1', 'app_notices']],
-    lazy: [],
+    // 🚨 2026-09-02 直した: logs は 2026-08-18 に起動時の購読から外れ、**分析タブを開いた時だけ**
+    //   張る形(logsWanted)に移っていた。実コード src/App.jsx:42622-42629 で確認:
+    //     const [logsWanted, setLogsWanted] = useState(false);
+    //     useEffect(() => { if (activeTab === 'analysis') setLogsWanted(true); }, [activeTab]);
+    //     useEffect(() => { if (!logsWanted || …) return; return DATA(db).watchCollection(…,'logs',…) }, …)
+    //   read-budget-allow.json の製品 logs の理由にも「普段は1件も読まない」と書いてある。
+    //   always に置いたままだと **1回開くごとに 179件を余計に数えていた**(1日 179×4人×4回=2,864件)。
+    //   ⚠これは見積りの誤りを直しただけで、**実物の読みは1件も減っていない**。
+    //   ⚠ checkStartupFresh() は「always に在るのに購読が無い」しか見ないので、
+    //     「always に在るが実は遅延」は見つけられない(見張りの穴。親へ報告済み)。
+    lazy: [['product-inspection-v1', 'logs', '分析タブを開いた時だけ(src/App.jsx 42622)']],
     why: 'src/App.jsx の unsubs 配列。lots は limit:500 + 未完了だけの2本立て(=同じ doc を2回読む)',
   },
   parts: {
@@ -388,7 +398,22 @@ export const literalOf = (raw) => {
   const t = String(raw == null ? '' : raw).trim();
   let mm;
   if ((mm = t.match(/^'([^']*)'$/)) || (mm = t.match(/^"([^"]*)"$/))) return { lit: true, v: mm[1] };
-  if (/^-?\d+(?:\.\d+)?$/.test(t)) return { lit: true, v: Number(t) };
+  // 🚨 2026-09-02 追加: バッククォートで書いた文字列。
+  //   実測: M1 を where: [['id','!=',``]] と書くと **違反0・確かめられない0＝まるごと緑** だった。
+  //   ＝「絞りが効いているか」を見る直しが、引用符を変えるだけで消せていた。
+  //   ⚠ 差し込み(${…})が入っている物は中身が実行時に決まるので「読めた」とは言わない。
+  if ((mm = t.match(/^`([^`]*)`$/)) && !mm[1].includes('${')) return { lit: true, v: mm[1] };
+  // 🚨 2026-09-02 追加: 数の書き方は10進の整数だけではない。
+  //   実測: limit: 1e9 / 100_000 / 1000000.0 / 0x100000 は どれも「数が読めない」に落ち、
+  //   **10億件の limit が違反0** で素通りしていた。
+  {
+    const numTxt = t.replace(/_/g, '');
+    if (/^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/.test(numTxt)
+        || /^[-+]?0[xXoObB][0-9a-fA-F]+$/.test(numTxt)) {
+      const n = Number(numTxt);
+      if (Number.isFinite(n)) return { lit: true, v: n };
+    }
+  }
   if (t === 'true' || t === 'false') return { lit: true, v: t === 'true' };
   if (t === 'null') return { lit: true, v: null };
   if (t === 'undefined') return { lit: true, v: undefined };
@@ -452,8 +477,12 @@ export const alwaysTrueWhy = (c) => {
 export const limitNumberOf = (raw, nums = {}) => {
   const t = String(raw || '').trim();
   if (!t) return null;
-  if (/^-?\d+$/.test(t)) return Number(t);
   if (Object.prototype.hasOwnProperty.call(nums, t) && Number.isFinite(nums[t])) return nums[t];
+  // 🚨 2026-09-02: ここは /^-?\d+$/ だけだった＝**10進の整数しか読めなかった**。
+  //   1e9 も 100_000 も Infinity も「読めない」に落ち、赤にも緑にもならずに素通りしていた(実測)。
+  //   → 数の読み取りは literalOf ただ1つに寄せる（書き方が増えても穴が2箇所に増えない）。
+  const l = literalOf(t);
+  if (l.lit && typeof l.v === 'number') return l.v;   // ⚠ Infinity もそのまま返す（下で ❌ にする）
   return null;
 };
 
@@ -479,7 +508,10 @@ export const filterEffect = (s, { ceiling = LIMIT_CEILING } = {}) => {
   let l = 'none'; let lWhy = '';
   if (s.hasLimit) {
     const n = s.limitNum == null ? null : Number(s.limitNum);
-    if (n == null || !Number.isFinite(n)) { l = 'unknown'; lWhy = `limit の数が静的に読めない（limit: ${s.limitRaw || '?'}）`; }
+    // 🚨 2026-09-02: limit: Infinity は「数が読めない」ではない。**読めた上で上限が無い**。
+    //   「確かめられません」へ逃がすと、いちばん大きい絞り込み漏れが赤にならない。
+    if (n === Infinity) { l = 'dead'; lWhy = `🚨 limit ${s.limitRaw} … 上限が無いのと同じ（必ず全件返る）`; }
+    else if (n == null || !Number.isFinite(n)) { l = 'unknown'; lWhy = `limit の数が静的に読めない（limit: ${s.limitRaw || '?'}）`; }
     else if (n <= 0) { l = 'dead'; lWhy = `limit ${n} … 1件以上を読む問い合わせになっていない`; }
     else if (s.docsUnknown) {
       l = 'unknownShelf';
@@ -1147,6 +1179,39 @@ DATA(db).getPageFields(APP_DATA_ID, 'lot_images', ['lotId'], spec);
       '🚨 M2: 棚 633件に limit 100000（棚ぜんぶより大きい）は ❌ になる');
     say(vio(M2, { docs: 0 }).violations.length === 1,
       `🚨 棚が実測0件でも、limit 100000 は ❌（線 ${LIMIT_CEILING}件 を超えている）`);
+
+    // 🚨🚨 2026-09-02 追加。上の M2 は **10進の整数で書いた時だけ** 捕まえていた。
+    //   実測: 次の6通りは どれも「数が読めない」に落ちて **違反0** で素通りしていた。
+    //   ＝「絞りが効いているか」を見る直しが、数の書き方を変えるだけで消せた。
+    for (const [txt, name] of [
+      ['1e9', '1e9（指数の書き方）'],
+      ['100_000', '100_000（下線で区切る書き方）'],
+      ['1000000.0', '1000000.0（小数点つき）'],
+      ['0x100000', '0x100000（16進）'],
+      ['Number.MAX_SAFE_INTEGER', 'Number.MAX_SAFE_INTEGER'],
+      ['Infinity', 'Infinity（上限が無い）'],
+    ]) {
+      const BIG = `const p = await DATA(db).getPage(APP_DATA_ID, 'lots', { limit: ${txt} });`;
+      say(vio(BIG).violations.length === 1, `🚨 大きすぎる limit: ${name} も ❌ になる`);
+    }
+    // ⚠ 本物の小さい limit は、どの書き方でも 緑のまま（狼少年にしない）
+    for (const txt of ['20', '2e1', '0x14']) {
+      say(vio(`Q.watchQuery(APP_DATA_ID, 'lots', { limit: ${txt} }, cb);`).violations.length === 0,
+        `⚠ 棚 633件に limit ${txt}（小さい）は 緑のまま`);
+    }
+    // 🚨 M1 を バッククォートで書いた形。実測で **違反0・確かめられない0＝まるごと緑** だった。
+    say(vio("Q.watchQuery(APP_DATA_ID, 'lots', { where: [['id','!=',``]] }, cb);").violations.length === 1,
+      '🚨 M1 を バッククォート(``)で書いても ❌ になる（引用符を変えて逃げられない）');
+    // ⚠ 差し込みの入った値は「常に真」と決めつけない（嘘の❌を出さない）
+    say(vio("Q.watchQuery(APP_DATA_ID, 'lots', { where: [['id','!=',`${mark}`]] }, cb);").violations.length === 0,
+      '⚠ 差し込み(${…})の入った値は「常に真」と決めつけない');
+    say(literalOf('``').lit === true && literalOf('``').v === '', '部品: バッククォートの空文字を読める');
+    say(literalOf('`${x}`').lit === false, '部品: 差し込みの入った文字は「読めない」');
+    say(literalOf('1e9').v === 1e9 && literalOf('100_000').v === 100000
+      && literalOf('0x10').v === 16 && literalOf('1.5').v === 1.5,
+      '部品: 1e9 / 100_000 / 0x10 / 1.5 を数として読める');
+    say(limitNumberOf('Infinity') === Infinity && limitNumberOf('pageSize') === null,
+      '部品: limit の Infinity は数として返る / 変数(pageSize)は null（読めない）');
 
     // 🚨 棚の件数が分からない時は「分かりません」＝赤。黙っては通さない。
     say(vio(`Q.watchQuery(APP_DATA_ID, 'lots', { limit: 20 }, cb);`, { docsUnknown: true }).violations.length === 1,
