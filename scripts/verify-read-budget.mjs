@@ -200,6 +200,75 @@ export const checkEmbedFresh = (apps, stops = EMBED_STOPS, srcOf = null) => {
   return bad;
 };
 
+// ---------------------------------------------------------------------------
+// 🚨🚨 「棚ぜんぶ」で数えている口（＝**上振れ**。実物はこれより少ない）
+// ---------------------------------------------------------------------------
+//   2026-09-04 に足した。理由(実測):
+//     この見張りは同じ報告の中で、写真の棚(lot_images 2,355件)を
+//       ・「ここの件数は棚ぜんぶ=**上振れ**」(＝実物より多い)
+//     と書きながら、その 2,355件 を合計に丸ごと足し、その合計を
+//       ・「**少なくとも**/日」「これも下限」(＝実物より少ない)
+//     とも書いて、**同じ1つの数に上振れと下限を混ぜていた**。
+//     混ざった 61,378件(123%) の上に ❌「出荷しないでください」が乗っていた。
+//     lot_images だけで 34,248件＝合計の56%。実コードは
+//       `where lotId in [いま開いているロット]` で **開いた台の分だけ** 読む。
+//
+//   → ここに登録した口は、下の②「写真の棚を1件も数えない時」の数から **引く**。
+//     引いた方の数(floor)だけが ❌ の土台になる。混ざった数で ❌ は出さない。
+//
+//   ⚠ 登録してよいのは「棚ぜんぶは読んでいない」事が **実コードで読める** 口だけ。
+//     裏が取れない申告は checkOvercountFresh() が赤にする
+//     (＝「見積りを小さくする申告」を、確かめずには通さない。EMBED_STOPS と同じ作法)。
+//   ⚠ この一覧に無くても「棚ぜんぶ」で数えている口は他にも在る(下の NOT_SUBTRACTED)。
+//     だから②は「絶対の下限」ではなく「**写真の棚を1件も数えない時**」と名乗る。
+// ---------------------------------------------------------------------------
+export const OVERCOUNT = {
+  final: [{ col: 'lot_images', file: 'App.firebase.jsx',
+    evidence: /lotImagesWanted/,
+    why: '開いているロットの分だけ購読する(where lotId in …)。棚ぜんぶ(実測2,355件)は読まない' }],
+  product: [],
+  parts: [],
+};
+
+// 「棚ぜんぶで数えているが、まだ②から引いていない」と分かっている口。
+// 🚨 引けない理由まで書く。書かずに黙って落とすと、また上振れと下限が混ざる。
+export const OVERCOUNT_NOT_SUBTRACTED = [
+  ['final', 'lots', '窓(ACTIVE_LOTS_SPEC / recentDoneSpec)で読むので棚ぜんぶより少ない。'
+    + '窓に何件入るかは件数の控えからは数えられないので、引く量が決められない'],
+  ['product', 'lots', '窓(新しい順500件＋未完了の2本立て)で読むので棚ぜんぶより少ない。同上'],
+];
+
+/**
+ * 🚨 OVERCOUNT に書いた「棚ぜんぶは読んでいない」が、本当に実コードに在るか。
+ *   在れば②から引いてよい。無ければ **小さく見積もった嘘** なので赤にする。
+ */
+export const checkOvercountFresh = (apps, table = OVERCOUNT, srcOf = null) => {
+  const bad = [];
+  for (const [key, list] of Object.entries(table)) {
+    const app = apps.find((a) => a.key === key);
+    if (!app || app.missing) continue;
+    for (const st of list) {
+      let src = null;
+      if (srcOf) src = srcOf(key, st.file);
+      else {
+        const p = path.join(app.dir, st.file);
+        src = fs.existsSync(p) ? stripComments(readSrc(p)) : null;
+      }
+      if (src == null) { bad.push({ key, col: st.col, why: `${st.file} が見つからない` }); continue; }
+      if (!st.evidence.test(src)) {
+        bad.push({ key, col: st.col,
+          why: `${st.col} を「棚ぜんぶは読まない」と書いてあるのに、実コードに証拠が無い`
+             + '(実物は棚ぜんぶ読んでいる可能性がある＝②を小さく見積もっている)' });
+      }
+    }
+  }
+  return bad;
+};
+
+/** その口が OVERCOUNT に登録されているか。 */
+export const isOvercounted = (appKey, col, table = OVERCOUNT) =>
+  (table[appKey] || []).some((x) => x.col === col);
+
 // 起動時に必ず張る物。⚠どれが起動時かは実コードを読んで決めた(門を why に書く)。
 // ⚠⚠ ここが実コードとずれたら見積りが黙って嘘になるので、下の checkStartupFresh() が突き合わせる。
 export const STARTUP = {
@@ -849,7 +918,14 @@ export const estimatePerOpen = (counts) => {
     //     だから **上振れの見積り**として残す。数えられない物を作らない。
     let lazySum = 0; const lazyRows = [];
     for (const [ns, col, why] of plan.lazy) { const n = docsOf(counts, ns, col); lazySum += n; lazyRows.push([col, n, why]); }
-    perOpen[key] = { startup: sum, lazy: lazySum, total: sum + lazySum, rows, lazyRows, why: plan.why };
+    // 🚨 「棚ぜんぶ」で数えた口(OVERCOUNT)の件数を別に持つ。
+    //   total には今までどおり入れる(＝①の数は1件も変えていない)。
+    //   floor は total からこれを引いた数＝「写真の棚を1件も数えない時」。
+    const overSum = [...rows, ...lazyRows.map((r) => [r[0], r[1]])]
+      .filter(([c]) => isOvercounted(key, c))
+      .reduce((s, [, n]) => s + n, 0);
+    perOpen[key] = { startup: sum, lazy: lazySum, total: sum + lazySum,
+      over: overSum, floor: sum + lazySum - overSum, rows, lazyRows, why: plan.why };
   }
   return perOpen;
 };
@@ -902,8 +978,35 @@ export const estimateOverview = (counts, srcOverride = null, apps = APPS) => {
        + '窓に何件入るかは手元の実測から数えられないので、0件として置いてある＝**実際はこれより多い**']
     : [];
 
+  // 🚨 2026-09-04: 組立の連絡ポータル(?renraku=1 / src/AssemblyPortal.jsx)を
+  //   「数えていない」と **名指しで** 出す。ここは③本体とは別の道で、組立の人が常時開く画面。
+  //   これまでは報告の隅に一言あるだけで、合計の外に黙って置かれていた。
+  //   ⚠件数は作らない: 連絡(contact_requests)は `to == 班` で絞って読むので、
+  //     何件返るかは班ごとに違い、件数の控え(コレクション全体の数)からは数えられない。
+  const portalPath = ovApp && ovApp.dir ? path.join(ovApp.dir, 'AssemblyPortal.jsx') : null;
+  const portalSrc = (srcOverride === null && portalPath && fs.existsSync(portalPath))
+    ? stripComments(readSrc(portalPath)) : null;
+  if (portalSrc) {
+    const docs = (portalSrc.match(/getOne\s*\(|watchDoc\s*\(/g) || []).length;
+    const filtered = /watchQuery\s*\([^)]*contact_requests/.test(portalSrc)
+      || /contact_requests[\s\S]{0,200}?where/.test(portalSrc);
+    uncounted.push('組立の連絡ポータル(?renraku=1 / src/AssemblyPortal.jsx)の読み。'
+      + `開くたび 書類 ${docs}件 + 連絡(contact_requests)を ${filtered ? '班で絞って' : '絞らずに'} 読む。`
+      + '絞った先に何件入るかは班ごとに違い、件数の控えからは数えられないので **0件として置いてある**'
+      + '＝実際はこれより多い');
+  }
+
+  // 🚨🚨 2026-09-04 に直した所。
+  //   ここには「⚠③は端末の控えを持たない作り(getFirestore のまま)」という **手書きの決め打ち** を
+  //   印字していた。実物(factory-overview-app/src/App.jsx)は 2026-08-30 から
+  //     initializeFirestore(fbApp, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) })
+  //   で **控えを持っている**(例外が出た時だけ getFirestore に落ちる)。
+  //   手で写した前提は必ず古くなるので、実コードから読む。読めない時は何も言わない。
+  const localCache = /persistentLocalCache\s*\(/.test(ovSrc)
+    ? { has: true, how: 'initializeFirestore + persistentLocalCache（実コードから読んだ）' }
+    : { has: false, how: 'persistentLocalCache が見つからない（実コードから読んだ）' };
   return { unreadable: false, OV_FULL, OV_LIGHT, OV_NS, lightName, autoDefault, full, light, refreshes,
-           lotsWindowed, uncounted, perTabDay: full + light * refreshes };
+           lotsWindowed, uncounted, localCache, perTabDay: full + light * refreshes };
 };
 
 export const estimateDay = (counts, apps = APPS) => {
@@ -911,7 +1014,7 @@ export const estimateDay = (counts, apps = APPS) => {
   const ov = estimateOverview(counts, null, apps);
   if (ov.unreadable) return { unreadable: true, perOpen };
   const A = ASSUME.overview;
-  let day = 0; const bill = [];
+  let day = 0; let dayFloor = 0; const bill = [];
   const notCounted = [];
   // 🚨件数の実測(控え)が無い時は、全部0件で数えている＝この合計は **合計ではない**。
   if (!counts) notCounted.push('件数の実測(控え)がこの端末に無いので、全コレクションを0件として数えている（＝実際はもっと多い）');
@@ -919,11 +1022,12 @@ export const estimateDay = (counts, apps = APPS) => {
     const app = apps.find((x) => x.key === key);
     const n = (perOpen[key]?.total || 0) * a.people * a.opens;
     day += n;
+    dayFloor += (perOpen[key]?.floor || 0) * a.people * a.opens;
     bill.push([`${app.label} ${a.people}人 × ${a.opens}回 × ${(perOpen[key]?.total || 0).toLocaleString('en-US')}件`, n, a.why]);
   }
   // 🚨③のコードを見ていない時は、③自身の読みを **数えない**（作り物の数字を足さない）。
   const ovDay = ov.notSeen ? 0 : ov.perTabDay * A.tabs;
-  day += ovDay;
+  day += ovDay; dayFloor += ovDay;
   if (ov.notSeen) {
     notCounted.push(`司令塔③のコードをこの端末で見ていないので、③自身の読み(1日ぶん)は0として数えている … ${ov.why}`);
   } else {
@@ -932,26 +1036,41 @@ export const estimateDay = (counts, apps = APPS) => {
   // 🚨 ③の iframe(?embed=map)。**止めている購読の分は引く**(EMBED_STOPS。実コードで裏を取ってある)。
   //   引ける根拠が消えたら checkEmbedFresh() が赤にするので、黙って小さい数字にはならない。
   const embedCut = [];
-  const ifrPerOpen = ASSUME.overviewIframes.apps.reduce((s, k) => {
+  // isFloor=true の時は「棚ぜんぶで数えた口」の分をもう引いてあるので、二重に引かない。
+  const cutOf = (k, isFloor) => {
     const app = apps.find((x) => x.key === k);
-    let n = perOpen[k]?.total || 0;
+    let n = isFloor ? (perOpen[k]?.floor || 0) : (perOpen[k]?.total || 0);
     for (const st of (EMBED_STOPS[k] || [])) {
       const d = docsOf(counts, app.ns, st.col);
-      if (d > 0) { n -= d; embedCut.push(`${app.label} の ${st.col} ${d.toLocaleString('en-US')}件`); }
+      if (d <= 0) continue;
+      if (!isFloor) embedCut.push(`${app.label} の ${st.col} ${d.toLocaleString('en-US')}件`);
+      if (!(isFloor && isOvercounted(k, st.col))) n -= d;
     }
-    return s + Math.max(0, n);
-  }, 0);
+    return Math.max(0, n);
+  };
+  const ifrPerOpen = ASSUME.overviewIframes.apps.reduce((s, k) => s + cutOf(k, false), 0);
+  const ifrPerOpenFloor = ASSUME.overviewIframes.apps.reduce((s, k) => s + cutOf(k, true), 0);
   const ifr = ifrPerOpen * A.tabs;
-  day += ifr;
+  day += ifr; dayFloor += ifrPerOpenFloor * A.tabs;
   bill.push([`③の iframe(?embed=map) が抱える実アプリ ${ASSUME.overviewIframes.apps.length}本 × ${A.tabs}タブ`
     + (embedCut.length ? `（?embed=map で読まない ${embedCut.join(' / ')} は引いてある）` : ''), ifr, ASSUME.overviewIframes.why]);
 
   // 🚨数えられない読みが1つでも在れば、この合計は「合計」ではなく **下限** になる。
   //   下限だと分かるように印を立てる。「合計」の顔をした足りない数字を出さない。
   const uncounted = [...(ov.uncounted || []), ...notCounted];
-  return { unreadable: false, perOpen, ov, day, bill, iframes: ifr, uncounted,
+  // 🚨🚨 2026-09-04: 数を **2つに分ける**。1つに混ぜない(決まり: 上振れと下限を混ぜない)。
+  //   day      … ①「棚ぜんぶ」で数えた時。上振れ込み。下限でも上限でもない **混ざった数**。
+  //   dayFloor … ②「棚ぜんぶで数えた口(OVERCOUNT)」を1件も数えない時。
+  //   ❌ の土台は dayFloor だけ。①では ❌ を出さない(出すと、上振れの上に出荷差し止めが乗る)。
+  const overFloor = dayFloor > FREE_READS_PER_DAY;
+  return { unreadable: false, perOpen, ov, day, dayFloor, bill, iframes: ifr, uncounted,
            lowerBound: uncounted.length > 0,
-           pct: Math.round((day / FREE_READS_PER_DAY) * 100), over: day > FREE_READS_PER_DAY };
+           pct: Math.round((day / FREE_READS_PER_DAY) * 100),
+           pctFloor: Math.round((dayFloor / FREE_READS_PER_DAY) * 100),
+           overFloor,
+           // 「①では超えるが②では超えない」＝この見張りでは決められない。赤にも緑にもしない。
+           undecided: !overFloor && day > FREE_READS_PER_DAY,
+           over: day > FREE_READS_PER_DAY };
 };
 
 /**
@@ -1369,6 +1488,39 @@ DATA(db).getAll(ns, 'lots', { map: ROW_DATA_WINS }),
   say(EMBED_STOPS.product.length === 0 && EMBED_STOPS.parts.length === 0,
     '製品・部品の ?embed=map は購読を止めない（見た目だけ）ので、引く物は無い');
 
+  // --- (E3) 🚨🚨 上振れ(棚ぜんぶ)と下限を **1つの数に混ぜない**（2026-09-04） ----
+  //   ここが緑のままだと、自分で「上振れ」と書いた数の上に ❌「出荷しないでください」が乗る。
+  const ocApps = [{ key: 'final', missing: false, dir: '(memory)' }];
+  const ocOf = (re) => ({ final: [{ col: 'lot_images', file: 'App.firebase.jsx', evidence: re, why: '(試験)' }] });
+  say(checkOvercountFresh(ocApps, ocOf(/lotImagesWanted/),
+    withCode('if (!lotImagesWanted) return;')).length === 0,
+    '「棚ぜんぶは読まない」の証拠が実コードに在れば、②から引いてよい');
+  say(checkOvercountFresh(ocApps, ocOf(/lotImagesWanted/),
+    withCode('const x = 1;')).length === 1,
+    '🚨 証拠が消えたら赤（＝②を小さく見積もったまま通さない）');
+  say(isOvercounted('final', 'lot_images') && !isOvercounted('final', 'lots'),
+    '🚨 いま②から引いているのは 最終検査の lot_images だけ（lots は引けていない＝NOT_SUBTRACTED に名指しで残す）');
+  say(OVERCOUNT_NOT_SUBTRACTED.length > 0
+      && OVERCOUNT_NOT_SUBTRACTED.every(([, , why]) => typeof why === 'string' && why.length >= 20),
+    '🚨 引けていない口は「引けない理由」まで書く（黙って落とさない）');
+
+  // ①と②が本当に分かれているか。作り物の棚で数える。
+  const ocCounts = { ns: {
+    'final-inspection-v1': { lots: { docs: 100 }, lot_images: { docs: 900 } },
+    'contact-shared-v1': {}, 'product-inspection-v1': {}, 'parts-inspection-v1': {},
+  } };
+  const savedF = STARTUP.final, savedP = STARTUP.product, savedPa = STARTUP.parts;
+  STARTUP.final = { always: ['lots'], docs: [], shared: [],
+    lazy: [['final-inspection-v1', 'lot_images', '(試験)']], why: '(試験)' };
+  STARTUP.product = { always: [], docs: [], shared: [], lazy: [], why: '(試験)' };
+  STARTUP.parts = { always: [], docs: [], shared: [], lazy: [], why: '(試験)' };
+  const po = estimatePerOpen(ocCounts);
+  STARTUP.final = savedF; STARTUP.product = savedP; STARTUP.parts = savedPa;
+  say(po.final.total === 1000 && po.final.over === 900 && po.final.floor === 100,
+    `🚨 ①(棚ぜんぶ 1,000件)と②(棚ぜんぶの口を引いた 100件)を別々に持つ（実測 ①${po.final.total} / ②${po.final.floor}）`);
+  say(po.final.total !== po.final.floor,
+    '🚨 ①と②が同じ数になっていない（同じなら引く仕掛けが死んでいる）');
+
   // --- (F) 司令塔③の読み取り方が変わっても、数字を作らない/黙って落とさない ---------
   const OV_OLD = `const COLLECTIONS = ['lots','settings','workers'];
 const LIGHT_COLLECTIONS = ['lots','settings','workers'];
@@ -1395,6 +1547,15 @@ const APPS=[{ id: 'final-inspection-v1' }];`;
   const oGone = estimateOverview(fakeCounts, OV_GONE);
   say(oGone.unreadable === true,
     '🚨 ③の軽い読みの一覧がどこにも無い時は、数字を出さずに「当てにするな」と言う');
+
+  // 🚨🚨 2026-09-04: ③に控え(キャッシュ)が在るかを **手書きせず実コードから読む**。
+  //   ここには「③は端末の控えを持たない作り」と決め打ちで印字していた。実物は 2026-08-30 から
+  //   persistentLocalCache を使っている＝印字が嘘だった。
+  const OV_CACHE = OV_NEW + '\nconst db = initializeFirestore(fbApp, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });';
+  say(estimateOverview(fakeCounts, OV_CACHE).localCache?.has === true,
+    '🚨 ③が端末の控え(persistentLocalCache)を持っていたら「持っている」と出す（手書きの決め打ちにしない）');
+  say(estimateOverview(fakeCounts, OV_NEW).localCache?.has === false,
+    '🚨 ③に控えが無ければ「無い」と出す（どちらも実コードから読む）');
 
   // 🚨 2026-09-01: 「③がこの端末に無い」と「③が在るのに読めない」を混ぜない。
   //   無い＝見ていない(赤にしない)／在るのに読めない＝赤。混ぜると CI が中身と関わりなく赤になる。
@@ -1448,6 +1609,7 @@ export const main = () => {
   const est = estimateDay(counts, apps);
   const fresh = checkStartupFresh(apps, counts);
   const embedBad = checkEmbedFresh(apps);
+  const overcountBad = checkOvercountFresh(apps);
   const verdict = judge({ sites, allows, today });
 
   // --- 🚨 どこを見たか（見ていない物を黙って合格にしない） -------------------
@@ -1465,7 +1627,11 @@ export const main = () => {
       perOpen: Object.fromEntries(Object.entries(est.perOpen || {}).map(([k, v]) => [k, v.total])),
       overviewPerTabDay: est.ov?.perTabDay ?? null,
       day: est.day ?? null, dayIsLowerBound: !!est.lowerBound, uncounted: est.uncounted || [],
+      // 🚨 2026-09-04: 上振れ込みの① と 棚ぜんぶの口を数えない② を別々に出す(混ぜない)。
+      dayFloor: est.dayFloor ?? null, pctFloor: est.pctFloor ?? null,
+      overFloor: !!est.overFloor, undecided: !!est.undecided,
       overviewLightName: est.ov?.lightName ?? null,
+      overviewLocalCache: est.ov?.localCache?.has ?? null,
       freeQuota: FREE_READS_PER_DAY, pct: est.pct ?? null,
       unfiltered: verdict.risky.length, violations: verdict.violations.length,
       // 🚨 where/limit は書いてあるのに 1件も絞れていない口(2026-09-01 追加)
@@ -1552,7 +1718,12 @@ export const main = () => {
     console.log(`    (③の実コードから取り出した: 名前空間 ${ov.OV_NS.length}個 × ${ov.OV_FULL.length}コレクション / 軽い読み ${ov.lightName} = ${ov.OV_LIGHT.join(',')})`);
     console.log(`    自動更新 ${ASSUME.overview.autoMin}分 × ${ASSUME.overview.hoursVisible}時間 = ${ov.refreshes}回/日`);
     console.log(`    → 1タブで ${num(ov.full)} + ${num(ov.light)}×${ov.refreshes} = **${num(ov.perTabDay)}件/日**`);
-    console.log('    ⚠③は端末の控えを持たない作り(getFirestore のまま)。getAll は毎回サーバから全件読む。');
+    // 🚨 手書きの決め打ちをやめた(2026-09-04)。③の実コードを読んで出し分ける。
+    if (ov.localCache && ov.localCache.has) {
+      console.log(`    ✅③は端末の控えを持つ作り(${ov.localCache.how})。2回目からはこれより少ない。**その分は測っていない**。`);
+    } else if (ov.localCache) {
+      console.log(`    ⚠③に端末の控えが見つからない(${ov.localCache.how})。getAll は毎回サーバから全件読む。`);
+    }
   } else {
     console.log('\n  ❌ 司令塔③の実コードから COLLECTIONS / LIGHT_COLLECTIONS を取り出せませんでした。');
     console.log('     あちらの書き方が変わっています。**この見積りは当てにしないこと。**');
@@ -1568,14 +1739,46 @@ export const main = () => {
       console.log(`   ${String(num(n)).padStart(8)}  ${what}`);
     }
     console.log(`   ${'-'.repeat(62)}`);
-    console.log(`   ${String(num(est.day)).padStart(8)}  ${est.lowerBound ? '**少なくとも**/日（合計ではない）' : '合計/日'}`);
-    console.log(`   ${String(est.pct + '%').padStart(8)}  🚨**無料枠(${num(FREE_READS_PER_DAY)})に対する割合**${est.lowerBound ? '（これも下限）' : ''}`);
+    // 🚨🚨 2026-09-04: 1つの数に混ぜない。**2通りを別々に出す**。
+    //   ①は「棚ぜんぶ」で数えた口を含む＝上振れ込み。②はその口を1件も数えない。
+    console.log(`   ${String(num(est.day)).padStart(8)}  ① 棚ぜんぶで数えた時（${est.pct}%）`);
+    console.log('             ⚠ 写真の棚など「開いた分だけ読む口」を棚ぜんぶで数えている＝**上振れ込み**。');
+    console.log(`   ${String(num(est.dayFloor)).padStart(8)}  ② その口を1件も数えない時（${est.pctFloor}%）`);
+    console.log('             ⚠ その口の実物は0件ではない＝**実物は②より多い**。');
+    console.log(`   ${'-'.repeat(62)}`);
+    console.log(`   → 実物は ② ${num(est.dayFloor)}件 より多い。①${num(est.day)}件 より多いか少ないかは、この見張りでは決められません。`);
+    // 引いた口・引けなかった口を名指しで出す(黙って落とさない)。
+    const cutRows = [];
+    for (const [k, list] of Object.entries(OVERCOUNT)) {
+      const app = apps.find((a) => a.key === k);
+      for (const st of list) cutRows.push(`${app ? app.label : k} の ${st.col} … ${st.why}`);
+    }
+    if (cutRows.length) {
+      console.log('\n   ②で引いた口（実コードで裏を取ってある。証拠が消えたら赤になります）:');
+      for (const r of cutRows) console.log(`     ・${r}`);
+    }
+    if (OVERCOUNT_NOT_SUBTRACTED.length) {
+      console.log('   ⚠ 棚ぜんぶで数えているが、**②からまだ引けていない**口（だから②は絶対の下限ではありません）:');
+      for (const [k, col, why] of OVERCOUNT_NOT_SUBTRACTED) {
+        const app = apps.find((a) => a.key === k);
+        console.log(`     ・${app ? app.label : k} の ${col} … ${why}`);
+      }
+    }
     if (est.lowerBound) {
-      console.log('\n   ⚠ 数えていない読みが在るので、上の数字は **下限** です（実際はこれより多い）。');
+      console.log('\n   ⚠ どちらの数にも入っていない読みが在ります（＝実物はその分だけ多い）。');
       for (const u of est.uncounted) console.log(`     ・${u}`);
       console.log('     → 本当の数は Firebase コンソールの使用量か、③画面の「実測」で見る事。');
     }
-    if (est.over) console.log(`\n   ❌ 無料枠を ${num(est.day - FREE_READS_PER_DAY)}回 超えている＝昼過ぎに使い切って以後は全部 429。`);
+    if (est.overFloor) {
+      console.log(`\n   ❌ ②（棚ぜんぶで数えた口を1件も数えない数）でも無料枠を ${num(est.dayFloor - FREE_READS_PER_DAY)}回 超えています。`);
+      console.log('      ＝上振れを全部落としても超える＝**確かに超えています**。');
+    } else if (est.undecided) {
+      console.log(`\n   ⏳ 決められません。① ${num(est.day)}件 は枠を超え、② ${num(est.dayFloor)}件 は枠の中です。`);
+      console.log(`      無料枠 ${num(FREE_READS_PER_DAY)} は ②と① の**間**にあります。`);
+      console.log('      🚨 どちらの線で赤にするかは、まだ決まっていません（清水さん待ち）。');
+      console.log('      🚨 混ざった数の上に ❌「出荷しないでください」は出しません（2026-09-04 に直した所）。');
+      console.log('      本当の数は Firebase コンソールの使用量で見てください。');
+    }
   }
 
   // --- ③ 見積りの土台がずれていないか -------------------------------------
@@ -1685,7 +1888,15 @@ export const main = () => {
   for (const b of embedBad) reasons.push(`?embed=map で読まない、と書いてあるのに実コードに証拠が無い: ${b.key} / ${b.col} … ${b.why}`);
   // ⚠③が **この端末に無い** のは赤にしない(見ていない)。**在るのに読めない** のは赤。
   if (est.unreadable) reasons.push('司令塔③の実コードを読めず、見積りが出せない');
-  if (!est.unreadable && est.over) reasons.push(`1日の見積り ${num(est.day)}件 が無料枠 ${num(FREE_READS_PER_DAY)} を超えている(${est.pct}%)`);
+  // 🚨🚨 2026-09-04: ❌ の土台は「棚ぜんぶで数えた口を1件も数えない数(②)」だけ。
+  //   ①(上振れ込み)で ❌ を出すと、自分で「上振れ」と書いた数の上に出荷差し止めが乗る。
+  //   ①だけが超えている時は「決められません」として、赤にも緑にもしない(下で別に出す)。
+  if (!est.unreadable && est.overFloor) {
+    reasons.push(`1日の見積り ${num(est.dayFloor)}件（棚ぜんぶで数えた口を1件も数えない数）が`
+      + ` 無料枠 ${num(FREE_READS_PER_DAY)} を超えている(${est.pctFloor}%)`);
+  }
+  // 🚨「棚ぜんぶは読まない」は **②を小さくする** 側の申告。裏が取れない申告は通さない。
+  for (const b of overcountBad) reasons.push(`棚ぜんぶは読まない、と書いてあるのに実コードに証拠が無い: ${b.key} / ${b.col} … ${b.why}`);
 
   if (listOnly) {
     console.log('（--list なので判定は出しません。上の一覧と見積りだけです）');
@@ -1699,7 +1910,15 @@ export const main = () => {
       console.log(`   🚫 見ていない: ${unseenApps.map((a) => a.label).join(' / ')}`);
       console.log('      → そのアプリのリポジトリの中で同じ物を走らせるまで、そこは何も確かめていません。');
     }
-    console.log('   見た範囲では、絞り込みの無い読み口は無く、見積りも無料枠の中です。');
+    if (est.undecided) {
+      // 🚨 合格でも「決められない」を黙って消さない(2026-09-04)。強さを変えて残す。
+      console.log('   見た範囲では、絞り込みの無い読み口は在りません。');
+      console.log(`   ⏳ ただし1日の見積りは **決められていません**: ① ${num(est.day)}件(枠を超える) / ② ${num(est.dayFloor)}件(枠の中)。`);
+      console.log('      上の②の所に、どちらの口を引いたか・引けていないかを名指しで出してあります。');
+      console.log('      🚨 どちらの線で赤にするかは 清水さん待ち。混ざった数の上に ❌ は出しません。');
+    } else {
+      console.log('   見た範囲では、絞り込みの無い読み口は無く、見積りも無料枠の中です。');
+    }
     console.log('==========================================================================');
     return 0;
   }

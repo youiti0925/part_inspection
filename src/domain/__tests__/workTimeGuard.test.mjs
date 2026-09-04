@@ -433,3 +433,68 @@ test('Z14 「消す印」を tasks の中に直接置く形も読む(withDeletio
   lot2.tasks['SEED-0'] = { status: 'waiting', duration: 0 };
   assert.equal(wouldLoseWorkTime(lot2, { tasks: { 'SEED-0': DEL } }).lost, false);
 });
+
+// ============================================================================
+// 🚨 2026-09-04 追加。実測: この下が無いと 28通り壊して9通りが緑だった。
+//   いちばん効いたのは「戻せる印」の名前。'countMergeFix' を 'countMergeFixZZ' に
+//   変えても 終了値0 だった＝**印の名前が1文字でも変わったら現場の正しい操作が
+//   全部止まる**のに、門は何も言わなかった。
+//   🚨 印の名前は **文字を直に書いて** 比べる。RECOVERABLE_MARKS を取り込んで
+//     比べると、名前を変えた時に試験の方も一緒に変わって永久に緑になる。
+// ============================================================================
+import { RECOVERABLE_MARKS } from '../workTimeGuard.js';
+
+test('Y40 🚨「戻せる印」の名前を、文字を直に書いて留める(定数と比べない)', () => {
+  // ⚠ここを直す時は、実際の保存(App.jsx)で書いている印の名前も一緒に直す事。
+  //   片方だけ直すと「印を付けたのに止められる」か「印が無いのに通る」になる。
+  assert.deepEqual([...RECOVERABLE_MARKS].sort(), [
+    'countMergeFix',   // 員数/一括のもどし(元の秒数を控える)
+    'manualTime',      // 人が画面で秒数を打ち直した
+    'origDuration',    // 按分補正(元の秒数を控える)
+    'redoReset',       // 「最初から作業」「該当なし解除」を人が押した
+    'restoredFrom',    // 復元で書き戻した
+  ], '🚨 戻せる印の名前が変わっている。名前が1文字でも違うと、印を付けた保存が止められる');
+  assert.equal(RECOVERABLE_MARKS.length, 5, '印が増減している。増やすなら理由をここに書く');
+  assert.ok(Object.isFrozen(RECOVERABLE_MARKS), '一覧が書き換えられる形になっている');
+});
+
+test('Y41 🚨印が1つでも付いていれば通る／1文字違えば通らない(対で見る)', () => {
+  for (const name of ['countMergeFix', 'origDuration', 'manualTime', 'restoredFrom', 'redoReset']) {
+    assert.equal(hasRecoverableMark({ [name]: { before: 123 } }), true, `${name} の印が効いていない`);
+    assert.equal(hasRecoverableMark({ [`${name}ZZ`]: { before: 123 } }), false,
+      `🚨 ${name}ZZ という **知らない名前** の印で通してしまう`);
+  }
+  assert.equal(hasRecoverableMark({}), false, '印が1つも無いのに通している');
+  assert.equal(hasRecoverableMark(null), false);
+  assert.equal(hasRecoverableMark({ countMergeFix: null }), false, 'null の印は控えていない');
+});
+
+test('Y42 🚨印の名前が変わると、現場の正しい操作(やり直し)が止められる', () => {
+  const lot = LOT_8_12();
+  const cur = lot.tasks[`${STEP_B}-0`];
+  // 正しい印つきの「最初から作業」は通る
+  const ok = { ...cur, duration: 0, firstStartTime: 0,
+    redoReset: { before: cur.duration, firstStartTime: cur.firstStartTime } };
+  assert.equal(wouldLoseWorkTime(lot, { tasks: { [`${STEP_B}-0`]: ok } }).lost, false,
+    '印つきのやり直しを止めている＝現場が見張りごと外しにかかる');
+  // 名前を1文字変えた印は通らない
+  const ng = { ...cur, duration: 0, firstStartTime: 0,
+    redoResetZZ: { before: cur.duration, firstStartTime: cur.firstStartTime } };
+  assert.equal(wouldLoseWorkTime(lot, { tasks: { [`${STEP_B}-0`]: ng } }).lost, true,
+    '🚨 知らない名前の印で「戻せる」と読んでいる');
+});
+
+test('Y43 🚨危ない言い方を、文字を直に書いて留める(人が読む所)', () => {
+  // ⚠ここが黙って変わると、現場は何が起きるのか読めないまま押す。
+  const lot = LOT_8_12();
+  const wiped = describeLoss(wouldLoseWorkTime(lot, { tasks: {} }));
+  assert.ok(wiped.includes('時間取りデータが丸ごと消えます'),
+    '🚨 いちばん重い危険の言い方が変わっている');
+  const blank = describeLoss(wouldLoseWorkTime(lot, { tasks: {} , steps: lot.steps }));
+  assert.ok(typeof blank === 'string' && blank.length > 10, '白状の文が空になっている');
+  // 危険の重さの順番(重い方が大きい数)
+  assert.ok(LOSS_LEVEL.blank > LOSS_LEVEL.wipe, 'tasks を空にする方が重い');
+  assert.ok(LOSS_LEVEL.wipe > LOSS_LEVEL.drop);
+  assert.ok(LOSS_LEVEL.drop > LOSS_LEVEL.erase);
+  assert.ok(LOSS_LEVEL.erase > LOSS_LEVEL.shrink);
+});

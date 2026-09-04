@@ -218,3 +218,69 @@ test('LC26 減らせる時だけ、どこで何KB減らせるかを言う', () =
     assert.equal(a.text.includes('事務所'), false);
     assert.ok(a.afterFail.includes('入力は消えていません'));
 });
+
+// ============================================================================
+// 🚨 2026-09-04 追加。実測: この下の3つが無いと、25通り壊して18通りが緑だった
+//   (＝2026-07-26 の「1MB上限」の見張りが、境界と経路を1つも見ていなかった)。
+//   壊して赤になる事を4点セットで確かめてある:
+//     ① path[0] → path[1]（荷姿写真を引き剥がす道が死ぬ）
+//     ② freed >= need → freed > need（ちょうど足りる時に1枚多く落とす）
+//
+//   ⚠ 3つ目に挙がっていた「169行 t >= f を t > f にしても緑」は **赤にできません**。
+//     t === f の時に通る式は Math.round(bytes * Math.pow(1, 1.35)) = bytes で、
+//     返す値が1バイトも変わらないからです(実測: 1 / 7 / 99999 / 123457 / 1000003 で確認)。
+//     つまりこの書き換えは **結果が同じ**＝欠陥ではありません。緑のままが正しい。
+//     下の LC33 は「同じ画質では減らない」という **決まりの方** を留めています。
+// ============================================================================
+
+test('LC30 🚨荷姿写真だけで上限を越えたら、荷姿写真を引き剥がす(この道が死んでも今まで緑だった)', () => {
+    // 写真は packagingPhotos にだけ在る。tasks には1枚も無い。
+    const cur = { id: 'x', packagingPhotos: { 全体: [img(400), img(400)], 銘板: img(300) } };
+    const plan = planAutoOffload(cur, { status: 'completed' });
+    assert.equal(plan.needed, true, '1MBの安全線を越えているのに手を出していない');
+    assert.deepEqual(plan.pull, ['packagingPhotos'],
+        '🚨 引き剥がす対象に packagingPhotos が入っていない＝荷姿写真が本体に残ったまま保存され、'
+        + '1MB上限で保存が丸ごと失敗する(2026-07-26 の事故の形)');
+    assert.equal(plan.images, 3, '荷姿写真を3枚とも数えていない');
+    assert.ok(plan.freed > 1_000_000);
+    assert.ok(plan.after < plan.before, '引き剥がした後の見込みが減っていない');
+});
+
+test('LC31 🚨写真の場所(path)の1段目で見分ける。tasks の写真を荷姿写真と取り違えない', () => {
+    const onlyTasks = { id: 'y', tasks: { t1: { aiAnalysis: { imageUrl: img(700) } }, t2: { aiAnalysis: { imageUrl: img(700) } } } };
+    const plan = planAutoOffload(onlyTasks, { status: 'completed' });
+    assert.equal(plan.needed, true);
+    assert.deepEqual(plan.pull, ['tasks'],
+        '荷姿写真が1枚も無いのに packagingPhotos を引き剥がそうとしている');
+    // 場所の1段目が本当に見分けの鍵になっているか(取り違えたら上の2件のどちらかが必ず落ちる)
+    const imgs = inlineImagesOf({ packagingPhotos: { 全体: [img(30)] }, tasks: { t: { aiAnalysis: { imageUrl: img(30) } } } });
+    assert.deepEqual(imgs.map(i => i.path[0]), ['packagingPhotos', 'tasks']);
+});
+
+test('LC32 🚨「ちょうど足りる」で止める。1枚多く落として画質を無駄に下げない', () => {
+    // 大 100,000 バイト → 0.9→0.55 で predictRecompressed だけ減る。
+    const big = 100_000;
+    const freedByBig = big - predictRecompressed(big, 0.9, 0.55);
+    assert.ok(freedByBig > 0);
+    const images = [{ label: '大', bytes: big }, { label: '中', bytes: 60_000 }];
+    // ちょうど「大」1枚ぶんだけ要る時は、中には手を出さない
+    const r = planRecompress(images, { needBytes: freedByBig, quality: 0.55, assumeQuality: 0.9 });
+    assert.equal(r.picks.length, 1,
+        '🚨 ちょうど足りているのに2枚目まで落としている(freed >= need の境界が壊れている)');
+    assert.equal(r.enough, true);
+    // 1バイトでも足りなければ2枚目に手を出す
+    const r2 = planRecompress(images, { needBytes: freedByBig + 1, quality: 0.55, assumeQuality: 0.9 });
+    assert.equal(r2.picks.length, 2, '足りないのに2枚目へ進んでいない');
+});
+
+test('LC33 🚨同じ画質を指定した時は「減らない」と言う(減ったふりをしない)', () => {
+    const b = 100_000;
+    assert.equal(predictRecompressed(b, 0.55, 0.55), b,
+        '🚨 同じ画質なのに小さくなると答えている(t >= f の境界が壊れている)');
+    assert.equal(predictRecompressed(b, 0.9, 0.9), b);
+    assert.ok(predictRecompressed(b, 0.9, 0.89) < b, '少しでも下げれば減る');
+    // 同じ画質しか選べない写真は、落とす対象に選ばれない
+    const r = planRecompress([{ label: 'a', bytes: 100_000 }], { needBytes: 10_000, quality: 0.9, assumeQuality: 0.9 });
+    assert.equal(r.picks.length, 0, '減らないのに落とす対象へ入れている');
+    assert.equal(r.enough, false, '減らないのに「足りた」と言っている');
+});
