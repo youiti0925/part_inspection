@@ -21048,10 +21048,10 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
   };
 
   return (
-    <div className="p-8 max-w-5xl mx-auto space-y-6 h-full overflow-y-auto">
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+    <div className="p-3 max-w-5xl mx-auto space-y-2 h-full overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
         <div className="flex justify-between items-center mb-4">
-          <h3 className="font-bold text-lg flex items-center gap-2"><ClipboardList className="w-5 h-5" /> 工程テンプレート管理</h3>
+          <h3 className="font-bold text-base flex items-center gap-2"><ClipboardList className="w-5 h-5" /> 工程テンプレート管理</h3>
           <div className="flex gap-2">
             <label className="text-xs flex items-center gap-1 cursor-pointer bg-green-50 text-green-700 px-3 py-2 rounded border border-green-200 hover:bg-green-100"><FileUp className="w-4 h-4"/> Excel取込<input type="file" ref={excelInputRef} accept=".xlsx" onChange={handleExcelImport} className="hidden"/></label>
             <button onClick={handleBackupExport} className="text-xs flex items-center gap-1 bg-slate-100 text-slate-600 px-3 py-2 rounded border hover:bg-slate-200"><DownloadCloud className="w-4 h-4"/> バックアップ</button>
@@ -21303,10 +21303,10 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
   };
 
   return (
-   <div data-fs="settings" className="p-8 max-w-5xl mx-auto space-y-6 h-full flex flex-col overflow-y-auto">
+   <div data-fs="settings" className="p-3 max-w-5xl mx-auto space-y-2 h-full flex flex-col overflow-y-auto">
        <>
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Settings className="w-5 h-5" /> 作業者マスタ</h3>
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="font-bold text-base mb-2 flex items-center gap-2"><Settings className="w-5 h-5" /> 作業者マスタ</h3>
            <div className="flex gap-2 mb-4">
              <input id="workerInput" className="border rounded px-3 py-2 text-sm flex-1" placeholder="新しい作業者名" />
              <button onClick={() => { const input = document.getElementById('workerInput'); if(input && input.value) { saveData('workers', generateId(), { name: input.value }); input.value = ''; } }} className="bg-slate-800 text-white px-4 py-2 rounded text-sm font-bold">追加</button>
@@ -21364,8 +21364,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          {/* 工程テンプレート管理は専用タブに移動 */}
 
          {/* 間接作業ジャンルマスタ */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Coffee className="w-5 h-5 text-amber-500" /> 間接作業ジャンルマスタ</h3>
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="font-bold text-base mb-2 flex items-center gap-2"><Coffee className="w-5 h-5 text-amber-500" /> 間接作業ジャンルマスタ</h3>
            <div className="flex gap-2 mb-4">
              <input id="indirectCatInput" className="border rounded px-3 py-2 text-sm flex-1" placeholder="新しいジャンル名（例: 朝礼）"/>
              <button onClick={() => {
@@ -21391,8 +21391,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          </div>
 
          {/* 不具合原因工程マスタ */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-rose-500" /> 不具合原因工程マスタ</h3>
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="font-bold text-base mb-2 flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-rose-500" /> 不具合原因工程マスタ</h3>
            <div className="flex gap-2 mb-4">
              <input
                value={newProcessOpt}
@@ -21422,8 +21422,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          </div>
 
          {/* 軽微不良・改善提案の報告オプション */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Megaphone className="w-5 h-5 text-purple-500" /> 軽微不良・改善提案の選択肢マスタ</h3>
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="font-bold text-base mb-2 flex items-center gap-2"><Megaphone className="w-5 h-5 text-purple-500" /> 軽微不良・改善提案の選択肢マスタ</h3>
            <p className="text-xs text-slate-500 mb-3">作業中に軽微不良や改善提案を報告する際のカテゴリを設定します。(1行1項目)</p>
            <textarea
              value={complaintOptionsText}
@@ -21434,8 +21434,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          </div>
 
          {/* コンボボックスプリセット管理 */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><List className="w-5 h-5 text-amber-500" /> コンボボックスプリセット管理</h3>
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="font-bold text-base mb-2 flex items-center gap-2"><List className="w-5 h-5 text-amber-500" /> コンボボックスプリセット管理</h3>
            <p className="text-xs text-slate-500 mb-3">測定入力のコンボボックスで使用するプリセット値リストを管理します。テンプレートの測定設定で選択できます。</p>
            <button onClick={() => {
              const newPreset = { id: `cp_${generateId()}`, name: '新規プリセット', values: [] };
@@ -21480,8 +21480,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          <BreakAlertSettings alerts={localBreakAlerts} onChange={setLocalBreakAlerts} />
 
          {/* 操作取り消し設定 */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="text-lg font-bold mb-4">操作取り消し設定</h3>
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="text-base font-bold mb-2">操作取り消し設定</h3>
            <div className="flex items-center gap-3">
              <label className="text-sm font-bold text-slate-700">取り消し猶予時間</label>
              <input type="number" min="1" max="30" value={settings.undoTimeout || 5} onChange={e => saveSettings({ undoTimeout: parseInt(e.target.value) || 5 })} className="w-20 border rounded p-2 text-center" />
@@ -21491,8 +21491,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          </div>
 
          {/* 作業アラート設定 (管理者向け・右下ライブアラート) */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="text-lg font-bold mb-2 flex items-center gap-2"><Bell className="w-5 h-5 text-rose-600" /> 作業アラート（管理者・画面右下）</h3>
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="text-base font-bold mb-2 flex items-center gap-2"><Bell className="w-5 h-5 text-rose-600" /> 作業アラート（管理者・画面右下）</h3>
            <p className="text-xs text-slate-400 mb-4">管理者ログイン中、どの画面でも右下に出る「作業アラート」です。NG発生・目標時間オーバー・改善が効いていないカルテを常時監視して知らせます。<b>既定はOFF</b>。</p>
            {(() => {
              const wa = { enabled: false, showNG: true, showOverrun: true, showStale: true, autoDismissMin: 0, ...(settings.workAlert || {}) };
@@ -21525,8 +21525,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          </div>
 
          {/* 目標時間オーバー警告設定 (カスタム作業画面の点滅・音) */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="text-lg font-bold mb-2 flex items-center gap-2"><Target className="w-5 h-5 text-rose-600" /> 目標時間オーバー警告（カスタム作業画面）</h3>
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="text-base font-bold mb-2 flex items-center gap-2"><Target className="w-5 h-5 text-rose-600" /> 目標時間オーバー警告（カスタム作業画面）</h3>
            <p className="text-xs text-slate-400 mb-4">作業中のタスクが目標時間に近づいた/超えた時の、ボタン点滅・画面全体の警告・通知音を調整します。警告は「その作業をしている本人」にだけ出ます。</p>
            {(() => {
              const oa = { enabled: true, warnPct: 80, overPct: 100, screenEffect: true, sound: 'warn', warnColor: '#F59E0B', overColor: '#E11D48', warnBlink: 'none', overBlink: 'slow', ...(settings.overrunAlert || {}) };
@@ -21644,8 +21644,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          </div>
 
          {/* 文字サイズ設定 */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="text-lg font-bold mb-2 flex items-center gap-2"><Type className="w-5 h-5 text-blue-600" /> 文字サイズ設定</h3>
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="text-base font-bold mb-2 flex items-center gap-2"><Type className="w-5 h-5 text-blue-600" /> 文字サイズ設定</h3>
            <p className="text-xs text-slate-400 mb-4">各エリアの文字サイズを調整できます（100%が標準）</p>
 
            {/* 現場マップのエリア名サイズ (px 単位で直接指定) */}
@@ -21753,8 +21753,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          <WorkScheduleSettingsPanel workSchedule={settings.workSchedule} saveSettings={saveSettings} workloadEffectiveWorkers={settings.workloadEffectiveWorkers} registeredWorkerCount={workers.length} />
 
          {/* 作業順ガイド・厳密モード (管理者向け) — 一元管理は専用画面へ */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="text-lg font-bold mb-2 flex items-center gap-2 text-slate-800">
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="text-base font-bold mb-2 flex items-center gap-2 text-slate-800">
              <ShieldCheck className="w-5 h-5 text-rose-600" /> 作業順ガイド・厳密モード
            </h3>
            <p className="text-xs text-slate-500 mb-4">
@@ -21768,8 +21768,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          </div>
 
          {/* 画像の容量・画質 (種別ごとに最大px・画質を設定。基本は低画質スタート) */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="text-lg font-bold mb-2 flex items-center gap-2 text-slate-800">
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="text-base font-bold mb-2 flex items-center gap-2 text-slate-800">
              <Camera className="w-5 h-5 text-teal-600" /> 画像の容量・画質
            </h3>
            <p className="text-xs text-slate-500 mb-4">
@@ -21818,8 +21818,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          </div>
 
          {/* ロットカード表示項目設定 */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="text-lg font-bold mb-2 flex items-center gap-2 text-slate-800">
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="text-base font-bold mb-2 flex items-center gap-2 text-slate-800">
              <LayoutGrid className="w-5 h-5 text-blue-600" /> ロットカード 表示項目
            </h3>
            <p className="text-xs text-slate-500 mb-4">
@@ -21882,7 +21882,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          </div>
 
          {/* 作業エリア設定 */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
            <div className="flex justify-between items-center mb-6">
              <h3 className="text-xl font-bold flex items-center gap-2 text-slate-800"><MapIcon className="w-6 h-6 text-blue-600" /> 作業エリア設定</h3>
            </div>
@@ -21928,8 +21928,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          </div>
 
          {/* 音声アシスタント設定 */}
-         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-           <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Mic className="w-5 h-5 text-blue-500" /> 音声アシスタント設定</h3>
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+           <h3 className="font-bold text-base mb-2 flex items-center gap-2"><Mic className="w-5 h-5 text-blue-500" /> 音声アシスタント設定</h3>
            <div className="space-y-4">
              <div>
                <label className="block text-xs font-bold text-slate-500 mb-1">音声の選択 (日本語)</label>
@@ -22598,6 +22598,22 @@ const OrderGroupCard = ({ group, workers, templates, onOpen }) => {
   );
 };
 
+/**
+ * 📦 狭い時だけ「畳む」入れ物。(製品アプリ product-inspection-app の NarrowFold と同じ物)
+ * ⚠⚠ fold=false(=PC) の時は **子をそのまま返すだけ**。囲いも増えないので、
+ *    広い画面の見た目・DOM は1バイトも変わらない(退行を作らない為に必ずこの形で使う)。
+ * ⚠ 畳んでも中身は消えない。押せば今までと同じ物が全部出る。
+ */
+const NarrowFold = ({ fold, summary, className = '', children }) => {
+  if (!fold) return <>{children}</>;
+  return (
+    <details className={`shrink-0 bg-white rounded-lg shadow-sm border border-slate-200 ${className}`}>
+      <summary className="list-none cursor-pointer px-3 min-h-[44px] flex items-center gap-2 text-sm font-bold text-slate-700 select-none">{summary}</summary>
+      {children}
+    </details>
+  );
+};
+
 const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onDeleteLot, setExecutionLotId, currentUserName = '', saveData }) => {
   const [assignmentLot, setAssignmentLot] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
@@ -22615,6 +22631,13 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
   const [onlyMine, setOnlyMine] = useState(false);
   // 担当者絞り込み (管理者/代理作業者向け): '' = 全員, 'me' = 自分のみ, workerId = 指定作業者
   const [workerFilter, setWorkerFilter] = useState('');
+  // 🖥 狭い画面(1024px以下)かどうか。狭い時だけ絞り込み帯を畳む(NarrowFold)。広い画面は今まで通り。
+  const [narrow, setNarrow] = useState(() => { try { return window.innerWidth <= 1024; } catch { return false; } });
+  useEffect(() => {
+    const f = () => { try { setNarrow(window.innerWidth <= 1024); } catch { /* noop */ } };
+    window.addEventListener('resize', f);
+    return () => window.removeEventListener('resize', f);
+  }, []);
 
   // 詳細フィルタ (multi-select)
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
@@ -22754,6 +22777,21 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
 
   return (
     <div data-fs="tables" className="flex flex-col h-full gap-4">
+      <NarrowFold
+        fold={narrow}
+        summary={<>
+          <Search className="w-4 h-4 text-slate-400 shrink-0"/>
+          <span>絞り込み・並び替え</span>
+          {activeAdvancedCount > 0 && (
+            <span className="bg-indigo-600 text-white text-xs font-black px-1.5 py-0.5 rounded-full">詳細 {activeAdvancedCount}</span>
+          )}
+          {(searchOrderNo || searchModel || searchTemplate || selectedZoneFilter !== 'all' || workerFilter) && (
+            <span className="bg-amber-100 text-amber-800 border border-amber-300 text-xs font-bold px-1.5 py-0.5 rounded-full">絞り込み中</span>
+          )}
+          <span className="ml-auto text-xs font-normal text-slate-500 shrink-0">該当 {filteredLots.length} / 全 {activeLots.length} 件</span>
+          <ChevronDown className="w-4 h-4 text-slate-400 shrink-0"/>
+        </>}
+      >
       <div className="flex flex-wrap justify-between items-center bg-white p-2 rounded-lg shadow-sm border border-slate-200 shrink-0 gap-2">
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2 text-sm font-bold text-slate-600">
@@ -22863,6 +22901,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           <button onClick={() => setGroupByOrder((v) => !v)} data-list-group-toggle={groupByOrder ? '1' : '0'} aria-pressed={groupByOrder} className={`rounded px-2 py-1.5 text-xs font-bold inline-flex items-center gap-1 ${groupByOrder ? 'bg-indigo-600 shadow text-white' : 'text-slate-400 hover:text-slate-600'}`} title="同じ指図のロット（テンプレ違い）を1枚にまとめて、どのテンプレが在って・入荷と納期・終わったか・誰が今やっているかを見ます"><Layers className="w-5 h-5" /><span>指図ごと</span></button>
         </div>
       </div>
+      </NarrowFold>
 
       {/* 詳細フィルタパネル */}
       {showAdvancedFilters && (
@@ -25599,12 +25638,13 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
   return (
     <div className="p-4 max-w-screen-2xl mx-auto h-full overflow-y-auto space-y-4">
       {/* セクション 0: 稼働率の前提 (間接作業) — 実効直工キャパの設定 */}
-      <div className="bg-white border border-indigo-200 rounded-xl shadow-sm">
-        <div className="p-3 border-b border-indigo-100 bg-indigo-50/50 flex items-center justify-between gap-2 flex-wrap">
+      <details className="bg-white border border-indigo-200 rounded-xl shadow-sm">
+        <summary className="list-none [&::-webkit-details-marker]:hidden cursor-pointer select-none px-3 min-h-[44px] border-b border-indigo-100 bg-indigo-50/50 flex items-center justify-between gap-2 flex-wrap">
           <h3 className="font-bold text-base flex items-center gap-2 text-indigo-800"><Settings className="w-4 h-4"/> 稼働率の前提（間接作業）</h3>
-          <span className="text-[11px] text-slate-500">必要人数・余力判定は「間接作業を加味した実効直工キャパ」で計算します</span>
-        </div>
+          <span className="text-xs text-slate-600">係数 {factor}× ／ 残業 {maxOtPerDay}h/人 ／ 実効 {teamCapacityWeekH.toFixed(1)}h週・{teamCapacityMonthH.toFixed(1)}h月</span>
+        </summary>
         <div className="p-3 flex flex-wrap items-end gap-4">
+          <span className="w-full text-[11px] text-slate-500">必要人数・余力判定は「間接作業を加味した実効直工キャパ」で計算します</span>
           {/* 間接込み係数 */}
           <div className="flex flex-col gap-1">
             <label className="text-[11px] font-bold text-slate-600">間接込み係数</label>
@@ -25678,7 +25718,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
             </div>
           </div>
         </div>
-      </div>
+      </details>
 
       {/* セクション 1: 作業者の現状 */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
