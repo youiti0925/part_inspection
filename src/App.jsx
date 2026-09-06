@@ -26,6 +26,9 @@ import {
   ListChecks, ArrowUpDown, Calculator, Ruler, MicOff, Printer, Coffee, ChevronDown,
   Wrench, RotateCcw, XCircle, Pause, Minimize2, Ban, ClipboardCheck, Hash, BookOpen, Tag
 } from 'lucide-react';
+// 🧾 品目×テンプレ単位の抜取／スキップ(2026-09-06 清水さん「部品検査にもこの機能が要る」)。製品検査と同じ純関数・同じ画面。
+import TemplateSkipPanel from './TemplateSkipPanel.jsx';
+import { judgeTemplateSkip, buildTemplateSkippedTasks, isTemplateSkippedLot } from './domain/templateSkip.js';
 
 // --- Firebase Imports (SDK v9) ---
 import { initializeApp } from "firebase/app";
@@ -1276,6 +1279,16 @@ const buildProfileSkippedTasks = (steps, naStepIds, qty) => {
     }
   });
   return tasks;
+};
+
+// 🧾 品目×テンプレの抜取判定(2026-09-06)。スキップなら全工程を『システム(抜取判定)』の skipped で作り、根拠をロットに残す。
+//   ⚠ ロットは消さない(検査リストに『スキップ』の札で残る)。負荷計算は残り工程0として数える。
+//   ⚠ 該当なし(buildProfileSkippedTasks)の **後ろ** に広げる(スキップが該当なしを上書きする)。
+const templateSkipPatch = ({ model, templateId, steps, qty, lots, settings, at }) => {
+  const j = judgeTemplateSkip({ model, templateId, lots, cfg: settings?.templateSkip });
+  return j.skip
+    ? { templateSkip: { skip: true, key: j.key, streak: j.streak, need: j.need, every: j.every, at, by: 'system' }, tasks: buildTemplateSkippedTasks(steps, qty, { at }) }
+    : {};
 };
 
 // === 進捗・ETA・遅延の計算ヘルパー ===
@@ -22511,9 +22524,85 @@ const LotAssignmentModal = ({ lot, workers, mapZones, currentUserName, onClose, 
   );
 };
 
+// ============================================================================
+// 📦 指図ごとにまとめる(検査リスト)。清水さん(2026-09-06)。製品検査と同じ形(到着予定の口は部品検査に無い)。
+//   🚨 数字を作らない: 状態は checkLotProcessing / computeLotProgress と同じ読み方、担当は作業中タスクの workerName。
+//   🚨 同じ指図の **完了ロット** も並べる(「終わったか」が分かるように)。絞り込みは活きているロットにだけ掛かる。
+// ============================================================================
+const fmtDueShort = (raw) => String(raw == null ? '' : raw).replace(/（.*?）/g, '').trim();
+const lotStateForGroup = (lot, workers) => {
+  if (!lot) return { key: 'waiting', label: '未着手', who: '' };
+  if (lot.status === 'completed' || lot.location === 'completed') {
+    const at = toMsAny(lot.completedAt) || toMsAny(lot.updatedAt);
+    return { key: 'done', label: '完了', who: '', at };
+  }
+  if (isTemplateSkippedLot(lot)) return { key: 'skip', label: 'スキップ（流すだけ）', who: '' };
+  const tasks = Object.values(lot.tasks || {}).filter(Boolean);
+  const proc = tasks.filter((t) => t.status === 'processing');
+  if (proc.length || lot.status === 'processing') {
+    const names = [...new Set(proc.map((t) => t.workerName).filter(Boolean))];
+    if (!names.length) { const w = (workers || []).find((x) => x.id === lot.workerId); if (w) names.push(w.name); }
+    return { key: 'processing', label: '作業中', who: names.join('・') };
+  }
+  if (tasks.some((t) => t.status === 'paused')) return { key: 'paused', label: '一時停止', who: '' };
+  const prog = computeLotProgress(lot);
+  if ((prog?.completedCount || 0) > 0) return { key: 'progress', label: `進捗 ${prog.completedCount}/${prog.totalTasks}`, who: '' };
+  const w = (workers || []).find((x) => x.id === lot.workerId);
+  return { key: 'waiting', label: '未着手', who: w ? `割当 ${w.name}` : '' };
+};
+const GROUP_STATE_CLS = {
+  done: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+  skip: 'bg-emerald-50 text-emerald-800 border-emerald-400',
+  processing: 'bg-blue-600 text-white border-blue-700',
+  paused: 'bg-orange-100 text-orange-800 border-orange-300',
+  progress: 'bg-amber-100 text-amber-800 border-amber-300',
+  waiting: 'bg-slate-100 text-slate-600 border-slate-300',
+};
+const fmtMd = (ms) => { const n = toMsAny(ms); if (!n) return ''; const d = new Date(n); return `${d.getMonth() + 1}/${d.getDate()}`; };
+const OrderGroupCard = ({ group, workers, templates, onOpen }) => {
+  const rows = [...group.active, ...group.done];
+  const doneN = group.done.length;
+  const tplName = (l) => (l.templateId === 'demo' ? '詳細デモ手順' : (templates?.find((t) => t.id === l.templateId)?.name || '（テンプレなし）'));
+  // 同じ指図のロットは同じ台を別テンプレで見る物。台数は足さない。一番多い物を出す。
+  const qty = rows.reduce((a, l) => Math.max(a, Number(l.quantity) || 0), 0);
+  return (
+    <div data-order-group={group.orderNo} data-order-group-rows={rows.length} className="bg-white border-2 border-slate-300 rounded-xl shadow-sm overflow-hidden">
+      <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="text-xs font-bold text-slate-500">指図</span>
+        <span className="text-base font-black text-slate-800">{group.orderNo}</span>
+        <span className="text-sm font-bold text-slate-700">{group.model}</span>
+        <span className="text-xs font-bold bg-white border border-slate-300 rounded px-1.5 py-0.5">{qty}台</span>
+        <span className="ml-auto text-xs font-bold text-slate-600">テンプレ {rows.length}本{doneN ? <>（完了 <b className="text-emerald-700">{doneN}</b>）</> : null}</span>
+      </div>
+      <div className="divide-y divide-slate-100">
+        {rows.map((lot) => {
+          const st = lotStateForGroup(lot, workers);
+          return (
+            <button key={lot.id} type="button" data-order-group-row={lot.id} data-order-group-state={st.key} onClick={() => onOpen(lot)}
+              className={`w-full text-left px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 hover:bg-indigo-50 ${st.key === 'done' ? 'opacity-70' : ''}`}>
+              <span className="text-[11px] font-bold text-indigo-800 bg-indigo-100 border border-indigo-300 rounded px-2 py-0.5 inline-flex items-center gap-1 max-w-[16rem] truncate" title={tplName(lot)}>
+                <ClipboardList className="w-3.5 h-3.5 shrink-0" /><span className="truncate">{tplName(lot)}</span>
+              </span>
+              <span className="text-[11px] text-slate-500">{lot.quantity}台</span>
+              <span className="text-[11px] text-slate-600" title="入荷（検査へ来た日）">入荷 <b className="text-slate-800">{fmtMd(lot.entryAt) || '—'}</b></span>
+              <span className="text-[11px] text-slate-600" title="納期">納期 <b className="text-slate-800">{fmtDueShort(lot.dueDate) || '—'}</b></span>
+              <span className={`ml-auto text-[11px] font-black border rounded px-2 py-0.5 ${GROUP_STATE_CLS[st.key]}`}>
+                {st.label}{st.key === 'done' && st.at ? ` ${fmtMd(st.at)}` : ''}
+              </span>
+              {st.who ? <span className="text-[11px] font-bold text-blue-800">{st.who}</span> : null}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onDeleteLot, setExecutionLotId, currentUserName = '', saveData }) => {
   const [assignmentLot, setAssignmentLot] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
+  // 📦 指図ごとにまとめる(2026-09-06)。押した時だけ。グリッド／リストはそのまま残る。
+  const [groupByOrder, setGroupByOrder] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   // 指図 / 品目コード / テンプレ をそれぞれ個別に絞り込む
   const [searchOrderNo, setSearchOrderNo] = useState('');
@@ -22644,6 +22733,25 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
     });
   }, [filteredLots, sortOrder]);
 
+  // 📦 指図ごとのまとまり。並びは sortedLots(絞り込み・並び替え済み)の順。同じ指図の完了ロットも足す。
+  const orderGroups = useMemo(() => {
+    if (!groupByOrder) return [];
+    const keyOf = (l) => String(l.orderNo || '').trim() || `（指図なし）${l.id}`;
+    const byNo = new Map();
+    sortedLots.forEach((l) => {
+      const k = keyOf(l);
+      if (!byNo.has(k)) byNo.set(k, { orderNo: k, model: l.model || '', active: [], done: [] });
+      byNo.get(k).active.push(l);
+    });
+    (lots || []).forEach((l) => {
+      if (!l || !(l.status === 'completed' || l.location === 'completed')) return;
+      const g = byNo.get(keyOf(l));
+      if (g) g.done.push(l);
+    });
+    byNo.forEach((g) => g.done.sort((a, b) => (toMsAny(b.completedAt) || 0) - (toMsAny(a.completedAt) || 0)));
+    return [...byNo.values()];
+  }, [groupByOrder, sortedLots, lots]);
+
   return (
     <div data-fs="tables" className="flex flex-col h-full gap-4">
       <div className="flex flex-wrap justify-between items-center bg-white p-2 rounded-lg shadow-sm border border-slate-200 shrink-0 gap-2">
@@ -22751,6 +22859,8 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
         <div className="flex bg-slate-100 rounded p-1">
           <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded ${viewMode === 'grid' ? 'bg-white shadow text-blue-600' : 'text-slate-400 hover:text-slate-600'}`} title="グリッド表示"><LayoutGrid className="w-5 h-5" /></button>
           <button onClick={() => setViewMode('list')} className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-white shadow text-blue-600' : 'text-slate-400 hover:text-slate-600'}`} title="リスト表示"><List className="w-5 h-5" /></button>
+          {/* 📦 指図ごとにまとめる(2026-09-06)。同じ指図のテンプレ違いを1枚に。 */}
+          <button onClick={() => setGroupByOrder((v) => !v)} data-list-group-toggle={groupByOrder ? '1' : '0'} aria-pressed={groupByOrder} className={`rounded px-2 py-1.5 text-xs font-bold inline-flex items-center gap-1 ${groupByOrder ? 'bg-indigo-600 shadow text-white' : 'text-slate-400 hover:text-slate-600'}`} title="同じ指図のロット（テンプレ違い）を1枚にまとめて、どのテンプレが在って・入荷と納期・終わったか・誰が今やっているかを見ます"><Layers className="w-5 h-5" /><span>指図ごと</span></button>
         </div>
       </div>
 
@@ -22913,7 +23023,13 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
             <p>検査待ちの製品はありません</p>
           </div>
         ) : (
-          viewMode === 'grid' ? (
+          groupByOrder ? (
+            <div data-order-group-grid="1" className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start pb-10">
+              {orderGroups.map((g) => (
+                <OrderGroupCard key={g.orderNo} group={g} workers={workers} templates={templates} onOpen={(lot) => setAssignmentLot(lot)} />
+              ))}
+            </div>
+          ) : viewMode === 'grid' ? (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 items-start pb-10">
               {sortedLots.map(lot => {
                 const isPaused = Object.values(lot.tasks || {}).some(t => t.status === 'paused');
@@ -22946,7 +23062,12 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                         <ClipboardList className="w-3 h-3 shrink-0"/> <span className="truncate">{templateName}</span>
                       </div>
                     )}
-                    {/* 停止理由バッジ */}
+                    {/* 🧾 抜取判定でスキップと決めたロット(2026-09-06)。消さずに札で残す。押して完了にするだけ。 */}
+                    {isTemplateSkippedLot(lot) && (
+                      <div data-lot-template-skip="1" className="text-[11px] font-black text-emerald-800 bg-emerald-100 border border-emerald-300 rounded px-2 py-0.5 inline-flex items-center gap-1 w-fit" title={`品目×テンプレの実績(連続無欠点 ${lot.templateSkip?.streak ?? '?'}ロット)で検査せず流す判定。全工程はシステムがスキップ済み。押して完了にするだけ`}>
+                        ⏭ スキップ（流すだけ）
+                      </div>
+                    )}                    {/* 停止理由バッジ */}
                     {lot.pauseReason && lot.pauseReason.category && (() => {
                       const cm = getPauseReasonColor(lot.pauseReason.category);
                       const startTime = lot.pauseReason.startTime;
@@ -28990,6 +29111,7 @@ const QuotaStoppedPanel = ({ until }) => (
             totalWorkTime: 0,
             workStartTime: null,
             tasks: buildProfileSkippedTasks(steps, naStepIds, qty), // 品目別プロファイルの該当なし工程を事前スキップ
+            ...templateSkipPatch({ model, templateId, steps, qty, lots, settings, at: timestamp }),
             // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。merge:true でも空マップは
             //   その項目を丸ごと空に置き換える。読む側は全て lot.stepTimes || {} で見ている。
             interruptions: [],
@@ -29573,6 +29695,7 @@ const QuotaStoppedPanel = ({ until }) => (
            totalWorkTime: 0,
            workStartTime: null,
            tasks: buildProfileSkippedTasks(steps, naStepIds, c.quantity), // 品目別プロファイルの該当なし工程を事前スキップ
+           ...templateSkipPatch({ model: c.model, templateId: c.templateId, steps, qty: c.quantity, lots, settings, at: timestamp }),
            // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。読む側は lot.stepTimes || {}。
            interruptions: [],
            appliedStandard,
@@ -29775,6 +29898,7 @@ const QuotaStoppedPanel = ({ until }) => (
                  templateId: row.templateId, priority: row.priority,
                  dueDate: row.dueDate, entryAt: row.entryAt,
                  steps, appliedStandard: appliedStandard ?? null, tasks: buildProfileSkippedTasks(steps, naStepIds, row.qty),
+                 ...templateSkipPatch({ model: row.model, templateId: row.templateId, steps, qty: row.qty, lots, settings, at: Date.now() }),
                }
              : { priority: row.priority, dueDate: row.dueDate, modelText: row.modelText }; // 着手済みは実測に関わる項目を書き換えない(監査確定)
            await saveData('lots', existing.id, updates);
@@ -29803,6 +29927,7 @@ const QuotaStoppedPanel = ({ until }) => (
              currentStepIndex: 0, steps, totalWorkTime: 0, workStartTime: null,
              // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。読む側は lot.stepTimes || {}。
              tasks: buildProfileSkippedTasks(steps, naStepIds, row.qty), interruptions: [], // 品目別プロファイルの該当なし工程を事前スキップ
+             ...templateSkipPatch({ model: row.model, templateId: row.templateId, steps, qty: row.qty, lots, settings, at: Date.now() }),
              appliedStandard, // 適用された品質規格のスナップショット
            };
            await saveData('lots', id, lot);
@@ -30692,6 +30817,7 @@ const QuotaStoppedPanel = ({ until }) => (
                  <button onClick={() => setOptimizeView('strict')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'strict' ? 'bg-white shadow text-rose-600' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 厳密モード{strictReviewCount > 0 && <span className="bg-amber-400 text-white text-[9px] rounded-full w-4 h-4 flex items-center justify-center font-black">{strictReviewCount}</span>}</button>
                  <button onClick={() => setOptimizeView('skill')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'skill' ? 'bg-white shadow text-orange-600' : 'text-slate-500 hover:text-slate-700'}`}><Award className="w-4 h-4" /> スキルマップ</button>
                  <button onClick={() => setOptimizeView('modelgroup')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'modelgroup' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}><Layers className="w-4 h-4" /> 品目グループ</button>
+                 <button onClick={() => setOptimizeView('tskip')} data-optimize-tab="tskip" className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'tskip' ? 'bg-white shadow text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 抜取/スキップ</button>
                </div>
                <span className="text-xs text-slate-400">データから現場を最適化：<b>目標時間</b>→<b>厳密モード</b>→<b>スキル</b>。将来は空き人材・エリアから自動配置の土台に。</span>
              </div>
@@ -30700,6 +30826,8 @@ const QuotaStoppedPanel = ({ until }) => (
                {!quotaBlock && lotsHistoryReady && optimizeView === 'target' && <ProcessInsightsTab lots={lots} workers={workers} customTargetTimes={settings.customTargetTimes || {}} onSaveSettings={saveSettings} targetTimeHistory={settings.targetTimeHistory || []} settings={settings} saveData={saveData} currentUserName={currentUserName} />}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'strict' && (currentUserName === '管理者' ? <StrictModeManagerModal embedded lots={lots} templates={templates} rules={settings.strictModeRules || {}} history={strictModeHistory} currentUserName={currentUserName} maturityUnits={strictMaturityUnits} onSetMaturity={(n) => saveSettings({ strictMaturityUnits: n })} onDecide={handleStrictDecide} optimalByCombo={optimalByCombo} onDecideOptimal={handleOptimalDecide} onOpenAnalysis={(row) => setAnalysisCombo({ model: row.model, templateId: row.templateId, templateName: row.templateName })} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">厳密モードの管理は管理者のみです。ヘッダー左上で「管理者」を選択してください。</div>)}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'skill' && <SkillMapView lots={lots} templates={templates} workers={workers} skills={settings.skills && settings.skills.length ? settings.skills : DEFAULT_SKILLS} workerSkills={settings.workerSkills || {}} canEdit={currentUserName === '管理者'} onSaveSkills={(list) => saveSettings({ skills: list })} onSaveWorkerSkill={(wn, sid, level) => { const ws = settings.workerSkills || {}; saveSettings({ workerSkills: { ...ws, [wn]: { ...(ws[wn] || {}), [sid]: level } } }); }} onSaveTemplateSkills={(tplId, reqSkills) => saveData('templates', tplId, { requiredSkills: reqSkills })} />}
+               {/* 🧾 品目×テンプレ単位の抜取／スキップ。決めるのは管理者。数字は domain/templateSkip.js が実測から出す。 */}
+               {!quotaBlock && lotsHistoryReady && optimizeView === 'tskip' && <TemplateSkipPanel unitLabel="品目" lots={lots} templates={templates} settings={settings} saveSettings={saveSettings} canEdit={currentUserName === '管理者'} currentUserName={currentUserName} />}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'modelgroup' && (currentUserName === '管理者' ? <ModelGroupManager lots={lots} settings={settings} saveSettings={saveSettings} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">品目グループの管理は管理者のみです。</div>)}
              </div>
            </div>
