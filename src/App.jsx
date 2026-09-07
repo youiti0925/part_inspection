@@ -388,11 +388,19 @@ const applyFontSizes = (fontSizes = {}) => {
     document.head.appendChild(styleEl);
   }
   const areas = ['header', 'dashboard', 'tables', 'settings'];
-  const rules = areas.map(area => {
+  const rules = [];
+  for (const area of areas) {
     const scale = (fontSizes[area] || 100) / 100;
-    if (scale === 1) return '';
-    return `[data-fs="${area}"] { zoom: ${scale}; }`;
-  }).filter(Boolean);
+    if (scale === 1) continue;
+    rules.push(`[data-fs="${area}"] { zoom: ${scale}; }`);
+    // 🚨 2026-09-08: data-fs-reset は「その区画へ **合流させて置いただけ** の札」の印。
+    //   親タブ(分析 | 作業最適化)は 2026-09-07 に帯を1本減らす為だけに分析画面(data-fs="tables")の中へ入れた。
+    //   合流の前は区画の外に在り、いつも 100% だった。ここで打ち消さないと
+    //   ①「テーブル・リスト」を 70% にすると 14px → 9.8px になり 決まり7(文字 12px 以上)を割る
+    //   ② 分析↔作業最適化 を押すたびに同じ札の大きさが変わる。
+    //   ⚠ この行を消さない(見張り: src/domain/__tests__/ui-density-parts-gaps.test.mjs UG5)。
+    rules.push(`[data-fs="${area}"] [data-fs-reset] { zoom: ${(1 / scale).toFixed(4)}; }`);
+  }
   // execution: zoom on the fixed container, but compensate dimensions so it stays within viewport
   const execScale = (fontSizes.execution || 100) / 100;
   if (execScale !== 1) {
@@ -14885,7 +14893,8 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
 
     return (
         <div className="flex flex-col h-full gap-4">
-            <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 shrink-0 flex flex-wrap gap-4 items-center justify-between">
+            <div data-band="optimize-head" className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 shrink-0 flex flex-col gap-2">
+              <div className="flex flex-wrap gap-4 items-center justify-between">
                 <div className="flex items-center gap-3">
                     <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg"><Zap className="w-5 h-5" /></div>
                     <div>
@@ -14896,7 +14905,7 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                         </p>
                     </div>
                 </div>
-                <div className="flex gap-2 items-center">
+                <div className="flex gap-2 items-center flex-wrap justify-end">
                     {saveData && currentUserName === '管理者' && (
                       <button
                         onClick={reapplyCalibrationToActiveLots}
@@ -14914,6 +14923,46 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                         <History className="w-4 h-4" /> 変更履歴
                     </button>
                 </div>
+              </div>
+              {/* 🧹 2026-09-07: 「品目コード / 集計」だけの帯(本番実測 59px・中身34%)は、専用の箱をやめてこの見出しの箱の中へ合体した(決まり1・3)。押す物・文言・順番はそのまま。 */}
+              {!showHistory && (
+                    <div data-band="optimize-filter" className="flex flex-wrap items-center gap-2 w-full">
+                        <span className="text-xs font-bold text-slate-500">品目コード</span>
+                        <select value={targetValue} onChange={e => { setTargetValue(e.target.value); setFocusStepKey(null); }} className="border border-indigo-300 rounded px-3 py-1.5 font-bold text-indigo-800 outline-none focus:border-indigo-500 min-w-[170px]">
+                            <option value="">品目コードを選択...</option>
+                            {availableModels.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                        </select>
+                        <span className="text-xs font-bold text-slate-500 ml-1">集計</span>
+                        <select value={period} onChange={e => setPeriod(e.target.value)} className="border rounded px-2 py-1.5 text-sm font-bold text-slate-700 bg-slate-50 outline-none">
+                            <option value="1m">過去1ヶ月</option>
+                            <option value="3m">過去3ヶ月</option>
+                            <option value="6m">過去6ヶ月</option>
+                            <option value="all">全期間</option>
+                            <option value="custom">期間指定</option>
+                        </select>
+                        {period === 'custom' && (
+                            <div className="flex items-center gap-1 bg-slate-50 p-1 rounded border">
+                                <input type="date" value={customStartDate} onChange={e => setCustomStartDate(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 outline-none" />
+                                <span className="text-slate-400 text-xs">~</span>
+                                <input type="date" value={customEndDate} onChange={e => setCustomEndDate(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 outline-none" />
+                            </div>
+                        )}
+                        {targetValue && insightsData.length > 0 && (
+                            <>
+                                <span className="text-[11px] text-slate-600 bg-slate-100 rounded px-2 py-1 whitespace-nowrap">工程<b>{insightsData.length}</b>件 / 有効データ計<b>{insightsData.reduce((s,d)=>s+d.stats.validCount,0)}</b>件で判断</span>
+                                <div className="ml-auto flex items-center gap-1.5">
+                                    <span className="text-xs font-bold text-slate-600 whitespace-nowrap">全工程に一括:</span>
+                                    <select value={bulkStrategy} onChange={(e) => setBulkStrategy(e.target.value)} className="border rounded px-2 py-1.5 text-xs font-bold bg-slate-50">
+                                        <option value="standard">標準バランス型</option>
+                                        <option value="aggressive">効率追求型</option>
+                                        <option value="conservative">余裕確保型</option>
+                                    </select>
+                                    <button onClick={applyAllSuggestedTargets} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded font-bold shadow flex items-center gap-1 text-sm whitespace-nowrap"><Bot className="w-4 h-4" /> 適用</button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+              )}
             </div>
 
             {!showHistory ? (
@@ -14951,42 +15000,7 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                         </div>
                     )}
 
-                    <div className="flex flex-wrap items-center gap-2 bg-white p-2.5 rounded-lg border shadow-sm shrink-0">
-                        <span className="text-xs font-bold text-slate-500">品目コード</span>
-                        <select value={targetValue} onChange={e => { setTargetValue(e.target.value); setFocusStepKey(null); }} className="border border-indigo-300 rounded px-3 py-1.5 font-bold text-indigo-800 outline-none focus:border-indigo-500 min-w-[170px]">
-                            <option value="">品目コードを選択...</option>
-                            {availableModels.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                        </select>
-                        <span className="text-xs font-bold text-slate-500 ml-1">集計</span>
-                        <select value={period} onChange={e => setPeriod(e.target.value)} className="border rounded px-2 py-1.5 text-sm font-bold text-slate-700 bg-slate-50 outline-none">
-                            <option value="1m">過去1ヶ月</option>
-                            <option value="3m">過去3ヶ月</option>
-                            <option value="6m">過去6ヶ月</option>
-                            <option value="all">全期間</option>
-                            <option value="custom">期間指定</option>
-                        </select>
-                        {period === 'custom' && (
-                            <div className="flex items-center gap-1 bg-slate-50 p-1 rounded border">
-                                <input type="date" value={customStartDate} onChange={e => setCustomStartDate(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 outline-none" />
-                                <span className="text-slate-400 text-xs">~</span>
-                                <input type="date" value={customEndDate} onChange={e => setCustomEndDate(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 outline-none" />
-                            </div>
-                        )}
-                        {targetValue && insightsData.length > 0 && (
-                            <>
-                                <span className="text-[11px] text-slate-600 bg-slate-100 rounded px-2 py-1 whitespace-nowrap">工程<b>{insightsData.length}</b>件 / 有効データ計<b>{insightsData.reduce((s,d)=>s+d.stats.validCount,0)}</b>件で判断</span>
-                                <div className="ml-auto flex items-center gap-1.5">
-                                    <span className="text-xs font-bold text-slate-600 whitespace-nowrap">全工程に一括:</span>
-                                    <select value={bulkStrategy} onChange={(e) => setBulkStrategy(e.target.value)} className="border rounded px-2 py-1.5 text-xs font-bold bg-slate-50">
-                                        <option value="standard">標準バランス型</option>
-                                        <option value="aggressive">効率追求型</option>
-                                        <option value="conservative">余裕確保型</option>
-                                    </select>
-                                    <button onClick={applyAllSuggestedTargets} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded font-bold shadow flex items-center gap-1 text-sm whitespace-nowrap"><Bot className="w-4 h-4" /> 適用</button>
-                                </div>
-                            </>
-                        )}
-                    </div>
+                    {/* 🧹 2026-09-07: ここに在った「品目コード ・ 集計」の帯は、上の見出しの箱の中へ移した。中身は1つも減っていない。 */}
 
                     {targetValue ? (
                         <div className="flex-1 overflow-y-auto min-h-0 space-y-4 pr-2">
@@ -16920,17 +16934,34 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
             <button onClick={() => setShowHelp(true)} className="px-2 py-1 border border-indigo-300 text-indigo-700 rounded-lg font-bold hover:bg-indigo-100 whitespace-nowrap">❓ 使い方</button>
           </div>
         </div>
-        <div className="mt-2 relative max-w-md">
-          <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="品目コード・工程・担当・問題で検索" className="w-full pl-8 pr-3 py-1.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+        {/* 🧹 2026-09-07: 右が丸ごと空いていた検索の行へ、「手動でカルテ:」だけの帯(本番実測 46px・中身29%)を合体した(決まり1・3)。押す物・文言・順番はそのまま。 */}
+        <div data-band="pdca-search" className="mt-2 flex items-center gap-x-3 gap-y-2 flex-wrap">
+          <div className="relative flex-1 min-w-[220px] max-w-md">
+            <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="品目コード・工程・担当・問題で検索" className="w-full pl-8 pr-3 py-1.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+          {/* 手動でカルテ作成(元は下の専用の帯。ここへ移しただけ) */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-bold text-slate-500">手動でカルテ:</span>
+            <select value={newModel} onChange={e => { setNewModel(e.target.value); setNewStepKey(''); }} className="border rounded px-2 py-1 text-xs">
+              <option value="">品目コードを選択</option>
+              {modelOptions.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <select value={newStepKey} onChange={e => setNewStepKey(e.target.value)} className="border rounded px-2 py-1 text-xs" disabled={!newModel}>
+              <option value="">工程を選択</option>
+              {stepOptions.map(s => <option key={s.stepKey} value={s.stepKey}>{s.stepTitle}</option>)}
+            </select>
+            <button onClick={() => { const s = stepOptions.find(x => x.stepKey === newStepKey); if (s) { createCard(s.model, s.stepKey, s.stepTitle, s.category, { kind: 'manual', label: '手動作成' }); setNewModel(''); setNewStepKey(''); } }} disabled={!newStepKey} className="text-xs px-3 py-1 bg-slate-700 text-white rounded font-bold disabled:bg-slate-300">＋ 作成</button>
+          </div>
         </div>
       </div>
 
       {/* === 改善スコアボード(SQDC型・改善ループの主役): 今月 vs 先月のトレンド + 浮いた時間。毎月見て1つ選ぶ。 === */}
       <div className="border-2 border-indigo-200 rounded-xl overflow-hidden mb-4">
-        <div className="px-3 py-2 bg-indigo-600 text-white text-sm font-black flex items-center gap-2"><Activity className="w-4 h-4" /> 改善スコアボード — 今月のうごき（先月と比べて）</div>
-        {/* サマリ: 浮いた時間 + ¥ + 正直な注記 */}
-        <div className="px-3 py-2.5 bg-indigo-50 border-b border-indigo-100 flex items-center gap-4 flex-wrap">
+        {/* 🧹 2026-09-07: 見出しだけの帯(本番実測 36px・中身1%)を無くした。文言は1文字も変えずに、下のサマリの行の左端へ入れた(決まり1・3)。 */}
+        {/* サマリ: 見出し + 浮いた時間 + ¥ + 正直な注記 */}
+        <div data-band="scoreboard-summary" className="px-3 py-2 bg-indigo-50 border-b border-indigo-100 flex items-center gap-x-4 gap-y-1 flex-wrap">
+          <div className="shrink-0 flex items-center gap-1.5 text-xs font-black text-indigo-800"><Activity className="w-4 h-4" /> 改善スコアボード — 今月のうごき（先月と比べて）</div>
           <div className="shrink-0">
             <div className="text-[10px] text-indigo-500 font-bold">今月 浮いた時間（先月より速くなった分）</div>
             <div className="text-2xl font-black text-indigo-700 font-mono">{formatTime(scoreboard.freedSecTotal)}
@@ -16979,8 +17010,25 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
 
       {/* 重点工程ランキング: 年間でかかっている時間・コストが大きい順。行クリックで詳細(計算の内訳+根拠データ) */}
       <div className="border border-emerald-200 rounded-xl overflow-hidden">
-        <div className="px-3 py-2 bg-emerald-50 text-emerald-900 text-sm font-bold flex items-center justify-between gap-2 flex-wrap">
-          <span className="flex items-center gap-2"><TrendingUp className="w-4 h-4" /> 重点工程 — {rankingView === 'cross' ? '工程横断（共通ポイントを1つ直すと全品目コードに効く）' : '年間でかかっている時間が大きい順（詳しく見る）'}</span>
+        <div className="px-3 py-2.5 bg-emerald-50 text-emerald-900 text-sm font-bold flex items-center justify-between gap-2 flex-wrap">
+          <span className="flex items-center gap-2"><TrendingUp className="w-4 h-4" /> 重点工程 — {rankingView === 'cross' ? '工程横断（共通ポイントを1つ直すと全品目コードに効く）' : '年間でかかっている時間が大きい順（詳しく見る）'}
+            {/* 🧹 2026-09-07: 説明1行だけの帯(本番実測 30px・中身30%)を無くした。文言は1文字も消さず ？ の中へ畳んだ(決まり6)。
+                🚨 2026-09-08 直し: 押せる所は **44px ちょうど**。
+                  ・札は w-6 h-6(24px) + border 1px、box-sizing は border-box なので **内側(padding box)は 22px**。
+                  ・::after は border box ではなく padding box に対して置かれるので、前後 10px(-top-2.5 等)では 22+10+10 = **42px** しか無かった。
+                  ・前後 11px にして 22+11+11 = **44px**。
+                  ・上の行の余白も py-2(8px) → py-2.5(10px) にした。8px のままだと ::after の上 3px が
+                    親の overflow-hidden(rounded-xl の箱)に切られて 42px に戻る。
+                ⚠ この 11px と py-2.5 を小さくしない(見張り: ui-density-parts-bands.test.mjs PB3 が 44 という **数** を見る)。 */}
+            <details className="relative font-normal shrink-0">
+              <summary className="list-none cursor-pointer select-none relative w-6 h-6 flex items-center justify-center rounded-md border border-emerald-300 bg-white text-emerald-700 text-xs font-bold hover:bg-emerald-100 after:content-[''] after:absolute after:top-[-11px] after:bottom-[-11px] after:left-[-11px] after:right-[-11px]" title="読み方">？</summary>
+              <div data-fold="ranking-howto" className="absolute left-0 top-full mt-1 z-30 w-[560px] max-w-[70vw] bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-[11px] text-slate-500 leading-relaxed">
+                {rankingView === 'cross'
+                  ? <><b className="text-slate-700">読み方：</b>同じ工程（例: 測定準備）を<b>品目コードをまたいで合計</b>しています。「N品目コードに共通・年◯時間」の大きい所ほど、<b>その1工程を直すと全品目コードに効いて大きい</b>。行クリックで品目別の内訳が見られます。</>
+                  : <><b className="text-slate-700">読み方：</b>1年でその工程に合計どれだけ時間がかかっているかの大きい順です。<b>行をクリック</b>すると「年間◯台 × 1台◯分 = 年◯時間」の計算の内訳と、集計に使った指図一覧（確認用）が見られます。</>}
+              </div>
+            </details>
+          </span>
           <div className="flex items-center gap-3 text-[11px] font-normal">
             <div className="flex rounded-lg overflow-hidden border border-emerald-300 shrink-0">
               <button onClick={() => setRankingView('model')} className={`px-2.5 py-0.5 font-bold ${rankingView === 'model' ? 'bg-emerald-600 text-white' : 'bg-white text-emerald-700 hover:bg-emerald-100'}`} title="どの品目コードのどの工程か">品目別</button>
@@ -16992,11 +17040,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
             {rankingView === 'model' && <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={hideLowFreq} onChange={e => setHideLowFreq(e.target.checked)} className="accent-emerald-600" />年10台未満を隠す</label>}
           </div>
         </div>
-        <div className="px-3 py-1.5 bg-white text-[11px] text-slate-500 border-b">
-          {rankingView === 'cross'
-            ? <><b className="text-slate-700">読み方：</b>同じ工程（例: 測定準備）を<b>品目コードをまたいで合計</b>しています。「N品目コードに共通・年◯時間」の大きい所ほど、<b>その1工程を直すと全品目コードに効いて大きい</b>。行クリックで品目別の内訳が見られます。</>
-            : <><b className="text-slate-700">読み方：</b>1年でその工程に合計どれだけ時間がかかっているかの大きい順です。<b>行をクリック</b>すると「年間◯台 × 1台◯分 = 年◯時間」の計算の内訳と、集計に使った指図一覧（確認用）が見られます。</>}
-        </div>
+        {/* 🧹 2026-09-07: ここに在った「読み方：…」の1行の帯は、上の見出しの ？ の中へ畳んだ。文言は両方(工程横断・品目別)とも残っている。 */}
         {/* 生産台数の年: 金額計算の台数をどの年の実生産台数で出すか。未入力品目コードは測定台数ベースの推定にフォールバック。 */}
         <div className="px-3 py-1.5 bg-indigo-50/40 border-b border-indigo-100 flex items-center gap-2 flex-wrap text-[11px]">
           <span className="font-bold text-indigo-800">金額の元にする 生産台数の年:</span>
@@ -17148,41 +17192,42 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
         </>)}
       </div>
 
-      {/* 手動でカルテ作成 */}
-      <div className="flex items-center gap-2 flex-wrap bg-white border rounded-xl p-2">
-        <span className="text-xs font-bold text-slate-500">手動でカルテ:</span>
-        <select value={newModel} onChange={e => { setNewModel(e.target.value); setNewStepKey(''); }} className="border rounded px-2 py-1 text-xs">
-          <option value="">品目コードを選択</option>
-          {modelOptions.map(m => <option key={m} value={m}>{m}</option>)}
-        </select>
-        <select value={newStepKey} onChange={e => setNewStepKey(e.target.value)} className="border rounded px-2 py-1 text-xs" disabled={!newModel}>
-          <option value="">工程を選択</option>
-          {stepOptions.map(s => <option key={s.stepKey} value={s.stepKey}>{s.stepTitle}</option>)}
-        </select>
-        <button onClick={() => { const s = stepOptions.find(x => x.stepKey === newStepKey); if (s) { createCard(s.model, s.stepKey, s.stepTitle, s.category, { kind: 'manual', label: '手動作成' }); setNewModel(''); setNewStepKey(''); } }} disabled={!newStepKey} className="text-xs px-3 py-1 bg-slate-700 text-white rounded font-bold disabled:bg-slate-300">＋ 作成</button>
-      </div>
+      {/* 🧹 2026-09-07: ここに在った「手動でカルテ」だけの帯は、上の検索の行へ移した。中身は1つも減っていない。 */}
 
-      {/* カンバンボード */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+      {/* カンバンボード
+          🧹 2026-09-08: 4つの列が **中身の件数に関係なく全部 306px** だった(本番・写しの両方で実測)。
+            「効果測定中 / 0 / なし」「完了 / 0 / なし」— 数字1つと「なし」だけで 306px。
+            原因は grid の既定 align-items:stretch。一番多い列(計画・3枚)の高さに残り3列が引き伸ばされていた。
+            直し(決まり4・6):
+              ① items-start … 列の高さを **その列の中身**で決める。件数が増えれば伸び、減れば縮む
+                 (「0件の時だけ低くする」ではない。0枚=74px / 1枚=116px / 3枚=273px と件数で変わる)。
+              ② 空の列の下限 min-h を 120px → 64px。
+              ③ 1枚あたりを詰める: p-2→p-1.5・mb-0.5を廃し・mt-1→mt-0.5・行の高さを leading-4 で固定。
+            🚨 列・見出し・件数・「なし」・カードの中身(品目コード/工程/主指標/判定)は **1つも消していない**。
+               ついでに 11px だった2か所を text-xs(12px)へ **大きく** した(決まり7)。
+            📏 写しで実測(1366×768): 0枚=74px / 1枚=116px / 3枚=273px(直す前は **中身に関係なく全部 306px**)。
+               カード1枚は 72px なので、押す所は 44px 以上。4列は今までどおり横1行(top が4つとも同じ)。
+               ⚠ この p-1.5 / leading-4 / min-h-[64px] を これ以上詰めない(見張り: ui-density-parts-kanban.test.mjs)。 */}
+      <div data-band="pdca-kanban" className="grid grid-cols-1 md:grid-cols-4 gap-2 items-start">
         {PDCA_COLS.map(col => (
-          <div key={col} className="bg-slate-50 border border-slate-200 rounded-xl p-2 min-h-[120px]">
-            <div className="text-xs font-bold text-slate-600 mb-2 px-1 flex items-center justify-between">{col}<span className="text-slate-400">{(byCol[col] || []).length}</span></div>
+          <div key={col} data-kanban-col={col} className="bg-slate-50 border border-slate-200 rounded-xl p-2 min-h-[64px]">
+            <div className="text-xs leading-4 font-bold text-slate-600 mb-1.5 px-1 flex items-center justify-between">{col}<span className="text-slate-400">{(byCol[col] || []).length}</span></div>
             <div className="space-y-1.5">
               {(byCol[col] || []).map(c => {
                 const meta = PDCA_STATUS_META[c.status] || PDCA_STATUS_META.plan;
                 const v = liveVerdict(c);
                 return (
-                  <button key={c.id} onClick={() => setOpenId(c.id)} className="w-full text-left bg-white border rounded-lg p-2 hover:border-indigo-300 transition">
-                    <div className="flex items-center gap-1.5 mb-0.5"><span className={`w-2 h-2 rounded-full shrink-0 ${meta.dot}`} /><span className="text-xs font-bold text-slate-800 truncate">{c.model}</span></div>
-                    <div className="text-[11px] text-slate-600 truncate">{c.stepTitle || c.stepKey}</div>
-                    <div className="flex items-center gap-1 mt-1 flex-wrap">
+                  <button key={c.id} onClick={() => setOpenId(c.id)} className="w-full text-left bg-white border rounded-lg p-1.5 hover:border-indigo-300 transition">
+                    <div className="flex items-center gap-1.5"><span className={`w-2 h-2 rounded-full shrink-0 ${meta.dot}`} /><span className="text-xs leading-4 font-bold text-slate-800 truncate">{c.model}</span></div>
+                    <div className="text-xs leading-4 text-slate-600 truncate">{c.stepTitle || c.stepKey}</div>
+                    <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                       <span className="text-[9px] px-1 py-0.5 rounded bg-slate-100 text-slate-500">{PDCA_KPIS[c.kpi] || PDCA_KPIS.time}</span>
                       {v && <PdcaVerdictBadge v={v} />}
                     </div>
                   </button>
                 );
               })}
-              {(byCol[col] || []).length === 0 && <div className="text-center text-slate-300 text-[11px] py-2">なし</div>}
+              {(byCol[col] || []).length === 0 && <div className="text-center text-slate-300 text-xs leading-4 py-1">なし</div>}
             </div>
           </div>
         ))}
@@ -17613,6 +17658,39 @@ const makeImprovementCard = (lots, { model, stepKey, stepTitle, category, source
     log: [{ ts: nowMs, by: currentUserName || '?', type: 'create', note: `カルテ作成 (由来: ${source?.label || '手動'})` }],
   };
 };
+// === 🧹 中身の無い箱を「小さな絵」にする(2026-09-07) ===
+// 清水さん「文字ばっかりのところ沢山あるからそこもイラストとかグラフで置き換えて」。
+// 本番・1366×768 の実測では「この品目コードの完了データがまだありません。」だけで 152px、
+// 「評価データがありません (期間内の完了ロットが必要です)」で 184px を使っていた(py-16 / py-20)。
+// ここは 56px(絵 40px + 上下の余白 16px)に収め、代わりに **データが貯まる様子** を絵で見せる。
+// 🚨 絵に数字は1つも入れない(嘘の数字を出さない)。文言は1文字も消さず、そのまま右に置く。
+const EmptyDataHint = ({ text }) => (
+  <div data-empty-hint="1" className="flex items-center justify-center gap-3 py-2">
+    <svg width="152" height="40" viewBox="0 0 152 40" role="img" aria-label="記録が付く、集まる、目標が出せる" className="shrink-0">
+      {/* 3つの丸 = 記録が付く → 集まる → 目標が出せる */}
+      <circle cx="18" cy="20" r="14" fill="none" stroke="#cbd5e1" strokeWidth="1.5" />
+      <circle cx="76" cy="20" r="14" fill="none" stroke="#cbd5e1" strokeWidth="1.5" />
+      <circle cx="134" cy="20" r="14" fill="none" stroke="#cbd5e1" strokeWidth="1.5" />
+      {/* 矢印 */}
+      <path d="M35 20h13m-5-4 5 4-5 4" fill="none" stroke="#cbd5e1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M93 20h13m-5-4 5 4-5 4" fill="none" stroke="#cbd5e1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      {/* ① 記録が1つ付く */}
+      <circle cx="18" cy="20" r="2.5" fill="#94a3b8" />
+      {/* ② 記録が集まる */}
+      <circle cx="70" cy="15" r="2.5" fill="#94a3b8" />
+      <circle cx="82" cy="15" r="2.5" fill="#94a3b8" />
+      <circle cx="70" cy="25" r="2.5" fill="#94a3b8" />
+      <circle cx="82" cy="25" r="2.5" fill="#94a3b8" />
+      {/* ③ 目標(的)が出せる */}
+      <circle cx="134" cy="20" r="7" fill="none" stroke="#94a3b8" strokeWidth="1.5" />
+      <circle cx="134" cy="20" r="2.5" fill="#94a3b8" />
+    </svg>
+    <div className="text-left text-xs text-slate-400 leading-5">
+      <div>{text}</div>
+      <div className="text-slate-300">記録が付く → 集まる → 目標が出せる</div>
+    </div>
+  </div>
+);
 const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates = [], customTargetTimes = {}, modelGroups = [], observationPlans = [], improvements = [], saveData = null, deleteData = null, currentUserName = '', onGoToPdca = null }) => {
   const completed = useMemo(() => (lots || []).filter(l => l.status === 'completed' || l.location === 'completed'), [lots]);
   const models = useMemo(() => [...new Set(completed.map(l => l.model))].filter(Boolean).sort(), [completed]);
@@ -17780,30 +17858,39 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
 
   return (
     <div className="space-y-3">
-      {/* 選択 */}
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex flex-wrap items-center gap-3">
+      {/* 選択
+          🚨 2026-09-08: 「出力: / PDF(A4 1枚) / PDF(詳細) / Excel(グラフ入り)」だけの帯
+            (本番実測 中身32%・高さ38px。w-full で2行目を丸ごと専有していた)を、
+            すぐ上の見出しの行の **右端** へ入れて 帯を1本減らした。
+            札の名前・順番・押した時の行き先(printReport(false)/printReport(true)/exportExcel)は1つも変えていない。
+          ⚠ 品目コード・テンプレ と 出力: は 同じ ml-auto の入れ物に入れて **一緒に折り返す**。
+            別々にすると、狭い時に片方だけ右へ残って真ん中が空く(設計 決まり1 の⚠)。
+          ⚠ 見張り: src/domain/__tests__/ui-density-parts-q1.test.mjs Q2/Q4/Q5 */}
+      <div data-band="proc-analysis-head" className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2 text-sm text-blue-900"><BarChart3 className="w-5 h-5 text-blue-600 shrink-0" /><b>工程分析</b> — 取ったデータをそのまま見る（直近1年）</div>
-        <div className="flex items-center gap-2 ml-auto flex-wrap">
-          <span className="text-xs text-slate-500">品目コード</span>
-          <select value={model} onChange={e => setModel(e.target.value)} className="border rounded px-2 py-1 text-sm min-w-[8rem]">{models.map(m => <option key={m} value={m}>{m}</option>)}</select>
-          <span className="text-xs text-slate-500">テンプレ</span>
-          <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="border rounded px-2 py-1 text-sm">
-            <option value="">全テンプレ</option>
-            {tplOptions.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-        </div>
-        {bd.rows.length > 0 && (
-          <div className="flex items-center gap-1.5 w-full justify-end border-t border-blue-100 pt-2">
-            <span className="text-[11px] text-slate-500 mr-1">出力:</span>
-            <button onClick={() => printReport(false)} className="px-2.5 py-1 text-xs font-bold rounded border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex items-center gap-1"><Printer className="w-3.5 h-3.5" /> PDF(A4 1枚)</button>
-            <button onClick={() => printReport(true)} className="px-2.5 py-1 text-xs font-bold rounded border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex items-center gap-1"><Printer className="w-3.5 h-3.5" /> PDF(詳細)</button>
-            <button onClick={exportExcel} disabled={busyExcel} className={`px-2.5 py-1 text-xs font-bold rounded border flex items-center gap-1 ${busyExcel ? 'border-slate-200 bg-slate-100 text-slate-400' : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}><FileSpreadsheet className="w-3.5 h-3.5" /> {busyExcel ? '生成中…' : 'Excel(グラフ入り)'}</button>
+        <div className="flex items-center gap-3 ml-auto flex-wrap justify-end">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-slate-500">品目コード</span>
+            <select value={model} onChange={e => setModel(e.target.value)} className="border rounded px-2 py-1 text-sm min-w-[8rem]">{models.map(m => <option key={m} value={m}>{m}</option>)}</select>
+            <span className="text-xs text-slate-500">テンプレ</span>
+            <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="border rounded px-2 py-1 text-sm">
+              <option value="">全テンプレ</option>
+              {tplOptions.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
           </div>
-        )}
+          {bd.rows.length > 0 && (
+            <div data-band="proc-export" className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11px] text-slate-500 mr-1">出力:</span>
+              <button onClick={() => printReport(false)} className="px-2.5 py-1 text-xs font-bold rounded border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex items-center gap-1"><Printer className="w-3.5 h-3.5" /> PDF(A4 1枚)</button>
+              <button onClick={() => printReport(true)} className="px-2.5 py-1 text-xs font-bold rounded border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex items-center gap-1"><Printer className="w-3.5 h-3.5" /> PDF(詳細)</button>
+              <button onClick={exportExcel} disabled={busyExcel} className={`px-2.5 py-1 text-xs font-bold rounded border flex items-center gap-1 ${busyExcel ? 'border-slate-200 bg-slate-100 text-slate-400' : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}><FileSpreadsheet className="w-3.5 h-3.5" /> {busyExcel ? '生成中…' : 'Excel(グラフ入り)'}</button>
+            </div>
+          )}
+        </div>
       </div>
 
       {bd.rows.length === 0 ? (
-        <div className="text-center text-slate-400 py-16">この品目コードの完了データがまだありません。</div>
+        <EmptyDataHint text="この品目コードの完了データがまだありません。" />
       ) : (
         <>
           {/* ① 工程別パレート */}
@@ -18007,7 +18094,7 @@ const ANALYSIS_GROUPS = [
     { k: 'export', l: 'データ書き出し', color: 'text-blue-600' },
   ] },
 ];
-const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settings, saveSettings, currentUserName = '', indirectWork = [], improvements = [], observationPlans = [], templates = [], notes = [], announcements = [], strictModeHistory = [], onRestore = null, db = null, anomalies = [], onGoOptimize = null }) => {
+const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settings, saveSettings, currentUserName = '', indirectWork = [], improvements = [], observationPlans = [], templates = [], notes = [], announcements = [], strictModeHistory = [], onRestore = null, db = null, anomalies = [], onGoOptimize = null, parentTabs = null }) => {
   // デフォルトは process (工程改善分析)。旧 'daily' は全体進捗タブと重複していたため削除済み
   const [activeMode, setActiveMode] = useState('process-analysis'); // 既定=工程分析(データを見る土台)。グループは activeMode から導出
   const activeGroup = ANALYSIS_GROUPS.find(g => g.tabs.some(t => t.k === activeMode)) || ANALYSIS_GROUPS[0];
@@ -18517,47 +18604,31 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
            </div>
          </div>
        )}
-       {/* Header Tabs */}
-       <div className="bg-white border-b px-6 py-4 flex flex-col gap-3 shrink-0">
-          <div className="flex items-center justify-between">
-            {/* タイトルは activeMode に応じて切り替え (旧「生産性分析」固定は削除) */}
-            <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-              {activeMode === 'process' && (<><TrendingUp className="w-6 h-6 text-blue-600"/> 工程改善分析</>)}
-              {activeMode === 'dashboard' && (<><Activity className="w-6 h-6 text-blue-600"/> 管理者ダッシュボード</>)}
-              {activeMode === 'process-analysis' && (<><BarChart3 className="w-6 h-6 text-blue-600"/> 工程分析（データを見る）</>)}
-              {activeMode === 'kpi' && (<><TrendingUp className="w-6 h-6 text-indigo-600"/> 経営分析（KPI詳細）</>)}
-              {activeMode === 'achievement' && (<><Target className="w-6 h-6 text-emerald-600"/> 達成率分析</>)}
-              {activeMode === 'audit' && (<><ClipboardCheck className="w-6 h-6 text-emerald-600"/> 提出前チェック・バックアップ</>)}
-              {activeMode === 'defects' && (<><AlertTriangle className="w-6 h-6 text-rose-600"/> 不具合分析</>)}
-              {activeMode === 'complaints' && (<><Megaphone className="w-6 h-6 text-purple-600"/> 軽微不良・改善提案</>)}
-              {activeMode === 'direct-indirect' && (<><Activity className="w-6 h-6 text-teal-600"/> 直間分析</>)}
-              {activeMode === 'worker-eval' && (<><Users className="w-6 h-6 text-amber-600"/> 作業者評価</>)}
-              {activeMode === 'improvement' && (<><Zap className="w-6 h-6 text-indigo-600"/> AI洞察・乖離アラート</>)}
-              {activeMode === 'anomaly' && (<><AlertTriangle className="w-6 h-6 text-amber-600"/> ① データを正す（要確認）</>)}
-              {activeMode === 'standardize' && (<><ShieldCheck className="w-6 h-6 text-indigo-600"/> ⑤ 基準を固める（定着）</>)}
-              {activeMode === 'pdca' && (<><ClipboardList className="w-6 h-6 text-indigo-600"/> 改善PDCA (改善カルテ)</>)}
-              {activeMode === 'monthly' && (<><FileText className="w-6 h-6 text-slate-700"/> 月次レポート</>)}
-            </h2>
-            <div className="flex items-center gap-3">
-              <div className="flex flex-col gap-1.5">
-                 {/* 1段目: グループ (5つ) */}
-                 <div className="flex bg-slate-200 p-1 rounded-lg flex-wrap">
+       {/* Header Tabs
+           🚨 2026-09-07: 帯を4段→2段へ畳んだ(上のナビと合わせて3本)。札の名前・順番・押した時の行き先は1つも変えていない(並べ方だけ)。
+             帯1 = [分析 | 作業最適化(親タブ)] │ 大分類(5つ) … 右端に 出力(Excel / PDF)
+             帯2 = 見出し + 小分類 … 右端に 月単位 / 期間指定
+           ⚠ この2本を分けたり、1つの押す物のために行を足したりしない(見張り: src/domain/__tests__/ui-density-parts.test.mjs)。 */}
+       <div data-band="analysis-header" className="bg-white border-b px-6 py-2 flex flex-col gap-2 shrink-0">
+          {/* 帯1: 親タブ(分析 | 作業最適化) │ 大分類(5つ) … 右端に 出力 */}
+          <div data-band="analysis-top" className="flex items-center gap-2 flex-wrap">
+              {/* 親タブ(分析 / 作業最適化)は App 側から受け取ってこの帯へ入れる。専用の行は作らない。
+                  ⚠ 渡って来ない時(単体で使う時)は App 側が今までどおり自分の帯で出す。行き先を消さない。 */}
+              {/* ⚠ data-fs-reset: この画面は data-fs="tables"(テーブル・リストの文字サイズ 70〜160%)の中。
+                  親タブはここへ **合流させて置いただけ** で、合流の前は区画の外に在り いつも 100% だった。
+                  打ち消さないと 70% で 9.8px(決まり7 の 12px 割れ)・作業最適化の同じ札と大きさが変わる。 */}
+              {parentTabs && (<><div data-fs-reset="1" className="flex items-center gap-1">{parentTabs}</div><div className="h-7 w-px bg-slate-300 mx-1" /></>)}
+              {/* 大分類 (5つ) */}
+              <div className="flex bg-slate-200 p-1 rounded-lg flex-wrap">
                    {ANALYSIS_GROUPS.map(g => {
                      const vis = g.tabs.filter(t => !t.admin || currentUserName === '管理者');
                      if (vis.length === 0) return null;
                      const on = activeGroup.key === g.key;
-                     return <button key={g.key} onClick={() => setActiveMode(vis[0].k)} className={`px-4 py-2 rounded-md text-sm font-bold ${on ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>{g.label}</button>;
+                     return <button key={g.key} onClick={() => setActiveMode(vis[0].k)} className={`px-3 py-2 rounded-md text-sm font-bold ${on ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>{g.label}</button>;
                    })}
                  </div>
-                 {/* 2段目: 選択中グループのサブタブ */}
-                 <div className="flex gap-1 flex-wrap">
-                   {activeGroup.tabs.filter(t => !t.admin || currentUserName === '管理者').map(t => (
-                     <button key={t.k} onClick={() => setActiveMode(t.k)} className={`px-3 py-1.5 rounded-md text-xs font-bold border ${activeMode === t.k ? `bg-white shadow ${t.color} border-slate-300` : 'text-slate-500 border-transparent hover:bg-slate-100'}`}>{t.l}</button>
-                   ))}
-                 </div>
-              </div>
               {!['monthly', 'dashboard', 'export', 'kpi', 'audit', 'achievement', 'rotary', 'pdca', 'process-analysis', 'anomaly', 'standardize'].includes(activeMode) && (
-              <div className="flex gap-1 border rounded-lg overflow-hidden">
+              <div className="ml-auto flex gap-1 border rounded-lg overflow-hidden">
                 {/* Excel エクスポート: 現在のタブのデータを出力する。タブ別に列・データを切替 */}
                 <button onClick={async ()=>{
                   const ExcelJS = await loadExcelJS();
@@ -18686,12 +18757,49 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                 }} className="px-3 py-1.5 text-xs font-bold bg-rose-600 text-white hover:bg-rose-700 flex items-center gap-1"><Printer className="w-3 h-3"/> PDF</button>
               </div>
               )}
-            </div>
           </div>
-          {/* 共通フィルタ UI: 月単位 / 期間指定 (全タブ共有)。
+          {/* 帯2: 見出し + 小分類 … 右端に 共通フィルタ UI: 月単位 / 期間指定 (全タブ共有)。
               旧コードでは「今月/期間指定」と「月単位/期間指定」が別 state で並列表示されて混乱の元だった。 */}
-          <div className="flex items-center gap-3 flex-wrap">
-            {renderDefectFilterUI()}
+          <div data-band="analysis-sub" className="flex items-center gap-2 flex-wrap">
+            {/* タイトルは activeMode に応じて切り替え (旧「生産性分析」固定は削除) */}
+            <h2 className="text-base font-bold text-slate-800 flex items-center gap-1.5 whitespace-nowrap">
+              {activeMode === 'process' && (<><TrendingUp className="w-5 h-5 text-blue-600"/> 工程改善分析</>)}
+              {activeMode === 'dashboard' && (<><Activity className="w-5 h-5 text-blue-600"/> 管理者ダッシュボード</>)}
+              {activeMode === 'process-analysis' && (<><BarChart3 className="w-5 h-5 text-blue-600"/> 工程分析（データを見る）</>)}
+              {activeMode === 'kpi' && (<><TrendingUp className="w-5 h-5 text-indigo-600"/> 経営分析（KPI詳細）</>)}
+              {activeMode === 'achievement' && (<><Target className="w-5 h-5 text-emerald-600"/> 達成率分析</>)}
+              {activeMode === 'audit' && (<><ClipboardCheck className="w-5 h-5 text-emerald-600"/> 提出前チェック・バックアップ</>)}
+              {activeMode === 'defects' && (<><AlertTriangle className="w-5 h-5 text-rose-600"/> 不具合分析</>)}
+              {activeMode === 'complaints' && (<><Megaphone className="w-5 h-5 text-purple-600"/> 軽微不良・改善提案</>)}
+              {activeMode === 'direct-indirect' && (<><Activity className="w-5 h-5 text-teal-600"/> 直間分析</>)}
+              {/* 🧹 2026-09-08 Q2: 帯2に「作業者評価」が2回出ていた(この見出しの文字 + すぐ右の小分類の押せる札)。
+                  設計 決まり3・清水さん「無駄が多い」。残すのは **押せる札の方**(押すと今までどおり作業者評価の中身が出る)。
+                  見出しは 人のアイコン(絵札)だけ を残す。文言「作業者評価」は
+                    ・小分類の札 ANALYSIS_GROUPS の { k: 'worker-eval', l: '作業者評価' }
+                    ・PDF 出力の見出し title = '作業者評価'
+                  に在るので1文字も失っていない(見張り: _guard_strings.mjs で 3回→2回 の1件だけ)。
+                  ⚠ ここへ「作業者評価」の文字を戻さない(見張り: ui-density-parts-dup.test.mjs UD1)。
+                  ⚠ <>…</> の形は外さない。ui-density-parts.test.mjs UD7 が `&& (<>` で見出しを15本と数えている。 */}
+              {activeMode === 'worker-eval' && (<><Users className="w-5 h-5 text-amber-600"/></>)}
+              {activeMode === 'improvement' && (<><Zap className="w-5 h-5 text-indigo-600"/> AI洞察・乖離アラート</>)}
+              {activeMode === 'anomaly' && (<><AlertTriangle className="w-5 h-5 text-amber-600"/> ① データを正す（要確認）</>)}
+              {activeMode === 'standardize' && (<><ShieldCheck className="w-5 h-5 text-indigo-600"/> ⑤ 基準を固める（定着）</>)}
+              {activeMode === 'pdca' && (<><ClipboardList className="w-5 h-5 text-indigo-600"/> 改善PDCA (改善カルテ)</>)}
+              {activeMode === 'monthly' && (<><FileText className="w-5 h-5 text-slate-700"/> 月次レポート</>)}
+            </h2>
+            {/* 小分類: 選択中グループのサブタブ (前は大分類の下に別の行だった。帯1本ぶん詰めた) */}
+            <div className="flex gap-1 flex-wrap">
+                   {activeGroup.tabs.filter(t => !t.admin || currentUserName === '管理者').map(t => (
+                     <button key={t.k} onClick={() => setActiveMode(t.k)} className={`px-3 py-1.5 rounded-md text-xs font-bold border ${activeMode === t.k ? `bg-white shadow ${t.color} border-slate-300` : 'text-slate-500 border-transparent hover:bg-slate-100'}`}>{t.l}</button>
+                   ))}
+            </div>
+            {/* 🧹 2026-09-08: ml-auto(右端へ飛ばす)をやめた。小分類が1〜2個の大分類(① データを正す・⑤ 基準を固める・人・配分)では
+                左端の見出しと右端の 月単位/期間指定 の間に 47〜55% の空きが出ていた(1366px・本番の dist の CSS を当てて実測)。
+                決まり1の⚠「右端に1個・左端に1個・真ん中は空 も無駄(内側の空きが幅の25%を超えたら直す)」。
+                ⚠ ml-auto をここへ戻さない(見張り: ui-density-parts-gaps.test.mjs UG1)。 */}
+            <div className="flex items-center gap-3 flex-wrap">
+              {renderDefectFilterUI()}
+            </div>
           </div>
        </div>
 
@@ -19502,10 +19610,13 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                    })}
                  </div>
 
-                 {workerStats.length === 0 && <div className="text-center py-20 text-slate-400">評価データがありません (期間内の完了ロットが必要です)</div>}
+                 {workerStats.length === 0 && <EmptyDataHint text="評価データがありません (期間内の完了ロットが必要です)" />}
 
-                 {/* 評価指標の説明 */}
-                 <div className="bg-slate-50 rounded-xl p-4 border">
+                 {/* 評価指標の説明 — 🧹 閉じている時は「指標の意味 ▼」の1行(44px)。
+                     本番の実測で 146px を使っていた説明文を **畳んだだけ**で、文は1文字も消していない(2026-09-07)。 */}
+                 <details data-fold="worker-eval-metrics" className="bg-slate-50 rounded-xl border">
+                   <summary className="flex min-h-[2.75rem] cursor-pointer select-none list-none items-center gap-1 px-4 text-xs font-bold text-slate-600">指標の意味 <span className="text-slate-400">▼</span></summary>
+                   <div className="px-4 pb-4">
                    <div className="text-sm font-bold text-slate-700 mb-2">評価指標の定義</div>
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-slate-600">
                      <div><span className="font-bold text-blue-600">平均タスク時間</span>: 期間内に完了したタスクの所要時間平均。全作業者の平均と比較した％を表示。</div>
@@ -19514,7 +19625,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                      <div><span className="font-bold text-amber-600">最速記録 / NG発見</span>: 全作業者中で最速タイムを持つ工程数 / 期間内に NG 判定した件数 (品質意識)。</div>
                    </div>
                    <div className="text-[10px] text-slate-400 mt-2">※ 順位は <span className="font-bold">目標達成率</span> 優先、次に <span className="font-bold">平均タスク時間</span> (速い順)。期間は上部のフィルタで変更可能。</div>
-                 </div>
+                   </div>
+                 </details>
                </div>
              );
            })()}
@@ -22614,7 +22726,7 @@ const NarrowFold = ({ fold, summary, className = '', children }) => {
   );
 };
 
-const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onDeleteLot, setExecutionLotId, currentUserName = '', saveData }) => {
+const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onDeleteLot, setExecutionLotId, currentUserName = '', saveData, parentTabs = null }) => {
   const [assignmentLot, setAssignmentLot] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
   // 📦 指図ごとにまとめる(2026-09-06)。押した時だけ。グリッド／リストはそのまま残る。
@@ -22775,8 +22887,19 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
     return [...byNo.values()];
   }, [groupByOrder, sortedLots, lots]);
 
+  // 🚨 2026-09-08: 親タブ「検査リスト / 完了履歴」を、この画面の絞り込みの行の **左端** へ合流させて
+  //   横帯を1本減らした(本番実測 中身15%・高さ39px の帯)。札の名前・順番・押した時の行き先(setActiveTab)は
+  //   1つも変えていない — 並べ方だけ。作り方は App の renderTabGroupButtons 1か所のまま。
+  // ⚠ data-fs-reset: この画面は data-fs="tables"(テーブル・リストの文字サイズ 70〜160%)の中。
+  //   打ち消さないと 70% で 14px → 9.8px になり 決まり7(文字 12px 以上)を割る。分析画面の合流と同じ扱い。
+  // ⚠ 見張り: src/domain/__tests__/ui-density-parts-q1.test.mjs Q1/Q3/Q5
+  const parentTabsEl = parentTabs ? <div data-fs-reset="1" className="flex items-center gap-1 shrink-0">{parentTabs}</div> : null;
   return (
     <div data-fs="tables" className="flex flex-col h-full gap-4">
+      {/* 🚨 狭い画面(1024px以下)では、下の絞り込みの行は <details> に畳まれる。
+          畳んだ中に入れると「完了履歴へ行く道」が閉じている間 押せなくなるので、その時だけ今までどおり行の上に出す。
+          広い画面(現場の 1366px)では下の行の左端に入り、帯は1本減る。 */}
+      {narrow && parentTabsEl && <div data-band="inspection-tabs-narrow" className="shrink-0 flex items-center gap-1">{parentTabsEl}</div>}
       <NarrowFold
         fold={narrow}
         summary={<>
@@ -22792,8 +22915,9 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           <ChevronDown className="w-4 h-4 text-slate-400 shrink-0"/>
         </>}
       >
-      <div className="flex flex-wrap justify-between items-center bg-white p-2 rounded-lg shadow-sm border border-slate-200 shrink-0 gap-2">
+      <div data-band="inspection-filter" className="flex flex-wrap justify-between items-center bg-white p-2 rounded-lg shadow-sm border border-slate-200 shrink-0 gap-2">
         <div className="flex flex-wrap items-center gap-4">
+          {!narrow && parentTabsEl && (<>{parentTabsEl}<div className="h-7 w-px bg-slate-300 shrink-0" /></>)}
           <div className="flex items-center gap-2 text-sm font-bold text-slate-600">
             <MapPin className="w-4 h-4" /> エリア:
             <select value={selectedZoneFilter} onChange={(e) => setSelectedZoneFilter(e.target.value)} className="border rounded px-2 py-1 bg-slate-50 text-slate-800 max-w-[10rem] md:max-w-[12rem] truncate">
@@ -26895,7 +27019,7 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
           <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2 mb-1"><FileText className="w-6 h-6 text-blue-600" /> 月次レポート <span className="text-xs font-normal text-slate-400">(会社提出用)</span></h2>
           <p className="text-xs text-slate-500 mb-3">対象月を選び、<b>月初の作業計画報告書</b>と<b>月末の業務実績報告書</b>を PDF / Excel で出力します。すべて実データに基づきます。</p>
-          <div className="flex flex-wrap items-end gap-4">
+          <div data-band="monthly-head" className="flex flex-wrap items-end gap-4">
             <div>
               <label className="block text-[11px] font-bold text-slate-500 mb-1">対象月</label>
               <input type="month" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} className="border border-slate-300 rounded px-3 py-1.5 font-bold text-slate-700" />
@@ -26909,29 +27033,32 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
               <input type="text" value={deptName} onChange={e => persistDept(e.target.value)} onBlur={commitOrgDept} placeholder="例: 品質保証部 検査課" className="border border-slate-300 rounded px-3 py-1.5 text-sm w-56" />
             </div>
             <div className="text-[11px] text-slate-500">作成者: <b className="text-slate-700">{currentUserName || '—'}</b> / 作成日: <b className="text-slate-700">{todayStr}</b></div>
-          </div>
-        </div>
-
-        {/* エクスポートボタン */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-wrap items-center gap-3">
-          <span className="text-sm font-bold text-slate-600">出力:</span>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-blue-700 bg-blue-50 px-2 py-1 rounded">月初・作業計画</span>
-            <Btn onClick={buildPlanPdf} color="bg-rose-600 hover:bg-rose-700" icon={Printer}>PDF</Btn>
-            <Btn onClick={buildPlanExcel} color="bg-emerald-600 hover:bg-emerald-700" icon={FileSpreadsheet}>Excel</Btn>
-          </div>
-          <div className="w-px h-8 bg-slate-200" />
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-teal-700 bg-teal-50 px-2 py-1 rounded">月末・業務実績</span>
-            <Btn onClick={buildActualPdf} color="bg-rose-600 hover:bg-rose-700" icon={Printer}>PDF</Btn>
-            <Btn onClick={buildActualExcel} color="bg-emerald-600 hover:bg-emerald-700" icon={FileSpreadsheet}>Excel</Btn>
+            {/* 🧹 2026-09-07: 「出力:」だけの箱(本番実測 70px・中身47%)を、この対象月の行へ合体した(決まり1・3)。押す物・文言はそのまま。
+                🧹 2026-09-08: ml-auto をやめた。max-w-screen-xl(1280px)で必ず2行目へ折り返し、その行の左に 659px(53%)の空きが
+                出ていた(1366px で実測)。決まり1の⚠「内側の空きが幅の25%を超えたら直す」。
+                ⚠ ml-auto をここへ戻さない(見張り: ui-density-parts-gaps.test.mjs UG1)。 */}
+            <div data-band="monthly-export" className="flex flex-wrap items-center gap-3">
+              <span className="text-sm font-bold text-slate-600">出力:</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-blue-700 bg-blue-50 px-2 py-1 rounded">月初・作業計画</span>
+                <Btn onClick={buildPlanPdf} color="bg-rose-600 hover:bg-rose-700" icon={Printer}>PDF</Btn>
+                <Btn onClick={buildPlanExcel} color="bg-emerald-600 hover:bg-emerald-700" icon={FileSpreadsheet}>Excel</Btn>
+              </div>
+              <div className="w-px h-8 bg-slate-200" />
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-teal-700 bg-teal-50 px-2 py-1 rounded">月末・業務実績</span>
+                <Btn onClick={buildActualPdf} color="bg-rose-600 hover:bg-rose-700" icon={Printer}>PDF</Btn>
+                <Btn onClick={buildActualExcel} color="bg-emerald-600 hover:bg-emerald-700" icon={FileSpreadsheet}>Excel</Btn>
+              </div>
+            </div>
           </div>
         </div>
 
         {/* 所感 */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-          <label className="block text-sm font-bold text-slate-600 mb-2">所感 (実績報告書 §8 に記載 — 任意)</label>
-          <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="当月の総括・特記事項・次月への課題などを記入してください。" className="w-full border border-slate-300 rounded p-2.5 text-sm" />
+        {/* 🧹 空欄が 150px を使っていた(本番実測)。入れ物を 88px 以下へ。中身は1文字も消していない(2026-09-07) */}
+        <div data-tight="shokan" className="bg-white rounded-xl border border-slate-200 shadow-sm px-3 py-1.5">
+          <label className="block text-xs font-bold text-slate-600 mb-1">所感 (実績報告書 §8 に記載 — 任意)</label>
+          <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} placeholder="当月の総括・特記事項・次月への課題などを記入してください。" className="block w-full min-h-[2.75rem] border border-slate-300 rounded px-2 py-1 text-sm" />
         </div>
 
         {/* プレビュー: 2カラム */}
@@ -27840,6 +27967,15 @@ const QuotaStoppedPanel = ({ until }) => (
      ],
    };
    const TAB_PARENT = { inspection: 'inspection', history: 'inspection', analysis: 'analysis', optimize: 'analysis', templates: 'templates', 'template-mgr': 'templates', 'measurement-settings': 'templates' };
+   // 親タブ(検査リスト|完了履歴 / 分析|作業最適化 / マスタ設定|…)のボタン。
+   // 🚨 2026-09-07: 分析・作業最適化の画面では、この帯を下の大分類の帯へ**合流**させて1本減らす。
+   //    同じ物を出す為に作り方をここ1か所にまとめた。札の名前・順番・押した時の行き先は変えていない。
+   const renderTabGroupButtons = (group) => group.map(s => (
+     <button key={s.id} onClick={() => setActiveTab(s.id)}
+       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t-md text-sm font-bold border-b-2 transition-all ${activeTab === s.id ? 'border-blue-600 text-blue-600 bg-blue-50' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
+       <s.icon className="w-4 h-4" /> {s.label}
+     </button>
+   ));
    // ヘッダーのまとめメニュー (間接作業/日次集計, 作業標準/ノート)。overflowで切れないよう fixed配置。
    const [hdrMenu, setHdrMenu] = useState(null); // { type:'time'|'docs', top, right }
    const openHdrMenu = (type, e) => { const r = e.currentTarget.getBoundingClientRect(); setHdrMenu(prev => prev && prev.type === type ? null : { type, top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) }); };
@@ -30816,14 +30952,18 @@ const QuotaStoppedPanel = ({ until }) => (
            const parent = TAB_PARENT[activeTab] || activeTab;
            const group = TAB_GROUPS[parent];
            if (!group) return null;
+           // 🚨 帯を1本減らす(2026-09-07)。分析/作業最適化の画面では、この帯は下の大分類の帯へ合流して出る。
+           //    合流先が描かれない時(上限で止まっている・読み込み中)は、ここで今までどおり出す。押す先を消さない。
+           if (activeTab === 'optimize') return null;
+           if (activeTab === 'analysis' && analysisDataReady && !quotaBlock) return null;
+           // 🚨 2026-09-08: 検査リストでは、この帯は下の絞り込みの行(エリア/並び替え/検索)の**左端**へ合流して出る。
+           //    InspectionListView は activeTab==='inspection' の時いつも描かれる(読み込み待ちも上限も挟まない)ので、
+           //    ここで返さなくても「完了履歴へ行く道」は必ず在る。狭い画面では向こう側が行の上に出す。
+           //    ⚠ 完了履歴(history)は今までどおりこの帯で出す(合流先の行がその画面には無い)。
+           if (activeTab === 'inspection') return null;
            return (
              <div className="shrink-0 bg-white border-b border-slate-200 px-4 pt-1.5 flex gap-1">
-               {group.map(s => (
-                 <button key={s.id} onClick={() => setActiveTab(s.id)}
-                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t-md text-sm font-bold border-b-2 transition-all ${activeTab === s.id ? 'border-blue-600 text-blue-600 bg-blue-50' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
-                   <s.icon className="w-4 h-4" /> {s.label}
-                 </button>
-               ))}
+               {renderTabGroupButtons(group)}
              </div>
            );
          })()}
@@ -30846,12 +30986,19 @@ const QuotaStoppedPanel = ({ until }) => (
            : !progressDataReady ? <DataLoadingPanel what="過去のロットと間接作業" />
            : <ProgressOverviewView lots={lots} workers={workers} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} />
          )}
-         {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} />}
+         {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)} />}
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
-         {activeTab === 'analysis' && analysisDataReady && !quotaBlock && <AnalysisView lots={lots} logs={logs} workers={workers} saveData={saveData} deleteData={deleteData} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} indirectWork={indirectWork} improvements={improvementCards} observationPlans={observationPlans} templates={templates} notes={notes} announcements={announcements} strictModeHistory={strictModeHistory} onRestore={restoreAllFromBackup} db={db} anomalies={anomalies} onGoOptimize={(view) => { setOptimizeView(view); setActiveTab('optimize'); }} />}
+         {activeTab === 'analysis' && analysisDataReady && !quotaBlock && <AnalysisView lots={lots} logs={logs} workers={workers} saveData={saveData} deleteData={deleteData} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} indirectWork={indirectWork} improvements={improvementCards} observationPlans={observationPlans} templates={templates} notes={notes} announcements={announcements} strictModeHistory={strictModeHistory} onRestore={restoreAllFromBackup} db={db} anomalies={anomalies} onGoOptimize={(view) => { setOptimizeView(view); setActiveTab('optimize'); }} parentTabs={renderTabGroupButtons(TAB_GROUPS.analysis)} />}
          {activeTab === 'optimize' && (
-           <div className="h-full flex flex-col gap-3 max-w-[1100px] mx-auto">
-             <div className="shrink-0 flex items-center gap-3 flex-wrap">
+           <div className="h-full flex flex-col gap-3">
+             {/* 🚨 2026-09-07: 親タブ(分析 | 作業最適化)をこの帯へ合流させて1本減らした。札の名前・順番・行き先はそのまま。
+                 🧹 2026-09-08 直し: 帯を max-w-[1100px] mx-auto の中から出した。中に入れていた時、1366px では
+                   帯が左から 133px 内側に寄り、分析画面の同じ2つの札(px-6 = 左40px)との間で **押すたびに約93px 横に跳んでいた**。
+                   いまは px-6 で分析画面と同じ左40px。中身(下の箱)だけを 1100px に収める。
+                 ⚠ この帯を max-w の中へ戻さない(見張り: ui-density-parts-gaps.test.mjs UG3)。 */}
+             <div data-band="optimize-top" className="shrink-0 flex items-center gap-2 flex-wrap px-6">
+               <div className="flex items-center gap-1">{renderTabGroupButtons(TAB_GROUPS.analysis)}</div>
+               <div className="h-7 w-px bg-slate-300 mx-1" />
                <div className="flex bg-slate-100 rounded-lg p-1">
                  <button onClick={() => setOptimizeView('target')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'target' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}><Target className="w-4 h-4" /> 目標時間最適化</button>
                  <button onClick={() => setOptimizeView('strict')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'strict' ? 'bg-white shadow text-rose-600' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 厳密モード{strictReviewCount > 0 && <span className="bg-amber-400 text-white text-[9px] rounded-full w-4 h-4 flex items-center justify-center font-black">{strictReviewCount}</span>}</button>
@@ -30859,9 +31006,22 @@ const QuotaStoppedPanel = ({ until }) => (
                  <button onClick={() => setOptimizeView('modelgroup')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'modelgroup' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}><Layers className="w-4 h-4" /> 品目グループ</button>
                  <button onClick={() => setOptimizeView('tskip')} data-optimize-tab="tskip" className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'tskip' ? 'bg-white shadow text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 抜取/スキップ</button>
                </div>
-               <span className="text-xs text-slate-400">データから現場を最適化：<b>目標時間</b>→<b>厳密モード</b>→<b>スキル</b>。将来は空き人材・エリアから自動配置の土台に。</span>
+               {/* 🚨 説明文は消していない。？ を押すと全文が出る(畳んだだけ)。
+                   🚨 2026-09-08 直し2件:
+                     ① 吹き出しが 1366px で画面の右へ 30px はみ出し、祖先が overflow-hidden なので
+                        「将来は空き人材」の「き人」の2文字がどこからも読めなかった。left-0 → **right-0**(右端を ？ に合わせて左へ伸ばす)。
+                        1280px でも収まるよう max-w も付ける。
+                     ② 押せる所が 34px しか無かった(決まり7 は 44px)。重点工程の ？ と同じ形にして
+                        w-6(24px) - border 2px = 内側 22px、::after を前後 11px にして **44px ちょうど**。
+                   ⚠ この 11px と right-0 を戻さない(見張り: ui-density-parts-gaps.test.mjs UG2 / UG4)。 */}
+               <details className="relative">
+                 <summary className="list-none cursor-pointer select-none relative w-6 h-6 flex items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 text-xs font-bold hover:bg-slate-50 after:content-[''] after:absolute after:top-[-11px] after:bottom-[-11px] after:left-[-11px] after:right-[-11px]" title="この画面の使い方">？</summary>
+                 <div data-fold="optimize-howto" className="absolute right-0 top-full mt-1 z-30 w-[380px] max-w-[calc(100vw-3rem)] bg-white border border-slate-200 rounded-lg shadow-lg p-3">
+                   <span className="text-xs text-slate-500">データから現場を最適化：<b>目標時間</b>→<b>厳密モード</b>→<b>スキル</b>。将来は空き人材・エリアから自動配置の土台に。</span>
+                 </div>
+               </details>
              </div>
-             <div className="flex-1 min-h-0 overflow-hidden">
+             <div className="flex-1 min-h-0 overflow-hidden w-full max-w-[1100px] mx-auto">
                {(quotaBlock || !lotsHistoryReady) && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : <DataLoadingPanel what="過去のロット" />)}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'target' && <ProcessInsightsTab lots={lots} workers={workers} customTargetTimes={settings.customTargetTimes || {}} onSaveSettings={saveSettings} targetTimeHistory={settings.targetTimeHistory || []} settings={settings} saveData={saveData} currentUserName={currentUserName} />}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'strict' && (currentUserName === '管理者' ? <StrictModeManagerModal embedded lots={lots} templates={templates} rules={settings.strictModeRules || {}} history={strictModeHistory} currentUserName={currentUserName} maturityUnits={strictMaturityUnits} onSetMaturity={(n) => saveSettings({ strictMaturityUnits: n })} onDecide={handleStrictDecide} optimalByCombo={optimalByCombo} onDecideOptimal={handleOptimalDecide} onOpenAnalysis={(row) => setAnalysisCombo({ model: row.model, templateId: row.templateId, templateName: row.templateName })} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">厳密モードの管理は管理者のみです。ヘッダー左上で「管理者」を選択してください。</div>)}
