@@ -114,6 +114,11 @@ export const CHECKS = {
   },
 
   // ── UG4 ？ の吹き出しが画面の外へ出ない ──
+  //   🚨 2026-09-08 P4 で強くした。right-0 と上限だけでは足りない事が写しの実測で分かった:
+  //     吹き出しの **土台(position の親)** が ？ の details 自身(24px)だったので、
+  //     帯が折り返して ？ が2行目の左端(左38px)へ落ちると 吹き出しは **左-319→右61px**(幅940 / 700 / 600px)。
+  //     祖先が横スクロールを止めるので、説明文の大半が どうやっても読めなかった。
+  //     → 土台を 帯(data-band="optimize-top"・画面いっぱいの幅)へ移した。
   UG4: (code) => {
     const fold = from(code, 'data-fold="optimize-howto"', 400, '作業最適化の吹き出し');
     const cls = (fold.match(/className="([^"]*)"/) || [])[1] || '';
@@ -121,7 +126,21 @@ export const CHECKS = {
     assert.ok(!/\bleft-0\b/.test(cls), '吹き出しに left-0 が残っている(左右の両端に留められて幅が壊れる)');
     const w = Number((cls.match(/\bw-\[(\d+)px\]/) || [])[1]);
     assert.ok(Number.isFinite(w), '吹き出しの幅が読めない');
-    assert.ok(/max-w-\[calc\(100vw-/.test(cls), `吹き出しの幅 ${w}px に、画面より広くしない上限(max-w-[calc(100vw-…)])が無い`);
+    assert.ok(/\bmax-w-full\b/.test(cls),
+      `吹き出しの幅 ${w}px の上限が max-w-full(= 土台の帯の幅)でない。`
+      + 'vw の上限は 文字サイズの設定(zoom)の中で一緒に伸びるので上限にならない'
+      + '(実測: zoom1.15 の中では 高さ512pxの画面で 100vh が 589px と出た)');
+    // 土台は 帯。？ の details に position を戻さない
+    const band = (from(code, '<div data-band="optimize-top"', 300, '作業最適化の帯').match(/className="([^"]*)"/) || [])[1] || '';
+    assert.ok(/\brelative\b/.test(band),
+      '作業最適化の帯(data-band="optimize-top")に relative が無い。吹き出しの土台が ？ の details(24px)へ戻り、'
+      + '帯が折り返すと吹き出しの左端が負(実測 -319px)になって画面の外へ出る');
+    const iFold = code.indexOf('data-fold="optimize-howto"');
+    const det = code.slice(code.lastIndexOf('<details', iFold), iFold);
+    const detOpen = det.slice(0, det.indexOf('>') + 1);
+    assert.ok(!/\b(?:relative|absolute|fixed|sticky)\b/.test(detOpen),
+      `？ の details に position のクラスが戻っている(${detOpen.trim()})。`
+      + '土台が 24px の details になり、吹き出しが潰れるか画面の外へ出る');
   },
 
   // ── UG5 合流させた親タブが、区画の文字サイズで伸び縮みしない ──
@@ -174,11 +193,19 @@ export const BREAKS_FOR_PROOF = [
     s.replace("{activeTab === 'optimize' && (\n           <div className=\"h-full flex flex-col gap-3\">",
       "{activeTab === 'optimize' && (\n           <div className=\"h-full flex flex-col gap-3 max-w-[1100px] mx-auto\">")],
   ['UG3', '② 作業最適化の帯の左右の余白を削る(分析画面と横がずれる)', (s) =>
-    s.replace('<div data-band="optimize-top" className="shrink-0 flex items-center gap-2 flex-wrap px-6"',
-      '<div data-band="optimize-top" className="shrink-0 flex items-center gap-2 flex-wrap"')],
+    s.replace('<div data-band="optimize-top" className="relative shrink-0 flex items-center gap-2 flex-wrap px-6"',
+      '<div data-band="optimize-top" className="relative shrink-0 flex items-center gap-2 flex-wrap"')],
   ['UG4', '③ 吹き出しを left-0(直す前の形)へ戻す', (s) =>
-    s.replace('className="absolute right-0 top-full mt-1 z-30 w-[380px] max-w-[calc(100vw-3rem)]',
+    s.replace('className="absolute right-0 top-full mt-1 z-30 w-[380px] max-w-full',
       'className="absolute left-0 top-full mt-1 z-30 w-[380px]')],
+  ['UG4', '③ 吹き出しの土台を ？ の details へ戻す(実測 幅940px で 左-319px)', (s) =>
+    s.replace('               <details>\n                 <summary className="list-none cursor-pointer select-none relative w-6 h-6',
+      '               <details className="relative">\n                 <summary className="list-none cursor-pointer select-none relative w-6 h-6')],
+  ['UG4', '① 作業最適化の帯から relative を消す(土台が無くなる)', (s) =>
+    s.replace('<div data-band="optimize-top" className="relative shrink-0',
+      '<div data-band="optimize-top" className="shrink-0')],
+  ['UG4', '③ 吹き出しの上限を calc(100vw-3rem) へ戻す(zoom の中では画面より広くなる)', (s) =>
+    s.replace('w-[380px] max-w-full', 'w-[380px] max-w-[calc(100vw-3rem)]')],
   ['UG5', '① 打ち消しの規則を消す', (s) =>
     s.replace('    rules.push(`[data-fs="${area}"] [data-fs-reset] { zoom: ${(1 / scale).toFixed(4)}; }`);\n', '')],
   ['UG5', '① 親タブから打ち消しの印を消す', (s) =>
@@ -193,7 +220,7 @@ test('UG0 🚨 見張り自身の試験: 本物のコードをわざと壊すと
     CHECKS[id](app);                                   // 壊す前は緑
     assert.throws(() => CHECKS[id](broken), `${id} は「${why}」を入れても緑のまま = 何も見ていない`);
   }
-  assert.equal(BREAKS_FOR_PROOF.length, 9, '壊し方の数が変わっている(減らさない)');
+  assert.equal(BREAKS_FOR_PROOF.length, 12, '壊し方の数が変わっている(減らさない)');
 });
 
 for (const [id, fn] of Object.entries(CHECKS)) test(`${id} ${TITLES[id]}`, () => fn(app));

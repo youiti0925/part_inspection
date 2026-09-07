@@ -46,7 +46,14 @@ test('UD2 大分類・小分類・月単位/期間指定・出力が、その2�
   // 帯1: 親タブ + 大分類 + 出力
   assert.ok(top.includes('{parentTabs}'), '帯1に親タブ(分析 | 作業最適化)が入っていない');
   assert.ok(top.includes('ANALYSIS_GROUPS.map('), '帯1に大分類が入っていない');
-  assert.ok(top.includes('ml-auto flex gap-1 border rounded-lg overflow-hidden'), '帯1の右端に出力(Excel / PDF)が入っていない');
+  // 🚨 2026-09-08 P3: 出力(Excel / PDF)は 帯1 の右端(ml-auto)から **帯2 の中へ移した**。
+  //   帯2 は 本番の写し・1366×768 で 中身43%/50px(右に 732px の空き)だった。移した後は 64%。
+  //   ⚠ ここを緩めていない: 「どちらかの帯に在れば良い」ではなく **帯2 に在って ml-auto を使っていない** 事を見る。
+  assert.ok(!top.includes('flex gap-1 border rounded-lg overflow-hidden'), '出力(Excel / PDF)が帯1へ戻っている(帯2の右が 732px 空く)');
+  assert.ok(sub.includes('flex gap-1 border rounded-lg overflow-hidden'), '帯2に出力(Excel / PDF)が入っていない');
+  assert.ok(!sub.includes('ml-auto flex gap-1 border rounded-lg overflow-hidden'), '帯2の出力が ml-auto で右端へ飛んでいる(真ん中が空く)');
+  assert.ok(sub.includes('<FileSpreadsheet className="w-3 h-3"/> Excel</button>'), '帯2から Excel の札が消えている');
+  assert.ok(sub.includes('<Printer className="w-3 h-3"/> PDF</button>'), '帯2から PDF の札が消えている');
   // 帯2: 見出し + 小分類 + 月単位/期間指定
   assert.ok(sub.includes('activeGroup.tabs.filter('), '帯2に小分類が入っていない');
   assert.ok(sub.includes('{renderDefectFilterUI()}'), '帯2に 月単位 / 期間指定 が入っていない');
@@ -56,22 +63,29 @@ test('UD2 大分類・小分類・月単位/期間指定・出力が、その2�
   assert.ok(!h.includes('flex items-center justify-between'), '見出しと札を左右に離す古い1行が戻っている(帯が太る)');
 });
 
-test('UD3 「分析 / 作業最適化」だけの専用の帯を作らない(1か所で作って4か所で使う)', () => {
+test('UD3 「分析 / 作業最適化」だけの専用の帯を作らない(1か所で作って5か所で使う)', () => {
   const def = [...app.matchAll(/const renderTabGroupButtons = \(group\) =>/g)].length;
   assert.equal(def, 1, `親タブのボタンの作り方が ${def} か所(1か所のはず)`);
   const use = [...app.matchAll(/renderTabGroupButtons\(/g)].length; // 定義は `= (group) =>` の形なので、ここには数えられない
   // 🚨 2026-09-08: 3 → 4 へ。検査リストでも 親タブ(検査リスト | 完了履歴)を絞り込みの行へ合流させたので、
   //   使う所が1つ増えた(単独の帯・分析・作業最適化・検査リスト)。**作り方は1か所のまま** なので
   //   札の名前・順番・押した時の行き先は割れない。⚠ ここを「以上」に緩めない。増やす時は理由を書いてこの数を直す。
-  assert.equal(use, 4, `親タブのボタンを使っている所が ${use} か所(単独の帯・分析・作業最適化・検査リスト の4か所のはず)`);
-  // 分析・作業最適化・検査リストでは、単独の帯は出さない(下の帯・下の行へ合流している)
+  // 🚨 2026-09-08(その2): 4 → 5 へ。マスタ設定でも 親タブ(マスタ設定 | 工程テンプレート | 測定設定)を
+  //   中身の一番上の見出しの行へ合流させた(写しの実測で 39px・中身24% の帯だった)。
+  //   これで使う所は 単独の帯・分析・作業最適化・検査リスト・マスタ設定 の5か所。作り方は1か所のまま。
+  //   ⚠ 工程テンプレート・測定設定 の2画面は今までどおり単独の帯で出す(合流先の見出しがその2つに無い)。
+  //   見張り: ui-density-parts-settings.test.mjs S-9。
+  assert.equal(use, 5, `親タブのボタンを使っている所が ${use} か所(単独の帯・分析・作業最適化・検査リスト・マスタ設定 の5か所のはず)`);
+  // 分析・作業最適化・検査リスト・マスタ設定 では、単独の帯は出さない(下の帯・下の行へ合流している)
   assert.ok(app.includes("if (activeTab === 'optimize') return null;"), '作業最適化で単独の帯を止めていない(帯が1本増える)');
   assert.ok(app.includes("if (activeTab === 'analysis' && analysisDataReady && !quotaBlock) return null;"),
     '分析で単独の帯を止めていない、または「合流先が描かれない時は出す」条件(analysisDataReady / quotaBlock)が抜けている');
   assert.ok(app.includes("if (activeTab === 'inspection') return null;"), '検査リストで単独の帯を止めていない(帯が1本増える)');
-  // 🚨 行き先を消さない: 合流先(AnalysisView / InspectionListView)へ親タブを渡している
+  assert.ok(app.includes("if (activeTab === 'templates') return null;"), 'マスタ設定で単独の帯を止めていない(帯が1本増える)');
+  // 🚨 行き先を消さない: 合流先(AnalysisView / InspectionListView / TemplatesView)へ親タブを渡している
   assert.ok(app.includes('parentTabs={renderTabGroupButtons(TAB_GROUPS.analysis)}'), '分析画面へ親タブを渡していない(押す先が消える)');
   assert.ok(app.includes('parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)}'), '検査リスト画面へ親タブを渡していない(押す先が消える)');
+  assert.ok(app.includes('parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)}'), 'マスタ設定画面へ親タブを渡していない(工程テンプレート・測定設定へ行く道が消える)');
 });
 
 test('UD4 🚨 札の名前・順番・押した時の行き先が1つも変わっていない', () => {

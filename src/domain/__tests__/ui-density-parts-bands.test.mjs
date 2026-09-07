@@ -285,7 +285,7 @@ export const BREAKS_FOR_PROOF = [
     s.replace('className="mt-2 flex items-center gap-x-3 gap-y-2 flex-wrap"',
       'className="mt-2 text-[11px] flex items-center gap-x-3 gap-y-2 flex-wrap"')],
   ['PB4', '③ 「品目コード / 集計」を専用の箱へ戻す', (s) =>
-    s.replace('<div data-band="optimize-filter" className="flex flex-wrap items-center gap-2 w-full">',
+    s.replace('<div data-band="optimize-filter" className="flex flex-wrap items-center gap-2">',
       '<div className="flex flex-wrap items-center gap-2 bg-white p-2.5 rounded-lg border shadow-sm shrink-0">')],
   ['PB5', '① 出力のボタンを1つ消す', (s) =>
     s.replace('<Btn onClick={buildPlanExcel} color="bg-emerald-600 hover:bg-emerald-700" icon={FileSpreadsheet}>Excel</Btn>', '')],
