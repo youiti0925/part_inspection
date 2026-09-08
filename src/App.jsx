@@ -18865,6 +18865,55 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
               </div>
             </details>
             )}
+            {/* 🚨 2026-09-08 PC2/PC3: 本番でだけ出る「右が空いた帯」2本を埋める。
+                本番・1366×768 の実測(親が本番を読むだけで測った数):
+                  ① データを正す（要確認） … 帯2 の中身 **54%**(46px)。右に 628px の空き。
+                  ⑤ 基準を固める（定着）   … 帯2 の中身 **51%**(46px)。右に 669px の空き。
+                写しでは この2画面の中身に本番のデータが要る箱が出ない為、担当の写しでは 0本 と出ていた。
+                設計 決まり1「占めない帯は隣の帯へ入れる／右へ物を移す」・決まり3「1つの物のために行を作らない」。
+                直し: 中身の一番上に在った **説明の箱** を この帯の右へ移し、
+                      閉じている時は **1行の読み方 + ？**、押すと **元の箱がそのまま** 出る。
+                🚨 文言は1文字も消していない・変えていない(下の <div> の中は移す前と同じ字)。
+                   ただし ① の箱だけ text-[11px] → text-xs にした(決まり7「文字 12px 以上」。11px は前から割れていた)。
+                ⚠ flex-1 で **残りの幅を全部埋める**。ml-auto(右端へ飛ばす)は使わない(UG1)。
+                ⚠ 吹き出しは right-0 + max-w-full。土台は この帯(data-band="analysis-sub" の relative)。
+                   details 自身に position を付けない(付けると 24px の土台になり、帯が折り返した時に画面の外へ出る。P4 の実測)。
+                見張り: src/domain/__tests__/ui-density-parts-prod3.test.mjs (PC1〜PC5)。 */}
+            {/* 🚨 幅の下限は 画面の広さで2段。写しで幅を16通り測って決めた(実測):
+                  ・下限が無い(flex-1 だけ) … 幅900px で ？ が **46px** まで縮み、もう少し狭いと決まり7 の 44px を割る
+                  ・下限が 7rem(112px)だけ  … 幅 820〜960px で 帯が 50px → **109px**(2行になる)。
+                                              911px は現場の 1366px ノートPC の拡大150%、781px は 175%。
+                  → 広い時(xl = 1280px 以上)は 7rem で「読み方」の1行を出し、
+                    狭い時は 3rem(48px。44px 以上)まで縮めて **帯を1行のまま** 収める。
+                ⚠ 下限を 44px 未満にしない・xl の下限を外さない(見張り: ui-density-parts-prod3.test.mjs PC3)。
+                ⚠ この説明は **「activeMode が anomaly か standardize なら」の行より前** に置く。
+                   かっこの中(式の途中)へ入れると、波かっこの説明が JSX の子ではなく
+                   「オブジェクトの書き出し」と読まれ、画面が丸ごと出なくなる
+                   (2026-09-08 実測: 写しで分析の画面が真っ白になり、scripts/verify-prod3-bands.mjs が
+                    「分析の札が見つかりません」と赤にした。字の見張りは comment を落として読むので気付けない)。 */}
+            {(activeMode === 'anomaly' || activeMode === 'standardize') && (
+            <details data-fold="analysis-sub-howto" className="min-w-[3rem] xl:min-w-[7rem] flex-1 bg-slate-50 rounded-xl border">
+              <summary className="flex min-h-[2.75rem] cursor-pointer select-none list-none items-center gap-1 px-3 text-xs font-bold text-slate-600">
+                <span className="truncate">{activeMode === 'anomaly'
+                  ? '読み方: 怪しい値のセルをタップ →「目標で埋める / 実時間を手入力 / 📦該当なし / そのまま」'
+                  : '読み方: ③④で効果が出たら、基準時間を更新して作業順を固定する'}</span>
+                <span className="text-slate-400 shrink-0">？</span>
+              </summary>
+              <div className="absolute right-0 top-full mt-1 z-30 w-[420px] max-w-full bg-white border rounded-xl shadow-lg px-4 py-3">
+                {activeMode === 'anomaly' && (
+                <div className="text-xs text-slate-600 bg-amber-50 border border-amber-200 rounded-lg p-2.5 leading-relaxed">
+                  <b>まず土台＝データを正す。</b>0秒・4時間超・時刻矛盾などの<b>怪しい値</b>を直すか「<b className="text-amber-700">該当なし(対象外)</b>」にしてから、②で分析します（汚れたデータだと分析が嘘になります）。<br/>
+                  セルをタップ →「目標で埋める / 実時間を手入力 / 📦該当なし / そのまま」。<b>工程名タップ</b>で「#2以降をまとめて該当なし」（ロットで1回だけの工程の過去データ向け）。
+                </div>
+                )}
+                {activeMode === 'standardize' && (
+                <div className="text-sm text-slate-600 bg-indigo-50 border border-indigo-200 rounded-lg p-3 leading-relaxed">
+                  改善（③④）で効果が出たら、<b>その成果を「標準」に反映して定着</b>させます。基準時間を更新し、安定した作業順を固定します。
+                </div>
+                )}
+              </div>
+            </details>
+            )}
           </div>
        </div>
 
@@ -20145,21 +20194,28 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
            {/* ① データを正す: 要確認(異常値・該当なし)。ヘッダーの浮いたバッジと同じ中身を流れの先頭に置く。 */}
            {activeMode === 'anomaly' && (
              <div className="space-y-3">
-               <div className="text-[11px] text-slate-600 bg-amber-50 border border-amber-200 rounded-lg p-2.5 leading-relaxed">
-                 <b>まず土台＝データを正す。</b>0秒・4時間超・時刻矛盾などの<b>怪しい値</b>を直すか「<b className="text-amber-700">該当なし(対象外)</b>」にしてから、②で分析します（汚れたデータだと分析が嘘になります）。<br/>
-                 セルをタップ →「目標で埋める / 実時間を手入力 / 📦該当なし / そのまま」。<b>工程名タップ</b>で「#2以降をまとめて該当なし」（ロットで1回だけの工程の過去データ向け）。
-               </div>
+               {/* 🚨 2026-09-08 PC2: 説明の箱(2行)は **帯2 の右へ移した**(data-fold="analysis-sub-howto")。
+                   ここから消したのではない。1文字も変えずに ？ の中へ入れてある。
+                   理由: 本番の実測で 帯2(① データを正す)は 中身54%・右が空。設計 決まり1「隣と合体するか右へ物を移す」。
+                   ⚠ この箱をここへ戻すと 帯2 の右がまた空く(見張り: ui-density-parts-prod3.test.mjs PC2/PC3)。 */}
                {anomalies.length === 0
-                 ? <div className="text-center py-12 text-emerald-600"><CheckCircle2 className="w-12 h-12 mx-auto mb-2" /> 怪しい値はありません — データはクリーンです 🎉</div>
+                 /* 🧹 2026-09-08 PC1: 本番でだけ出る箱(写しには異常値の元になるデータが無いので出ない)。
+                    本番・1366×768 の実測で **1行の為に 176px**(py-12 の上下 96px + w-12 h-12 の丸 48px + mb-2 8px + 文字 24px)。
+                    直した形: 1行の帯(py-2 の上下 16px + わく 2px + 文字 24px = 42px ≤ 64px)。
+                    🚨 文言は1文字も変えていない(「怪しい値はありません — データはクリーンです 🎉」)。
+                       喜びの印(🎉)も 緑の✔の絵(CheckCircle2)も残す。絵を 48px → 20px にして横に並べただけ。
+                    ⚠ py-12 / w-12 h-12 へ戻さない(見張り: ui-density-parts-prod3.test.mjs PC1)。 */
+                 ? <div data-empty-clean="anomaly" className="flex items-center justify-center gap-2 py-2 text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg"><CheckCircle2 className="w-5 h-5 shrink-0" /> 怪しい値はありません — データはクリーンです 🎉</div>
                  : [...new Set(anomalies.map(a => a.lotId))].map(lotId => { const lot = lots.find(l => l.id === lotId); if (!lot) return null; return <LotTimeTable key={lotId} lot={lot} onSaveTasks={(nt) => saveData('lots', lotId, { tasks: nt })} />; })}
              </div>
            )}
            {/* ⑤ 基準を固める: 目標時間最適化・厳密モード(別画面)へ。改善が定着したらここで標準を更新/固定。 */}
            {activeMode === 'standardize' && (
              <div className="max-w-2xl mx-auto space-y-3">
-               <div className="text-sm text-slate-600 bg-indigo-50 border border-indigo-200 rounded-lg p-3 leading-relaxed">
-                 改善（③④）で効果が出たら、<b>その成果を「標準」に反映して定着</b>させます。基準時間を更新し、安定した作業順を固定します。
-               </div>
+               {/* 🚨 2026-09-08 PC2: 説明の箱は **帯2 の右へ移した**(data-fold="analysis-sub-howto")。
+                   ここから消したのではない。1文字も変えずに ？ の中へ入れてある。
+                   理由: 本番の実測で 帯2(⑤ 基準を固める)は 中身51%・右が空。設計 決まり1「右へ物を移す」。
+                   ⚠ この箱をここへ戻すと 帯2 の右がまた空く(見張り: ui-density-parts-prod3.test.mjs PC2/PC3)。 */}
                <button onClick={() => onGoOptimize && onGoOptimize('target')} className="w-full text-left bg-white border-2 border-indigo-200 hover:border-indigo-400 rounded-xl p-4 flex items-center gap-3 transition">
                  <div className="bg-indigo-100 p-2.5 rounded-lg shrink-0"><Target className="w-6 h-6 text-indigo-600" /></div>
                  <div className="flex-1"><div className="font-black text-slate-800">目標時間最適化 →</div><div className="text-xs text-slate-500 mt-0.5">実績に合わせて基準時間（目標）を更新。誰が・いつ・何を・根拠つきで管理。</div></div>

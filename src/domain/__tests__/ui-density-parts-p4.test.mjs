@@ -110,15 +110,28 @@ export const CHECKS = {
       `「指標の意味」の details に position のクラスが戻っている(${detCls})。`
       + '土台が details(幅118px)になり、狭い画面で吹き出しが画面の外へ出る(実測 幅911/900/800px で 左-325px)');
 
-    // 帯2 の中で position を持つのは「帯2 自身」と「吹き出し」の2つだけ。
+    // 帯2 の中で position を持つのは「帯2 自身(relative)」と「吹き出し(absolute)」だけ。
     // 間に1枚 relative をはさむと 土台がそちらへ移る(横取り)ので、その時はここも見直す。
+    // 🚨 2026-09-08 PC2: 2個 → 3個 へ。本番でだけ出る「右が空いた帯」2本
+    //   (① データを正す 中身54% / ⑤ 基準を固める 中身51%・どちらも右が空)を埋める為に、
+    //   中身の一番上に在った説明の箱を 帯2 の右へ移し、？ の吹き出し(data-fold="analysis-sub-howto")を1つ足した。
+    //   ⚠ **緩めていない**: 数を「以上」にはしない。1つ目が relative(帯2 自身)・**残りは全部 absolute の吹き出し**
+    //     (relative / fixed / sticky が1枚でも紛れ込んだら赤)で、どの吹き出しも right-0 top-full max-w-full で
+    //     帯2 に釣られている事まで数える。増やす時は理由を書いてこの数を直す。
     const b2 = between(code, BAND2, AFTER_HEADER, '帯2');
     const positioned = [...b2.matchAll(/className="([^"]*)"/g)].map((m) => m[1]).filter((c) => POS.test(c));
-    assert.equal(positioned.length, 2,
-      `帯2 の中で position を持つ物が ${positioned.length} 個(2個のはず: 帯2 自身と 吹き出し)。`
+    assert.equal(positioned.length, 3,
+      `帯2 の中で position を持つ物が ${positioned.length} 個(3個のはず: 帯2 自身 と 吹き出し2つ)。`
       + `土台が横取りされていないか確かめてください → ${JSON.stringify(positioned.map((c) => c.slice(0, 40)))}`);
     assert.ok(/\brelative\b/.test(positioned[0]), '帯2 の中の1つ目の position が relative(帯2 自身)でない');
-    assert.ok(/\babsolute\b/.test(positioned[1]), '帯2 の中の2つ目の position が absolute(吹き出し)でない');
+    for (const [n, cls] of positioned.slice(1).entries()) {
+      assert.ok(/\babsolute\b/.test(cls) && !/\b(?:relative|fixed|sticky)\b/.test(cls),
+        `帯2 の中の ${n + 2} 個目の position が absolute の吹き出しでない(${cls.slice(0, 60)})。土台が横取りされている`);
+      assert.ok(/\bright-0\b/.test(cls) && /\btop-full\b/.test(cls),
+        `帯2 の ${n + 2} 個目の吹き出しが right-0 top-full でない(${cls.slice(0, 60)})。帯の右端に揃わず画面の外へ出る`);
+      assert.ok(/\bmax-w-full\b/.test(cls),
+        `帯2 の ${n + 2} 個目の吹き出しの幅の上限が max-w-full でない(${cls.slice(0, 60)})`);
+    }
   },
 
   // ── P4B 吹き出しは details の直下(summary の次) ──
