@@ -44,3 +44,18 @@ test('G4 行を押すと そのロットの割当画面が開く', () => {
   assert.match(card, /data-order-group-row=\{lot\.id\}[^>]*onClick=\{\(\) => onOpen\(lot\)\}/, '行が押せない');
   assert.match(list, /onOpen=\{\(lot\) => setAssignmentLot\(lot\)\}/, '押しても割当画面に繋がっていない');
 });
+
+// 2026-09-09 清水さん(製品で頼まれた物を部品にも)「そこから編集と削除と入庫時間と納期、検査完了日が記載してほしい」
+test('G5 1行に 編集／削除(44px)・入庫時間(日付+時刻)・納期・検査完了(日付+時刻) が在り、編集／削除は親から本物を渡している', () => {
+  assert.match(card, /<div key=\{lot\.id\} data-order-group-line=\{lot\.id\}/, '行の入れ物が無い');
+  assert.match(card, /data-order-group-edit=\{lot\.id\} onClick=\{\(\) => onEdit\(lot\)\}/, '編集の押す物が無い');
+  assert.match(card, /data-order-group-delete=\{lot\.id\} onClick=\{\(\) => onDelete\(lot\.id\)\}/, '削除の押す物が無い');
+  assert.equal((card.match(/style=\{\{ minWidth: 'max\(2\.75rem, 44px\)', minHeight: 'max\(2\.75rem, 44px\)' \}\}/g) || []).length, 2, '編集／削除が 44px でない');
+  assert.match(card, /<div className="flex items-center gap-1 pr-2 shrink-0" onClick=\{\(e\) => e\.stopPropagation\(\)\}>/, '編集／削除を押すと行(割当画面)まで開く');
+  assert.match(card, /data-order-group-entry=\{lot\.id\}>入庫 <b className="text-slate-800">\{fmtMdHm\(lot\.entryAt\)/, '入庫時間(日付+時刻)が無い');
+  assert.match(card, /data-order-group-done=\{lot\.id\}>検査完了 <b>\{fmtMdHm\(st\.at\)/, '検査完了(日付+時刻)が無い');
+  assert.match(card, /st\.key === 'done' \? <span[^\n]*data-order-group-done/, '検査完了が完了ロット以外にも出る');
+  assert.match(app, /const fmtMdHm = \(ms\) => \{[^\n]*getHours\(\)[^\n]*getMinutes\(\)/, '日付+時刻の書式が無い');
+  assert.match(list, /<OrderGroupCard [^\n]*onEdit=\{onEditLot\} onDelete=\{onDeleteLot\}/, '親が onEditLot/onDeleteLot を渡していない(押しても何も起きない)');
+  assert.match(card, /onEdit = null, onDelete = null/, '渡されない時に出さない形になっていない');
+});

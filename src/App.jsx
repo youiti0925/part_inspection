@@ -6,6 +6,7 @@
 //   4件の嘘の赤を溜めると、本物の no-undef が来た時に見分けが付かなくなる。
 //   → 最終検査(golden)の src/App.firebase.jsx:1 と同じ書き方で、この2つだけを名指しで宣言する。
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Layout, ClipboardList, Package, 
   PlayCircle, CheckCircle2, AlertTriangle, 
@@ -2142,6 +2143,50 @@ const formatWorkElapsed = (startMs, schedule) => {
   return m > 0 ? `${h}h${m}m` : `${h}h`;
 };
 
+// 🛠 カードの ✏編集／🗑削除 を出す窓(2026-09-09 清水さん「現場マップとかで編集とか削除するところがボタン隠れてて見えない」)。
+//   今までは ⋮ を押すと <details> の小さな窓が **カードの中** に開いていた。カードは overflow-hidden なので、
+//   窓のうちカードの外へはみ出す分(下へ約80px)が **切られて編集／削除が見えなかった**。
+//   → body へ描く(createPortal)。どのカード・エリアの overflow にも切られない。
+//   ⚠ 背景を押したら **閉じるだけ**(取り消せない確定はしない。2026-08-21 の決まり)。
+//   ⚠ カードの onClick(作業画面を開く)・長押しドラッグへ伝えない(stopPropagation)。
+//   ⚠ 削除の確認文は前の ⋮ の窓と1文字も変えていない。
+const LotActionSheet = ({ lot, templateName, onEdit, onDelete, onClose }) => {
+  const stop = (e) => { e.stopPropagation(); };
+  const TAP = { minHeight: 'max(2.75rem, 44px)' };
+  const del = (e) => {
+    e.stopPropagation();
+    // 二段階確認: 削除対象を明示
+    const confirmMsg = `以下のロットを削除しますか？\n\n品目コード: ${lot.model || '-'}\n指図: ${lot.orderNo || '-'}\n台数: ${lot.quantity || 1}台\n\n※ この操作は取り消せません。完了済みデータを残したい場合は履歴タブから個別に削除してください。`;
+    if (!confirm(confirmMsg)) return;
+    onClose();
+    onDelete(lot.id);
+  };
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div data-lot-action-sheet={lot.id} className="fixed inset-0 z-[400] bg-black/40 flex items-center justify-center p-4"
+      onClick={(e) => { e.stopPropagation(); onClose(); }} onTouchStart={stop} onTouchMove={stop} onTouchEnd={stop} onDragStart={stop}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-4 flex flex-col gap-2" onClick={stop}>
+        <div className="min-w-0 mb-1">
+          <div className="text-xs font-bold text-slate-500">指図 {lot.orderNo || '-'}</div>
+          <div className="text-lg font-black text-slate-800 truncate">{lot.model || '-'} <span className="text-sm font-bold text-blue-600">{lot.quantity || 1}台</span></div>
+          {templateName ? <div className="text-xs font-bold text-indigo-700 truncate">📋 {templateName}</div> : null}
+        </div>
+        {onEdit ? (
+          <button type="button" data-lot-action="edit" onClick={(e) => { e.stopPropagation(); onClose(); onEdit(lot); }} style={TAP}
+            className="w-full min-h-11 px-3 rounded-xl border border-slate-300 bg-white hover:bg-blue-50 text-slate-800 text-sm font-bold flex items-center justify-center gap-2"><Pencil className="w-4 h-4" /> 編集</button>
+        ) : null}
+        {onDelete ? (
+          <button type="button" data-lot-action="delete" onClick={del} style={TAP}
+            className="w-full min-h-11 px-3 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-sm font-bold flex items-center justify-center gap-2"><Trash2 className="w-4 h-4" /> 削除</button>
+        ) : null}
+        <button type="button" data-lot-action="close" onClick={(e) => { e.stopPropagation(); onClose(); }} style={TAP}
+          className="w-full min-h-11 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold">閉じる</button>
+      </div>
+    </div>,
+    document.body,
+  );
+};
+
 const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData, setDraggedLotId, draggedLotId, variant = 'full', onEdit, onDelete, onMove, display: displayProp }) => {
   const workSchedule = React.useContext(WorkScheduleContext);
   const ctxDisplay = React.useContext(LotCardDisplayContext);
@@ -2215,6 +2260,8 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
     style: { WebkitTouchCallout: 'none', WebkitUserSelect: 'none', touchAction: 'auto' }
   } : {};
   const [elapsed, setElapsed] = useState(0);
+  // 🛠 ✏編集／🗑削除 の窓(LotActionSheet)を開いているか。🚨 hooks はガードより上。
+  const [actionOpen, setActionOpen] = useState(false);
   
   useEffect(() => {
     let interval;
@@ -2268,6 +2315,20 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
     animation: 'lotBlink 1s ease-in-out infinite',
     backgroundColor: 'rgb(219, 234, 254)', // 初期は blue-100
   } : {};
+  // 🛠 ✏編集／🗑削除 の入口(2026-09-09)。**44px** の ⋮。押すと LotActionSheet が画面の真ん中に出る。
+  //   3つの版(通常／コンパクト／横長)すべてに付ける。コンパクト版と横長版には今まで入口が無く、
+  //   通常版の ⋮ は 24×24px で、開く窓はカードの overflow-hidden に切られていた。
+  //   ⚠ 長押しドラッグ(touchProps)へ伝えない(押しただけで掴み始めない)。
+  //   ⚠ onEdit も onDelete も渡されていない所(閲覧だけの場所)には出さない。
+  const actionBtn = (onEdit || onDelete) ? (
+    <button type="button" data-lot-action-open={lot.id} title="編集・削除" aria-label="メニュー"
+      onClick={(e) => { e.stopPropagation(); setActionOpen(true); }}
+      onTouchStart={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()} onTouchEnd={(e) => e.stopPropagation()}
+      draggable={false} onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      style={{ minWidth: 'max(2.75rem, 44px)', minHeight: 'max(2.75rem, 44px)' }}
+      className="min-w-11 min-h-11 flex items-center justify-center rounded-lg border border-slate-300 bg-white/90 text-slate-600 text-xl font-black leading-none shadow-sm hover:bg-blue-50">⋮</button>
+  ) : null;
+  const actionSheet = actionOpen ? <LotActionSheet lot={lot} templateName={templateName} onEdit={onEdit} onDelete={onDelete} onClose={() => setActionOpen(false)} /> : null;
 
   if (variant === 'dashboard-arrival') {
     return (
@@ -2328,6 +2389,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
         {isLotProcessing && (
           <div className="absolute top-0 left-0 right-0 h-1 bg-blue-500 pointer-events-none z-10" style={{ animation: 'lotStripeBlink 0.8s ease-in-out infinite' }}/>
         )}
+        {/* 🛠 ✏編集／🗑削除(2026-09-09): この版には入口が無かった。右端に 44px の ⋮ */}
         <div className="flex items-center gap-1.5 leading-tight min-w-0">
           {/* 停止理由は絵文字＋短い文字だけ。横1行に収める */}
           {stripPause && (
@@ -2345,7 +2407,9 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
           {stripTotal > 0 && (
             <span className={`font-mono font-black text-xs shrink-0 ${stripPct >= 100 ? 'text-emerald-600' : stripPct > 0 ? 'text-blue-600' : 'text-slate-400'}`}>{stripPct}%</span>
           )}
+          {actionBtn}
         </div>
+        {actionSheet}
       </div>
     );
   }
@@ -2390,7 +2454,10 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
         {isLotProcessing && (
           <div className="absolute top-0 left-0 right-0 h-1.5 bg-blue-500 pointer-events-none z-10" style={{ animation: 'lotStripeBlink 0.8s ease-in-out infinite' }}/>
         )}
-        <div className="flex flex-col gap-1 leading-tight">
+        {/* 🛠 ✏編集／🗑削除(2026-09-09): この版には入口が無かった。右上に 44px の ⋮(中身は pr-12 で避ける) */}
+        <div className="absolute top-1 right-1 z-20">{actionBtn}</div>
+        {actionSheet}
+        <div className="flex flex-col gap-1 leading-tight pr-12">
            {/* ① 停止理由バッジ (大きめでハッキリ目立たせる - ユーザー指摘により拡大) */}
            {lot.pauseReason && lot.pauseReason.category && pauseColor && (
              <div className={`${pauseColor.bg} ${pauseColor.border} ${pauseColor.text} border-2 rounded px-2 py-1 inline-flex items-center gap-1.5 text-sm font-black w-fit max-w-full shadow-sm`} title={lot.pauseReason.note || lot.pauseReason.label}>
@@ -2462,24 +2529,11 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
       {isLotProcessing && (
         <div className="absolute top-0 left-0 right-0 h-1.5 bg-blue-500 pointer-events-none z-10" style={{ animation: 'lotStripeBlink 0.8s ease-in-out infinite' }}/>
       )}
-      {/* タブレット対応: hover では消える → 常時 [⋮] メニューで編集/削除アクセス */}
-      <div className="absolute top-1 right-1 flex gap-1 z-20">
-        <details className="relative" onClick={(e) => e.stopPropagation()}>
-          <summary className="p-1 bg-white/90 rounded border hover:bg-blue-50 text-slate-500 cursor-pointer list-none min-w-[24px] min-h-[24px] flex items-center justify-center" title="メニュー">⋮</summary>
-          <div className="absolute right-0 top-full mt-0.5 bg-white rounded-lg shadow-xl border border-slate-200 py-1 w-32 z-30">
-            <button onClick={(e)=>{e.stopPropagation(); onEdit(lot);}} className="w-full px-3 py-2 text-xs font-bold text-slate-700 hover:bg-blue-50 flex items-center gap-2"><Pencil className="w-3.5 h-3.5"/> 編集</button>
-            <button onClick={(e)=>{
-              e.stopPropagation();
-              // 二段階確認: 削除対象を明示
-              const confirmMsg = `以下のロットを削除しますか？\n\n品目コード: ${lot.model || '-'}\n指図: ${lot.orderNo || '-'}\n台数: ${lot.quantity || 1}台\n\n※ この操作は取り消せません。完了済みデータを残したい場合は履歴タブから個別に削除してください。`;
-              if (!confirm(confirmMsg)) return;
-              onDelete(lot.id);
-            }} className="w-full px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 flex items-center gap-2 border-t border-slate-100"><Trash2 className="w-3.5 h-3.5"/> 削除</button>
-          </div>
-        </details>
-      </div>
+      {/* 🛠 ✏編集／🗑削除(2026-09-09): 44px の ⋮ → 画面の真ん中の窓。<details> の窓はカードの overflow-hidden に切られていた */}
+      <div className="absolute top-1 right-1 z-20">{actionBtn}</div>
+      {actionSheet}
 
-      <div className="px-1.5 py-1 pr-8">{/* pr-8 で右上の ⋮ メニューと重ならないように */}
+      <div className="px-1.5 py-1 pr-12">{/* pr-12 で右上の 44px の ⋮ と重ならないように */}
         {/* 停止理由バッジ (一時停止中で明示的に理由が設定されている時のみ。経過時間は勤務時間内のみカウント) */}
         {lot.pauseReason && lot.pauseReason.category && (() => {
           const colorMap = getPauseReasonColor(lot.pauseReason.category);
@@ -4013,7 +4067,9 @@ const ShiftHandoverModal = ({ lots, indirectWork, currentUserName, workers, save
   );
 };
 
-const DailySummaryModal = ({ lots, indirectWork, currentUserName, workers, settings, saveData, onClose }) => {
+const DailySummaryModal = ({ lots, indirectWork, currentUserName, workers, settings, saveData, onClose, templates = [] }) => {
+  // 📋 テンプレ名(2026-09-09 清水さん「日次集計で製品検査と部品検査はテンプレ名も記載」)。ロットの templateId から引く。
+  const tplNameOf = (lot) => (lot && lot.templateId === 'demo' ? '詳細デモ手順' : ((templates || []).find(t => t && t.id === (lot || {}).templateId) || {}).name || '');
   const today = localYMD(new Date());
   const [tab, setTab] = useState('daily'); // 'daily' | 'analysis'
   const [dateFrom, setDateFrom] = useState(today);
@@ -4076,12 +4132,12 @@ const DailySummaryModal = ({ lots, indirectWork, currentUserName, workers, setti
       const unitIdx = isLotKey ? NaN : parseInt(parts[parts.length - 1]);
       const unitSn = isLotKey ? `${parseInt(parts[parts.length - 1]) + 1}回目` : (!isNaN(unitIdx) ? (lot.unitSerialNumbers?.[unitIdx] || `#${unitIdx + 1}`) : '');
       const detail = {
-        lotId: lot.id, lot: lot.orderNo, model: lot.model,
+        lotId: lot.id, lot: lot.orderNo, model: lot.model, templateName: tplNameOf(lot),
         stepId: step?.id || key, step: step?.title || key,
         unitIdx: isNaN(unitIdx) ? null : unitIdx, unitSn,
         duration: task.duration, worker: taskWorker, date: localYMD(new Date(taskEnd)),
       };
-      if (searchText && !`${detail.model} ${detail.lot} ${detail.step}`.includes(searchText)) return;
+      if (searchText && !`${detail.model} ${detail.lot} ${detail.step} ${detail.templateName}`.includes(searchText)) return;
       directDetails.push(detail);
     });
   });
@@ -4093,7 +4149,7 @@ const DailySummaryModal = ({ lots, indirectWork, currentUserName, workers, setti
       const key = d.lotId || d.lot;
       if (!map[key]) {
         map[key] = {
-          lotId: d.lotId, orderNo: d.lot, model: d.model,
+          lotId: d.lotId, orderNo: d.lot, model: d.model, templateName: d.templateName || '',
           totalSec: 0, totalCount: 0, stepMap: {}, workers: new Set(),
         };
       }
@@ -4207,6 +4263,7 @@ const DailySummaryModal = ({ lots, indirectWork, currentUserName, workers, setti
                             {isExpanded ? <ChevronDown className="w-3.5 h-3.5 text-blue-600 shrink-0"/> : <ChevronRight className="w-3.5 h-3.5 text-blue-600 shrink-0"/>}
                             <span className="font-bold text-blue-700 truncate">{g.model}</span>
                             <span className="text-slate-500 shrink-0">{g.orderNo}</span>
+                            {g.templateName ? <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5 truncate max-w-[14rem]" title={`テンプレート: ${g.templateName}`} data-daily-template={g.lotId || g.orderNo}>📋 {g.templateName}</span> : null}
                             <span className="text-[10px] text-slate-400 shrink-0">({g.steps.length}工程 / {g.totalCount}件)</span>
                             {g.workers.length > 0 && <span className="text-[10px] text-slate-500 shrink-0">担当: {g.workers.join(', ')}</span>}
                           </button>
@@ -22815,7 +22872,9 @@ const GROUP_STATE_CLS = {
   waiting: 'bg-slate-100 text-slate-600 border-slate-300',
 };
 const fmtMd = (ms) => { const n = toMsAny(ms); if (!n) return ''; const d = new Date(n); return `${d.getMonth() + 1}/${d.getDate()}`; };
-const OrderGroupCard = ({ group, workers, templates, onOpen }) => {
+// 🕒 入庫時間・検査完了は「日付+時刻」で出す(2026-09-09 清水さん「入庫時間と納期、検査完了日」)
+const fmtMdHm = (ms) => { const n = toMsAny(ms); if (!n) return ''; const d = new Date(n); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+const OrderGroupCard = ({ group, workers, templates, onOpen, onEdit = null, onDelete = null }) => {
   const rows = [...group.active, ...group.done];
   const doneN = group.done.length;
   const tplName = (l) => (l.templateId === 'demo' ? '詳細デモ手順' : (templates?.find((t) => t.id === l.templateId)?.name || '（テンプレなし）'));
@@ -22834,19 +22893,30 @@ const OrderGroupCard = ({ group, workers, templates, onOpen }) => {
         {rows.map((lot) => {
           const st = lotStateForGroup(lot, workers);
           return (
-            <button key={lot.id} type="button" data-order-group-row={lot.id} data-order-group-state={st.key} onClick={() => onOpen(lot)}
-              className={`w-full text-left px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 hover:bg-indigo-50 ${st.key === 'done' ? 'opacity-70' : ''}`}>
+            <div key={lot.id} data-order-group-line={lot.id} className={`flex items-stretch ${st.key === 'done' ? 'opacity-70' : ''}`}>
+            <button type="button" data-order-group-row={lot.id} data-order-group-state={st.key} onClick={() => onOpen(lot)}
+              className="flex-1 min-w-0 text-left px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 hover:bg-indigo-50" style={{ minHeight: 'max(2.75rem, 44px)' }}>
               <span className="text-[11px] font-bold text-indigo-800 bg-indigo-100 border border-indigo-300 rounded px-2 py-0.5 inline-flex items-center gap-1 max-w-[16rem] truncate" title={tplName(lot)}>
                 <ClipboardList className="w-3.5 h-3.5 shrink-0" /><span className="truncate">{tplName(lot)}</span>
               </span>
               <span className="text-[11px] text-slate-500">{lot.quantity}台</span>
-              <span className="text-[11px] text-slate-600" title="入荷（検査へ来た日）">入荷 <b className="text-slate-800">{fmtMd(lot.entryAt) || '—'}</b></span>
+              <span className="text-[11px] text-slate-600" title="入庫時間（検査へ来た日時）＝入荷（検査へ来た日）" data-order-group-entry={lot.id}>入庫 <b className="text-slate-800">{fmtMdHm(lot.entryAt) || fmtMd(lot.entryAt) || '—'}</b></span>
               <span className="text-[11px] text-slate-600" title="納期">納期 <b className="text-slate-800">{fmtDueShort(lot.dueDate) || '—'}</b></span>
+              {st.key === 'done' ? <span className="text-[11px] text-emerald-800" title="検査完了（完了した日時）" data-order-group-done={lot.id}>検査完了 <b>{fmtMdHm(st.at) || '—'}</b></span> : null}
               <span className={`ml-auto text-[11px] font-black border rounded px-2 py-0.5 ${GROUP_STATE_CLS[st.key]}`}>
-                {st.label}{st.key === 'done' && st.at ? ` ${fmtMd(st.at)}` : ''}
+                {st.label}{/* 完了の日時は隣の「検査完了 M/D HH:MM」に出す(2026-09-09)。ここに日付を重ねて出さない */}
               </span>
               {st.who ? <span className="text-[11px] font-bold text-blue-800">{st.who}</span> : null}
             </button>
+            {/* ✏編集／🗑削除(2026-09-09 清水さん)。行の押す所(割当画面)とは別の 44px の押す物。
+                ⚠ 渡されていない所(閲覧だけ)には出さない。押しても行の onOpen へは伝えない。 */}
+            {(onEdit || onDelete) ? (
+              <div className="flex items-center gap-1 pr-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                {onEdit ? <button type="button" data-order-group-edit={lot.id} onClick={() => onEdit(lot)} title="このロットを編集" style={{ minWidth: 'max(2.75rem, 44px)', minHeight: 'max(2.75rem, 44px)' }} className="min-w-11 min-h-11 flex items-center justify-center rounded border border-slate-300 bg-white text-slate-500 hover:bg-blue-50"><Pencil className="w-4 h-4" /></button> : null}
+                {onDelete ? <button type="button" data-order-group-delete={lot.id} onClick={() => onDelete(lot.id)} title="このロットを削除" style={{ minWidth: 'max(2.75rem, 44px)', minHeight: 'max(2.75rem, 44px)' }} className="min-w-11 min-h-11 flex items-center justify-center rounded border border-slate-300 bg-white text-red-400 hover:bg-red-50"><Trash2 className="w-4 h-4" /></button> : null}
+              </div>
+            ) : null}
+            </div>
           );
         })}
       </div>
@@ -23333,7 +23403,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           groupByOrder ? (
             <div data-order-group-grid="1" className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start pb-10">
               {orderGroups.map((g) => (
-                <OrderGroupCard key={g.orderNo} group={g} workers={workers} templates={templates} onOpen={(lot) => setAssignmentLot(lot)} />
+                <OrderGroupCard key={g.orderNo} group={g} workers={workers} templates={templates} onOpen={(lot) => setAssignmentLot(lot)} onEdit={onEditLot} onDelete={onDeleteLot} />
               ))}
             </div>
           ) : viewMode === 'grid' ? (
@@ -31281,7 +31351,7 @@ const QuotaStoppedPanel = ({ until }) => (
            </div>
          </div>
        )}
-       {showDailySummary && progressDataReady && <DailySummaryModal lots={lots} indirectWork={indirectWork} currentUserName={currentUserName} workers={workers} settings={settings} saveData={saveData} onClose={() => setShowDailySummary(false)} />}
+       {showDailySummary && progressDataReady && <DailySummaryModal lots={lots} indirectWork={indirectWork} currentUserName={currentUserName} workers={workers} settings={settings} saveData={saveData} templates={templates} onClose={() => setShowDailySummary(false)} />}
        {showShiftHandover && progressDataReady && <ShiftHandoverModal lots={lots} indirectWork={indirectWork} currentUserName={currentUserName} workers={workers} saveData={saveData} onClose={() => setShowShiftHandover(false)} />}
 
        {showNoteModal && <NoteModal notes={notes} templates={templates} workers={workers} saveData={saveData} deleteData={deleteData} loadImage={loadNoteImage} onClose={() => setShowNoteModal(false)} currentUserName={currentUserName} />}
