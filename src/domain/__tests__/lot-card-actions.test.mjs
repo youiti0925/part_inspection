@@ -43,15 +43,26 @@ test('LA3 背景を押したら閉じるだけ(確定しない)。カードの�
   for (const h of ['onTouchStart={stop}', 'onTouchMove={stop}', 'onTouchEnd={stop}', 'onDragStart={stop}']) assert.ok(sheet.includes(h), `${h} が無い(長押しドラッグへ伝わる)`);
 });
 
-test('LA4 ⋮ は 44px。state(actionOpen)は hooks の並び(版ごとの return より上)に在る', () => {
+// 🚨 2026-09-10 清水さん「でかすぎだろ、カードの内容が少なくなってるよ圧迫して、これだと意味ないよだろ
+//   作業者が見づらくなってるでしょ」。**見える四角まで44pxにしたのが間違い**だった。
+//   決まりを書き直す: 幅は 24px の細い帯・高さで 44px を稼ぐ。中身から奪う横幅は 24px まで。
+test('LA4 ⋮ は 幅24pxの細い帯・高さで44pxを稼ぐ。state(actionOpen)は hooks の並び(版ごとの return より上)に在る', () => {
   const st = card.indexOf('const [actionOpen, setActionOpen] = useState(false);');
   const firstReturn = card.indexOf("if (variant === 'dashboard-arrival')");
   assert.ok(st >= 0, 'actionOpen の state が無い');
   assert.ok(st < firstReturn, 'state が版ごとの return より後ろ(hooks の順が崩れる)');
   assert.match(card, /data-lot-action-open=\{lot\.id\}/, '⋮ の印が無い');
-  assert.match(card, /style=\{\{ minWidth: 'max\(2\.75rem, 44px\)', minHeight: 'max\(2\.75rem, 44px\)' \}\}/, '⋮ が 44px でない');
+  assert.match(card, /style=\{\{ width: 24, minWidth: 24, minHeight: 'max\(2\.75rem, 44px\)' \}\}/, '⋮ の幅24px・高さ44pxの床が無い');
+  assert.doesNotMatch(card, /minWidth: 'max\(2\.75rem, 44px\)'/, '⋮ の見える四角が 44px 角に戻っている(カードを潰す)');
+  assert.match(card, /self-stretch/, '高さがカードいっぱいに伸びない(押せる面積が足りない)');
   assert.match(card, /const actionBtn = \(onEdit \|\| onDelete\) \? \(/, '渡されていない所にも ⋮ が出る形');
   assert.match(card, /onTouchStart=\{\(e\) => e\.stopPropagation\(\)\}/, '⋮ を押すと長押しドラッグが始まる');
+});
+
+test('LA4b 中身の余白は 24px まで。pr-12(48px)は二度と入れない(カードの中身を潰した実物)', () => {
+  assert.doesNotMatch(card, /pr-12/, 'pr-12 が戻っている(中身から48pxも奪う。2026-09-10 に清水さんから苦情)');
+  assert.equal((card.match(/pr-6/g) || []).length, 2, '中身の余白(pr-6)が2つの版に無い');
+  assert.match(card, /absolute top-0 right-0 bottom-0 z-20 flex items-stretch/, '帯が右端の高さいっぱいに置かれていない');
 });
 
 test('LA5 3つの版(通常／コンパクト／横長)すべてに ⋮ と窓が在る。<details> の窓は残っていない', () => {
@@ -64,8 +75,8 @@ test('LA5 3つの版(通常／コンパクト／横長)すべてに ⋮ と窓�
   }
   assert.doesNotMatch(card, /<details className="relative"/, 'カードの中に <details> の窓が残っている(overflow-hidden に切られる)');
   assert.doesNotMatch(card, /min-w-\[24px\] min-h-\[24px\]/, '24px の ⋮ が残っている');
-  assert.match(full, /className="px-1\.5 py-1 pr-12"/, '通常版の中身が 44px の ⋮ を避けていない(pr-12)');
-  assert.match(dm, /flex flex-col gap-1 leading-tight pr-12/, 'コンパクト版の中身が ⋮ を避けていない(pr-12)');
+  assert.match(full, /className="px-1\.5 py-1 pr-6"/, '通常版の中身が 細い帯(24px)を避けていない');
+  assert.match(dm, /flex flex-col gap-1 leading-tight pr-6/, 'コンパクト版の中身が 細い帯(24px)を避けていない');
 });
 
 test('LA6 現場マップの3か所(エリアの中／到着予定の棚／未該当)は onEdit・onDelete を渡している(渡さないと ⋮ が出ない)', () => {

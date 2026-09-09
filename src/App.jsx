@@ -2320,13 +2320,19 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
   //   通常版の ⋮ は 24×24px で、開く窓はカードの overflow-hidden に切られていた。
   //   ⚠ 長押しドラッグ(touchProps)へ伝えない(押しただけで掴み始めない)。
   //   ⚠ onEdit も onDelete も渡されていない所(閲覧だけの場所)には出さない。
+  // 🛠 ✏編集／🗑削除 の入口。
+  //   🚨 2026-09-10 清水さん「でかすぎだろ、カードの内容が少なくなってるよ圧迫して」。
+  //     見える四角まで 44px にしたのが間違いだった(中身の余白も48px奪っていた)。
+  //     指で押せる面積は **縦で稼ぐ**: 幅は24pxの細い帯・高さはカードいっぱい(=44px以上)。
+  //     これで中身から奪う横幅は 48px → 24px。文字が縮む・切れる事もなくなる。
+  //   ⚠ 幅を24pxより細くしない(指の腹が入らない)。高さは親が items-stretch で伸ばす。
   const actionBtn = (onEdit || onDelete) ? (
     <button type="button" data-lot-action-open={lot.id} title="編集・削除" aria-label="メニュー"
       onClick={(e) => { e.stopPropagation(); setActionOpen(true); }}
       onTouchStart={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()} onTouchEnd={(e) => e.stopPropagation()}
       draggable={false} onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
-      style={{ minWidth: 'max(2.75rem, 44px)', minHeight: 'max(2.75rem, 44px)' }}
-      className="min-w-11 min-h-11 flex items-center justify-center rounded-lg border border-slate-300 bg-white/90 text-slate-600 text-xl font-black leading-none shadow-sm hover:bg-blue-50">⋮</button>
+      style={{ width: 24, minWidth: 24, minHeight: 'max(2.75rem, 44px)' }}
+      className="w-6 self-stretch shrink-0 flex items-center justify-center rounded-r-lg text-slate-400 hover:text-slate-700 hover:bg-blue-50/80 text-base font-black leading-none select-none">⋮</button>
   ) : null;
   const actionSheet = actionOpen ? <LotActionSheet lot={lot} templateName={templateName} onEdit={onEdit} onDelete={onDelete} onClose={() => setActionOpen(false)} /> : null;
 
@@ -2454,10 +2460,10 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
         {isLotProcessing && (
           <div className="absolute top-0 left-0 right-0 h-1.5 bg-blue-500 pointer-events-none z-10" style={{ animation: 'lotStripeBlink 0.8s ease-in-out infinite' }}/>
         )}
-        {/* 🛠 ✏編集／🗑削除(2026-09-09): この版には入口が無かった。右上に 44px の ⋮(中身は pr-12 で避ける) */}
-        <div className="absolute top-1 right-1 z-20">{actionBtn}</div>
+        {/* 🛠 ✏編集／🗑削除: 右端の細い帯(幅24px・高さいっぱい)。中身は pr-6 で避ける(2026-09-10 に 48px→24px へ) */}
+        <div className="absolute top-0 right-0 bottom-0 z-20 flex items-stretch">{actionBtn}</div>
         {actionSheet}
-        <div className="flex flex-col gap-1 leading-tight pr-12">
+        <div className="flex flex-col gap-1 leading-tight pr-6">
            {/* ① 停止理由バッジ (大きめでハッキリ目立たせる - ユーザー指摘により拡大) */}
            {lot.pauseReason && lot.pauseReason.category && pauseColor && (
              <div className={`${pauseColor.bg} ${pauseColor.border} ${pauseColor.text} border-2 rounded px-2 py-1 inline-flex items-center gap-1.5 text-sm font-black w-fit max-w-full shadow-sm`} title={lot.pauseReason.note || lot.pauseReason.label}>
@@ -2530,10 +2536,10 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
         <div className="absolute top-0 left-0 right-0 h-1.5 bg-blue-500 pointer-events-none z-10" style={{ animation: 'lotStripeBlink 0.8s ease-in-out infinite' }}/>
       )}
       {/* 🛠 ✏編集／🗑削除(2026-09-09): 44px の ⋮ → 画面の真ん中の窓。<details> の窓はカードの overflow-hidden に切られていた */}
-      <div className="absolute top-1 right-1 z-20">{actionBtn}</div>
+      <div className="absolute top-0 right-0 bottom-0 z-20 flex items-stretch">{actionBtn}</div>
       {actionSheet}
 
-      <div className="px-1.5 py-1 pr-12">{/* pr-12 で右上の 44px の ⋮ と重ならないように */}
+      <div className="px-1.5 py-1 pr-6">{/* pr-6 で右端の細い帯(幅24px)と重ならないように。48px は中身を潰していた(2026-09-10) */}
         {/* 停止理由バッジ (一時停止中で明示的に理由が設定されている時のみ。経過時間は勤務時間内のみカウント) */}
         {lot.pauseReason && lot.pauseReason.category && (() => {
           const colorMap = getPauseReasonColor(lot.pauseReason.category);
