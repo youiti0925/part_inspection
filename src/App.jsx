@@ -2347,9 +2347,15 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
         className={`${styleClass} ${borderClass} p-3 hover:shadow-md`}
       >
         <div className="flex justify-between items-start">
-           <div>
+           <div className="min-w-0">
              <div className="text-xs text-slate-500 font-bold mb-0.5">指図: {lot.orderNo}</div>
-             <div className="text-lg font-black text-slate-800 leading-tight">{lot.model}</div>
+             <div className="text-lg font-black text-slate-800 leading-tight truncate" title={lot.modelText ? `${lot.model}　${lot.modelText}` : lot.model}>{lot.model}</div>
+             {/* 🚨 2026-09-19 清水さん「型式が 品目コード と 品名(品目テキスト)になったぐらい」。
+                 品名は登録の窓・絞り込み・Excel・エリアマップのカードには在るのに、**この大きいカードだけ出ていなかった**。
+                 番号だけでは何の部品か分からないので、コードのすぐ下に出す(無ければ何も足さない)。 */}
+             {lot.modelText ? (
+               <div className="text-xs text-slate-600 leading-tight truncate" title={lot.modelText}>{lot.modelText}</div>
+             ) : null}
            </div>
            <div className="text-right">
              <div className="text-xl font-black text-blue-600">{lot.quantity}<span className="text-xs text-slate-500 font-normal ml-0.5">台</span></div>
@@ -29053,14 +29059,25 @@ const QuotaStoppedPanel = ({ until }) => (
      if (list.length === 0) return;
      try {
        setSyncStatus('syncing');
-       const payload = {};
-       list.forEach(p => { payload[p] = DATA_DELETE; });
-       await DATA(db).setFields(APP_DATA_ID, 'settings', 'config', payload);
+       // ⚠パスは2形式を受ける(製品検査と同じ形。2026-09-19)。
+       //   ① 'qualityStandards.qs-xxx' (ドット区切り文字列) … キーにドットが入らない時だけ安全
+       //   ② ['itemMaster', 'MB-200.5'] (配列パス) … 品目コードは「MB-200.5」のようにドットが入るので必ずこちら
+       //   🚨 直す前は配列を渡すとキーが '[object Object]' になり、**何も消えないのに消えたように見えて** いた。
+       const dotted = {};
+       const arrayPaths = [];
+       list.forEach(p => {
+         if (Array.isArray(p)) arrayPaths.push(p.map(String));
+         else dotted[p] = DATA_DELETE;
+       });
+       if (Object.keys(dotted).length) await DATA(db).setFields(APP_DATA_ID, 'settings', 'config', dotted);
+       // 配列パスは merge 保存 + 「消す印」で消す (__deleteMapKeys は窓口が deleteField に変換する)
+       if (arrayPaths.length) await DATA(db).save(APP_DATA_ID, 'settings', 'config', { __deleteMapKeys: arrayPaths });
        setSyncStatus('idle');
      } catch (e) {
        console.error(e);
        setSyncStatus('error');
        setErrorMsg(e.message || '設定の削除に失敗しました');
+       throw e;   // ⚠握り潰すと、呼び出し側が「消えた前提」で選択を外してしまう
      }
    };
 
