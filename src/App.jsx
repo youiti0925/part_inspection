@@ -30450,8 +30450,17 @@ const QuotaStoppedPanel = ({ until }) => (
          if (typeof v === 'number' && v > 20000 && v < 60000) { const d = new Date(Math.round((v - 25569) * 86400 * 1000)); return isNaN(d) ? '' : toYMD_pl(d); } // Excelシリアル値
          const s = String(v).trim();
          if (/^\d+(\.\d+)?$/.test(s)) { const n = parseFloat(s); if (n > 20000 && n < 60000) { const d = new Date(Math.round((n - 25569) * 86400 * 1000)); return isNaN(d) ? '' : toYMD_pl(d); } } // JSZipフォールバックはシリアル値が文字列で来る
-         let m = s.match(/^(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/); if (m) return `${m[1]}-${String(+m[2]).padStart(2, '0')}-${String(+m[3]).padStart(2, '0')}`;
-         m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/); if (m) return `${m[3]}-${String(+m[1]).padStart(2, '0')}-${String(+m[2]).padStart(2, '0')}`;
+         // 📅 2026-09-21: そんな日は無い書き方(2026/2/30・4/31・平年の2/29)を そのまま文字にしない。
+         //   直す前は「2026-02-30」という **存在しない日付の文字** がロットに入り、
+         //   後から読む所で静かに「納期が読めない」に化けていた。読めないなら最初から空にする。
+         //   ⚠ 同じ門が製品検査/最終検査の parseDueParts(isRealYmd)にも在る。
+         const realYMD_pl = (y, mo, d) => {
+           const t = new Date(Date.UTC(y, mo - 1, d));
+           return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d
+             ? `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` : '';
+         };
+         let m = s.match(/^(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/); if (m) return realYMD_pl(+m[1], +m[2], +m[3]);
+         m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/); if (m) return realYMD_pl(+m[3], +m[1], +m[2]);
          const d = new Date(s); return isNaN(d) ? '' : toYMD_pl(d);
        };
        const rows = [];
