@@ -30,6 +30,12 @@ import {
 // 🧾 品目×テンプレ単位の抜取／スキップ(2026-09-06 清水さん「部品検査にもこの機能が要る」)。製品検査と同じ純関数・同じ画面。
 import TemplateSkipPanel from './TemplateSkipPanel.jsx';
 import { judgeTemplateSkip, buildTemplateSkippedTasks, isTemplateSkippedLot } from './domain/templateSkip.js';
+// 🏷 品目名簿 (品目コード → 品名)。2026-09-21 清水さん「品目テキストという枠が必要なぐらい」。
+//   直す前は読む所が3箇所あるのに書く所が0で、名簿は「在るのに永久に空」だった。
+import {
+  normalizeItemCode, normalizeItemName, resolveItemName,
+  itemMasterRows, unregisteredItems, itemNameConflicts, withItem, withoutItem,
+} from './domain/itemMaster.js';
 
 // --- Firebase Imports (SDK v9) ---
 import { initializeApp } from "firebase/app";
@@ -2169,6 +2175,8 @@ const LotActionSheet = ({ lot, templateName, onEdit, onDelete, onClose }) => {
         <div className="min-w-0 mb-1">
           <div className="text-xs font-bold text-slate-500">指図 {lot.orderNo || '-'}</div>
           <div className="text-lg font-black text-slate-800 truncate">{lot.model || '-'} <span className="text-sm font-bold text-blue-600">{lot.quantity || 1}台</span></div>
+          {/* 🏷 品名(品目テキスト)。品目コードだけでは何の部品か分からない(2026-09-21 清水さん) */}
+          {lot.modelText ? <div className="text-xs text-slate-600 truncate" data-lot-action-model-text title={lot.modelText}>{lot.modelText}</div> : null}
           {templateName ? <div className="text-xs font-bold text-indigo-700 truncate">📋 {templateName}</div> : null}
         </div>
         {onEdit ? (
@@ -2349,7 +2357,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
         <div className="flex justify-between items-start">
            <div className="min-w-0">
              <div className="text-xs text-slate-500 font-bold mb-0.5">指図: {lot.orderNo}</div>
-             <div className="text-lg font-black text-slate-800 leading-tight truncate" title={lot.modelText ? `${lot.model}　${lot.modelText}` : lot.model}>{lot.model}</div>
+             <div className="text-lg font-black text-slate-800 leading-tight truncate" title={lot.modelText ? `${lot.model}\u3000${lot.modelText}` : lot.model}>{lot.model}</div>
              {/* 🚨 2026-09-19 清水さん「型式が 品目コード と 品名(品目テキスト)になったぐらい」。
                  品名は登録の窓・絞り込み・Excel・エリアマップのカードには在るのに、**この大きいカードだけ出ていなかった**。
                  番号だけでは何の部品か分からないので、コードのすぐ下に出す(無ければ何も足さない)。 */}
@@ -14462,6 +14470,211 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
     );
 };
 
+// 🏷 品目名簿 (品目コード → 品名)。2026-09-21
+//   清水さん「型式が品目コード(部品単体のコード)と品名という品目テキストになったぐらいで、
+//            品目テキストという枠が必要なぐらいかなって思ってる」
+//   🚨 直す前は settings.itemMaster を **読む所が3箇所あるのに書く所が1つも無かった**。
+//      名簿は「在るのに永久に空」で、品名は毎回手打ち → 同じ品目コードでも人によって品名がばらついていた。
+//   ⚠ 品目コードにはドットが入る (MB-200.5)。消す時は必ず配列パス(__deleteMapKeys)で。
+const ItemMasterPanel = ({ lots = [], itemMaster = {}, saveSettings }) => {
+  const [newCode, setNewCode] = useState('');
+  const [newName, setNewName] = useState('');
+  const [editing, setEditing] = useState(null);   // { code, name } 編集中の1行
+  const [draft, setDraft] = useState({});         // 未登録の行に打ち込んだ品名 { [code]: name }
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState('');
+
+  const rows = useMemo(() => itemMasterRows(itemMaster, lots), [itemMaster, lots]);
+  const missing = useMemo(() => unregisteredItems(itemMaster, lots), [itemMaster, lots]);
+  const conflicts = useMemo(() => itemNameConflicts(itemMaster, lots), [itemMaster, lots]);
+
+  const put = async (code, name, tag) => {
+    const next = withItem(itemMaster, code, name);
+    if (!next) { setErr('品目コードと品名の両方が要ります'); return; }
+    setErr(''); setBusy(tag || code);
+    try {
+      await saveSettings({ itemMaster: next });
+      setDraft((d) => { const n = { ...d }; delete n[normalizeItemCode(code)]; return n; });
+    } catch (e) {
+      setErr(e?.message || '名簿の保存に失敗しました');
+    } finally { setBusy(''); }
+  };
+
+  const addNew = async () => {
+    const code = normalizeItemCode(newCode);
+    if (itemMaster && Object.prototype.hasOwnProperty.call(itemMaster, code)) {
+      if (!window.confirm(`品目コード「${code}」は名簿にもう在ります。\n品名を「${normalizeItemName(newName)}」に書き換えますか？`)) return;
+    }
+    await put(newCode, newName, '__new');
+    if (withItem(itemMaster, newCode, newName)) { setNewCode(''); setNewName(''); }
+  };
+
+  const remove = async (code) => {
+    if (!window.confirm(`品目コード「${code}」を名簿から消しますか？\n※ ロットに入っている品名はそのまま残ります。`)) return;
+    setErr(''); setBusy(code);
+    try {
+      // ⚠ ドットが入るので配列パスで消す。'itemMaster.MB-200.5' では何も消えない。
+      await saveSettings({ itemMaster: withoutItem(itemMaster, code), __deleteMapKeys: [['itemMaster', String(code)]] });
+    } catch (e) {
+      setErr(e?.message || '名簿からの削除に失敗しました');
+    } finally { setBusy(''); }
+  };
+
+  const BTN = 'min-h-11 px-3 rounded-lg text-sm font-bold flex items-center gap-1.5 shadow-sm disabled:opacity-40';
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3" data-item-master-panel>
+      <h3 className="text-base font-bold mb-2 flex items-center gap-2 text-slate-800">
+        <Tag className="w-5 h-5 text-amber-600" /> 品目名簿（品目コード → 品名）
+        <span className="text-xs font-normal text-slate-500">{rows.length} 件</span>
+      </h3>
+      <p className="text-xs text-slate-500 mb-3">
+        品目コードに<b>品名（品目テキスト）</b>を1回だけ登録しておくと、ロットの登録でも Excel の取込でも
+        <b>品名が自動で入ります</b>。毎回手で打たなくて済み、同じ品目コードで品名がばらつかなくなります。<br />
+        <span className="text-slate-400">※ ロットに品名が直接入っている時は、そちらが優先されます（名簿は空欄を埋めるだけ）。</span>
+      </p>
+
+      {err ? (
+        <div className="mb-3 text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{err}</div>
+      ) : null}
+
+      {/* 追加 */}
+      <div className="flex flex-wrap items-end gap-2 mb-4 border rounded-lg p-2.5 bg-slate-50">
+        <label className="flex flex-col gap-1 min-w-0 flex-1">
+          <span className="text-xs font-bold text-slate-600">品目コード</span>
+          <input value={newCode} onChange={(e) => setNewCode(e.target.value)} placeholder="例: MB-200.5"
+            className="border rounded-lg p-2 text-sm bg-white min-h-11 w-full" />
+        </label>
+        <label className="flex flex-col gap-1 min-w-0 flex-[2]">
+          <span className="text-xs font-bold text-slate-600">品名（品目テキスト）</span>
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="例: ベアリングハウジング Ｌ"
+            onKeyDown={(e) => { if (e.key === 'Enter') addNew(); }}
+            className="border rounded-lg p-2 text-sm bg-white min-h-11 w-full" />
+        </label>
+        <button type="button" onClick={addNew} disabled={busy === '__new' || !normalizeItemCode(newCode) || !normalizeItemName(newName)}
+          className={`${BTN} bg-amber-600 hover:bg-amber-700 text-white`}>
+          <Plus className="w-4 h-4" /> 名簿へ入れる
+        </button>
+      </div>
+
+      {/* 名簿に無い品目コード */}
+      {missing.length > 0 && (
+        <div className="mb-4 border border-amber-300 bg-amber-50 rounded-lg p-2.5">
+          <div className="text-sm font-bold text-amber-900 mb-1 flex items-center gap-1.5">
+            <AlertTriangle className="w-4 h-4" /> 名簿に無い品目コード {missing.length} 件
+          </div>
+          <p className="text-xs text-amber-800 mb-2">
+            ロットには出てくるのに名簿に載っていない品目コードです。ロットが名乗っている品名を候補に入れてあります。
+            中身を確かめてから入れてください。
+          </p>
+          <div className="space-y-1.5">
+            {missing.map((m) => {
+              const v = draft[m.code] != null ? draft[m.code] : m.suggestedName;
+              return (
+                <div key={m.code} className="flex flex-wrap items-center gap-2 bg-white border border-amber-200 rounded-lg p-2">
+                  <span className="font-mono text-sm font-bold text-slate-800 truncate max-w-[14rem]">{m.code}</span>
+                  <span className="text-xs text-slate-500">ロット {m.lotCount} 件</span>
+                  <input value={v} onChange={(e) => setDraft((d) => ({ ...d, [m.code]: e.target.value }))}
+                    placeholder={m.suggestions.length > 1 ? `候補: ${m.suggestions.join(' / ')}` : '品名を入れてください'}
+                    className="border rounded-lg p-2 text-sm bg-white min-h-11 flex-1 min-w-0" />
+                  <button type="button" onClick={() => put(m.code, v)} disabled={busy === m.code || !normalizeItemName(v)}
+                    className={`${BTN} bg-amber-600 hover:bg-amber-700 text-white`}>
+                    <Plus className="w-4 h-4" /> 入れる
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 名簿と食い違っている品名 */}
+      {conflicts.length > 0 && (
+        <div className="mb-4 border border-rose-300 bg-rose-50 rounded-lg p-2.5">
+          <div className="text-sm font-bold text-rose-900 mb-1 flex items-center gap-1.5">
+            <AlertOctagon className="w-4 h-4" /> 名簿と品名が違うロットがある {conflicts.length} 件
+          </div>
+          <p className="text-xs text-rose-800 mb-2">
+            同じ品目コードなのに、名簿と違う品名で登録されているロットです。<b>どちらが正しいかは人が決めてください</b>
+            （ロットの品名は自動では書き換えません）。
+          </p>
+          <div className="space-y-1.5">
+            {conflicts.map((c) => (
+              <div key={c.code} className="flex flex-wrap items-center gap-2 bg-white border border-rose-200 rounded-lg p-2">
+                <span className="font-mono text-sm font-bold text-slate-800 truncate max-w-[14rem]">{c.code}</span>
+                <span className="text-xs text-slate-600">名簿: <b className="text-slate-800">{c.masterName}</b></span>
+                <span className="text-xs text-rose-700">
+                  ロット: {c.lotNames.map((x) => `${x.name}（${x.lotCount}件）`).join(' / ')}
+                </span>
+                {c.lotNames.length === 1 && (
+                  <button type="button" onClick={() => put(c.code, c.lotNames[0].name)} disabled={busy === c.code}
+                    className={`${BTN} bg-white border border-rose-300 text-rose-700 hover:bg-rose-100 ml-auto`}>
+                    名簿をロットに合わせる
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 一覧 */}
+      {rows.length === 0 ? (
+        <div className="text-sm text-slate-500 border border-dashed rounded-lg p-4 text-center">
+          名簿はまだ空です。上の欄か、「名簿に無い品目コード」から入れてください。
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+          {rows.map((r) => {
+            const isEdit = editing && editing.code === r.code;
+            return (
+              <div key={r.code} className="flex items-center gap-2 border rounded-lg p-2 bg-white">
+                <div className="min-w-0 flex-1">
+                  <div className="font-mono text-sm font-bold text-slate-800 truncate" title={r.code}>{r.code}</div>
+                  {isEdit ? (
+                    <input value={editing.name} autoFocus
+                      onChange={(e) => setEditing({ code: r.code, name: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && normalizeItemName(editing.name)) { put(r.code, editing.name); setEditing(null); }
+                        if (e.key === 'Escape') setEditing(null);
+                      }}
+                      className="border rounded-lg p-1.5 text-sm bg-white min-h-11 w-full mt-0.5" />
+                  ) : (
+                    <div className="text-sm text-slate-600 truncate" title={r.name}>{r.name}</div>
+                  )}
+                </div>
+                <span className="text-xs text-slate-400 shrink-0">{r.lotCount} 件</span>
+                {isEdit ? (
+                  <>
+                    <button type="button" onClick={() => { put(r.code, editing.name); setEditing(null); }}
+                      disabled={!normalizeItemName(editing.name)}
+                      className={`${BTN} bg-emerald-600 hover:bg-emerald-700 text-white shrink-0`}>
+                      <Save className="w-4 h-4" /> 保存
+                    </button>
+                    <button type="button" onClick={() => setEditing(null)}
+                      className={`${BTN} bg-white border text-slate-600 hover:bg-slate-50 shrink-0`}>やめる</button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" onClick={() => setEditing({ code: r.code, name: r.name })} title="品名を直す"
+                      className="min-h-11 min-w-11 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 shrink-0">
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button type="button" onClick={() => remove(r.code)} disabled={busy === r.code} title="名簿から消す"
+                      className="min-h-11 min-w-11 flex items-center justify-center rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 shrink-0 disabled:opacity-40">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // 品目グループ管理: 同じ製品・工程の品目コードを束ねてデータ共有(作業順・目標時間)。管理者専用。
 const ModelGroupManager = ({ lots = [], settings = {}, saveSettings }) => {
   const groups = settings.modelGroups || [];
@@ -22116,6 +22329,10 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
 
          <MeasurementOverridesPanel templates={templates} lots={lots} measurementOverrides={settings.measurementOverrides || {}} saveSettings={saveSettings} />
 
+         {/* 🏷 品目名簿 (品目コード → 品名)。品質規格マスタより先に置く:
+             品目コードに名前が付いていないと、その下の規格マッピングが読めないため。 */}
+         <ItemMasterPanel lots={lots} itemMaster={settings.itemMaster || {}} saveSettings={saveSettings} />
+
          {/* 品質規格マスタ (新方式: 品目コード → 品質規格 → 公差/測定条件) */}
          <div data-qs-panel>
            <QualityStandardsPanel
@@ -22898,6 +23115,10 @@ const OrderGroupCard = ({ group, workers, templates, onOpen, onEdit = null, onDe
         <span className="text-xs font-bold text-slate-500">指図</span>
         <span className="text-base font-black text-slate-800">{group.orderNo}</span>
         <span className="text-sm font-bold text-slate-700">{group.model}</span>
+        {/* 🏷 品名(品目テキスト)。品目コードだけでは何の部品か分からない(2026-09-21 清水さん) */}
+        {group.modelText ? (
+          <span className="text-xs text-slate-600 truncate max-w-[16rem]" data-order-group-model-text title={group.modelText}>{group.modelText}</span>
+        ) : null}
         <span className="text-xs font-bold bg-white border border-slate-300 rounded px-1.5 py-0.5">{qty}台</span>
         <span className="ml-auto text-xs font-bold text-slate-600">テンプレ {rows.length}本{doneN ? <>（完了 <b className="text-emerald-700">{doneN}</b>）</> : null}</span>
       </div>
@@ -23101,7 +23322,8 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
     const byNo = new Map();
     sortedLots.forEach((l) => {
       const k = keyOf(l);
-      if (!byNo.has(k)) byNo.set(k, { orderNo: k, model: l.model || '', active: [], done: [] });
+      // 🏷 品名(品目テキスト)も持たせる。ロットに入っていなければ品目名簿で補う(2026-09-21)。
+      if (!byNo.has(k)) byNo.set(k, { orderNo: k, model: l.model || '', modelText: resolveItemName(l.model, l.modelText, settings?.itemMaster), active: [], done: [] });
       byNo.get(k).active.push(l);
     });
     (lots || []).forEach((l) => {
@@ -23111,7 +23333,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
     });
     byNo.forEach((g) => g.done.sort((a, b) => (toMsAny(b.completedAt) || 0) - (toMsAny(a.completedAt) || 0)));
     return [...byNo.values()];
-  }, [groupByOrder, sortedLots, lots]);
+  }, [groupByOrder, sortedLots, lots, settings?.itemMaster]);
 
   // 🚨 2026-09-08: 親タブ「検査リスト / 完了履歴」を、この画面の絞り込みの行の **左端** へ合流させて
   //   横帯を1本減らした(本番実測 中身15%・高さ39px の帯)。札の名前・順番・押した時の行き先(setActiveTab)は
@@ -23425,6 +23647,8 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                 const zoneName = mapZones.find(z => z.id === lot.mapZoneId)?.name || '';
                 const workerName = workers.find(w => w.id === lot.workerId)?.name || '';
                 const templateName = templates?.find(t => t.id === lot.templateId)?.name || '';
+                // 🏷 品名(品目テキスト)。ロットに無ければ品目名簿で補う(2026-09-21)
+                const itemName = resolveItemName(lot.model, lot.modelText, settings?.itemMaster);
                 // 進捗計算 (computeLotProgress を活用)
                 const prog = computeLotProgress(lot);
                 const progressPct = prog?.progressPct ?? 0;
@@ -23441,7 +23665,11 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                     <div className="flex justify-between items-start">
                       <div className="min-w-0 flex-1">
                         <div className="text-xs text-slate-500 font-bold truncate">指図: {lot.orderNo}</div>
-                        <div className="text-lg font-black text-slate-800 truncate">{lot.model}</div>
+                        <div className="text-lg font-black text-slate-800 truncate" title={lot.model}>{lot.model}</div>
+                        {/* 🏷 品名(品目テキスト)。品目コードだけでは何の部品か分からない(2026-09-21 清水さん) */}
+                        {itemName ? (
+                          <div className="text-xs text-slate-600 leading-tight truncate" data-list-grid-model-text title={itemName}>{itemName}</div>
+                        ) : null}
                       </div>
                       <span className="text-xs font-bold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 shrink-0">{lot.quantity}台</span>
                     </div>
@@ -23542,6 +23770,8 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                   {sortedLots.map(lot => {
                     const isPaused = Object.values(lot.tasks || {}).some(t => t.status === 'paused');
                     const templateName = templates?.find(t => t.id === lot.templateId)?.name || '-';
+                    // 🏷 品名(品目テキスト)。ロットに無ければ品目名簿で補う。1回だけ出す(2026-09-21)
+                    const itemName = resolveItemName(lot.model, lot.modelText, settings?.itemMaster);
                     const prog = computeLotProgress(lot);
                     const progressPct = prog?.progressPct ?? 0;
                     const completedCount = prog?.completedCount ?? 0;
@@ -23562,6 +23792,10 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                         </td>
                         <td className="p-3">
                           <div className="font-bold text-slate-700">{lot.model}</div>
+                          {/* 🏷 品名(品目テキスト)。品目コードだけでは何の部品か分からない(2026-09-21 清水さん) */}
+                          {itemName ? (
+                            <div className="text-xs text-slate-500 truncate max-w-[14rem]" data-list-table-model-text title={itemName}>{itemName}</div>
+                          ) : null}
                         </td>
                         <td className="p-3">
                           {templateName !== '-' ? (
@@ -27435,7 +27669,8 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
   );
 };
 
-const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLot }) => {
+// 🏷 settings は 品目名簿(品目コード → 品名)を引くために受け取る(2026-09-21)。
+const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEditLot, onDeleteLot }) => {
   const completedLots = lots.filter(l => l.location === 'completed' || l.status === 'completed');
   const [viewMode, setViewMode] = useState('grid');
   const [reportLot, setReportLot] = useState(null);
@@ -27662,6 +27897,10 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
               <div key={lot.id} className="bg-white border rounded-xl p-4 shadow-sm flex flex-col gap-2 h-auto hover:shadow-md transition-shadow">
                 <div className="flex justify-between items-start gap-2">
                   <div className="font-bold text-lg text-slate-800 break-all">{lot.model}</div>
+                  {/* 🏷 品名(品目テキスト)。品目コードだけでは何の部品か分からない(2026-09-21 清水さん) */}
+                  {resolveItemName(lot.model, lot.modelText, settings?.itemMaster) ? (
+                    <div className="text-xs text-slate-600 break-all" data-history-card-model-text>{resolveItemName(lot.model, lot.modelText, settings?.itemMaster)}</div>
+                  ) : null}
                   <div className="flex gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                     <button onClick={() => setViewGridLot(lot)} className="p-1.5 border rounded hover:bg-indigo-50 text-indigo-600 transition-colors" title="作業表で見る（工程×台）"><LayoutGrid className="w-4 h-4" /></button>
                     <button onClick={() => setReportLot(lot)} className="p-1.5 border rounded hover:bg-green-50 text-green-600 transition-colors" title="成績表プレビュー"><Printer className="w-4 h-4" /></button>
@@ -27710,7 +27949,13 @@ const HistoryView = ({ lots, workers, templates, saveData, onEditLot, onDeleteLo
                   <tr key={lot.id} className="hover:bg-slate-50 transition-colors">
                     <td className="p-3 text-slate-500 text-xs whitespace-nowrap">{compMs(lot) ? new Date(compMs(lot)).toLocaleString() : '-'}</td>
                     <td className="p-3 font-bold text-slate-800">{lot.orderNo}</td>
-                    <td className="p-3 font-bold text-slate-700">{lot.model}</td>
+                    <td className="p-3 font-bold text-slate-700">
+                      {lot.model}
+                      {/* 🏷 品名(品目テキスト)。品目コードだけでは何の部品か分からない(2026-09-21 清水さん) */}
+                      {resolveItemName(lot.model, lot.modelText, settings?.itemMaster) ? (
+                        <div className="text-xs font-normal text-slate-500 truncate max-w-[14rem]" data-history-table-model-text title={resolveItemName(lot.model, lot.modelText, settings?.itemMaster)}>{resolveItemName(lot.model, lot.modelText, settings?.itemMaster)}</div>
+                      ) : null}
+                    </td>
                     <td className="p-3 text-center"><span className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">{lot.quantity}台</span></td>
                     <td className="p-3 text-xs text-slate-600">{workers.find(w => w.id === lot.workerId)?.name || '未割当'}</td>
                     <td className="p-3 font-mono text-sm">{formatTime(totalActual)}</td>
@@ -29399,7 +29644,7 @@ const QuotaStoppedPanel = ({ until }) => (
    const handleAddLot = async (formData) => {
      const { model, modelText, orderNo, quantity, templateId, priority, dueDate, entryAt } = formData;
      // 品目テキスト(名称): 表示専用。空欄なら品目名簿(itemMaster)で補完。集計キーには絶対に使わない(キーは品目コード=model)。
-     const modelTextResolved = ((modelText || '').trim()) || ((settings?.itemMaster || {})[model] || '');
+     const modelTextResolved = resolveItemName(model, modelText, settings?.itemMaster);
 
      // 柔軟な日付パース: "2026/5/15" や "2026-5-15" → "2026-05-15"
      // 不正な値はそのまま (空 → null)。途中で alert 出さない (フォームのバリデーション任せ)
@@ -30240,7 +30485,7 @@ const QuotaStoppedPanel = ({ until }) => (
          }
          // 品目テキスト: 列があれば読む。無ければ品目名簿(itemMaster)で補完。
          const mtextRaw = C_MTEXT ? (row.getCell(C_MTEXT).value?.toString?.() || '') : '';
-         const modelText = (mtextRaw || '').trim() || ((settings?.itemMaster || {})[model] || '');
+         const modelText = resolveItemName(model, mtextRaw, settings?.itemMaster);
 
          const serials = [];
          for (let i = 0; i < qty; i++) {
@@ -31303,7 +31548,7 @@ const QuotaStoppedPanel = ({ until }) => (
          {activeTab === 'history' && (
            quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
            : !lotsHistoryReady ? <DataLoadingPanel what="完了したロット" />
-           : <HistoryView lots={lots} workers={workers} templates={templates} saveData={saveData} onEditLot={onEditLot} onDeleteLot={onDeleteLot} />
+           : <HistoryView lots={lots} workers={workers} templates={templates} settings={settings} saveData={saveData} onEditLot={onEditLot} onDeleteLot={onDeleteLot} />
          )}
          {activeTab === 'template-mgr' && (
            editingTemplate ? (
@@ -31543,7 +31788,7 @@ const QuotaStoppedPanel = ({ until }) => (
                {/* 品目コード/品目テキストのオートコンプリート候補 (既存ロット + 品目名簿 itemMaster から生成) */}
                <datalist id="itemCodeOptions">
                  {[...new Set((lots || []).map(l => l.model).filter(Boolean))].map(code => {
-                   const nm = ((lots || []).find(l => l.model === code && l.modelText)?.modelText) || ((settings?.itemMaster || {})[code]) || '';
+                   const nm = resolveItemName(code, ((lots || []).find(l => l.model === code && l.modelText)?.modelText), settings?.itemMaster);
                    return <option key={code} value={code}>{nm}</option>;
                  })}
                </datalist>
