@@ -1987,9 +1987,9 @@ const DEMO_STEPS = [
 
 const WorkerBadge = ({ id, workers }) => {
   const w = workers.find(w => w.id === id);
-  if (!w) return <span className="text-[10px] text-slate-400 bg-slate-100 px-1 rounded">未割当</span>;
+  if (!w) return <span className="text-xs text-slate-400 bg-slate-100 px-1 rounded">未割当</span>;
   return (
-    <span className="text-[10px] font-bold text-slate-700 bg-slate-100 px-1 rounded flex items-center gap-1 border border-slate-200 truncate max-w-[80px]">
+    <span className="text-xs font-bold text-slate-700 bg-slate-100 px-1 rounded flex items-center gap-1 border border-slate-200 truncate max-w-[80px]">
       <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></div>{w.name}
     </span>
   );
@@ -2036,7 +2036,7 @@ const DriveDocsModal = ({ title, sections, onClose }) => {
     <div className="fixed inset-0 z-[520] bg-black/60 flex items-center justify-center p-3" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="px-4 py-3 bg-sky-700 text-white flex items-center justify-between shrink-0">
-          <h2 className="font-bold text-sm flex items-center gap-2">📁 {title} <span className="text-[11px] font-normal opacity-80">(Google Drive資料 {total}件)</span></h2>
+          <h2 className="font-bold text-sm flex items-center gap-2">📁 {title} <span className="text-xs font-normal opacity-80">(Google Drive資料 {total}件)</span></h2>
           <div className="flex items-center gap-1.5">
             <button onClick={load} className="px-2 py-1 rounded bg-white/15 hover:bg-white/25 text-xs font-bold" title="Driveの最新内容を読み直す(一覧は最大1分キャッシュ)">↻ 更新</button>
             <button onClick={onClose} className="p-1.5 rounded hover:bg-white/20"><X className="w-5 h-5" /></button>
@@ -2053,7 +2053,7 @@ const DriveDocsModal = ({ title, sections, onClose }) => {
             <div key={i} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
               <div className="px-3 py-2 bg-slate-100 flex items-center justify-between gap-2">
                 <span className="text-sm font-bold text-slate-700">{r.label}</span>
-                <span className="text-[10px] text-slate-400 font-mono truncate" title={`Driveフォルダ: 資料ルート/${r.path.join('/')}`}>{r.path.join('/')}</span>
+                <span className="text-xs text-slate-400 font-mono truncate" title={`Driveフォルダ: 資料ルート/${r.path.join('/')}`}>{r.path.join('/')}</span>
               </div>
               <div className="p-2">
                 {r.loading && <div className="text-sm text-slate-400 flex items-center gap-2 p-2"><Loader2 className="w-4 h-4 animate-spin" /> 読み込み中…</div>}
@@ -2069,15 +2069,15 @@ const DriveDocsModal = ({ title, sections, onClose }) => {
                       className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sky-50 text-left border-b border-slate-100 last:border-b-0">
                       <span className="text-lg shrink-0">{DRIVE_KIND_ICON[kind]}</span>
                       <span className="text-sm font-bold text-slate-700 truncate flex-1">{f.name}</span>
-                      <span className="text-[10px] text-slate-400 shrink-0">{driveFmtSize(f.size)}</span>
-                      <span className="text-[10px] text-sky-600 font-bold shrink-0">{kind === 'other' ? '開く' : '表示 ▶'}</span>
+                      <span className="text-xs text-slate-400 shrink-0">{driveFmtSize(f.size)}</span>
+                      <span className="text-xs text-sky-600 font-bold shrink-0">{kind === 'other' ? '開く' : '表示 ▶'}</span>
                     </button>
                   );
                 })}
               </div>
             </div>
           ))}
-          <div className="text-[10px] text-slate-400 px-1">Driveの該当フォルダにファイルを置くだけで自動で反映されます(反映は最大1分後・「↻ 更新」で即時)。ファイル本体はDriveにあり、このアプリの容量は使いません。</div>
+          <div className="text-xs text-slate-400 px-1">Driveの該当フォルダにファイルを置くだけで自動で反映されます(反映は最大1分後・「↻ 更新」で即時)。ファイル本体はDriveにあり、このアプリの容量は使いません。</div>
         </div>
       </div>
       {viewer && (
@@ -2413,17 +2413,17 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
         <div className="flex items-center gap-1.5 leading-tight min-w-0">
           {/* 停止理由は絵文字＋短い文字だけ。横1行に収める */}
           {stripPause && (
-            <span className={`${stripPause.bg} ${stripPause.border} ${stripPause.text} border rounded px-1 text-[10px] font-black shrink-0 whitespace-nowrap`} title={lot.pauseReason.note || lot.pauseReason.label}>
+            <span className={`${stripPause.bg} ${stripPause.border} ${stripPause.text} border rounded px-1 text-xs font-black shrink-0 whitespace-nowrap`} title={lot.pauseReason.note || lot.pauseReason.label}>
               {stripPause.emoji}{lot.pauseReason.label}
             </span>
           )}
-          <span className="text-[11px] text-slate-500 font-bold shrink-0">{lot.orderNo}</span>
+          <span className="text-xs text-slate-500 font-bold shrink-0">{lot.orderNo}</span>
           <span className="text-sm font-black text-slate-800 truncate shrink-0 max-w-[45%]">{lot.model}</span>
           {/* 品名。番号だけでは分からないので、横に広くなった分ここへ入れる(縦には増やさない) */}
           {lot.modelText && (
-            <span className="text-[10px] text-slate-500 truncate min-w-0 flex-1">{lot.modelText}</span>
+            <span className="text-xs text-slate-500 truncate min-w-0 flex-1">{lot.modelText}</span>
           )}
-          <span className="text-[11px] font-bold text-blue-600 shrink-0">{lot.quantity}台</span>
+          <span className="text-xs font-bold text-blue-600 shrink-0">{lot.quantity}台</span>
           {stripTotal > 0 && (
             <span className={`font-mono font-black text-xs shrink-0 ${stripPct >= 100 ? 'text-emerald-600' : stripPct > 0 ? 'text-blue-600' : 'text-slate-400'}`}>{stripPct}%</span>
           )}
@@ -2494,24 +2494,24 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
                  <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500"/>
                </span>
              )}
-             <span className="text-[11px] text-slate-500 font-bold shrink-0">{lot.orderNo}</span>
+             <span className="text-xs text-slate-500 font-bold shrink-0">{lot.orderNo}</span>
              <span className="text-sm font-black text-slate-800 truncate min-w-0 flex-1" title={lot.modelText ? `${lot.model} ${lot.modelText}` : lot.model}>{lot.model}</span>
              <span className="text-xs font-bold text-blue-600 shrink-0">{lot.quantity}台</span>
            </div>
            {/* 品目テキスト(品名): 番号だけでは分からないので名称も。あれば表示 */}
            {lot.modelText && (
-             <div className="text-[10px] text-slate-500 truncate -mt-0.5" title={lot.modelText}>{lot.modelText}</div>
+             <div className="text-xs text-slate-500 truncate -mt-0.5" title={lot.modelText}>{lot.modelText}</div>
            )}
            {/* ③ テンプレ名 + 進捗% (一行) */}
            <div className="flex items-baseline gap-1">
              {templateName && (
-               <span className="text-[11px] text-indigo-700 font-bold truncate min-w-0 flex-1 leading-tight" title={templateName}>
+               <span className="text-xs text-indigo-700 font-bold truncate min-w-0 flex-1 leading-tight" title={templateName}>
                  <ClipboardList className="w-3 h-3 inline mr-0.5 align-text-bottom"/>{templateName}
                </span>
              )}
              {compactTotal > 0 && (
                <span className="flex items-baseline gap-1 shrink-0">
-                 <span className="text-[10px] text-slate-500 font-mono">{compactDone}/{compactTotal}</span>
+                 <span className="text-xs text-slate-500 font-mono">{compactDone}/{compactTotal}</span>
                  <span className={`font-mono font-black text-sm ${compactPct >= 100 ? 'text-emerald-600' : compactPct > 0 ? 'text-blue-600' : 'text-slate-400'}`}>{compactPct}%</span>
                </span>
              )}
@@ -2560,7 +2560,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
           const startTime = lot.pauseReason.startTime;
           const elapsedDisplay = startTime ? formatWorkElapsed(startTime, workSchedule) : '';
           return (
-            <div className={`mb-1 inline-flex items-center gap-1 ${colorMap.bg} ${colorMap.border} ${colorMap.text} border rounded px-1.5 py-0.5 text-[10px] font-bold`} title={(lot.pauseReason.note || lot.pauseReason.label) + ' (経過は勤務時間内のみ)'}>
+            <div className={`mb-1 inline-flex items-center gap-1 ${colorMap.bg} ${colorMap.border} ${colorMap.text} border rounded px-1.5 py-0.5 text-xs font-bold`} title={(lot.pauseReason.note || lot.pauseReason.label) + ' (経過は勤務時間内のみ)'}>
               <span>{colorMap.emoji}</span>
               <span>{lot.pauseReason.label}</span>
               {startTime && <span className="font-mono opacity-70">{elapsedDisplay}</span>}
@@ -2597,7 +2597,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
           const showLine1 = display.progressPct || display.nextStep;
           const showLine2 = display.timeRange || display.delayStatus;
           return (
-            <div className={`text-[10px] mt-0.5 leading-tight space-y-0.5 ${cls}`}>
+            <div className={`text-xs mt-0.5 leading-tight space-y-0.5 ${cls}`}>
               {showLine1 && (
                 <div className="flex items-center justify-between">
                   {display.progressPct ? <span className="font-black text-xs">{p.progressPct}%</span> : <span/>}
@@ -2619,7 +2619,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
           </div>
         )}
         {lot.status === 'error' && (
-          <button onClick={(e) => { e.stopPropagation(); saveData('lots', lot.id, { status: 'waiting' }).catch((err) => console.error('🚨 復帰を保存できませんでした(画面の保存失敗バナーと「全部送り直す」が控えています)', lot.id, err)); }} className="w-full mt-0.5 bg-white border border-rose-300 text-rose-600 text-[10px] py-0.5 rounded hover:bg-rose-50 font-medium z-20 relative">復帰</button>
+          <button onClick={(e) => { e.stopPropagation(); saveData('lots', lot.id, { status: 'waiting' }).catch((err) => console.error('🚨 復帰を保存できませんでした(画面の保存失敗バナーと「全部送り直す」が控えています)', lot.id, err)); }} className="w-full mt-0.5 bg-white border border-rose-300 text-rose-600 text-xs py-0.5 rounded hover:bg-rose-50 font-medium z-20 relative">復帰</button>
         )}
       </div>
     </div>
@@ -3480,7 +3480,7 @@ const VideoToPhotosModal = ({ contextLabel = '', existingDescription = '', onApp
                 {frames.map(f => (
                   <button key={f.id} onClick={() => removeFrame(f.id)} className="relative group rounded-lg overflow-hidden border border-slate-200" title="タップで削除">
                     <img src={f.dataUrl} className="w-full h-20 object-cover" alt="コマ" />
-                    <span className="absolute top-0.5 right-0.5 bg-black/60 text-white text-[9px] px-1 rounded">{Math.floor(f.t)}秒</span>
+                    <span className="absolute top-0.5 right-0.5 bg-black/60 text-white text-xs px-1 rounded">{Math.floor(f.t)}秒</span>
                     <span className="absolute inset-0 bg-rose-600/0 group-hover:bg-rose-600/30 flex items-center justify-center"><X className="w-5 h-5 text-white opacity-0 group-hover:opacity-100" /></span>
                   </button>
                 ))}
@@ -3491,13 +3491,13 @@ const VideoToPhotosModal = ({ contextLabel = '', existingDescription = '', onApp
           <div>
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs font-bold text-slate-500">説明文（手順・注意点）</span>
-              <button onClick={runAi} disabled={aiBusy || !hasAiKey} title={hasAiKey ? '' : 'AIサーバー未設定(管理者: .env の VITE_GEMINI_PROXY_URL)'} className="text-[11px] font-bold px-2 py-1 rounded bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-40 flex items-center gap-1">
+              <button onClick={runAi} disabled={aiBusy || !hasAiKey} title={hasAiKey ? '' : 'AIサーバー未設定(管理者: .env の VITE_GEMINI_PROXY_URL)'} className="text-xs font-bold px-2 py-1 rounded bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-40 flex items-center gap-1">
                 {aiBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} AIで説明文を作る
               </button>
             </div>
             <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={5} placeholder="手順や注意点。AIで下書きを作って手直しできます。" className="w-full border rounded-lg p-2 text-sm" />
           </div>
-          {msg && <div className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded p-2">{msg}</div>}
+          {msg && <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded p-2">{msg}</div>}
         </div>
         <div className="p-3 border-t flex gap-2 shrink-0">
           <button onClick={onClose} className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl font-bold text-slate-600">やめる</button>
@@ -3530,7 +3530,7 @@ const WorkerSummaryCard = ({ worker, lots }) => {
            <span className="font-bold text-lg text-slate-800">{worker.name}</span>
          </div>
          {inProgressCount > 0 && (
-           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded inline-flex items-center gap-1 ${processingCount > 0 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`} title="着手中のロット件数">
+           <span className={`text-xs font-bold px-1.5 py-0.5 rounded inline-flex items-center gap-1 ${processingCount > 0 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`} title="着手中のロット件数">
              {processingCount > 0 && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"/>}
              進行中 {inProgressCount}件
            </span>
@@ -3538,11 +3538,11 @@ const WorkerSummaryCard = ({ worker, lots }) => {
       </div>
       <div className="grid grid-cols-2 gap-2 text-center">
          <div className="bg-blue-50 rounded p-2">
-            <div className="text-[10px] text-blue-500 font-bold mb-1">予定(残)</div>
+            <div className="text-xs text-blue-500 font-bold mb-1">予定(残)</div>
             <div className="text-base font-black text-blue-700 font-mono">{formatTime(plannedRemainingSec)}</div>
          </div>
          <div className={`rounded p-2 ${processingCount > 0 ? 'bg-emerald-100 ring-1 ring-emerald-300' : 'bg-emerald-50'}`}>
-            <div className="text-[10px] text-emerald-500 font-bold mb-1 flex items-center justify-center gap-1">
+            <div className="text-xs text-emerald-500 font-bold mb-1 flex items-center justify-center gap-1">
               本日実績
               {processingCount > 0 && <span className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse"/>}
             </div>
@@ -3570,7 +3570,7 @@ const ZoneList = ({ id, title, icon: Icon, color, border, children, onDropLot, o
     >
       <h2 className="font-bold text-slate-800 flex items-center gap-2 text-sm group-hover:text-blue-600 transition-colors">
         <Icon className="w-4 h-4 opacity-70" /> {title}
-        <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+        <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
            <Maximize2 className="w-3 h-3"/> Clickで拡大
         </span>
       </h2>
@@ -3708,7 +3708,7 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
         </div>
         {showFilterBar && (
           <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 flex flex-wrap gap-1.5 items-center">
-            <span className="text-[10px] text-slate-500 font-bold mr-1">エリア:</span>
+            <span className="text-xs text-slate-500 font-bold mr-1">エリア:</span>
             {localZones.map(zone => {
               const isVisible = !hiddenZones.includes(zone.id);
               const lotCount = (lotsByZoneId.get(zone.id) || []).length;
@@ -3717,12 +3717,12 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
                   className={`text-xs px-2.5 py-1 rounded-full font-bold border transition-all flex items-center gap-1 ${isVisible ? 'bg-blue-600 text-white border-blue-700 shadow-sm' : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'}`}
                 >
                   {zone.name}
-                  {lotCount > 0 && <span className={`text-[9px] px-1 rounded-full ${isVisible ? 'bg-white/20' : 'bg-slate-100'}`}>{lotCount}</span>}
+                  {lotCount > 0 && <span className={`text-xs px-1 rounded-full ${isVisible ? 'bg-white/20' : 'bg-slate-100'}`}>{lotCount}</span>}
                 </button>
               );
             })}
             {isFiltered && (
-              <button onClick={() => { setHiddenZones([]); localStorage.removeItem(storageKey); }} className="text-[10px] text-slate-400 hover:text-red-500 ml-1 underline">全表示</button>
+              <button onClick={() => { setHiddenZones([]); localStorage.removeItem(storageKey); }} className="text-xs text-slate-400 hover:text-red-500 ml-1 underline">全表示</button>
             )}
           </div>
         )}
@@ -3831,7 +3831,7 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
                          variant={useCompact ? 'dashboard-map' : 'full'}
                        />
                      ))}
-                     {zoneLots.length === 0 && !isLayoutMode && !isDashboard && !EMBED_MAP && (<div className="h-full flex items-center justify-center text-black/10 text-[10px]">Drop Here</div>)}
+                     {zoneLots.length === 0 && !isLayoutMode && !isDashboard && !EMBED_MAP && (<div className="h-full flex items-center justify-center text-black/10 text-xs">Drop Here</div>)}
                    </>
                  );
                })()}
@@ -3858,12 +3858,12 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
            >
              <div className="shrink-0 w-32 bg-slate-200 px-2 py-1 flex flex-col items-start justify-center border-r border-slate-400">
                <div className="text-xs font-black text-slate-700">未該当エリア</div>
-               <div className="text-[10px] text-slate-500">不良 / 残ロット等</div>
-               <div className="text-[10px] text-slate-600 mt-0.5"><span className="font-mono font-bold">{zoneLots.length}</span> 件</div>
+               <div className="text-xs text-slate-500">不良 / 残ロット等</div>
+               <div className="text-xs text-slate-600 mt-0.5"><span className="font-mono font-bold">{zoneLots.length}</span> 件</div>
              </div>
              <div className="flex-1 overflow-x-auto overflow-y-hidden flex gap-1 p-1">
                {zoneLots.length === 0 && (
-                 <div className="flex items-center justify-center w-full text-[10px] text-slate-400 italic">ここに不良・残ロット等をドラッグ&ドロップ</div>
+                 <div className="flex items-center justify-center w-full text-xs text-slate-400 italic">ここに不良・残ロット等をドラッグ&ドロップ</div>
                )}
                {/* ⚠横に広く・縦に低く(清水さん 2026-08-05)。w-48→w-72 */}
                {zoneLots.map(lot => (
@@ -4033,15 +4033,15 @@ const ShiftHandoverModal = ({ lots, indirectWork, currentUserName, workers, save
             <div className="text-xs font-bold text-slate-500 mb-2">本日の実績 ({currentUserName})</div>
             <div className="grid grid-cols-3 gap-2">
               <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
-                <div className="text-[10px] text-emerald-600 font-bold">完了</div>
+                <div className="text-xs text-emerald-600 font-bold">完了</div>
                 <div className="text-2xl font-black text-emerald-700">{todayCompleted.length}</div>
               </div>
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center">
-                <div className="text-[10px] text-blue-600 font-bold">進行中・一時停止</div>
+                <div className="text-xs text-blue-600 font-bold">進行中・一時停止</div>
                 <div className="text-2xl font-black text-blue-700">{inProgress.length}</div>
               </div>
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-center">
-                <div className="text-[10px] text-slate-500 font-bold">合計時間</div>
+                <div className="text-xs text-slate-500 font-bold">合計時間</div>
                 <div className="text-2xl font-black text-slate-700 font-mono">{((totalMyWork + indirectSec)/3600).toFixed(1)}h</div>
               </div>
             </div>
@@ -4057,7 +4057,7 @@ const ShiftHandoverModal = ({ lots, indirectWork, currentUserName, workers, save
                     {l.status === 'paused' ? <Pause className="w-4 h-4 text-amber-600"/> : <PlayCircle className="w-4 h-4 text-blue-600"/>}
                     <span className="font-bold">{l.model}</span>
                     <span className="text-slate-500 text-xs">({l.orderNo})</span>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${l.status === 'paused' ? 'bg-amber-200 text-amber-800' : 'bg-blue-200 text-blue-800'}`}>
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded ${l.status === 'paused' ? 'bg-amber-200 text-amber-800' : 'bg-blue-200 text-blue-800'}`}>
                       {l.status === 'paused' ? '一時停止' : '作業中'}
                     </span>
                   </div>
@@ -4075,7 +4075,7 @@ const ShiftHandoverModal = ({ lots, indirectWork, currentUserName, workers, save
               className="w-full border rounded-lg p-3 h-32 text-sm"
               placeholder="例: ロット123 の Step3 で気になる点あり、明日確認お願いします"
             />
-            <p className="text-[10px] text-slate-400 mt-1">保存すると共有ノートに登録され、次のシフトの担当者が「ノート」タブで確認できます。</p>
+            <p className="text-xs text-slate-400 mt-1">保存すると共有ノートに登録され、次のシフトの担当者が「ノート」タブで確認できます。</p>
           </div>
         </div>
         <div className="border-t p-4 flex justify-end gap-2 shrink-0">
@@ -4250,21 +4250,21 @@ const DailySummaryModal = ({ lots, indirectWork, currentUserName, workers, setti
             <input value={searchText} onChange={e => setSearchText(e.target.value)} className="border rounded px-2 py-1 text-sm w-32" placeholder="検索..."/>
           </div>
           <div className="flex items-center gap-1 flex-wrap">
-            <span className="text-[10px] text-slate-500 font-bold mr-1">作業者:</span>
-            <button onClick={() => isAllSelected ? setSelectedWorkers([]) : selectAll()} className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${isAllSelected ? 'bg-slate-800 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'}`}>全員</button>
+            <span className="text-xs text-slate-500 font-bold mr-1">作業者:</span>
+            <button onClick={() => isAllSelected ? setSelectedWorkers([]) : selectAll()} className={`text-xs px-2 py-0.5 rounded-full font-bold border ${isAllSelected ? 'bg-slate-800 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'}`}>全員</button>
             {allWorkerNames.map(name => (
-              <button key={name} onClick={() => toggleWorker(name)} className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${selectedWorkers.includes(name) ? 'bg-blue-600 text-white border-blue-700' : 'bg-white text-slate-400 border-slate-200'}`}>{name}</button>
+              <button key={name} onClick={() => toggleWorker(name)} className={`text-xs px-2 py-0.5 rounded-full font-bold border ${selectedWorkers.includes(name) ? 'bg-blue-600 text-white border-blue-700' : 'bg-white text-slate-400 border-slate-200'}`}>{name}</button>
             ))}
           </div>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* 合計カード */}
           <div className="grid grid-cols-5 gap-2">
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-2 text-center"><div className="text-[10px] text-blue-500 font-bold">直工</div><div className="text-xl font-black text-blue-700 font-mono">{(directSeconds/3600).toFixed(2)}<span className="text-[10px]">h</span></div></div>
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-2 text-center"><div className="text-[10px] text-amber-500 font-bold">間接</div><div className="text-xl font-black text-amber-700 font-mono">{(indirectSeconds/3600).toFixed(2)}<span className="text-[10px]">h</span></div></div>
-            <div className={`border rounded-xl p-2 text-center ${totalHours >= 7.75 ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'}`}><div className="text-[10px] font-bold text-slate-500">合計</div><div className={`text-xl font-black font-mono ${totalHours >= 7.75 ? 'text-emerald-700' : 'text-rose-700'}`}>{totalHours.toFixed(2)}<span className="text-[10px]">h</span></div></div>
-            <div className="bg-purple-50 border border-purple-200 rounded-xl p-2 text-center"><div className="text-[10px] text-purple-500 font-bold">直工比率</div><div className="text-xl font-black text-purple-700 font-mono">{directRatio.toFixed(0)}<span className="text-[10px]">%</span></div></div>
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 text-center"><div className="text-[10px] text-slate-500 font-bold">目標</div><div className="text-xl font-black text-slate-700 font-mono">{isSingleDay ? '7.75' : '-'}<span className="text-[10px]">h</span></div></div>
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-2 text-center"><div className="text-xs text-blue-500 font-bold">直工</div><div className="text-xl font-black text-blue-700 font-mono">{(directSeconds/3600).toFixed(2)}<span className="text-xs">h</span></div></div>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-2 text-center"><div className="text-xs text-amber-500 font-bold">間接</div><div className="text-xl font-black text-amber-700 font-mono">{(indirectSeconds/3600).toFixed(2)}<span className="text-xs">h</span></div></div>
+            <div className={`border rounded-xl p-2 text-center ${totalHours >= 7.75 ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'}`}><div className="text-xs font-bold text-slate-500">合計</div><div className={`text-xl font-black font-mono ${totalHours >= 7.75 ? 'text-emerald-700' : 'text-rose-700'}`}>{totalHours.toFixed(2)}<span className="text-xs">h</span></div></div>
+            <div className="bg-purple-50 border border-purple-200 rounded-xl p-2 text-center"><div className="text-xs text-purple-500 font-bold">直工比率</div><div className="text-xl font-black text-purple-700 font-mono">{directRatio.toFixed(0)}<span className="text-xs">%</span></div></div>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 text-center"><div className="text-xs text-slate-500 font-bold">目標</div><div className="text-xl font-black text-slate-700 font-mono">{isSingleDay ? '7.75' : '-'}<span className="text-xs">h</span></div></div>
           </div>
 
           {tab === 'daily' && (<>
@@ -4283,21 +4283,21 @@ const DailySummaryModal = ({ lots, indirectWork, currentUserName, workers, setti
                             {isExpanded ? <ChevronDown className="w-3.5 h-3.5 text-blue-600 shrink-0"/> : <ChevronRight className="w-3.5 h-3.5 text-blue-600 shrink-0"/>}
                             <span className="font-bold text-blue-700 truncate">{g.model}</span>
                             <span className="text-slate-500 shrink-0">{g.orderNo}</span>
-                            {g.templateName ? <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5 truncate max-w-[14rem]" title={`テンプレート: ${g.templateName}`} data-daily-template={g.lotId || g.orderNo}>📋 {g.templateName}</span> : null}
-                            <span className="text-[10px] text-slate-400 shrink-0">({g.steps.length}工程 / {g.totalCount}件)</span>
-                            {g.workers.length > 0 && <span className="text-[10px] text-slate-500 shrink-0">担当: {g.workers.join(', ')}</span>}
+                            {g.templateName ? <span className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5 truncate max-w-[14rem]" title={`テンプレート: ${g.templateName}`} data-daily-template={g.lotId || g.orderNo}>📋 {g.templateName}</span> : null}
+                            <span className="text-xs text-slate-400 shrink-0">({g.steps.length}工程 / {g.totalCount}件)</span>
+                            {g.workers.length > 0 && <span className="text-xs text-slate-500 shrink-0">担当: {g.workers.join(', ')}</span>}
                           </button>
                           <span className="font-mono font-bold text-blue-600 shrink-0 ml-2">{formatTime(g.totalSec)}</span>
                         </div>
                         {isExpanded && (
                           <div className="bg-slate-50 border-t border-blue-100">
-                            <table className="w-full text-[11px]">
+                            <table className="w-full text-xs">
                               <tbody>
                                 {g.steps.map((s) => (
                                   <tr key={s.stepId} className="border-b border-slate-200 last:border-b-0 hover:bg-blue-50/40">
                                     <td className="px-4 py-1.5 align-top w-1/2">
                                       <div className="font-bold text-slate-700 truncate" title={s.stepName}>{s.stepName}</div>
-                                      <div className="text-[10px] text-slate-400 mt-0.5">
+                                      <div className="text-xs text-slate-400 mt-0.5">
                                         {s.units.length}件 ・{s.workers.join(', ')}
                                       </div>
                                     </td>
@@ -4305,7 +4305,7 @@ const DailySummaryModal = ({ lots, indirectWork, currentUserName, workers, setti
                                       <div className="flex flex-wrap gap-1">
                                         {s.units.map((u, i) => (
                                           <span key={i} className="inline-flex items-center gap-1 bg-white border border-blue-200 rounded px-1.5 py-0.5">
-                                            <span className="text-[9px] text-slate-500">{u.unitSn}</span>
+                                            <span className="text-xs text-slate-500">{u.unitSn}</span>
                                             <span className="font-mono font-bold text-blue-700">{formatTime(u.duration)}</span>
                                           </span>
                                         ))}
@@ -4369,8 +4369,8 @@ const DailySummaryModal = ({ lots, indirectWork, currentUserName, workers, setti
               {catEntries.length > 0 ? catEntries.map(([cat, sec]) => (
                 <div key={cat} className="flex items-center gap-2 mb-2">
                   <span className="text-xs font-bold text-slate-600 w-16 text-right shrink-0">{cat}</span>
-                  <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden"><div className="h-full bg-amber-500 rounded-full flex items-center pl-2" style={{width: `${(sec/maxCatSec)*100}%`}}><span className="text-[9px] text-white font-bold">{formatTime(sec)}</span></div></div>
-                  <span className="text-[10px] text-slate-400 w-10 text-right font-mono">{((sec/3600)).toFixed(1)}h</span>
+                  <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden"><div className="h-full bg-amber-500 rounded-full flex items-center pl-2" style={{width: `${(sec/maxCatSec)*100}%`}}><span className="text-xs text-white font-bold">{formatTime(sec)}</span></div></div>
+                  <span className="text-xs text-slate-400 w-10 text-right font-mono">{((sec/3600)).toFixed(1)}h</span>
                 </div>
               )) : <div className="text-center text-slate-400 text-xs py-4">データなし</div>}
             </div>
@@ -4473,13 +4473,13 @@ const WorkStandardsLibraryModal = ({ standards, onClose, onEdit, allowManage = f
                     <FileText className="w-4 h-4 text-orange-600 shrink-0 mt-0.5"/>
                     <div className="flex-1 min-w-0">
                       <div className="font-bold text-sm text-slate-800 truncate" title={s.name}>{s.name}</div>
-                      {s.category && <div className="text-[10px] text-orange-700 bg-orange-100 inline-block px-1.5 py-0.5 rounded mt-0.5">{s.category}</div>}
-                      {s.description && <div className="text-[10px] text-slate-500 mt-1 line-clamp-2">{s.description}</div>}
+                      {s.category && <div className="text-xs text-orange-700 bg-orange-100 inline-block px-1.5 py-0.5 rounded mt-0.5">{s.category}</div>}
+                      {s.description && <div className="text-xs text-slate-500 mt-1 line-clamp-2">{s.description}</div>}
                     </div>
                   </div>
                   {allowManage && selectedId === s.id && (
                     <div className="flex gap-1 mt-2 pt-2 border-t border-orange-200">
-                      <button onClick={(e) => { e.stopPropagation(); onEdit && onEdit(s); }} className="flex-1 text-[10px] bg-blue-100 hover:bg-blue-200 text-blue-700 px-2 py-1 rounded font-bold flex items-center justify-center gap-1"><Pencil className="w-3 h-3"/> 編集</button>
+                      <button onClick={(e) => { e.stopPropagation(); onEdit && onEdit(s); }} className="flex-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 px-2 py-1 rounded font-bold flex items-center justify-center gap-1"><Pencil className="w-3 h-3"/> 編集</button>
                     </div>
                   )}
                 </div>
@@ -4499,7 +4499,7 @@ const WorkStandardsLibraryModal = ({ standards, onClose, onEdit, allowManage = f
                 <div className="bg-white border-b border-slate-200 px-4 py-2 flex items-center justify-between shrink-0">
                   <div className="min-w-0 flex-1">
                     <div className="font-bold text-slate-800 truncate">{selected.name}</div>
-                    <div className="text-[10px] text-slate-500 flex items-center gap-2">
+                    <div className="text-xs text-slate-500 flex items-center gap-2">
                       {selected.category && <span className="bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-bold">{selected.category}</span>}
                       {selected.uploadedBy && <span>登録: {selected.uploadedBy}</span>}
                       {selected.updatedAt && <span>更新: {toDateShort(selected.updatedAt)}</span>}
@@ -4593,7 +4593,7 @@ const WorkStandardEditModal = ({ editingItem, onClose, onSave, onDelete, current
           <div>
             <label className="block text-xs font-bold text-slate-600 mb-1">カテゴリ</label>
             <input value={category} onChange={e => setCategory(e.target.value)} placeholder="例: 組立 / 検査 / 包装" className="w-full border rounded p-2 text-sm"/>
-            <p className="text-[10px] text-slate-400 mt-0.5">同じカテゴリ名でグループ化されます</p>
+            <p className="text-xs text-slate-400 mt-0.5">同じカテゴリ名でグループ化されます</p>
           </div>
           <div>
             <label className="block text-xs font-bold text-slate-600 mb-1">説明</label>
@@ -4604,7 +4604,7 @@ const WorkStandardEditModal = ({ editingItem, onClose, onSave, onDelete, current
             <label className="block w-full p-4 border-2 border-dashed border-orange-300 bg-orange-50 hover:bg-orange-100 rounded cursor-pointer text-center text-sm">
               <FileText className="w-8 h-8 mx-auto mb-1 text-orange-600"/>
               <div className="font-bold text-orange-800">{pdfData ? (pdfFileName || (editingItem ? '既存 PDF (差し替えるならクリック)' : '選択済み')) : 'クリックして PDF を選択'}</div>
-              <div className="text-[10px] text-slate-500 mt-1">推奨 5MB 以下</div>
+              <div className="text-xs text-slate-500 mt-1">推奨 5MB 以下</div>
               <input type="file" accept="application/pdf" onChange={handlePdfUpload} className="hidden"/>
             </label>
             {pdfData && (
@@ -4777,7 +4777,7 @@ const NoteModal = ({ notes, templates, workers, saveData, deleteData, loadImage,
               </div>
               <label className="flex items-center gap-2 cursor-pointer p-2 bg-amber-50 rounded-lg border border-amber-200">
                 <input type="checkbox" checked={isShared} onChange={e => setIsShared(e.target.checked)} className="rounded"/>
-                <div><span className="text-sm font-bold text-amber-700">みんなに共有する</span><div className="text-[10px] text-amber-500">該当する品目コード・工程の作業時に表示されます</div></div>
+                <div><span className="text-sm font-bold text-amber-700">みんなに共有する</span><div className="text-xs text-amber-500">該当する品目コード・工程の作業時に表示されます</div></div>
               </label>
               <button onClick={handleSave} disabled={busy} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 disabled:opacity-50">{busy ? '保存中…' : '保存'}</button>
             </div>
@@ -4788,7 +4788,7 @@ const NoteModal = ({ notes, templates, workers, saveData, deleteData, loadImage,
               {myNotes.map(n => (
                 <div key={n.id} className="border rounded-lg p-3 bg-white shadow-sm">
                   <div className="flex justify-between items-start mb-1">
-                    <div className="text-[10px] text-slate-400">{n.model && <span className="bg-blue-100 text-blue-700 px-1.5 rounded mr-1">{n.model}</span>}{n.stepTitle && <span className="bg-emerald-100 text-emerald-700 px-1.5 rounded">{n.stepTitle}</span>}</div>
+                    <div className="text-xs text-slate-400">{n.model && <span className="bg-blue-100 text-blue-700 px-1.5 rounded mr-1">{n.model}</span>}{n.stepTitle && <span className="bg-emerald-100 text-emerald-700 px-1.5 rounded">{n.stepTitle}</span>}</div>
                     <button onClick={() => {
                       // 🖼 札の先の写真も一緒に片付ける(残すと note_images に宛先の無い1枚が残る)。
                       //   ⚠写真の削除に失敗しても本体の削除は止めない(ゴミが残るだけ。逆は「消したのに出る」)。
@@ -4798,7 +4798,7 @@ const NoteModal = ({ notes, templates, workers, saveData, deleteData, loadImage,
                   </div>
                   <div className="text-sm text-slate-700 whitespace-pre-wrap">{n.content}</div>
                   <NoteImageView doc={n} loadImage={loadImage} className="mt-2 max-h-32 rounded border"/>
-                  <div className="text-[9px] text-slate-300 mt-1">{new Date(n.createdAt).toLocaleString('ja-JP')}</div>
+                  <div className="text-xs text-slate-300 mt-1">{new Date(n.createdAt).toLocaleString('ja-JP')}</div>
                 </div>
               ))}
             </div>
@@ -4809,12 +4809,12 @@ const NoteModal = ({ notes, templates, workers, saveData, deleteData, loadImage,
               {sharedNotes.map(n => (
                 <div key={n.id} className="border-2 border-amber-300 rounded-lg p-3 bg-amber-50">
                   <div className="flex justify-between items-start mb-1">
-                    <div className="text-[10px]">{n.model && <span className="bg-blue-100 text-blue-700 px-1.5 rounded mr-1">{n.model}</span>}{n.stepTitle && <span className="bg-emerald-100 text-emerald-700 px-1.5 rounded">{n.stepTitle}</span>}</div>
-                    <span className="text-[10px] text-amber-600 font-bold">{n.author}</span>
+                    <div className="text-xs">{n.model && <span className="bg-blue-100 text-blue-700 px-1.5 rounded mr-1">{n.model}</span>}{n.stepTitle && <span className="bg-emerald-100 text-emerald-700 px-1.5 rounded">{n.stepTitle}</span>}</div>
+                    <span className="text-xs text-amber-600 font-bold">{n.author}</span>
                   </div>
                   <div className="text-sm text-slate-800 whitespace-pre-wrap font-medium">{n.content}</div>
                   <NoteImageView doc={n} loadImage={loadImage} className="mt-2 max-h-32 rounded border"/>
-                  <div className="text-[9px] text-slate-400 mt-1">{new Date(n.createdAt).toLocaleString('ja-JP')}</div>
+                  <div className="text-xs text-slate-400 mt-1">{new Date(n.createdAt).toLocaleString('ja-JP')}</div>
                 </div>
               ))}
             </div>
@@ -4999,10 +4999,10 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, loadI
                     <div className="flex justify-between items-start">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
-                          {!confirmed && <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded font-bold shrink-0">未読</span>}
+                          {!confirmed && <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded font-bold shrink-0">未読</span>}
                           <h3 className="font-black text-slate-800 truncate">{ann.title}</h3>
                         </div>
-                        <div className="text-[10px] text-slate-400 flex items-center gap-2">
+                        <div className="text-xs text-slate-400 flex items-center gap-2">
                           <span className="font-bold text-purple-500">{ann.author}</span>
                           <span>{new Date(ann.createdAt).toLocaleString('ja-JP', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
                           {(ann.comments || []).length > 0 && <span className="text-blue-500">💬{ann.comments.length}</span>}
@@ -5070,7 +5070,7 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, loadI
                     <div key={ci} className="bg-slate-50 rounded-lg p-2">
                       <div className="flex justify-between items-center mb-0.5">
                         <span className="text-xs font-bold text-blue-600">{c.author}</span>
-                        <span className="text-[9px] text-slate-300">{new Date(c.createdAt).toLocaleString('ja-JP', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+                        <span className="text-xs text-slate-300">{new Date(c.createdAt).toLocaleString('ja-JP', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
                       </div>
                       <div className="text-sm text-slate-700">{c.text}</div>
                     </div>
@@ -5094,7 +5094,7 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, loadI
                   <button onClick={() => setAnnMode('confirm')} className={`flex-1 py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-1.5 border-2 transition-all ${annMode === 'confirm' ? 'bg-emerald-600 text-white border-emerald-700' : 'bg-white text-slate-500 border-slate-200'}`}><CheckCircle2 className="w-4 h-4"/> 確認モード</button>
                   <button onClick={() => setAnnMode('alarm')} className={`flex-1 py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-1.5 border-2 transition-all ${annMode === 'alarm' ? 'bg-amber-500 text-white border-amber-600' : 'bg-white text-slate-500 border-slate-200'}`}><Bell className="w-4 h-4"/> アラームモード</button>
                 </div>
-                <div className="text-[10px] text-slate-400 mt-1">{annMode === 'confirm' ? '全員に「確認しました」ボタンとコメント欄が表示されます' : '通知時間にバナー表示のみ。確認ボタンは表示されません'}</div>
+                <div className="text-xs text-slate-400 mt-1">{annMode === 'confirm' ? '全員に「確認しました」ボタンとコメント欄が表示されます' : '通知時間にバナー表示のみ。確認ボタンは表示されません'}</div>
               </div>
               <div><label className="text-xs font-bold text-slate-500">タイトル</label><input value={title} onChange={e=>setTitle(e.target.value)} className="w-full border rounded p-2 text-sm font-bold" placeholder="例: 明日の全体会議について"/></div>
               <div><label className="text-xs font-bold text-slate-500">内容</label><textarea value={content} onChange={e=>setContent(e.target.value)} className="w-full border rounded p-2 text-sm h-24" placeholder="詳細を入力..."/></div>
@@ -5112,8 +5112,8 @@ const AnnouncementModal = ({ announcements, workers, saveData, deleteData, loadI
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <label className="text-xs font-bold text-blue-700 flex items-center gap-1 mb-2"><Bell className="w-3.5 h-3.5"/> 通知時間（画面上部にバナー表示）</label>
                 <div className="flex gap-3">
-                  <div className="flex-1"><label className="text-[10px] text-blue-500">通知1</label><input type="time" value={notifyTime1} onChange={e=>setNotifyTime1(e.target.value)} className="w-full border rounded p-1.5 text-sm"/></div>
-                  <div className="flex-1"><label className="text-[10px] text-blue-500">通知2</label><input type="time" value={notifyTime2} onChange={e=>setNotifyTime2(e.target.value)} className="w-full border rounded p-1.5 text-sm"/></div>
+                  <div className="flex-1"><label className="text-xs text-blue-500">通知1</label><input type="time" value={notifyTime1} onChange={e=>setNotifyTime1(e.target.value)} className="w-full border rounded p-1.5 text-sm"/></div>
+                  <div className="flex-1"><label className="text-xs text-blue-500">通知2</label><input type="time" value={notifyTime2} onChange={e=>setNotifyTime2(e.target.value)} className="w-full border rounded p-1.5 text-sm"/></div>
                 </div>
               </div>
               <button onClick={view === 'edit' ? handleUpdate : handlePost} disabled={busy} className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 disabled:opacity-50">{busy ? '保存中…' : (view === 'edit' ? '更新する' : '投稿する')}</button>
@@ -5143,7 +5143,7 @@ const MeasurementPreviewBox = ({ config, variant = 'tiny', maxHeight = 200 }) =>
 
   const inputs = config?.inputs || [];
   const dotCls = variant === 'large'
-    ? 'bg-teal-500 text-white text-[10px] font-bold rounded-full w-7 h-7 flex items-center justify-center shadow-md'
+    ? 'bg-teal-500 text-white text-xs font-bold rounded-full w-7 h-7 flex items-center justify-center shadow-md'
     : 'w-3 h-3 rounded-full border-2 border-white shadow';
   const labelCls = variant === 'large'
     ? '' // ドット内にラベルを入れる
@@ -5391,9 +5391,9 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
            </div>
            <div className="bg-white p-2 pb-6 flex flex-col gap-2">
              <div className="flex gap-2 justify-center pb-2">
-               <button onClick={()=>setDrawTool('pen')} className={`p-3 rounded-lg flex flex-col items-center ${drawTool==='pen'?'bg-blue-100 text-blue-600':'bg-slate-100'}`}><Brush/><span className="text-[10px]">ペン</span></button>
-               <button onClick={()=>setDrawTool('stamp')} className={`p-3 rounded-lg flex flex-col items-center ${drawTool==='stamp'?'bg-blue-100 text-blue-600':'bg-slate-100'}`}><AlertTriangle/><span className="text-[10px]">スタンプ</span></button>
-               <button onClick={()=>setDrawTool('text')} className={`p-3 rounded-lg flex flex-col items-center ${drawTool==='text'?'bg-blue-100 text-blue-600':'bg-slate-100'}`}><Type/><span className="text-[10px]">文字</span></button>
+               <button onClick={()=>setDrawTool('pen')} className={`p-3 rounded-lg flex flex-col items-center ${drawTool==='pen'?'bg-blue-100 text-blue-600':'bg-slate-100'}`}><Brush/><span className="text-xs">ペン</span></button>
+               <button onClick={()=>setDrawTool('stamp')} className={`p-3 rounded-lg flex flex-col items-center ${drawTool==='stamp'?'bg-blue-100 text-blue-600':'bg-slate-100'}`}><AlertTriangle/><span className="text-xs">スタンプ</span></button>
+               <button onClick={()=>setDrawTool('text')} className={`p-3 rounded-lg flex flex-col items-center ${drawTool==='text'?'bg-blue-100 text-blue-600':'bg-slate-100'}`}><Type/><span className="text-xs">文字</span></button>
              </div>
              {drawTool==='stamp' && ( <div className="flex gap-2 overflow-x-auto pb-2">{STAMPS.map(s=><button key={s.label} onClick={()=>setSelectedStampVal(s.val)} className={`flex-none px-3 py-2 rounded border text-lg ${selectedStampVal===s.val?'bg-blue-100 border-blue-500':'bg-white'}`}>{s.label}</button>)}</div> )}
              {drawTool==='text' && ( <div className="flex gap-2 p-2"><input value={textToDraw} onChange={e=>setTextToDraw(e.target.value)} placeholder="文字を入力" className="border p-2 rounded flex-1"/></div> )}
@@ -5422,14 +5422,14 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
             <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${overviewHasContent ? 'bg-cyan-500 text-white' : 'bg-slate-300 text-white'}`}><FileText className="w-5 h-5"/></div>
             <div className="min-w-0">
               <div className="text-sm font-bold text-slate-800">📋 テンプレ全体の総合資料</div>
-              <div className="text-[11px] text-slate-500 truncate">
+              <div className="text-xs text-slate-500 truncate">
                 {overviewHasContent
                   ? `${overview.images?.length || 0}枚 ／ PDF ${overview.pdfs?.length || 0} ／ 説明${(overview.description || '').trim() ? 'あり' : 'なし'}`
                   : '手順書PDF・概要写真・全体説明をまとめて登録'}
               </div>
             </div>
           </button>
-          <div className="text-[11px] font-bold text-slate-400 mb-1 px-1">工程一覧</div>
+          <div className="text-xs font-bold text-slate-400 mb-1 px-1">工程一覧</div>
           <div className="space-y-2">{steps.map((s, i) => {
             const isAuto = s.executionMode === 'batch' || (s.title || '').includes('自動');
             const resTag = s.workResource;
@@ -5440,7 +5440,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
             const resColor = isAuto ? 'bg-purple-100 text-purple-700' :
                              resTag === 'measurement-machine' || resTag === 'jig-shared' || (resTag && resTag !== '') ? 'bg-rose-100 text-rose-700' :
                              (resTag === null || resTag === '') ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700';
-            return (<div key={s.id} className={`p-3 border rounded-lg flex gap-3 cursor-pointer ${editingStepId===s.id ? 'border-blue-500 bg-blue-50' : 'hover:border-slate-300'}`} onClick={() => editStep(s)}><div className="flex flex-col gap-1 justify-center"><button onClick={(e)=>{e.stopPropagation();moveStep(i,'up')}} disabled={i===0} className="text-slate-300 hover:text-slate-600"><ArrowUp className="w-4 h-4"/></button><span className="text-xs font-bold text-slate-400 text-center">{i+1}</span><button onClick={(e)=>{e.stopPropagation();moveStep(i,'down')}} disabled={i===steps.length-1} className="text-slate-300 hover:text-slate-600"><ArrowDown className="w-4 h-4"/></button></div><div className="flex-1 min-w-0"><div className="font-bold text-sm truncate flex items-center gap-1.5">{isAuto && <span className="bg-purple-500 text-white text-[9px] font-bold px-1 rounded shrink-0">自動</span>}{s.title}</div><p className="text-xs text-slate-500 truncate">{s.description}</p><div className="flex items-center gap-1 mt-1"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${resColor}`}>{isAuto ? '🤖 自動測定' : resLabel}</span></div></div><div className="flex flex-col gap-1"><button onClick={(e)=>{e.stopPropagation();const dup={...s,id:generateId(),title:s.title+' (コピー)'};setSteps(prev=>[...prev.slice(0,i+1),dup,...prev.slice(i+1)]);}} className="text-slate-300 hover:text-blue-500" title="複製"><Copy className="w-4 h-4"/></button><button onClick={(e)=>{e.stopPropagation();deleteStep(s.id)}} className="text-slate-300 hover:text-red-500" title="削除"><Trash2 className="w-4 h-4"/></button></div></div>);
+            return (<div key={s.id} className={`p-3 border rounded-lg flex gap-3 cursor-pointer ${editingStepId===s.id ? 'border-blue-500 bg-blue-50' : 'hover:border-slate-300'}`} onClick={() => editStep(s)}><div className="flex flex-col gap-1 justify-center"><button onClick={(e)=>{e.stopPropagation();moveStep(i,'up')}} disabled={i===0} className="text-slate-300 hover:text-slate-600"><ArrowUp className="w-4 h-4"/></button><span className="text-xs font-bold text-slate-400 text-center">{i+1}</span><button onClick={(e)=>{e.stopPropagation();moveStep(i,'down')}} disabled={i===steps.length-1} className="text-slate-300 hover:text-slate-600"><ArrowDown className="w-4 h-4"/></button></div><div className="flex-1 min-w-0"><div className="font-bold text-sm truncate flex items-center gap-1.5">{isAuto && <span className="bg-purple-500 text-white text-xs font-bold px-1 rounded shrink-0">自動</span>}{s.title}</div><p className="text-xs text-slate-500 truncate">{s.description}</p><div className="flex items-center gap-1 mt-1"><span className={`text-xs font-bold px-1.5 py-0.5 rounded ${resColor}`}>{isAuto ? '🤖 自動測定' : resLabel}</span></div></div><div className="flex flex-col gap-1"><button onClick={(e)=>{e.stopPropagation();const dup={...s,id:generateId(),title:s.title+' (コピー)'};setSteps(prev=>[...prev.slice(0,i+1),dup,...prev.slice(i+1)]);}} className="text-slate-300 hover:text-blue-500" title="複製"><Copy className="w-4 h-4"/></button><button onClick={(e)=>{e.stopPropagation();deleteStep(s.id)}} className="text-slate-300 hover:text-red-500" title="削除"><Trash2 className="w-4 h-4"/></button></div></div>);
           })}</div>
         </div>
         <div className="w-2/3 p-6 bg-slate-50 overflow-y-auto flex gap-6">
@@ -5452,12 +5452,12 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
             <div className="bg-indigo-50/50 border-2 border-indigo-200 rounded-lg p-3 space-y-2.5">
               <div className="text-xs font-bold text-indigo-800 flex items-center gap-1.5">
                 <Bot className="w-3.5 h-3.5"/> 実行モードと占有リソース
-                <span className="text-[10px] font-normal text-indigo-600 ml-1">(オススメ順機能で「並行可能か」を判定するための情報)</span>
+                <span className="text-xs font-normal text-indigo-600 ml-1">(オススメ順機能で「並行可能か」を判定するための情報)</span>
               </div>
 
               {/* 実行モード: 手動 / 自動測定 */}
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">実行モード</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1">実行モード</label>
                 <div className="flex gap-1.5">
                   <button
                     type="button"
@@ -5481,13 +5481,13 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                   </label>
                   {autoEndEnabled && (
                     <div className="flex items-center flex-wrap gap-2 pl-6">
-                      <label className="text-[11px] text-slate-600">自動測定時間</label>
+                      <label className="text-xs text-slate-600">自動測定時間</label>
                       <input type="number" min="1" value={autoEndSec || ''} onChange={e => setAutoEndSec(Math.max(0, Number(e.target.value) || 0))} className="border rounded p-1 text-xs w-20" placeholder="秒"/>
-                      <span className="text-[11px] text-slate-500">秒{autoEndSec > 0 ? `（${Math.floor(autoEndSec/60)}分${autoEndSec%60}秒）` : ''}</span>
-                      {targetTime > 0 && <button type="button" onClick={() => setAutoEndSec(targetTime)} className="text-[10px] text-purple-600 underline">目標時間({targetTime}s)を使う</button>}
+                      <span className="text-xs text-slate-500">秒{autoEndSec > 0 ? `（${Math.floor(autoEndSec/60)}分${autoEndSec%60}秒）` : ''}</span>
+                      {targetTime > 0 && <button type="button" onClick={() => setAutoEndSec(targetTime)} className="text-xs text-purple-600 underline">目標時間({targetTime}s)を使う</button>}
                     </div>
                   )}
-                  <div className="text-[10px] text-purple-600 leading-relaxed">開始すると自動でカウントし、登録した時間が経過すると「完了」になります。一時停止中はカウントも止まります。</div>
+                  <div className="text-xs text-purple-600 leading-relaxed">開始すると自動でカウントし、登録した時間が経過すると「完了」になります。一時停止中はカウントも止まります。</div>
                 </div>
               )}
 
@@ -5497,7 +5497,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                   <input type="checkbox" checked={lotOnce} onChange={e => setLotOnce(e.target.checked)} className="w-4 h-4 accent-teal-600"/>
                   📦 ロットで1回（準備・片付けなどの段取り工程）
                 </label>
-                <div className="text-[10px] text-teal-700 leading-relaxed">
+                <div className="text-xs text-teal-700 leading-relaxed">
                   ONにすると、この工程は<b>台数分のボタンではなく「回数」のボタン</b>になります（10台でもボタン1個）。
                   5台ずつ持ち込み等で準備・片付けが複数回発生する場合は、作業画面の<b>「＋もう1回」</b>で回を追加できます。
                   目標時間は「1回あたり」の意味になり、1台目に段取り時間が混ざる問題が解消されます。
@@ -5508,7 +5508,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                   連動は「台ごとにステーション選択」する手動・単台の工程専用。ロット1回(段取り=回数ベース)や自動測定(batch=一括開始)とは
                   workId(=ロット×台)の採番が噛み合わないため併用不可にする(監査で確定した不整合の根本対策)。 */}
               {(lotOnce || executionMode === 'batch') ? (
-                <div className="bg-slate-50 border border-slate-200 rounded p-2 text-[10px] text-slate-400 leading-relaxed">
+                <div className="bg-slate-50 border border-slate-200 rounded p-2 text-xs text-slate-400 leading-relaxed">
                   🔗 分割測定アプリ連携は、<b>ロット1回(段取り)工程・自動測定(batch)工程とは併用できません</b>。連動は台ごとにステーションを選ぶ「手動・台ごとの工程」に付けてください。
                 </div>
               ) : (
@@ -5520,20 +5520,20 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                   {rotaryLink && (
                     <>
                       <div className="flex items-center gap-1.5 pl-6">
-                        <span className="text-[11px] text-slate-600">送る指令:</span>
-                        <button type="button" onClick={() => setRotaryRole('prepare')} className={`px-2.5 py-1 text-[11px] font-bold rounded border ${rotaryRole === 'prepare' ? 'bg-cyan-600 text-white border-cyan-700' : 'bg-white text-cyan-700 border-cyan-300'}`}>準備 (prepare)</button>
-                        <button type="button" onClick={() => setRotaryRole('capture')} className={`px-2.5 py-1 text-[11px] font-bold rounded border ${rotaryRole === 'capture' ? 'bg-cyan-600 text-white border-cyan-700' : 'bg-white text-cyan-700 border-cyan-300'}`}>測定開始 (start_capture)</button>
+                        <span className="text-xs text-slate-600">送る指令:</span>
+                        <button type="button" onClick={() => setRotaryRole('prepare')} className={`px-2.5 py-1 text-xs font-bold rounded border ${rotaryRole === 'prepare' ? 'bg-cyan-600 text-white border-cyan-700' : 'bg-white text-cyan-700 border-cyan-300'}`}>準備 (prepare)</button>
+                        <button type="button" onClick={() => setRotaryRole('capture')} className={`px-2.5 py-1 text-xs font-bold rounded border ${rotaryRole === 'capture' ? 'bg-cyan-600 text-white border-cyan-700' : 'bg-white text-cyan-700 border-cyan-300'}`}>測定開始 (start_capture)</button>
                       </div>
                       <div className="flex items-center gap-1.5 pl-6">
-                        <span className="text-[11px] text-slate-600">測定モード:</span>
-                        <select value={rotaryMode} onChange={e => setRotaryMode(e.target.value)} className="border border-cyan-300 rounded px-2 py-1 text-[11px] bg-white text-cyan-800 font-bold">
+                        <span className="text-xs text-slate-600">測定モード:</span>
+                        <select value={rotaryMode} onChange={e => setRotaryMode(e.target.value)} className="border border-cyan-300 rounded px-2 py-1 text-xs bg-white text-cyan-800 font-bold">
                           {ROTARY_MODES.map(m => <option key={m} value={m}>{m}</option>)}
                         </select>
-                        <span className="text-[10px] text-slate-400">品目コード＋このモードで条件が決まります</span>
+                        <span className="text-xs text-slate-400">品目コード＋このモードで条件が決まります</span>
                       </div>
                     </>
                   )}
-                  <div className="text-[10px] text-cyan-700 leading-relaxed">
+                  <div className="text-xs text-cyan-700 leading-relaxed">
                     「準備」工程の開始で<b>品目コード＋測定モード</b>を分割アプリへ送り条件をセット、「測定開始」工程の開始で測定が始まり、測定完了でこの工程のタイマーが<b>自動で止まります</b>。
                     開始時にステーション(PC)を選びます。<b>マスタ設定の「分割測定アプリ連携」がONのときだけ</b>動きます（既定OFF）。
                     <br />※モードは分割アプリの「条件編集」マスタに、この品目コードが登録されている必要があります（未登録だと条件が入らず分割アプリ側で警告）。
@@ -5543,7 +5543,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
 
               {/* 占有リソース */}
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">占有リソース (この工程で使う機械・場所)</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1">占有リソース (この工程で使う機械・場所)</label>
                 <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
@@ -5571,7 +5571,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                     className="px-2 py-1 text-xs border border-slate-300 rounded w-32 focus:border-indigo-500 outline-none"
                   />
                 </div>
-                <div className="text-[10px] text-slate-500 mt-1.5 leading-relaxed">
+                <div className="text-xs text-slate-500 mt-1.5 leading-relaxed">
                   💡 <b>機械独立</b> = 書類確認・準備など機械を使わない作業。他の台が自動測定中でも並行できる。<br/>
                   💡 <b>測定機を占有</b> = 測定準備・測定プログラム・自動測定本体など。同じ機械を共有する作業なので並行不可。
                 </div>
@@ -5584,7 +5584,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                 <div className="flex items-center justify-between">
                   <label className="text-sm font-bold text-purple-800 flex items-center gap-1">
                     <ListChecks className="w-4 h-4"/> 確認チェック項目 ({checklistItems.length}件)
-                    <span className="text-[10px] font-normal text-purple-500 ml-1">(任意 — どの工程タイプでも追加可)</span>
+                    <span className="text-xs font-normal text-purple-500 ml-1">(任意 — どの工程タイプでも追加可)</span>
                   </label>
                   <button
                     type="button"
@@ -5594,7 +5594,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                     <Plus className="w-3 h-3"/> 項目追加
                   </button>
                 </div>
-                {checklistItems.length > 0 && (<p className="text-[10px] text-purple-700">
+                {checklistItems.length > 0 && (<p className="text-xs text-purple-700">
                   作業者が確認したらチェックを入れる項目です。全ての <span className="font-bold">必須</span> 項目がチェックされないと工程を完了できません (成績表にも記録)。
                 </p>)}
                 <div className="space-y-1.5">
@@ -5607,14 +5607,14 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                     const remove = () => setChecklistItems(checklistItems.filter((_, i) => i !== idx));
                     return (
                       <div key={item.id || idx} className="bg-white border border-purple-200 rounded p-2 flex items-center gap-2">
-                        <span className="text-[10px] font-bold text-purple-500 w-5 text-center">{idx + 1}</span>
+                        <span className="text-xs font-bold text-purple-500 w-5 text-center">{idx + 1}</span>
                         <input
                           value={item.label || ''}
                           onChange={e => update({ label: e.target.value })}
                           placeholder="例: 色見本との一致を確認 / 銘板貼付確認"
                           className="flex-1 border rounded px-2 py-1 text-sm"
                         />
-                        <label className="flex items-center gap-1 text-[10px] font-bold text-slate-600 cursor-pointer shrink-0" title="チェック必須項目">
+                        <label className="flex items-center gap-1 text-xs font-bold text-slate-600 cursor-pointer shrink-0" title="チェック必須項目">
                           <input type="checkbox" checked={item.required !== false} onChange={e => update({ required: e.target.checked })} className="w-3.5 h-3.5 accent-purple-600"/>
                           必須
                         </label>
@@ -5737,8 +5737,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                 {/* Layout Preset */}
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="block text-[10px] font-bold text-slate-500">レイアウトプリセット</label>
-                    <button onClick={() => setShowPresetManager(!showPresetManager)} className="text-[10px] text-teal-600 font-bold hover:text-teal-800 flex items-center gap-0.5">
+                    <label className="block text-xs font-bold text-slate-500">レイアウトプリセット</label>
+                    <button onClick={() => setShowPresetManager(!showPresetManager)} className="text-xs text-teal-600 font-bold hover:text-teal-800 flex items-center gap-0.5">
                       <Settings className="w-3 h-3"/> プリセット管理
                     </button>
                   </div>
@@ -5753,35 +5753,35 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                         </optgroup>
                       )}
                     </select>
-                    <button onClick={handleSaveAsPreset} title="現在の入力ポイントをプリセットとして保存" className="bg-teal-500 hover:bg-teal-600 text-white px-2 py-1 rounded text-[10px] font-bold flex items-center gap-0.5 whitespace-nowrap">
+                    <button onClick={handleSaveAsPreset} title="現在の入力ポイントをプリセットとして保存" className="bg-teal-500 hover:bg-teal-600 text-white px-2 py-1 rounded text-xs font-bold flex items-center gap-0.5 whitespace-nowrap">
                       <Save className="w-3 h-3"/> 保存
                     </button>
                   </div>
                   {/* Preset Manager Panel */}
                   {showPresetManager && (
                     <div className="mt-2 bg-white border border-teal-200 rounded-lg p-2 space-y-2">
-                      <div className="text-[10px] font-bold text-slate-600 flex items-center gap-1 border-b pb-1"><Layers className="w-3 h-3"/> プリセット一覧</div>
+                      <div className="text-xs font-bold text-slate-600 flex items-center gap-1 border-b pb-1"><Layers className="w-3 h-3"/> プリセット一覧</div>
                       {/* Built-in presets (read-only) */}
                       {Object.entries(MEASUREMENT_LAYOUTS).map(([k, v]) => (
-                        <div key={k} className="flex items-center gap-2 text-[10px] py-1 px-1.5 bg-slate-50 rounded">
+                        <div key={k} className="flex items-center gap-2 text-xs py-1 px-1.5 bg-slate-50 rounded">
                           <ShieldCheck className="w-3 h-3 text-slate-400 flex-none"/>
                           <span className="flex-1 text-slate-500">{v.label}</span>
-                          <span className="text-[9px] text-slate-400">組み込み</span>
+                          <span className="text-xs text-slate-400">組み込み</span>
                         </div>
                       ))}
                       {/* Custom presets (editable) */}
                       {Object.entries(customLayouts).map(([k, v]) => (
-                        <div key={k} className="flex items-center gap-1 text-[10px] py-1 px-1.5 bg-teal-50 rounded border border-teal-100">
+                        <div key={k} className="flex items-center gap-1 text-xs py-1 px-1.5 bg-teal-50 rounded border border-teal-100">
                           {editingPresetKey === k ? (
                             <>
-                              <input value={editingPresetName} onChange={e => setEditingPresetName(e.target.value)} className="flex-1 border rounded px-1 py-0.5 text-[10px]" autoFocus onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleRenameCustomPreset(k, editingPresetName); if (e.key === 'Escape') { setEditingPresetKey(null); setEditingPresetName(''); } }}/>
+                              <input value={editingPresetName} onChange={e => setEditingPresetName(e.target.value)} className="flex-1 border rounded px-1 py-0.5 text-xs" autoFocus onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleRenameCustomPreset(k, editingPresetName); if (e.key === 'Escape') { setEditingPresetKey(null); setEditingPresetName(''); } }}/>
                               <button onClick={() => handleRenameCustomPreset(k, editingPresetName)} className="text-teal-600 hover:text-teal-800"><Check className="w-3 h-3"/></button>
                               <button onClick={() => { setEditingPresetKey(null); setEditingPresetName(''); }} className="text-slate-400 hover:text-slate-600"><X className="w-3 h-3"/></button>
                             </>
                           ) : (
                             <>
                               <span className="flex-1 font-medium text-teal-700">{v.label}</span>
-                              <span className="text-[9px] text-teal-500">{v.inputs?.length || 0}点</span>
+                              <span className="text-xs text-teal-500">{v.inputs?.length || 0}点</span>
                               <button onClick={() => { setEditingPresetKey(k); setEditingPresetName(v.label); }} className="text-slate-400 hover:text-teal-600" title="名前を変更"><Pencil className="w-3 h-3"/></button>
                               <button onClick={() => handleDeleteCustomPreset(k)} className="text-slate-400 hover:text-red-500" title="削除"><Trash2 className="w-3 h-3"/></button>
                             </>
@@ -5789,14 +5789,14 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                         </div>
                       ))}
                       {Object.keys(customLayouts).length === 0 && (
-                        <div className="text-[10px] text-slate-400 text-center py-2">カスタムプリセットはまだありません。上の「保存」ボタンで現在の設定を保存できます。</div>
+                        <div className="text-xs text-slate-400 text-center py-2">カスタムプリセットはまだありません。上の「保存」ボタンで現在の設定を保存できます。</div>
                       )}
                     </div>
                   )}
                 </div>
                 {/* Input Points */}
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">入力ポイント ({measurementConfig.inputs.length}点)</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">入力ポイント ({measurementConfig.inputs.length}点)</label>
                   <div className="max-h-64 overflow-y-auto space-y-2">
                     {measurementConfig.inputs.map((inp, idx) => (
                       <div key={idx} className="bg-white rounded p-2 border space-y-1">
@@ -5804,17 +5804,17 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                           <input value={inp.id} onChange={e => updateInput(idx, { id: e.target.value })} className="w-14 border rounded px-1 py-0.5 text-xs" placeholder="ID"/>
                           <input value={inp.label} onChange={e => updateInput(idx, { label: e.target.value })} className="flex-1 border rounded px-1 py-0.5 text-xs" placeholder="ラベル"/>
                           <div className="relative group">
-                            <select value={inp.inputType || 'number'} onChange={e => updateInput(idx, { inputType: e.target.value })} className="w-28 border rounded px-1 py-0.5 text-[10px] pr-4">
+                            <select value={inp.inputType || 'number'} onChange={e => updateInput(idx, { inputType: e.target.value })} className="w-28 border rounded px-1 py-0.5 text-xs pr-4">
                               <option value="number">数値入力</option>
                               <option value="combobox">選択式(コンボ)</option>
                             </select>
-                            <div className="hidden group-hover:block absolute bottom-full left-0 mb-1 bg-slate-800 text-white text-[9px] p-1.5 rounded shadow-lg whitespace-nowrap z-50">
+                            <div className="hidden group-hover:block absolute bottom-full left-0 mb-1 bg-slate-800 text-white text-xs p-1.5 rounded shadow-lg whitespace-nowrap z-50">
                               {(inp.inputType || 'number') === 'number' ? '直接数値を入力します' : 'ブロックゲージ等のプリセット値から選択できます'}
                             </div>
                           </div>
                           <button onClick={() => { const ni = measurementConfig.inputs.filter((_, i) => i !== idx); setMeasurementConfig({ ...measurementConfig, inputs: ni }); }} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
                         </div>
-                        <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                        <div className="flex items-center gap-2 text-xs text-slate-500">
                           <span>X:</span>
                           <input type="range" min="0" max="100" value={Math.round(inp.x)} onChange={e => updateInput(idx, { x: Number(e.target.value) })} className="flex-1 h-1 accent-teal-500"/>
                           <span className="w-8 text-right">{Math.round(inp.x)}%</span>
@@ -5825,8 +5825,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                         {(inp.inputType === 'combobox') && (
                           <div className="space-y-1 pt-1 border-t border-slate-100">
                             <div className="flex items-center gap-1">
-                              <span className="text-[10px] text-slate-500 font-bold">プリセットリスト:</span>
-                              <select value={inp.comboPresetId || ''} onChange={e => updateInput(idx, { comboPresetId: e.target.value })} className="flex-1 border rounded px-1 py-0.5 text-[10px]">
+                              <span className="text-xs text-slate-500 font-bold">プリセットリスト:</span>
+                              <select value={inp.comboPresetId || ''} onChange={e => updateInput(idx, { comboPresetId: e.target.value })} className="flex-1 border rounded px-1 py-0.5 text-xs">
                                 <option value="">-- 選択してください --</option>
                                 {comboPresets.map(cp => <option key={cp.id} value={cp.id}>{cp.name} ({cp.values?.length || 0}件)</option>)}
                               </select>
@@ -5834,7 +5834,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                             {(() => { const selectedPreset = comboPresets.find(cp => cp.id === inp.comboPresetId); return selectedPreset ? (
                               <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto bg-slate-50 p-1 rounded">
                                 {(selectedPreset.values || []).map((pv, pi) => (
-                                  <span key={pi} className="inline-flex items-center bg-white text-[9px] px-1.5 py-0.5 rounded border border-slate-200">{pv}</span>
+                                  <span key={pi} className="inline-flex items-center bg-white text-xs px-1.5 py-0.5 rounded border border-slate-200">{pv}</span>
                                 ))}
                               </div>
                             ) : null; })()}
@@ -5846,22 +5846,22 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                   <button onClick={() => setMeasurementConfig({ ...measurementConfig, inputs: [...measurementConfig.inputs, { id: `p${measurementConfig.inputs.length + 1}`, label: `P${measurementConfig.inputs.length + 1}`, x: 50, y: 50, inputType: 'number', presetValues: [], comboPresetId: '' }] })} className="mt-2 w-full py-2 bg-teal-500 hover:bg-teal-600 text-white text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 shadow-sm transition-colors"><Plus className="w-4 h-4"/> 入力ポイント追加</button>
                   {/* Diagram Image Upload */}
                   <div className="mt-3 border-t pt-3">
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">測定図面画像</label>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">測定図面画像</label>
                     <div className="flex gap-2">
-                      <button onClick={() => document.getElementById('diagram-image-upload')?.click()} className="flex-1 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-bold rounded flex items-center justify-center gap-1 border"><ImageIcon className="w-3 h-3"/> 画像を選択</button>
-                      {measurementConfig.diagramImage && <button onClick={() => setMeasurementConfig({ ...measurementConfig, diagramImage: null })} className="py-1.5 px-3 bg-red-50 hover:bg-red-100 text-red-500 text-[10px] font-bold rounded flex items-center justify-center gap-1 border border-red-200"><Trash2 className="w-3 h-3"/> 削除</button>}
+                      <button onClick={() => document.getElementById('diagram-image-upload')?.click()} className="flex-1 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded flex items-center justify-center gap-1 border"><ImageIcon className="w-3 h-3"/> 画像を選択</button>
+                      {measurementConfig.diagramImage && <button onClick={() => setMeasurementConfig({ ...measurementConfig, diagramImage: null })} className="py-1.5 px-3 bg-red-50 hover:bg-red-100 text-red-500 text-xs font-bold rounded flex items-center justify-center gap-1 border border-red-200"><Trash2 className="w-3 h-3"/> 削除</button>}
                     </div>
                     <input id="diagram-image-upload" type="file" className="hidden" accept="image/*" onChange={async (e) => { const file = e.target.files?.[0]; if (file) { const img = await resizeImage(file, 'diagram'); setMeasurementConfig({ ...measurementConfig, diagramImage: img }); } e.target.value = ''; }}/>
                     {measurementConfig.diagramImage && <img src={measurementConfig.diagramImage} className="mt-2 w-full h-24 object-contain rounded border" alt="diagram"/>}
                   </div>
-                  <div className="mt-2 text-[10px] text-slate-400 italic px-1 leading-snug">
+                  <div className="mt-2 text-xs text-slate-400 italic px-1 leading-snug">
                     💡 品目別の<span className="font-bold">初期値プリセット</span> (ブロックゲージ組合せなど) は<span className="font-bold text-indigo-600">「マスタ設定 → 品質規格マスタ」</span>から品目群ごとに登録してください。品目コードと一緒に管理した方が運用が楽になります。
                   </div>
                 </div>
                 {/* Calculations Section */}
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-[10px] font-bold text-slate-500">計算設定 ({mcCalcs.length}件)</label>
+                    <label className="text-xs font-bold text-slate-500">計算設定 ({mcCalcs.length}件)</label>
                     <button onClick={addCalc} disabled={mcCalcs.length >= MAX_CALCULATIONS} className="mt-2 w-full py-2 bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 shadow-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"><Plus className="w-4 h-4"/> 計算を追加</button>
                   </div>
                   <div className="space-y-2 max-h-64 overflow-y-auto">
@@ -5872,8 +5872,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                           {mcCalcs.length > 1 && <button onClick={() => removeCalc(cIdx)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>}
                         </div>
                         <div>
-                          <label className="block text-[10px] text-slate-400">計算方法</label>
-                          <select value={calc.method} onChange={e => updateCalc(cIdx, { method: e.target.value })} className="w-full border rounded p-1 text-[11px]">
+                          <label className="block text-xs text-slate-400">計算方法</label>
+                          <select value={calc.method} onChange={e => updateCalc(cIdx, { method: e.target.value })} className="w-full border rounded p-1 text-xs">
                             {CALCULATION_METHODS.map(m => <option key={m.value} value={m.value}>{m.label} - {m.desc}</option>)}
                           </select>
                         </div>
@@ -5890,30 +5890,30 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                           };
                           return (
                             <div>
-                              <label className="block text-[10px] text-slate-400">数式</label>
-                              <input value={calc.formula || ''} onChange={e => updateCalc(cIdx, { formula: e.target.value })} className="w-full border rounded p-1 text-[11px] font-mono" placeholder="例: (b+c)/2+d/2"/>
+                              <label className="block text-xs text-slate-400">数式</label>
+                              <input value={calc.formula || ''} onChange={e => updateCalc(cIdx, { formula: e.target.value })} className="w-full border rounded p-1 text-xs font-mono" placeholder="例: (b+c)/2+d/2"/>
                               <details className="mt-1" open>
-                                <summary className="text-[10px] text-blue-600 cursor-pointer font-bold list-none flex items-center gap-1">▶ 使える変数 (タップで数式に挿入)</summary>
+                                <summary className="text-xs text-blue-600 cursor-pointer font-bold list-none flex items-center gap-1">▶ 使える変数 (タップで数式に挿入)</summary>
                                 <div className="mt-1 space-y-1.5 bg-slate-50 p-2 rounded border max-h-48 overflow-y-auto">
                                   {/* 現工程の入力 */}
                                   <div>
-                                    <div className="text-[9px] font-bold text-teal-700 mb-0.5">現工程の入力 ({myInputs.length})</div>
+                                    <div className="text-xs font-bold text-teal-700 mb-0.5">現工程の入力 ({myInputs.length})</div>
                                     <div className="flex flex-wrap gap-1">
                                       {myInputs.map(inp => (
-                                        <button type="button" key={inp.id} onClick={() => insertVar(inp.id)} className="text-[9px] bg-white border border-teal-300 text-teal-700 px-1.5 py-0.5 rounded hover:bg-teal-100 font-mono">
+                                        <button type="button" key={inp.id} onClick={() => insertVar(inp.id)} className="text-xs bg-white border border-teal-300 text-teal-700 px-1.5 py-0.5 rounded hover:bg-teal-100 font-mono">
                                           {inp.id}{inp.label && inp.label !== inp.id ? ` (${inp.label})` : ''}
                                         </button>
                                       ))}
-                                      {myInputs.length === 0 && <span className="text-[9px] text-slate-400">なし</span>}
+                                      {myInputs.length === 0 && <span className="text-xs text-slate-400">なし</span>}
                                     </div>
                                   </div>
                                   {/* 同工程の前の計算 */}
                                   {priorCalcs.length > 0 && (
                                     <div>
-                                      <div className="text-[9px] font-bold text-indigo-700 mb-0.5">同工程の前の計算 ({priorCalcs.length})</div>
+                                      <div className="text-xs font-bold text-indigo-700 mb-0.5">同工程の前の計算 ({priorCalcs.length})</div>
                                       <div className="flex flex-wrap gap-1">
                                         {priorCalcs.map(c => (
-                                          <button type="button" key={c.id} onClick={() => insertVar(c.id)} className="text-[9px] bg-white border border-indigo-300 text-indigo-700 px-1.5 py-0.5 rounded hover:bg-indigo-100 font-mono">
+                                          <button type="button" key={c.id} onClick={() => insertVar(c.id)} className="text-xs bg-white border border-indigo-300 text-indigo-700 px-1.5 py-0.5 rounded hover:bg-indigo-100 font-mono">
                                             {c.id}{c.label && c.label !== c.id ? ` (${c.label})` : ''}
                                           </button>
                                         ))}
@@ -5923,22 +5923,22 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                                   {/* 他工程の入力・計算結果 (プレフィックス付きID で衝突回避) */}
                                   {otherSteps.length > 0 && (
                                     <div>
-                                      <div className="text-[9px] font-bold text-amber-700 mb-0.5">他工程の入力・計算結果 (同ロット内・ID 衝突回避済)</div>
+                                      <div className="text-xs font-bold text-amber-700 mb-0.5">他工程の入力・計算結果 (同ロット内・ID 衝突回避済)</div>
                                       <div className="space-y-1">
                                         {otherSteps.map(s => {
                                           const ins = s.measurementConfig?.inputs || [];
                                           const cls = s.measurementConfig?.calculations || [];
                                           return (
                                             <div key={s.id} className="bg-white p-1 rounded border border-amber-100">
-                                              <div className="text-[9px] text-amber-700 font-bold">→ {s.title} <span className="text-amber-400 font-normal">(タップで `工程ID_変数` 形式を挿入)</span></div>
+                                              <div className="text-xs text-amber-700 font-bold">→ {s.title} <span className="text-amber-400 font-normal">(タップで `工程ID_変数` 形式を挿入)</span></div>
                                               <div className="flex flex-wrap gap-1 mt-0.5">
                                                 {ins.map(inp => (
-                                                  <button type="button" key={inp.id} onClick={() => insertVar(`${s.id}_${inp.id}`)} className="text-[9px] bg-amber-50 border border-amber-200 text-amber-700 px-1.5 py-0.5 rounded hover:bg-amber-100 font-mono" title={`変数: ${s.id}_${inp.id}`}>
+                                                  <button type="button" key={inp.id} onClick={() => insertVar(`${s.id}_${inp.id}`)} className="text-xs bg-amber-50 border border-amber-200 text-amber-700 px-1.5 py-0.5 rounded hover:bg-amber-100 font-mono" title={`変数: ${s.id}_${inp.id}`}>
                                                     {inp.id}
                                                   </button>
                                                 ))}
                                                 {cls.map(c => (
-                                                  <button type="button" key={c.id} onClick={() => insertVar(`${s.id}_${c.id}`)} className="text-[9px] bg-amber-100 border border-amber-400 text-amber-800 px-1.5 py-0.5 rounded hover:bg-amber-200 font-mono font-bold" title={`計算結果: ${s.id}_${c.id}`}>
+                                                  <button type="button" key={c.id} onClick={() => insertVar(`${s.id}_${c.id}`)} className="text-xs bg-amber-100 border border-amber-400 text-amber-800 px-1.5 py-0.5 rounded hover:bg-amber-200 font-mono font-bold" title={`計算結果: ${s.id}_${c.id}`}>
                                                     Σ {c.id}{c.label ? ` (${c.label})` : ''}
                                                   </button>
                                                 ))}
@@ -5949,7 +5949,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                                       </div>
                                     </div>
                                   )}
-                                  <div className="text-[9px] text-slate-500 pt-1 border-t">
+                                  <div className="text-xs text-slate-500 pt-1 border-t">
                                     ・ボタンを押すと数式末尾に追加されます<br/>
                                     ・直接タイピングでも入力可能<br/>
                                     ・ID 衝突時は現工程の入力が優先されます
@@ -5960,7 +5960,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                           );
                         })()}
                         <div>
-                          <label className="block text-[10px] text-slate-400">対象入力 (空=全て)</label>
+                          <label className="block text-xs text-slate-400">対象入力 (空=全て)</label>
                           <div className="flex flex-wrap gap-1 mt-0.5">
                             {measurementConfig.inputs.map(inp => {
                               const selected = (calc.inputIds || []).includes(inp.id);
@@ -5969,7 +5969,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                                   const ids = calc.inputIds || [];
                                   const newIds = selected ? ids.filter(id => id !== inp.id) : [...ids, inp.id];
                                   updateCalc(cIdx, { inputIds: newIds });
-                                }} className={`text-[9px] px-1.5 py-0.5 rounded border ${selected ? 'bg-teal-500 text-white border-teal-500' : 'bg-white text-slate-500 border-slate-200'}`}>
+                                }} className={`text-xs px-1.5 py-0.5 rounded border ${selected ? 'bg-teal-500 text-white border-teal-500' : 'bg-white text-slate-500 border-slate-200'}`}>
                                   {inp.label || inp.id}
                                 </button>
                               );
@@ -5985,57 +5985,57 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                               onChange={e => updateCalc(cIdx, { toleranceEnabled: e.target.checked })}
                               className="w-3.5 h-3.5 accent-teal-600"
                             />
-                            <span className="text-[10px] font-bold text-slate-600">公差判定 (OFFで記録のみ・OK/NG判定なし)</span>
+                            <span className="text-xs font-bold text-slate-600">公差判定 (OFFで記録のみ・OK/NG判定なし)</span>
                           </label>
                           <div className={`grid grid-cols-3 gap-1 ${calc.toleranceEnabled === false ? 'opacity-40 pointer-events-none' : ''}`}>
                             <div>
-                              <label className="block text-[10px] text-slate-400">基準値</label>
+                              <label className="block text-xs text-slate-400">基準値</label>
                               <input
                                 type="number"
                                 step="any"
                                 value={calc.nominal ?? ''}
                                 onChange={e => updateCalc(cIdx, { nominal: e.target.value === '' ? null : Number(e.target.value) })}
                                 placeholder="(0)"
-                                className="w-full border rounded p-1 text-[11px] text-right font-mono"
+                                className="w-full border rounded p-1 text-xs text-right font-mono"
                               />
                             </div>
                             <div>
-                              <label className="block text-[10px] text-slate-400">上限公差</label>
+                              <label className="block text-xs text-slate-400">上限公差</label>
                               <input
                                 type="number"
                                 step="0.001"
                                 value={calc.toleranceUpper}
                                 onChange={e => updateCalc(cIdx, { toleranceUpper: Number(e.target.value) })}
-                                className="w-full border rounded p-1 text-[11px] text-right"
+                                className="w-full border rounded p-1 text-xs text-right"
                               />
                             </div>
                             <div>
-                              <label className="block text-[10px] text-slate-400">下限公差</label>
+                              <label className="block text-xs text-slate-400">下限公差</label>
                               <input
                                 type="number"
                                 step="0.001"
                                 value={calc.toleranceLower}
                                 onChange={e => updateCalc(cIdx, { toleranceLower: Number(e.target.value) })}
-                                className="w-full border rounded p-1 text-[11px] text-right"
+                                className="w-full border rounded p-1 text-xs text-right"
                               />
                             </div>
                           </div>
                           {/* 表示設定: 単位 + 桁数 (公差判定OFFでも有効) */}
                           <div className="grid grid-cols-2 gap-1">
                             <div>
-                              <label className="block text-[10px] text-slate-400">単位</label>
-                              <select value={calc.unit} onChange={e => updateCalc(cIdx, { unit: e.target.value })} className="w-full border rounded p-1 text-[11px]">
+                              <label className="block text-xs text-slate-400">単位</label>
+                              <select value={calc.unit} onChange={e => updateCalc(cIdx, { unit: e.target.value })} className="w-full border rounded p-1 text-xs">
                                 <option value="mm">mm</option>
                                 <option value="μm">μm</option>
                                 <option value="°">°</option>
                               </select>
                             </div>
                             <div>
-                              <label className="block text-[10px] text-slate-400">表示桁数 (小数点以下)</label>
+                              <label className="block text-xs text-slate-400">表示桁数 (小数点以下)</label>
                               <select
                                 value={calc.precision ?? 3}
                                 onChange={e => updateCalc(cIdx, { precision: Number(e.target.value) })}
-                                className="w-full border rounded p-1 text-[11px]"
+                                className="w-full border rounded p-1 text-xs"
                               >
                                 <option value={0}>0桁 (整数)</option>
                                 <option value={1}>1桁 (X.X)</option>
@@ -6048,7 +6048,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                             </div>
                           </div>
                           {calc.toleranceEnabled !== false && (
-                            <div className="text-[9px] text-slate-500 italic">
+                            <div className="text-xs text-slate-500 italic">
                               判定範囲: {(Number(calc.nominal) || 0) + Number(calc.toleranceLower || 0)} ～ {(Number(calc.nominal) || 0) + Number(calc.toleranceUpper || 0)} {calc.unit}
                             </div>
                           )}
@@ -6066,10 +6066,10 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                   return (
                     <div className="bg-amber-50 border border-amber-200 rounded-lg p-2">
                       <div className="flex justify-between items-center mb-1.5">
-                        <label className="text-[10px] font-bold text-amber-800 flex items-center gap-1">↗↘ 矢印比較 ({mcArrows.length}件)
-                          <span className="text-[9px] font-normal text-amber-600">— 2つの値を比較して大→↗ / 小→↘ を画像に表示</span>
+                        <label className="text-xs font-bold text-amber-800 flex items-center gap-1">↗↘ 矢印比較 ({mcArrows.length}件)
+                          <span className="text-xs font-normal text-amber-600">— 2つの値を比較して大→↗ / 小→↘ を画像に表示</span>
                         </label>
-                        <button type="button" onClick={addArrow} className="bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1"><Plus className="w-3 h-3"/> 矢印を追加</button>
+                        <button type="button" onClick={addArrow} className="bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 rounded text-xs font-bold flex items-center gap-1"><Plus className="w-3 h-3"/> 矢印を追加</button>
                       </div>
                       <div className="space-y-2">
                         {mcArrows.map((ar, aIdx) => {
@@ -6085,13 +6085,13 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                           return (
                             <div key={aIdx} className="bg-white rounded p-2 border space-y-1.5">
                               <div className="flex items-center gap-1">
-                                <input value={ar.label} onChange={e => updateArrow(aIdx, { label: e.target.value })} className="flex-1 border rounded px-1 py-0.5 text-[11px] font-bold" placeholder="ラベル (例: 左右の通り)"/>
+                                <input value={ar.label} onChange={e => updateArrow(aIdx, { label: e.target.value })} className="flex-1 border rounded px-1 py-0.5 text-xs font-bold" placeholder="ラベル (例: 左右の通り)"/>
                                 <button type="button" onClick={() => removeArrow(aIdx)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
                               </div>
                               <div className="grid grid-cols-2 gap-1.5">
                                 <div>
-                                  <label className="block text-[10px] text-emerald-700 font-bold mb-0.5">比較元 A</label>
-                                  <select value={ar.sourceA} onChange={e => updateArrow(aIdx, { sourceA: e.target.value })} className="w-full border rounded p-1 text-[11px]">
+                                  <label className="block text-xs text-emerald-700 font-bold mb-0.5">比較元 A</label>
+                                  <select value={ar.sourceA} onChange={e => updateArrow(aIdx, { sourceA: e.target.value })} className="w-full border rounded p-1 text-xs">
                                     <option value="">-- 選択 --</option>
                                     <optgroup label="入力ポイント">
                                       {measurementConfig.inputs.map(inp => <option key={inp.id} value={inp.id}>{inp.id}{inp.label && inp.label !== inp.id ? ` (${inp.label})` : ''}</option>)}
@@ -6102,8 +6102,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                                   </select>
                                 </div>
                                 <div>
-                                  <label className="block text-[10px] text-rose-700 font-bold mb-0.5">比較元 B</label>
-                                  <select value={ar.sourceB} onChange={e => updateArrow(aIdx, { sourceB: e.target.value })} className="w-full border rounded p-1 text-[11px]">
+                                  <label className="block text-xs text-rose-700 font-bold mb-0.5">比較元 B</label>
+                                  <select value={ar.sourceB} onChange={e => updateArrow(aIdx, { sourceB: e.target.value })} className="w-full border rounded p-1 text-xs">
                                     <option value="">-- 選択 --</option>
                                     <optgroup label="入力ポイント">
                                       {measurementConfig.inputs.map(inp => <option key={inp.id} value={inp.id}>{inp.id}{inp.label && inp.label !== inp.id ? ` (${inp.label})` : ''}</option>)}
@@ -6117,30 +6117,30 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                               {(ar.sourceA && ar.sourceB) && (
                                 <div className="bg-amber-50 border border-amber-200 rounded p-1.5 space-y-1">
                                   <div className="flex items-center justify-between">
-                                    <label className="text-[10px] font-bold text-amber-800">矢印の表示位置</label>
-                                    {ar.position && <button type="button" onClick={() => updateArrow(aIdx, { position: null })} className="text-[9px] text-blue-600 hover:underline">A・B中央へリセット</button>}
+                                    <label className="text-xs font-bold text-amber-800">矢印の表示位置</label>
+                                    {ar.position && <button type="button" onClick={() => updateArrow(aIdx, { position: null })} className="text-xs text-blue-600 hover:underline">A・B中央へリセット</button>}
                                   </div>
-                                  <div className="flex items-center gap-1 text-[10px]">
+                                  <div className="flex items-center gap-1 text-xs">
                                     <span className="text-slate-600 font-bold w-3">X:</span>
                                     <input type="range" min="0" max="100" value={Math.round(posX)} onChange={e => setPos({ x: Number(e.target.value) })} className="flex-1 h-1 accent-amber-500"/>
                                     <span className="w-10 text-right font-mono">{Math.round(posX)}%</span>
                                   </div>
-                                  <div className="flex items-center gap-1 text-[10px]">
+                                  <div className="flex items-center gap-1 text-xs">
                                     <span className="text-slate-600 font-bold w-3">Y:</span>
                                     <input type="range" min="0" max="100" value={Math.round(posY)} onChange={e => setPos({ y: Number(e.target.value) })} className="flex-1 h-1 accent-amber-500"/>
                                     <span className="w-10 text-right font-mono">{Math.round(posY)}%</span>
                                   </div>
                                 </div>
                               )}
-                              <div className="flex items-center gap-1.5 text-[10px]">
+                              <div className="flex items-center gap-1.5 text-xs">
                                 <label className="text-slate-500 font-bold">許容差:</label>
-                                <input type="number" step="0.001" value={ar.threshold} onChange={e => updateArrow(aIdx, { threshold: e.target.value })} className="w-20 border rounded p-0.5 text-[10px] text-right"/>
-                                <span className="text-slate-400 text-[9px]">差がこの値以下なら ↔</span>
+                                <input type="number" step="0.001" value={ar.threshold} onChange={e => updateArrow(aIdx, { threshold: e.target.value })} className="w-20 border rounded p-0.5 text-xs text-right"/>
+                                <span className="text-slate-400 text-xs">差がこの値以下なら ↔</span>
                               </div>
                             </div>
                           );
                         })}
-                        {mcArrows.length === 0 && <div className="text-[10px] text-amber-700 text-center py-2">「+ 矢印を追加」で 2点の比較を設定できます (例: 左の通り vs 右の通り)</div>}
+                        {mcArrows.length === 0 && <div className="text-xs text-amber-700 text-center py-2">「+ 矢印を追加」で 2点の比較を設定できます (例: 左の通り vs 右の通り)</div>}
                       </div>
                     </div>
                   );
@@ -6166,9 +6166,9 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                         <label className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
                           <ListChecks className="w-3.5 h-3.5"/> 測定条件 (デフォルト)
                         </label>
-                        <span className="text-[10px] text-purple-600">作業者に表示する段取り条件</span>
+                        <span className="text-xs text-purple-600">作業者に表示する段取り条件</span>
                       </div>
-                      <p className="text-[10px] text-slate-500 mb-2">
+                      <p className="text-xs text-slate-500 mb-2">
                         例: 分割数, 角度刻み, 評価種別 (ウォーム/ピニオン) など。<br/>
                         品目別の上書きは <span className="font-bold text-indigo-700">品質規格マスタ</span> で設定できます。
                       </p>
@@ -6185,11 +6185,11 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                         </button>
                       </div>
                       <div className="mt-2">
-                        <label className="block text-[10px] text-slate-500 mb-0.5">条件メモ (自由記述)</label>
+                        <label className="block text-xs text-slate-500 mb-0.5">条件メモ (自由記述)</label>
                         <textarea value={condPreset.note || ''} onChange={e => updateCond({ note: e.target.value })} className="w-full border rounded p-1.5 text-xs" rows={2} placeholder="例: ホイール45°毎、ウォーム評価あり、温度23°C基準"/>
                       </div>
                       {(condPreset.params?.length > 0 || condPreset.note) && (
-                        <div className="mt-2 pt-2 border-t border-purple-200 text-[10px] text-purple-700">
+                        <div className="mt-2 pt-2 border-t border-purple-200 text-xs text-purple-700">
                           ✓ 作業者の測定画面に「測定条件」カードが表示されます
                         </div>
                       )}
@@ -6198,7 +6198,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                 })()}
                 {/* Preview */}
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">プレビュー</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">プレビュー</label>
                   <MeasurementPreviewBox config={measurementConfig} variant="tiny" maxHeight={192} />
                 </div>
               </div>
@@ -6533,9 +6533,9 @@ const MeasurementInputPanel = ({ config, values, onChange, onComplete, pastData,
               <div className={`${color} ${bg} ${border} font-black text-3xl px-2 py-0.5 rounded-full shadow-lg border-2 ${!isEqual ? 'animate-pulse' : ''}`} style={{ lineHeight: 1 }}>
                 {arrowChar}
               </div>
-              {ar.label && <span className="text-[9px] font-bold text-slate-700 bg-white/90 px-1 rounded mt-0.5 whitespace-nowrap shadow-sm">{ar.label}</span>}
+              {ar.label && <span className="text-xs font-bold text-slate-700 bg-white/90 px-1 rounded mt-0.5 whitespace-nowrap shadow-sm">{ar.label}</span>}
               {ar.diff !== null && !isEqual && (
-                <span className={`text-[9px] font-mono font-bold mt-0.5 px-1 rounded ${isUp ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'} whitespace-nowrap`}>
+                <span className={`text-xs font-mono font-bold mt-0.5 px-1 rounded ${isUp ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'} whitespace-nowrap`}>
                   差: {ar.diff > 0 ? '+' : ''}{ar.diff.toFixed(4)}
                 </span>
               )}
@@ -6574,7 +6574,7 @@ const MeasurementInputPanel = ({ config, values, onChange, onComplete, pastData,
         };
         return (
           <div className="mt-2 flex flex-wrap items-center gap-1.5 p-2 bg-amber-50/60 border border-amber-200 rounded">
-            <span className="text-[10px] font-bold text-amber-700 shrink-0">📋 初期値:</span>
+            <span className="text-xs font-bold text-amber-700 shrink-0">📋 初期値:</span>
             {hasQsDefaults && (
               <button
                 type="button"
@@ -6595,7 +6595,7 @@ const MeasurementInputPanel = ({ config, values, onChange, onComplete, pastData,
                 <RotateCcw className="w-3 h-3"/> 前回の値を使う ({pastData[0].orderNo || ''})
               </button>
             )}
-            <span className="text-[9px] text-amber-600 ml-auto">適用後、各枠を必要に応じて微調整</span>
+            <span className="text-xs text-amber-600 ml-auto">適用後、各枠を必要に応じて微調整</span>
           </div>
         );
       })()}
@@ -6694,9 +6694,9 @@ const MeasurementInputPanel = ({ config, values, onChange, onComplete, pastData,
                   </div>
                   <div className="flex items-baseline gap-1">
                     <span className="text-xl font-mono font-black text-slate-800">{cr.result !== null ? cr.result.toFixed(cr.precision ?? 4) : '---'}</span>
-                    <span className="text-[10px] text-slate-500">{cr.unit}</span>
+                    <span className="text-xs text-slate-500">{cr.unit}</span>
                   </div>
-                  <div className="text-[10px] text-slate-500 mt-0.5">{rangeText}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">{rangeText}</div>
                 </>
               ) : (
                 <>
@@ -6705,8 +6705,8 @@ const MeasurementInputPanel = ({ config, values, onChange, onComplete, pastData,
                     <span className="text-base font-mono font-black text-slate-800 shrink-0">
                       {cr.result !== null ? cr.result.toFixed(cr.precision ?? 4) : '---'}
                     </span>
-                    <span className="text-[10px] text-slate-500 shrink-0">{cr.unit}</span>
-                    <span className="text-[9px] text-slate-400 shrink-0">{rangeText}</span>
+                    <span className="text-xs text-slate-500 shrink-0">{cr.unit}</span>
+                    <span className="text-xs text-slate-400 shrink-0">{rangeText}</span>
                   </div>
                   {cr.result !== null && cr.isOk !== null && (
                     <span className={`px-2 py-0.5 rounded text-xs font-bold shrink-0 ${cr.isOk ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
@@ -6737,11 +6737,11 @@ const LiveParallelGuide = ({ guide, fmtTime, onHide }) => {
   const target = runningAuto.targetSec;
   const pct = target > 0 ? Math.min(100, Math.round((elapsed / target) * 100)) : 0;
   const Chip = ({ t, kind }) => (
-    <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] border ${kind === 'extra' ? 'bg-amber-50 border-amber-300' : 'bg-blue-50 border-blue-200'}`}>
+    <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs border ${kind === 'extra' ? 'bg-amber-50 border-amber-300' : 'bg-blue-50 border-blue-200'}`}>
       {kind === 'extra' && <span className="text-amber-600 font-black">+</span>}
-      <span className="bg-blue-600 text-white text-[10px] font-black px-1 rounded">#{t.unitIdx + 1}</span>
+      <span className="bg-blue-600 text-white text-xs font-black px-1 rounded">#{t.unitIdx + 1}</span>
       <span className="font-bold text-slate-800">{t.stepTitle}</span>
-      <span className="text-slate-400 font-mono text-[10px]">{fmtTime(t.durationSec)}</span>
+      <span className="text-slate-400 font-mono text-xs">{fmtTime(t.durationSec)}</span>
     </span>
   );
   return (
@@ -6752,21 +6752,21 @@ const LiveParallelGuide = ({ guide, fmtTime, onHide }) => {
         <span className="font-bold text-xs truncate flex-1">🤖 #{runningAuto.unitIdx + 1}「{runningAuto.step.title}」測定中</span>
         <span className="font-mono font-black text-sm shrink-0">{fmtTime(elapsed)}</span>
         {target > 0 && (isOverrun
-          ? <span className="bg-white/25 px-1.5 rounded font-bold text-[10px] shrink-0">予定+{fmtTime(overrunSec)}</span>
-          : <span className="bg-white/20 px-1.5 rounded font-bold text-[10px] shrink-0">残{fmtTime(remainingSec)}</span>)}
+          ? <span className="bg-white/25 px-1.5 rounded font-bold text-xs shrink-0">予定+{fmtTime(overrunSec)}</span>
+          : <span className="bg-white/20 px-1.5 rounded font-bold text-xs shrink-0">残{fmtTime(remainingSec)}</span>)}
         {onHide && <button onClick={onHide} title="並行ガイドを隠す" className="shrink-0 hover:bg-white/20 rounded p-0.5"><X className="w-3.5 h-3.5" /></button>}
       </div>
       {target > 0 && <div className="h-1 bg-purple-100"><div className={`h-full ${isOverrun ? 'bg-rose-400' : 'bg-purple-400'} transition-all`} style={{ width: `${pct}%` }} /></div>}
       {/* 本体: 横並びチップ */}
       <div className="bg-white px-2 py-1.5">
         {planned.length === 0 && extra.length === 0 ? (
-          <div className="text-[11px] text-slate-400 italic">並行できる作業なし（他台なし／機械独立工程なし）</div>
+          <div className="text-xs text-slate-400 italic">並行できる作業なし（他台なし／機械独立工程なし）</div>
         ) : (
           <div className="flex flex-wrap items-center gap-1">
-            <span className="text-[10px] font-bold text-purple-700 mr-0.5 flex items-center gap-0.5"><Zap className="w-3 h-3" />他の台で並行:</span>
+            <span className="text-xs font-bold text-purple-700 mr-0.5 flex items-center gap-0.5"><Zap className="w-3 h-3" />他の台で並行:</span>
             {planned.map((t, i) => <Chip key={`p${i}`} t={t} kind="plan" />)}
             {extra.map((t, i) => <Chip key={`e${i}`} t={t} kind="extra" />)}
-            {extra.length > 0 && <span className="text-[10px] text-amber-600">（<b>+</b>＝測定が延びたら）</span>}
+            {extra.length > 0 && <span className="text-xs text-amber-600">（<b>+</b>＝測定が延びたら）</span>}
           </div>
         )}
       </div>
@@ -6809,12 +6809,12 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
   // 密表示(無理やり表示)モード: 工程欄・セル・余白を縮めて多くの台(10台等)を画面に収める
   const D = dense ? {
     stepTh: 'p-1.5 min-w-[100px]', stepTd: 'p-1.5', stepTitle: 'text-[12px]', stepMeta: 'hidden sm:flex',
-    unitTh: 'p-1 min-w-[42px]', unitSub: 'hidden', cellBtn: 'py-0.5 px-0', cellMinH: '34px', cellMark: 'text-[11px] font-black', cellTime: 'text-[9px] font-mono',
-    batchTd: 'p-0.5 w-11', batchBtn: 'text-[9px] px-0.5 py-1',
+    unitTh: 'p-1 min-w-[42px]', unitSub: 'hidden', cellBtn: 'py-0.5 px-0', cellMinH: '34px', cellMark: 'text-xs font-black', cellTime: 'text-xs font-mono',
+    batchTd: 'p-0.5 w-11', batchBtn: 'text-xs px-0.5 py-1',
   } : {
     stepTh: 'p-3 min-w-[170px]', stepTd: 'p-3', stepTitle: 'text-[15px]', stepMeta: 'flex',
     unitTh: 'p-2 min-w-[68px]', unitSub: '', cellBtn: 'py-1.5 px-0.5', cellMinH: '52px', cellMark: 'text-sm font-black', cellTime: 'text-xs font-mono',
-    batchTd: 'p-1 w-16', batchBtn: 'text-[11px] px-2 py-1.5',
+    batchTd: 'p-1 w-16', batchBtn: 'text-xs px-2 py-1.5',
   };
   const isAutoStepFn = (s) => s?.executionMode === 'batch' || (s?.title || '').includes('自動');
   const getTask = (step, sIdx, u) => {
@@ -6856,7 +6856,7 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
             {Array.from({ length: qty }).map((_, u) => (
               <th key={u} className={`${D.unitTh} text-center font-bold border-l border-slate-200`}>
                 #{u + 1}
-                {lot.unitSerialNumbers?.[u] && <div className={`font-normal text-slate-400 text-[10px] truncate max-w-[64px] ${D.unitSub}`}>{lot.unitSerialNumbers[u]}</div>}
+                {lot.unitSerialNumbers?.[u] && <div className={`font-normal text-slate-400 text-xs truncate max-w-[64px] ${D.unitSub}`}>{lot.unitSerialNumbers[u]}</div>}
               </th>
             ))}
             <th className={`${D.batchTd} text-center font-bold bg-slate-200 border-l-2 border-slate-300`}>一括</th>
@@ -6872,15 +6872,15 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
                 {/* 工程名 (sticky) */}
                 <td className={`${D.stepTd} sticky left-0 bg-white border-r border-slate-200 z-10`}>
                   <div className="flex items-center gap-1.5">
-                    {isAuto && <span className="bg-purple-500 text-white text-[10px] font-bold px-1 py-0.5 rounded shrink-0">自</span>}
+                    {isAuto && <span className="bg-purple-500 text-white text-xs font-bold px-1 py-0.5 rounded shrink-0">自</span>}
                     <span className={`font-bold text-slate-800 ${D.stepTitle} leading-tight`}>{step.title}</span>
                   </div>
                   <div className={`items-center gap-1.5 mt-1 ${D.stepMeta}`}>
-                    <span className="text-[11px] text-slate-400">Step {sIdx + 1}</span>
-                    {effTargets[sIdx] > 0 && <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-100 px-1 py-0.5 rounded" title="目標時間 (1台あたり)">🎯{formatTime(effTargets[sIdx])}</span>}
-                    {!isAuto && (resTag === null || resTag === '') && <span className="text-[10px] bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded">並行可</span>}
-                    {!isAuto && resTag === 'measurement-machine' && <span className="text-[10px] bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded">測定機</span>}
-                    {!isAuto && resTag && resTag !== 'measurement-machine' && <span className="text-[10px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">占有</span>}
+                    <span className="text-xs text-slate-400">Step {sIdx + 1}</span>
+                    {effTargets[sIdx] > 0 && <span className="text-xs font-mono font-bold text-slate-400 bg-slate-100 px-1 py-0.5 rounded" title="目標時間 (1台あたり)">🎯{formatTime(effTargets[sIdx])}</span>}
+                    {!isAuto && (resTag === null || resTag === '') && <span className="text-xs bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded">並行可</span>}
+                    {!isAuto && resTag === 'measurement-machine' && <span className="text-xs bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded">測定機</span>}
+                    {!isAuto && resTag && resTag !== 'measurement-machine' && <span className="text-xs bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">占有</span>}
                   </div>
                 </td>
                 {/* ロット1回工程: 台セルの代わりに回数チップ + ＋もう1回 (colSpanで列を潰す) */}
@@ -6896,7 +6896,7 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
                             className={`rounded px-2 relative overflow-hidden flex flex-col items-center justify-center leading-none transition-all ${c.cls} ${isNextOcc ? 'ring-2 ring-emerald-400' : ''}`}
                             style={{ minHeight: D.cellMinH, minWidth: '64px', ...(c.style || {}) }}
                             title={`${k + 1}回目 ${step.title} (${t.status})${isNextOcc ? ' 👉 次にやる段取り' : ''}`}>
-                            {isNextOcc && <div className="absolute -top-2 -right-1 z-20 bg-emerald-500 text-white text-[10px] font-black px-1 py-0.5 rounded-full shadow-md ring-1 ring-white animate-bounce">次</div>}
+                            {isNextOcc && <div className="absolute -top-2 -right-1 z-20 bg-emerald-500 text-white text-xs font-black px-1 py-0.5 rounded-full shadow-md ring-1 ring-white animate-bounce">次</div>}
                             <span className={D.cellMark}>{k + 1}回目{c.mark ? ` ${c.mark}` : ''}</span>
                             <span className={`${D.cellTime} ${dense ? '' : 'mt-1'}`}>{c.time}</span>
                             {c.pct != null && (
@@ -6907,11 +6907,11 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
                           </button>
                         ); })}
                         {allDone && (
-                          <button onClick={() => onCellClick(sIdx, occN)} className="rounded px-2 border-2 border-dashed border-teal-400 bg-teal-50 hover:bg-teal-100 text-teal-700 text-[10px] font-bold flex flex-col items-center justify-center" style={{ minHeight: D.cellMinH, minWidth: '52px' }} title="次の持ち込み分を追加して計測開始">
+                          <button onClick={() => onCellClick(sIdx, occN)} className="rounded px-2 border-2 border-dashed border-teal-400 bg-teal-50 hover:bg-teal-100 text-teal-700 text-xs font-bold flex flex-col items-center justify-center" style={{ minHeight: D.cellMinH, minWidth: '52px' }} title="次の持ち込み分を追加して計測開始">
                             <span className="text-sm leading-none">＋</span><span>もう1回</span>
                           </button>
                         )}
-                        <span className="text-[9px] text-teal-600 font-bold">📦ロット1回</span>
+                        <span className="text-xs text-teal-600 font-bold">📦ロット1回</span>
                       </div>
                     </td>
                   );
@@ -6929,7 +6929,7 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
                   return (
                     <td key={u} className="p-0.5 text-center border-l border-slate-100 relative align-top">
                       {isNext && (
-                        <div className="absolute -top-2 -right-1 z-20 bg-emerald-500 text-white text-[11px] font-black px-1.5 py-0.5 rounded-full shadow-md ring-1 ring-white animate-bounce">次</div>
+                        <div className="absolute -top-2 -right-1 z-20 bg-emerald-500 text-white text-xs font-black px-1.5 py-0.5 rounded-full shadow-md ring-1 ring-white animate-bounce">次</div>
                       )}
                       <button
                         onClick={() => onCellClick(sIdx, u)}
@@ -6948,7 +6948,7 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
                       </button>
                       {reworks.length > 0 && (
                         <div className="mt-0.5 flex flex-col items-stretch gap-0.5">
-                          <div className="text-[10px] font-black text-orange-600 leading-none flex items-center justify-center gap-0.5">
+                          <div className="text-xs font-black text-orange-600 leading-none flex items-center justify-center gap-0.5">
                             <Wrench className="w-2.5 h-2.5"/>修正{reworks.length}回
                           </div>
                           <div className="flex flex-wrap justify-center gap-0.5">
@@ -6959,7 +6959,7 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
                               return (
                                 <span key={rIdx} title={`修正${rIdx + 1}回目: ${formatTime(t)}${rw.reason ? ` / 理由: ${rw.reason}` : ''}${onEditReworks ? ' (タップで編集・削除)' : ''}`}
                                   onClick={(e) => { if (onEditReworks) { e.stopPropagation(); onEditReworks(sIdx, u); } }}
-                                  className={`inline-flex items-center gap-0.5 leading-none text-[9px] font-bold px-1 py-0.5 rounded ${live ? 'bg-orange-500 text-white animate-pulse' : 'bg-orange-100 text-orange-700 border border-orange-300'} ${onEditReworks ? 'cursor-pointer hover:bg-orange-200' : ''}`}>
+                                  className={`inline-flex items-center gap-0.5 leading-none text-xs font-bold px-1 py-0.5 rounded ${live ? 'bg-orange-500 text-white animate-pulse' : 'bg-orange-100 text-orange-700 border border-orange-300'} ${onEditReworks ? 'cursor-pointer hover:bg-orange-200' : ''}`}>
                                   <span className="opacity-70">{rIdx + 1}</span>
                                   <span className="font-mono">{formatTime(t)}</span>
                                   {rw.reason && <span className="max-w-[56px] truncate opacity-80">{rw.reason}</span>}
@@ -6974,7 +6974,7 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
                 })}
                 {/* 一括ボタン (ロット1回工程は対象外) */}
                 <td className={`${D.batchTd} text-center bg-slate-50 border-l-2 border-slate-300`}>
-                  {step.lotOnce ? <span className="text-[10px] text-slate-300">—</span> : (
+                  {step.lotOnce ? <span className="text-xs text-slate-300">—</span> : (
                   <button
                     onClick={() => onBatchClick(sIdx)}
                     className={`${D.batchBtn} font-bold rounded border w-full ${isBatch ? 'bg-orange-500 text-white border-orange-600 animate-pulse' : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'}`}
@@ -6990,7 +6990,7 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
                     return (
                       <button
                         onClick={() => onSkipRow(sIdx)}
-                        className={`mt-1 text-[10px] font-bold px-1 py-1 rounded border w-full whitespace-nowrap ${anySkipped ? 'bg-slate-400 text-white border-slate-500' : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'}`}
+                        className={`mt-1 text-xs font-bold px-1 py-1 rounded border w-full whitespace-nowrap ${anySkipped ? 'bg-slate-400 text-white border-slate-500' : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'}`}
                         title={anySkipped ? '該当なしを解除' : 'この工程を該当なし (全台) にする'}
                       >
                         {anySkipped ? '解除' : '該当なし'}
@@ -7064,19 +7064,19 @@ const ModelQualityInfoPanel = ({ model, stepTitle, info, open, onToggle }) => {
               <div className="font-bold text-rose-800 mb-1">🔴 この工程「{stepTitle}」の要注意事項:</div>
               {stepRelated.defects.map((d, i) => (
                 <div key={'sdf'+i} className="flex items-start gap-2 bg-white rounded px-2 py-1 border border-amber-200">
-                  <span className="bg-amber-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0">不具合</span>
+                  <span className="bg-amber-600 text-white text-xs font-bold px-1.5 py-0.5 rounded shrink-0">不具合</span>
                   <span className="flex-1 text-amber-900">{d.label || '内容未記載'}</span>
-                  {d.causeProcess && <span className="text-[10px] text-amber-700">原因:{d.causeProcess}</span>}
-                  <span className="text-[10px] text-slate-500">{d.lot?.orderNo || d.orderNo}</span>
-                  <span className="text-[10px] text-slate-500">{fmtDate(d.timestamp)}</span>
+                  {d.causeProcess && <span className="text-xs text-amber-700">原因:{d.causeProcess}</span>}
+                  <span className="text-xs text-slate-500">{d.lot?.orderNo || d.orderNo}</span>
+                  <span className="text-xs text-slate-500">{fmtDate(d.timestamp)}</span>
                 </div>
               ))}
               {stepRelated.complaints.map((c, i) => (
                 <div key={'scp'+i} className="flex items-start gap-2 bg-white rounded px-2 py-1 border border-purple-200">
-                  <span className="bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0">軽微不良</span>
+                  <span className="bg-purple-600 text-white text-xs font-bold px-1.5 py-0.5 rounded shrink-0">軽微不良</span>
                   <span className="flex-1 text-purple-900">{c.label || '内容未記載'}</span>
-                  <span className="text-[10px] text-slate-500">{c.lot?.orderNo || c.orderNo}</span>
-                  <span className="text-[10px] text-slate-500">{fmtDate(c.timestamp)}</span>
+                  <span className="text-xs text-slate-500">{c.lot?.orderNo || c.orderNo}</span>
+                  <span className="text-xs text-slate-500">{fmtDate(c.timestamp)}</span>
                 </div>
               ))}
             </div>
@@ -7090,29 +7090,29 @@ const ModelQualityInfoPanel = ({ model, stepTitle, info, open, onToggle }) => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {/* 不具合 */}
                 <div className="bg-white border border-amber-200 rounded p-2">
-                  <div className="text-amber-700 font-bold mb-1 text-[11px]">⚠ 不具合 ({defects.length})</div>
-                  {allRecent.defects.length === 0 && <div className="text-slate-400 text-[10px]">なし</div>}
+                  <div className="text-amber-700 font-bold mb-1 text-xs">⚠ 不具合 ({defects.length})</div>
+                  {allRecent.defects.length === 0 && <div className="text-slate-400 text-xs">なし</div>}
                   {allRecent.defects.map((d, i) => (
-                    <div key={'df'+i} className="text-[11px] py-0.5 border-b border-amber-100 last:border-b-0">
+                    <div key={'df'+i} className="text-xs py-0.5 border-b border-amber-100 last:border-b-0">
                       <div className="font-bold truncate text-slate-700">{d.stepInfo?.title || '全体'}</div>
                       <div className="text-amber-700 truncate">{d.label}</div>
-                      <div className="text-[9px] text-slate-400">{d.lot?.orderNo || d.orderNo} · {fmtDate(d.timestamp)}</div>
+                      <div className="text-xs text-slate-400">{d.lot?.orderNo || d.orderNo} · {fmtDate(d.timestamp)}</div>
                     </div>
                   ))}
-                  {defects.length > 3 && <div className="text-[9px] text-slate-400 pt-0.5">…他 {defects.length - 3} 件</div>}
+                  {defects.length > 3 && <div className="text-xs text-slate-400 pt-0.5">…他 {defects.length - 3} 件</div>}
                 </div>
                 {/* 気づき */}
                 <div className="bg-white border border-purple-200 rounded p-2">
-                  <div className="text-purple-700 font-bold mb-1 text-[11px]">💡 軽微不良 ({complaints.length})</div>
-                  {allRecent.complaints.length === 0 && <div className="text-slate-400 text-[10px]">なし</div>}
+                  <div className="text-purple-700 font-bold mb-1 text-xs">💡 軽微不良 ({complaints.length})</div>
+                  {allRecent.complaints.length === 0 && <div className="text-slate-400 text-xs">なし</div>}
                   {allRecent.complaints.map((c, i) => (
-                    <div key={'cp'+i} className="text-[11px] py-0.5 border-b border-purple-100 last:border-b-0">
+                    <div key={'cp'+i} className="text-xs py-0.5 border-b border-purple-100 last:border-b-0">
                       <div className="font-bold truncate text-slate-700">{c.stepInfo?.title || '全体'}</div>
                       <div className="text-purple-700 truncate">{c.label}</div>
-                      <div className="text-[9px] text-slate-400">{c.lot?.orderNo || c.orderNo} · {fmtDate(c.timestamp)}</div>
+                      <div className="text-xs text-slate-400">{c.lot?.orderNo || c.orderNo} · {fmtDate(c.timestamp)}</div>
                     </div>
                   ))}
-                  {complaints.length > 3 && <div className="text-[9px] text-slate-400 pt-0.5">…他 {complaints.length - 3} 件</div>}
+                  {complaints.length > 3 && <div className="text-xs text-slate-400 pt-0.5">…他 {complaints.length - 3} 件</div>}
                 </div>
               </div>
             )}
@@ -8050,6 +8050,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   // カスタムで完了済みかチェック (id ベース・index 両対応)
   const isTaskCompleted = (sIdx, uIdx) => {
     const step = localSteps[sIdx];
+    // 🚨 2026-09-23 ロット1回の工程は 台ではなく回(`${id}-lot-${k}`)。順序実行では 1回目だけを見る
+    if (step?.lotOnce && step.id) { const t1 = tasks[`${step.id}-lot-0`]; return !!t1 && t1.status === 'completed'; }
     const t = (step?.id && tasks[`${step.id}-${uIdx}`]) || tasks[`${sIdx}-${uIdx}`];
     return t && t.status === 'completed';
   };
@@ -8060,7 +8062,9 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     // 次の位置から探す
     uIdx++;
     while (sIdx < localSteps.length) {
-      while (uIdx < totalUnits) {
+      // 🚨 2026-09-23 ロット1回の工程は1回だけ(台0)。台数ぶん回さない
+      const unitsHere = localSteps[sIdx]?.lotOnce ? 1 : totalUnits;
+      while (uIdx < unitsHere) {
         if (!isTaskCompleted(sIdx, uIdx)) return { step: sIdx, unit: uIdx };
         uIdx++;
       }
@@ -8095,7 +8099,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
 
     // カスタムモードのtasksにも完了を記録（モード切替時に整合性を保つ）
     // step.id ベースのキーを正準とする (テンプレ並び替え時の不整合防止)
-    const taskKey = currentStep?.id ? `${currentStep.id}-${currentUnitIdx}` : `${currentStepIdx}-${currentUnitIdx}`;
+    // 🚨 2026-09-23 ロット1回の工程はカスタムと同じ鍵(`${id}-lot-0`)へ。台の鍵へ書くと 完了確認で永久に未完了になっていた
+    const taskKey = currentStep?.lotOnce && currentStep.id ? `${currentStep.id}-lot-0` : (currentStep?.id ? `${currentStep.id}-${currentUnitIdx}` : `${currentStepIdx}-${currentUnitIdx}`);
     const legacyKey = `${currentStepIdx}-${currentUnitIdx}`;
     const removedKeys = [];
     if (!tasks[taskKey] || tasks[taskKey].status !== 'completed') {
@@ -8940,6 +8945,9 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
           }
           if (hasAnom) { setShowTimeTable('precomplete'); return; }
       }
+      // 🚨 2026-09-23: 一時停止(handlePause)と同じく、いまの工程×台の経過秒を退避する。
+      //   退避しないと「← 作業に戻る」で handleStart が起点を今に戻し、確認の前の作業時間が丸ごと消えていた。
+      if (isTimerRunning) stepUnitAccumRef.current += Math.max(0, Math.floor((Date.now() - stepUnitStartRef.current) / 1000));
       setIsTimerRunning(false);
       onSave({
         status: 'paused',
@@ -10108,7 +10116,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
           <div className="bg-slate-800 text-white p-3 text-center font-bold">
             <div>{unitLabel} — {task.status === 'waiting' ? '未着手' : task.status === 'skipped' ? '該当なし' : task.status === 'paused' ? '一時停止中' : isNG ? 'NG判定済み' : isReworkDone ? '修正完了' : '完了済み'}</div>
             {task.ngReason && (
-              <div className="text-[11px] font-normal bg-red-900/40 mt-1.5 px-2 py-0.5 rounded inline-block">{isNG ? '理由' : 'NG理由(修正済)'}: {task.ngReason}</div>
+              <div className="text-xs font-normal bg-red-900/40 mt-1.5 px-2 py-0.5 rounded inline-block">{isNG ? '理由' : 'NG理由(修正済)'}: {task.ngReason}</div>
             )}
           </div>
           <div className="p-4 space-y-2">
@@ -10133,7 +10141,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                     {task.reworks.map((r, i) => (
                       <div key={i} className="text-xs text-orange-600">
                         <div className="flex justify-between"><span>{i+1}回目</span><span className="font-mono">{formatTime(r.duration || 0)}</span></div>
-                        {r.reason && <div className="text-[10px] text-orange-500 truncate pl-2" title={r.reason}>└ {r.reason}</div>}
+                        {r.reason && <div className="text-xs text-orange-500 truncate pl-2" title={r.reason}>└ {r.reason}</div>}
                       </div>
                     ))}
                   </div>
@@ -10146,10 +10154,10 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
             <button onClick={() => { setTimeInput({ keys: [key], label: unitLabel, min: String(Math.floor((task.duration || 0) / 60) || ''), sec: String((task.duration || 0) % 60 || '') }); setCompletedTaskMenu(null); }} className="w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-300 rounded-xl text-indigo-700 font-bold text-sm flex items-center justify-center gap-2"><Timer className="w-4 h-4"/> 時間を手入力（押し忘れ時など）</button>
             {(task.status === 'completed' || isNG || isReworkDone) && !isLotKey && (
               <div className="pt-2 mt-1 border-t border-slate-100">
-                <div className="text-[11px] font-bold text-slate-400 mb-1.5 text-center">この台(#{completedTaskMenu.unitIdx + 1})を一括やり直し → 2回目測定へ</div>
+                <div className="text-xs font-bold text-slate-400 mb-1.5 text-center">この台(#{completedTaskMenu.unitIdx + 1})を一括やり直し → 2回目測定へ</div>
                 <button onClick={() => { setNgReasonPicker({ key, stepIdx: completedTaskMenu.stepIdx, unitIdx: completedTaskMenu.unitIdx, bulkAction: 'redo-from-here' }); setCompletedTaskMenu(null); }} className="w-full py-2.5 mb-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-xl text-amber-700 font-bold text-sm flex items-center justify-center gap-2"><Wrench className="w-4 h-4"/> この工程から下をやり直し</button>
                 <button onClick={() => { setNgReasonPicker({ key, stepIdx: completedTaskMenu.stepIdx, unitIdx: completedTaskMenu.unitIdx, bulkAction: 'redo-unit-all' }); setCompletedTaskMenu(null); }} className="w-full py-2.5 bg-amber-100 hover:bg-amber-200 border border-amber-400 rounded-xl text-amber-800 font-bold text-sm flex items-center justify-center gap-2"><RotateCcw className="w-4 h-4"/> 全工程やり直し</button>
-                <div className="text-[10px] text-slate-400 mt-1.5 leading-snug">※ 対象工程を一括NGにします（理由を選択）。1回目の時間は残り、2回目は各工程の「修正作業」で測り直し（適正時間には入りません）。</div>
+                <div className="text-xs text-slate-400 mt-1.5 leading-snug">※ 対象工程を一括NGにします（理由を選択）。1回目の時間は残り、2回目は各工程の「修正作業」で測り直し（適正時間には入りません）。</div>
               </div>
             )}
           </div>
@@ -10168,7 +10176,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs overflow-hidden" onClick={e => e.stopPropagation()}>
           <div className="bg-indigo-600 text-white p-3 text-center font-bold flex items-center justify-center gap-2"><Timer className="w-5 h-5" /> 時間を手入力 {timeInput.label || ''}</div>
           <div className="p-4 space-y-3">
-            <div className="text-[11px] text-slate-500 text-center leading-snug">押し忘れ等で時間が残らなかった工程に、分かる範囲で時間を入れます{n > 1 ? `（${n}台 一括）` : ''}。この工程は「完了」になります。</div>
+            <div className="text-xs text-slate-500 text-center leading-snug">押し忘れ等で時間が残らなかった工程に、分かる範囲で時間を入れます{n > 1 ? `（${n}台 一括）` : ''}。この工程は「完了」になります。</div>
             <div className="flex items-center justify-center gap-1.5">
               <input type="number" min="0" value={timeInput.min} onChange={e => setTimeInput(p => ({ ...p, min: e.target.value }))} className="border rounded p-2 text-lg w-16 text-center font-mono" placeholder="0" />
               <span className="font-bold text-sm">分</span>
@@ -10239,14 +10247,14 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                       ) : (
                         <span className="text-xs font-bold text-orange-700 animate-pulse">⏱ 計測中（時間は完了後に編集できます）</span>
                       )}
-                      <button onClick={() => removeItem(i)} className="ml-auto px-2 py-1 rounded bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-600 text-[11px] font-bold shrink-0" title={`修正${i + 1}を削除`}>🗑 削除</button>
+                      <button onClick={() => removeItem(i)} className="ml-auto px-2 py-1 rounded bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-600 text-xs font-bold shrink-0" title={`修正${i + 1}を削除`}>🗑 削除</button>
                     </div>
                     <input value={it.reason} onChange={e => setItem(i, { reason: e.target.value })} list="rework-reason-list" placeholder={`修正${i + 1}の理由（任意・修正ごとに別でOK）`} className="w-full border rounded-lg p-1.5 text-xs" />
                   </div>
                 ))}
               </div>
             </div>
-            <div className="text-[10px] text-slate-400 leading-snug">※ 削除した修正の時間は集計から消えます。計測中の修正を削除すると、この台はNG状態に戻ります。理由は軽微不良の候補から選ぶか自由入力。</div>
+            <div className="text-xs text-slate-400 leading-snug">※ 削除した修正の時間は集計から消えます。計測中の修正を削除すると、この台はNG状態に戻ります。理由は軽微不良の候補から選ぶか自由入力。</div>
           </div>
           <div className="p-3 border-t flex gap-2">
             <button onClick={() => setReworkEditor(null)} className="flex-1 py-2.5 border rounded-xl font-bold text-slate-600 hover:bg-slate-50">キャンセル</button>
@@ -10272,7 +10280,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
             <div className="font-bold flex items-center gap-2 text-sm truncate"><Timer className="w-5 h-5 shrink-0" /> 測定時間表 — {lot.model} <span className="font-mono opacity-70">#{lot.serialNo}</span> ({qty}台)</div>
             {anomCount > 0 ? <span className="bg-rose-600 px-2 py-0.5 rounded font-bold text-xs shrink-0">要確認 {anomCount}件</span> : <span className="bg-emerald-600 px-2 py-0.5 rounded font-bold text-xs shrink-0">異常なし</span>}
           </div>
-          <div className="px-4 py-2 text-[11px] text-slate-500 border-b bg-slate-50">赤=0秒/4時間超/時刻矛盾、黄=5秒未満。セルをタップ →「目標で埋める」or「実時間を手入力」で直せます。</div>
+          <div className="px-4 py-2 text-xs text-slate-500 border-b bg-slate-50">赤=0秒/4時間超/時刻矛盾、黄=5秒未満。セルをタップ →「目標で埋める」or「実時間を手入力」で直せます。</div>
           <div className="flex-1 overflow-auto p-2">
             <table className="w-full text-xs border-collapse">
               <thead className="sticky top-0 bg-slate-100 z-10"><tr><th className="px-2 py-1.5 text-left font-bold border-b sticky left-0 bg-slate-100">工程</th><th className="px-1 py-1.5 text-center font-bold border-b">目標</th>{Array.from({ length: qty }, (_, u) => <th key={u} className="px-1 py-1.5 text-center font-bold border-b">#{u + 1}</th>)}</tr></thead>
@@ -10299,7 +10307,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
             </table>
           </div>
           <div className="px-4 py-3 border-t flex justify-between items-center gap-2 bg-slate-50">
-            {showTimeTable === 'precomplete' ? <span className="text-[11px] text-rose-600 font-bold leading-tight">⚠ 要確認の測定時間があります。直すか、このまま完了へ進めます。</span> : <span />}
+            {showTimeTable === 'precomplete' ? <span className="text-xs text-rose-600 font-bold leading-tight">⚠ 要確認の測定時間があります。直すか、このまま完了へ進めます。</span> : <span />}
             <div className="flex gap-2 shrink-0">
               <button onClick={() => setShowTimeTable(false)} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-bold">{showTimeTable === 'precomplete' ? 'まだ完了しない' : '閉じる'}</button>
               {showTimeTable === 'precomplete' && <button onClick={() => { setShowTimeTable(false); handleCompleteTrigger(true); }} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold flex items-center gap-1"><CheckCircle2 className="w-4 h-4" /> このまま完了へ進む</button>}
@@ -10328,7 +10336,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
           <div className="bg-red-600 text-white p-3 text-center">
             <div className="font-black text-base flex items-center justify-center gap-2"><XCircle className="w-5 h-5"/> {isBulk ? 'やり直しの理由を選択' : 'NG 理由を選択'}</div>
-            <div className="text-[11px] opacity-90 mt-0.5">{isBulk ? `#${ngReasonPicker.unitIdx + 1} を ${ngReasonPicker.bulkAction === 'redo-from-here' ? 'この工程から下' : '全工程'} やり直し（再測定）にします` : `${LOT_ONCE_RE.test(ngReasonPicker.key || '') ? `${ngReasonPicker.unitIdx + 1}回目` : `#${ngReasonPicker.unitIdx + 1}`} を NG にします`}</div>
+            <div className="text-xs opacity-90 mt-0.5">{isBulk ? `#${ngReasonPicker.unitIdx + 1} を ${ngReasonPicker.bulkAction === 'redo-from-here' ? 'この工程から下' : '全工程'} やり直し（再測定）にします` : `${LOT_ONCE_RE.test(ngReasonPicker.key || '') ? `${ngReasonPicker.unitIdx + 1}回目` : `#${ngReasonPicker.unitIdx + 1}`} を NG にします`}</div>
           </div>
           <div className="p-3 space-y-2">
             {/* 理由候補は2〜3列のグリッド + 高さ上限で縦長を解消 (多くても3〜4行ぶんで残りはスクロール) */}
@@ -10371,7 +10379,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
           <div className="bg-orange-600 text-white p-3 text-center">
             <div className="font-black text-base flex items-center justify-center gap-2"><Wrench className="w-5 h-5"/> {p.round}回目の修正 — 内容を確認</div>
-            <div className="text-[11px] opacity-90 mt-0.5">{p.label} ／ 前回の理由: {p.prevReason || '（記録なし）'}</div>
+            <div className="text-xs opacity-90 mt-0.5">{p.label} ／ 前回の理由: {p.prevReason || '（記録なし）'}</div>
           </div>
           <div className="p-3 space-y-2">
             {p.prevReason && (
@@ -10379,7 +10387,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                 ✓ 前回と同じ内容で続行（{p.prevReason}）
               </button>
             )}
-            <div className="text-[11px] font-bold text-slate-500 pt-1">違う内容（別の不具合）— 理由を選ぶ:</div>
+            <div className="text-xs font-bold text-slate-500 pt-1">違う内容（別の不具合）— 理由を選ぶ:</div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-[36vh] overflow-y-auto pr-0.5">
               {opts.map(opt => (
                 <button key={opt} onClick={() => start(opt)} className="py-2 px-2 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-lg text-orange-700 font-bold text-xs text-center leading-tight min-h-[44px] flex items-center justify-center">{opt}</button>
@@ -10398,7 +10406,9 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     );
   })();
 
-  if (isConfirming) {
+  // 🚨 2026-09-23: 未完了ガードを開いている間は 完了確認の画面を描かない(ここが先に return していて、ガードが一度も出なかった)。
+  //   ガードの「キャンセル」で showIncompleteGuard が消えると、この完了確認へそのまま戻る。
+  if (isConfirming && !showIncompleteGuard) {
       const summary = localSteps.map((step, idx) => {
           let incompleteCount = 0;
           let duration = 0;
@@ -10406,10 +10416,15 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
               duration = stepTimes[step.id] || 0;
               // 各台の完了状態をstepUnitTimesで判定
               let completedUnits = 0;
-              for (let u = 0; u < totalUnits; u++) {
-                if (stepUnitTimes[`${step.id}-${u}`] != null) completedUnits++;
+              // 🚨 2026-09-23 ロット1回の工程は1回(台0)で完了
+              const unitsHere = step?.lotOnce ? 1 : totalUnits;
+              for (let u = 0; u < unitsHere; u++) {
+                // 🚨 2026-09-23 カスタムで終えた作業(tasks)も完了として数える(stepUnitTimes は順序実行で押した物だけ)
+                const tk = step?.lotOnce && step.id ? tasks[`${step.id}-lot-${u}`] : ((step?.id && tasks[`${step.id}-${u}`]) || tasks[`${idx}-${u}`]);
+                const doneInTasks = !!tk && (tk.status === 'completed' || tk.status === 'skipped');
+                if (stepUnitTimes[`${step.id}-${u}`] != null || doneInTasks) completedUnits++;
               }
-              incompleteCount = totalUnits - completedUnits;
+              incompleteCount = unitsHere - completedUnits;
           } else if (step?.lotOnce) {
               // ロット1回工程: 分母=実施回数 (台数で数えると永久に完了不可になる)
               const keys = lotOnceKeysOf(tasks, step);
@@ -10555,7 +10570,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
             </ul>
           </div>
           <div>
-            <div className="font-black text-slate-800 mb-1">▶ まとめて始める／終える（同じ工程の複数台を一気に）<span className="text-[10px] font-bold text-emerald-700 ml-1">※カスタムモード専用</span></div>
+            <div className="font-black text-slate-800 mb-1">▶ まとめて始める／終える（同じ工程の複数台を一気に）<span className="text-xs font-bold text-emerald-700 ml-1">※カスタムモード専用</span></div>
             <ul className="space-y-0.5 text-[13px] pl-1">
               <li>「<b>1工程まとめて開始</b>」「<b>一括開始</b>」「<b>バッチ</b>」… その工程の未着手の台を全部いっぺんに開始</li>
               <li>「<b>2台目から4台目までまとめて</b>」… 範囲を指定して開始</li>
@@ -10817,7 +10832,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                         <textarea className="w-full border rounded-lg p-2" rows={3} placeholder="不良の内容を入力（工程改善の提案は「気づき・改善」へ）..." value={complaintLabel} onChange={e=>setComplaintLabel(e.target.value)}/>
                       </div>
                     </div>
-                    <div className="mt-4 p-2 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-500">
+                    <div className="mt-4 p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-500">
                       ※「時間取りして報告」を選ぶと別作業として時間計測を開始します。<br/>普通の軽微不良メモなら「報告のみ」でOK。
                     </div>
                     <div className="flex justify-end gap-2 mt-3 flex-wrap">
@@ -10851,7 +10866,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
             <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
                     <h3 className="text-lg font-bold mb-1 flex items-center gap-2 text-indigo-600"><Lightbulb className="w-5 h-5" /> 気づき・改善（工程の提案）</h3>
-                    <div className="text-[11px] text-slate-500 mb-3">「この工程はこう変えた方がいい」を理由つきで残す。後で<b>作業データ分析・改善</b>画面に出て、テンプレ改善の手がかりになります。（品質の不良は「軽微不良」へ）</div>
+                    <div className="text-xs text-slate-500 mb-3">「この工程はこう変えた方がいい」を理由つきで残す。後で<b>作業データ分析・改善</b>画面に出て、テンプレ改善の手がかりになります。（品質の不良は「軽微不良」へ）</div>
                     <div className="space-y-3">
                         <div>
                             <label className="block text-xs font-bold text-slate-500 mb-1">種類</label>
@@ -10963,15 +10978,15 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-center mb-3">
                   <div className="bg-slate-50 rounded p-2">
-                    <div className="text-[10px] text-slate-500 font-bold">全体</div>
+                    <div className="text-xs text-slate-500 font-bold">全体</div>
                     <div className="text-base font-black text-slate-700 font-mono">{lot.quantity}台</div>
                   </div>
                   <div className="bg-emerald-50 rounded p-2">
-                    <div className="text-[10px] text-emerald-600 font-bold">完了済</div>
+                    <div className="text-xs text-emerald-600 font-bold">完了済</div>
                     <div className="text-base font-black text-emerald-700 font-mono">{completedCount}台</div>
                   </div>
                   <div className="bg-amber-50 rounded p-2">
-                    <div className="text-[10px] text-amber-600 font-bold">未着手</div>
+                    <div className="text-xs text-amber-600 font-bold">未着手</div>
                     <div className="text-base font-black text-amber-700 font-mono">{remainCount}台</div>
                   </div>
                 </div>
@@ -10981,8 +10996,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-xs font-bold text-slate-600">開始する台を選択 (タップでON/OFF)</label>
                     <div className="flex gap-1">
-                      <button onClick={selectAll} className="text-[10px] px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-bold hover:bg-blue-200">全選択</button>
-                      <button onClick={clearAll} className="text-[10px] px-2 py-0.5 bg-slate-100 text-slate-600 rounded font-bold hover:bg-slate-200">全解除</button>
+                      <button onClick={selectAll} className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-bold hover:bg-blue-200">全選択</button>
+                      <button onClick={clearAll} className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded font-bold hover:bg-slate-200">全解除</button>
                     </div>
                   </div>
                   <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.min(10, Math.max(5, lot.quantity))}, 1fr)` }}>
@@ -11020,7 +11035,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                     placeholder="例: 1-2,4-10"/>
                 </div>
 
-                <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[11px] text-amber-800 mb-3">
+                <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800 mb-3">
                   ⚠ 完了済み・該当なしの台は選択不可。<br/>選択中: <span className="font-bold text-orange-700 font-mono">{formatRanges(selectedUnits)} ({selectedCount}台)</span>
                 </div>
                 <div className="flex flex-wrap justify-end gap-2">
@@ -11056,7 +11071,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
 
         <div className="bg-white w-full max-w-6xl h-full max-h-full rounded-2xl shadow-2xl flex flex-col overflow-hidden relative">
           <div className="bg-slate-800 text-white px-3 py-1.5 flex justify-between items-center shrink-0 gap-2">
-             <div className="shrink-0"><h2 className="text-sm font-bold flex items-center gap-1.5"><button onClick={switchToSequential} className="bg-emerald-600 hover:bg-blue-600 px-2 py-0.5 rounded text-[11px] transition-colors" title="通常モードに切替">カスタム ⇄</button><span className="truncate max-w-[9rem]">{lot.model}</span> <span className="font-mono opacity-70 text-xs">#{lot.serialNo}</span> {lotTemplate?.name && <span className="text-[11px] bg-white/15 px-1.5 py-0.5 rounded font-bold truncate max-w-[10rem]" title={`テンプレート: ${lotTemplate.name}`}>📋 {lotTemplate.name}</span>} <span className="text-xs opacity-70 shrink-0">({lot.quantity}台)</span></h2></div>
+             <div className="shrink-0"><h2 className="text-sm font-bold flex items-center gap-1.5"><button onClick={switchToSequential} className="bg-emerald-600 hover:bg-blue-600 px-2 py-0.5 rounded text-xs transition-colors" title="通常モードに切替">カスタム ⇄</button><span className="truncate max-w-[9rem]">{lot.model}</span> <span className="font-mono opacity-70 text-xs">#{lot.serialNo}</span> {lotTemplate?.name && <span className="text-xs bg-white/15 px-1.5 py-0.5 rounded font-bold truncate max-w-[10rem]" title={`テンプレート: ${lotTemplate.name}`}>📋 {lotTemplate.name}</span>} <span className="text-xs opacity-70 shrink-0">({lot.quantity}台)</span></h2></div>
              <div className="flex flex-wrap gap-1.5 items-center justify-end">
                  {voiceHelpModal}
                  <button onClick={toggleVoice} className={`p-2 rounded-full transition-all ${voiceEnabled ? 'bg-blue-500 text-white animate-pulse ring-2 ring-blue-300' : 'bg-white/10 text-white/60 hover:bg-white/20'}`} title={voiceEnabled ? '音声OFF' : '音声ON'}>
@@ -11066,7 +11081,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                  {onSetExecFontScale && (
                    <div className="flex items-center bg-white/10 rounded-lg overflow-hidden shrink-0" title="この作業画面の文字サイズ (即反映・保存)">
                      <button onClick={() => onSetExecFontScale(execFontScale - 10)} className="px-2.5 py-1.5 hover:bg-white/20 font-black" title="文字を小さく">A−</button>
-                     <span className="px-1 text-[11px] font-bold text-white/80 min-w-[2.8rem] text-center">{execFontScale}%</span>
+                     <span className="px-1 text-xs font-bold text-white/80 min-w-[2.8rem] text-center">{execFontScale}%</span>
                      <button onClick={() => onSetExecFontScale(execFontScale + 10)} className="px-2.5 py-1.5 hover:bg-white/20 font-black text-lg leading-none" title="文字を大きく">A＋</button>
                    </div>
                  )}
@@ -11100,7 +11115,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                      )}
                    </summary>
                    <div className="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-2xl border border-slate-200 w-72 z-50 overflow-hidden">
-                     <div className="p-2 border-b bg-slate-50 text-[11px] text-slate-500">
+                     <div className="p-2 border-b bg-slate-50 text-xs text-slate-500">
                        停止理由を選ぶと <span className="font-bold">自動で一時停止 + ロットカードにバッジ表示</span>します
                      </div>
                      <div className="p-2 space-y-1">
@@ -11137,7 +11152,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                              <span className="text-lg">{r.emoji}</span>
                              <div className="flex-1">
                                <div className="font-bold text-sm">{r.label}</div>
-                               <div className={`text-[10px] ${active ? 'opacity-80' : 'opacity-70'}`}>{r.desc}</div>
+                               <div className={`text-xs ${active ? 'opacity-80' : 'opacity-70'}`}>{r.desc}</div>
                              </div>
                              {active && <Check className="w-4 h-4 mt-0.5"/>}
                            </button>
@@ -11193,7 +11208,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                        className="px-3 py-2 rounded font-bold text-xs flex items-center gap-1 whitespace-nowrap bg-amber-500 hover:bg-amber-600 text-white ring-2 ring-amber-300/50"
                        title="厳密順を一時的に外しています（このロットを開いている間だけ）。タップで厳密に戻す。"
                      >
-                       🔓 厳密 一時OFF中 <span className="text-[9px] bg-white/25 px-1 rounded ml-0.5">戻す</span>
+                       🔓 厳密 一時OFF中 <span className="text-xs bg-white/25 px-1 rounded ml-0.5">戻す</span>
                      </button>
                    ) : (
                      <span className="flex items-center gap-1">
@@ -11201,11 +11216,11 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                          className="px-3 py-2 rounded-l font-bold text-xs flex items-center gap-1 whitespace-nowrap bg-rose-600 text-white ring-2 ring-rose-300/50"
                          title={`${lot.model || 'この品目コード'} × このテンプレ は厳密モード（一元管理で承認済み）。順番どおりに作業してください。\nON は管理者の一元管理でのみ。状況により外す場合は右の「一時OFF」を押してください。`}
                        >
-                         🔒 順番厳密 <span className="text-[9px] bg-white/25 px-1 rounded ml-0.5">承認済</span>
+                         🔒 順番厳密 <span className="text-xs bg-white/25 px-1 rounded ml-0.5">承認済</span>
                        </span>
                        <button
                          onClick={toggleStrictOrderMode}
-                         className="px-2 py-2 rounded-r font-bold text-[10px] whitespace-nowrap bg-rose-700 hover:bg-rose-800 text-rose-100 border-l border-rose-400"
+                         className="px-2 py-2 rounded-r font-bold text-xs whitespace-nowrap bg-rose-700 hover:bg-rose-800 text-rose-100 border-l border-rose-400"
                          title="状況により厳密順を一時的に外す（このロットを開いている間だけ。再度開くと承認状態に戻る）"
                        >
                          一時OFF
@@ -11331,7 +11346,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                    <div className="mb-3 rounded-xl border-2 border-blue-400 bg-gradient-to-r from-blue-50 to-sky-50 p-3 shadow-sm">
                      <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
                        <div className="text-sm font-black text-blue-800 flex items-center gap-1.5"><Eye className="w-4 h-4" /> じっと見る観測中 — 「{step.title}」#{unitIdx + 1}台目</div>
-                       <span className="text-[10px] text-blue-500 font-bold">要素を順に区切る（合計＝この工程の時間）</span>
+                       <span className="text-xs text-blue-500 font-bold">要素を順に区切る（合計＝この工程の時間）</span>
                      </div>
                      <div className="flex flex-wrap gap-1.5 mb-2">
                        {els.map((el, i) => {
@@ -11359,7 +11374,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                          <button onClick={() => undoElementLap(key)} className="px-3 py-2.5 rounded-lg border border-slate-300 bg-white text-slate-500 text-xs font-bold hover:bg-slate-50 active:scale-95 transition">1つ戻す</button>
                        )}
                      </div>
-                     <div className="text-[10px] text-slate-400 mt-1.5">※ 上の時間は速報値。最後まで区切って一気に計測した時だけ内訳を記録します（途中で一時停止・続きにすると内訳は記録されず、工程の合計時間だけ残ります）。テンプレ本体は変更しません。</div>
+                     <div className="text-xs text-slate-400 mt-1.5">※ 上の時間は速報値。最後まで区切って一気に計測した時だけ内訳を記録します（途中で一時停止・続きにすると内訳は記録されず、工程の合計時間だけ残ります）。テンプレ本体は変更しません。</div>
                    </div>
                  );
                })()}
@@ -11409,7 +11424,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                  {/* 密表示トグル: 表の工程列の真上に配置 (ヘッダーから移動して整理) */}
                  <div className="flex justify-end mb-1">
                    <button onClick={toggleGridDense}
-                     className={`px-2.5 py-1 rounded font-bold text-[11px] flex items-center gap-1 whitespace-nowrap border ${gridDense ? 'bg-amber-500 text-white border-amber-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
+                     className={`px-2.5 py-1 rounded font-bold text-xs flex items-center gap-1 whitespace-nowrap border ${gridDense ? 'bg-amber-500 text-white border-amber-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
                      title={gridDense ? '通常表示に戻す' : '密表示: 工程欄とセルを縮めて全台を画面に詰める'}>
                      {gridDense ? <><Eye className="w-3.5 h-3.5"/> 通常表示に戻す</> : <><LayoutGrid className="w-3.5 h-3.5"/> 密表示(全台を詰める)</>}
                    </button>
@@ -11582,11 +11597,11 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                                     style={over ? { backgroundColor: oaCfg.overColor, borderColor: oaCfg.overColor, boxShadow: `0 0 0 4px ${oaCfg.overColor}55` } : warn ? { boxShadow: `0 0 0 4px ${oaCfg.warnColor}` } : undefined}
                                     title={isNextOcc ? '👉 次にやる段取り工程です' : t.status === 'processing' ? 'タップで完了' : t.status === 'waiting' ? 'タップで計測開始' : 'タップでメニュー'}>
                                     {isNextOcc && (
-                                      <div className="absolute -top-2 -right-2 z-10 bg-emerald-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-lg animate-bounce flex items-center gap-0.5">👉 次</div>
+                                      <div className="absolute -top-2 -right-2 z-10 bg-emerald-500 text-white text-xs font-black px-1.5 py-0.5 rounded-full shadow-lg animate-bounce flex items-center gap-0.5">👉 次</div>
                                     )}
                                     <span className="text-sm font-bold">{kIdx + 1}回目</span>
                                     {isNGo ? <span className="text-xs font-black bg-white/20 px-1.5 rounded">NG</span> : <span className="text-sm font-mono font-bold mt-1">{t.status === 'skipped' ? '該当なし' : formatTime(live)}</span>}
-                                    {tgt > 0 && !isNGo && <span className={`text-[9px] leading-none mt-0.5 font-mono ${over ? 'text-white font-bold' : 'opacity-50'}`}>{over ? '⏰超過 ' : ''}目標{formatTime(tgt)}</span>}
+                                    {tgt > 0 && !isNGo && <span className={`text-xs leading-none mt-0.5 font-mono ${over ? 'text-white font-bold' : 'opacity-50'}`}>{over ? '⏰超過 ' : ''}目標{formatTime(tgt)}</span>}
                                     {t.status === 'processing' && tgt > 0 && (
                                       <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/20 rounded-b-lg overflow-hidden">
                                         <div className="h-full transition-all duration-500" style={{ width: `${Math.min(100, live / tgt * 100)}%`, backgroundColor: over ? '#fff' : warn ? oaCfg.warnColor : '#34d399' }} />
@@ -11606,10 +11621,10 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                                       title="次の持ち込み分の段取りを追加して、すぐ計測を開始します">
                                       <span className="text-xl leading-none">＋</span>
                                       <span>もう1回</span>
-                                      <span className="text-[9px] font-normal text-teal-500">押すと計測開始</span>
+                                      <span className="text-xs font-normal text-teal-500">押すと計測開始</span>
                                     </button>
                                   )}
-                                  <div className="basis-full text-[10px] text-teal-600 mt-0.5">📦 ロット1回の段取り工程（台数に関係なく回数で計測。5台ずつ持ち込み等は「＋もう1回」）</div>
+                                  <div className="basis-full text-xs text-teal-600 mt-0.5">📦 ロット1回の段取り工程（台数に関係なく回数で計測。5台ずつ持ち込み等は「＋もう1回」）</div>
                                 </>
                               );
                             })()}
@@ -11677,7 +11692,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                                  <div className="relative">
                                    {/* 「次」ハイライト: 推奨順の次にやるべき台 */}
                                    {isRecommendedNext && (
-                                     <div className="absolute -top-2 -right-2 z-10 bg-emerald-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-lg animate-bounce flex items-center gap-0.5">
+                                     <div className="absolute -top-2 -right-2 z-10 bg-emerald-500 text-white text-xs font-black px-1.5 py-0.5 rounded-full shadow-lg animate-bounce flex items-center gap-0.5">
                                        👉 次
                                      </div>
                                    )}
@@ -11697,7 +11712,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                                      ) : (
                                        <span className="text-sm font-mono font-bold mt-1">{formatTime(liveSec)}</span>
                                      )}
-                                     {!isNG && cellTgt > 0 && <span className={`text-[9px] leading-none mt-0.5 font-mono ${cellOver ? 'text-white font-bold' : cellWarn ? 'font-bold' : 'opacity-50'}`} style={cellWarn && !cellOver ? { color: oaCfg.warnColor } : undefined}>{cellOver ? '⏰超過 ' : ''}目標{formatTime(cellTgt)}{cellBN > 1 ? `(${cellBN}台)` : ''}</span>}
+                                     {!isNG && cellTgt > 0 && <span className={`text-xs leading-none mt-0.5 font-mono ${cellOver ? 'text-white font-bold' : cellWarn ? 'font-bold' : 'opacity-50'}`} style={cellWarn && !cellOver ? { color: oaCfg.warnColor } : undefined}>{cellOver ? '⏰超過 ' : ''}目標{formatTime(cellTgt)}{cellBN > 1 ? `(${cellBN}台)` : ''}</span>}
                                      {/* 進捗ゲージ: 経過/目標 をひと目で (緑→警告色→超過で満タン) */}
                                      {task.status === 'processing' && cellTgt > 0 && (
                                        <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/20 rounded-b-lg overflow-hidden">
@@ -11708,7 +11723,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                                    </button>
                                    {/* NG 理由をボタン外に独立表示 (枠内 truncate されないように)。修正後合格(completed)でも消さずに残す。 */}
                                    {task.ngReason && (
-                                     <div className={`mt-1 text-[10px] font-bold rounded px-1.5 py-1 leading-tight whitespace-normal break-words border ${isNG ? 'text-rose-700 bg-rose-50 border-rose-300' : 'text-slate-500 bg-slate-50 border-slate-300'}`} title={task.ngReason}>
+                                     <div className={`mt-1 text-xs font-bold rounded px-1.5 py-1 leading-tight whitespace-normal break-words border ${isNG ? 'text-rose-700 bg-rose-50 border-rose-300' : 'text-slate-500 bg-slate-50 border-slate-300'}`} title={task.ngReason}>
                                        <span className={`mr-0.5 ${isNG ? 'text-rose-500' : 'text-slate-400'}`}>{isNG ? '理由:' : 'NG理由(修正済):'}</span>{task.ngReason}
                                      </div>
                                    )}
@@ -11725,7 +11740,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                                      }
                                    }} title={rw.endTime ? `タップで編集・削除${rw.reason ? ` / 理由: ${rw.reason}` : ''}` : '修正中 (タップで完了)'} className={`h-14 rounded-lg flex flex-col items-center justify-center border text-xs font-bold transition-all ${rw.endTime ? 'bg-orange-100 text-orange-700 border-orange-300 hover:bg-orange-200' : 'bg-orange-500 text-white border-orange-600 animate-pulse'}`}>
                                      <span>修正{rIdx + 1} {rw.endTime ? '✎' : ''}</span>
-                                     <span className="font-mono text-[11px]">{formatTime(rw.endTime ? rw.duration : ((rw.duration || 0) + (task.reworkStartTime ? Math.floor((Date.now() - task.reworkStartTime) / 1000) : 0)))}</span>
+                                     <span className="font-mono text-xs">{formatTime(rw.endTime ? rw.duration : ((rw.duration || 0) + (task.reworkStartTime ? Math.floor((Date.now() - task.reworkStartTime) / 1000) : 0)))}</span>
                                      {rw.reason && <span className="text-[8px] leading-none truncate max-w-full px-1 opacity-80">{rw.reason}</span>}
                                    </button>
                                  ))}
@@ -11756,7 +11771,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                  {/* 機番切り替えボタン (台数が複数あるとき) */}
                  {lot.quantity > 1 && (
                    <div className="mt-2">
-                     <div className="text-[10px] font-bold text-slate-500 mb-1">表示中の機番 (クリックで切り替え)</div>
+                     <div className="text-xs font-bold text-slate-500 mb-1">表示中の機番 (クリックで切り替え)</div>
                      <div className="flex flex-wrap gap-1">
                        {Array.from({ length: lot.quantity }).map((_, uIdx) => {
                          const key = displayStep?.id ? `${displayStep.id}-${uIdx}` : `${displayStepIdx}-${uIdx}`;
@@ -11781,9 +11796,9 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                              title={lot.unitSerialNumbers?.[uIdx] ? `機番: ${lot.unitSerialNumbers[uIdx]}` : `${uIdx + 1}台目`}
                            >
                              #{uIdx + 1}
-                             {isDone && <span className="ml-0.5 text-[9px]">✓</span>}
-                             {isNG && <span className="ml-0.5 text-[9px]">NG</span>}
-                             {isSkipped && <span className="ml-0.5 text-[9px]">－</span>}
+                             {isDone && <span className="ml-0.5 text-xs">✓</span>}
+                             {isNG && <span className="ml-0.5 text-xs">NG</span>}
+                             {isSkipped && <span className="ml-0.5 text-xs">－</span>}
                            </button>
                          );
                        })}
@@ -11824,8 +11839,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                            <ListChecks className="w-4 h-4"/> 確認チェック ({requiredOkCount}/{requiredItems.length} 必須)
                          </div>
                          <div className="flex items-center gap-1.5">
-                           <button onClick={() => setChecklistFullscreen(true)} className="text-[10px] bg-purple-600 hover:bg-purple-700 text-white px-2 py-1 rounded font-bold flex items-center gap-1"><Maximize2 className="w-3 h-3"/> 拡大</button>
-                           <button onClick={checkAll} className="text-[10px] bg-purple-100 hover:bg-purple-200 text-purple-700 px-2 py-1 rounded font-bold">全てチェック</button>
+                           <button onClick={() => setChecklistFullscreen(true)} className="text-xs bg-purple-600 hover:bg-purple-700 text-white px-2 py-1 rounded font-bold flex items-center gap-1"><Maximize2 className="w-3 h-3"/> 拡大</button>
+                           <button onClick={checkAll} className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-2 py-1 rounded font-bold">全てチェック</button>
                          </div>
                        </div>
                        <div className="space-y-1.5">
@@ -11836,9 +11851,9 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                                {item.label || '(無題)'}
                              </span>
                              {item.required === false ? (
-                               <span className="text-[10px] text-slate-400 font-bold shrink-0">任意</span>
+                               <span className="text-xs text-slate-400 font-bold shrink-0">任意</span>
                              ) : (
-                               <span className="text-[10px] bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded font-bold shrink-0">必須</span>
+                               <span className="text-xs bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded font-bold shrink-0">必須</span>
                              )}
                            </label>
                          ))}
@@ -11848,8 +11863,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                        </div>
                      </div>
                      {displayStep.description && (
-                       <div className="bg-slate-50 rounded-lg border border-slate-200 p-2 text-[11px] text-slate-700 whitespace-pre-wrap leading-snug">
-                         <span className="text-[9px] font-bold text-slate-500">注意事項:</span> {displayStep.description}
+                       <div className="bg-slate-50 rounded-lg border border-slate-200 p-2 text-xs text-slate-700 whitespace-pre-wrap leading-snug">
+                         <span className="text-xs font-bold text-slate-500">注意事項:</span> {displayStep.description}
                        </div>
                      )}
                    </div>
@@ -11859,14 +11874,14 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                    <div className="bg-slate-50 rounded-lg border border-slate-200 p-2 shrink-0">
                      <div className="flex items-start gap-2">
                        {displayStep.images && displayStep.images.length > 0 && (
-                         <div className="relative shrink-0 cursor-pointer" onClick={() => setMeasurementFullscreen(true)}><img src={displayStep.images[0]} className="w-16 h-16 object-contain rounded border border-slate-200" alt="参考"/>{displayStep.images.length > 1 && <span className="absolute bottom-0 right-0 bg-black/70 text-white text-[9px] font-bold px-0.5 rounded">＋{displayStep.images.length - 1}</span>}</div>
+                         <div className="relative shrink-0 cursor-pointer" onClick={() => setMeasurementFullscreen(true)}><img src={displayStep.images[0]} className="w-16 h-16 object-contain rounded border border-slate-200" alt="参考"/>{displayStep.images.length > 1 && <span className="absolute bottom-0 right-0 bg-black/70 text-white text-xs font-bold px-0.5 rounded">＋{displayStep.images.length - 1}</span>}</div>
                        )}
                        <div className="flex-1 min-w-0">
                          <div className="flex items-center gap-1 mb-0.5 flex-wrap">
-                           <span className="text-[9px] font-bold text-slate-500">注意事項</span>
-                           {displayStep.pdfData && <button onClick={() => setShowPdf(true)} className="bg-orange-100 text-orange-700 text-[9px] font-bold px-1 rounded hover:bg-orange-200">PDF</button>}
+                           <span className="text-xs font-bold text-slate-500">注意事項</span>
+                           {displayStep.pdfData && <button onClick={() => setShowPdf(true)} className="bg-orange-100 text-orange-700 text-xs font-bold px-1 rounded hover:bg-orange-200">PDF</button>}
                          </div>
-                         <div className="text-[11px] text-slate-700 whitespace-pre-wrap leading-snug">{displayStep.description || <span className="text-slate-400 italic">（なし）</span>}</div>
+                         <div className="text-xs text-slate-700 whitespace-pre-wrap leading-snug">{displayStep.description || <span className="text-slate-400 italic">（なし）</span>}</div>
                        </div>
                      </div>
                    </div>
@@ -11911,16 +11926,16 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                        <div className="mt-2 bg-purple-50/50 border-2 border-purple-200 rounded-lg p-2">
                          <div className="flex items-center justify-between mb-1.5">
                            <div className="text-xs font-bold text-purple-800 flex items-center gap-1">
-                             <ListChecks className="w-3.5 h-3.5"/> 確認チェック <span className={`text-[10px] ${allRequiredDone ? 'text-emerald-700' : 'text-amber-700'}`}>({requiredOkCount}/{requiredItems.length})</span>
+                             <ListChecks className="w-3.5 h-3.5"/> 確認チェック <span className={`text-xs ${allRequiredDone ? 'text-emerald-700' : 'text-amber-700'}`}>({requiredOkCount}/{requiredItems.length})</span>
                            </div>
-                           <button onClick={() => setChecklistFullscreen(true)} className="text-[10px] bg-purple-600 hover:bg-purple-700 text-white px-1.5 py-0.5 rounded font-bold flex items-center gap-1"><Maximize2 className="w-2.5 h-2.5"/> 拡大</button>
+                           <button onClick={() => setChecklistFullscreen(true)} className="text-xs bg-purple-600 hover:bg-purple-700 text-white px-1.5 py-0.5 rounded font-bold flex items-center gap-1"><Maximize2 className="w-2.5 h-2.5"/> 拡大</button>
                          </div>
                          <div className="space-y-0.5">
                            {items.map(item => (
                              <label key={item.id} className={`flex items-center gap-2 px-1.5 py-1 rounded text-xs cursor-pointer ${checked[item.id] ? 'bg-emerald-50' : 'bg-white hover:bg-purple-50'}`}>
                                <input type="checkbox" checked={!!checked[item.id]} onChange={() => toggle(item.id)} className="w-3.5 h-3.5 accent-emerald-600 shrink-0"/>
                                <span className={`flex-1 truncate ${checked[item.id] ? 'text-emerald-700 font-bold' : 'text-slate-700'}`}>{item.label || '(無題)'}</span>
-                               {item.required !== false && <span className="text-[9px] bg-rose-100 text-rose-700 px-1 rounded font-bold">必須</span>}
+                               {item.required !== false && <span className="text-xs bg-rose-100 text-rose-700 px-1 rounded font-bold">必須</span>}
                              </label>
                            ))}
                          </div>
@@ -11957,7 +11972,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
               {voiceEnabled && (
                 <div className="bg-slate-800 text-white">
                   <button onClick={() => setVoiceBarOpen(prev => !prev)} className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-slate-700 transition-colors">
-                    <div className="flex items-center gap-2 text-[11px] min-w-0 flex-1">
+                    <div className="flex items-center gap-2 text-xs min-w-0 flex-1">
                       <Mic className={`w-3.5 h-3.5 shrink-0 ${interimText ? 'text-green-400 animate-pulse' : isListeningNow ? 'text-amber-400 animate-pulse' : 'text-blue-400 animate-pulse'}`}/>
                       {voiceError ? (
                         <span className="text-rose-400 font-bold truncate">⚠️ {voiceError}</span>
@@ -11977,8 +11992,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   {voiceBarOpen && (
                     <div className="flex border-t border-slate-700">
                       <div className="w-64 p-2 shrink-0 border-r border-slate-700">
-                        <div className="text-[10px] font-bold text-blue-300 mb-1 flex items-center gap-1"><HelpCircle className="w-3 h-3"/> コマンド例</div>
-                        <div className="space-y-0.5 text-[10px]">
+                        <div className="text-xs font-bold text-blue-300 mb-1 flex items-center gap-1"><HelpCircle className="w-3 h-3"/> コマンド例</div>
+                        <div className="space-y-0.5 text-xs">
                           {activeCustomTaskKey ? (
                             <>
                               <div className="text-slate-300"><span className="text-emerald-300 font-bold">「完了」</span> 作業完了 / <span className="text-emerald-300 font-bold">「次」</span> 次へ</div>
@@ -11993,9 +12008,9 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                       </div>
                       {voiceLog.length > 0 && (
                         <div className="flex-1 p-2 max-h-20 overflow-y-auto">
-                          <div className="text-[10px] font-bold text-blue-300 mb-0.5">ログ</div>
+                          <div className="text-xs font-bold text-blue-300 mb-0.5">ログ</div>
                           {voiceLog.slice(-3).map((log, i) => (
-                            <div key={i} className={`text-[10px] py-0.5 ${log.type === 'assistant' ? 'text-blue-200' : 'text-green-200'}`}>
+                            <div key={i} className={`text-xs py-0.5 ${log.type === 'assistant' ? 'text-blue-200' : 'text-green-200'}`}>
                               {log.type === 'assistant' ? '🔊' : '🎤'} {log.text}
                             </div>
                           ))}
@@ -12054,7 +12069,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                       {lot.model || '品目コード?'} ／ 機番 {machine}{p.stepTitle ? ` ／ ${p.stepTitle}` : ''}
                     </div>
                     {p.role === 'prepare' && p.rotaryMode && (
-                      <div className="text-center"><span className="inline-block text-[11px] font-bold text-cyan-700 bg-cyan-50 border border-cyan-200 rounded px-2 py-0.5">測定モード: {p.rotaryMode}</span></div>
+                      <div className="text-center"><span className="inline-block text-xs font-bold text-cyan-700 bg-cyan-50 border border-cyan-200 rounded px-2 py-0.5">測定モード: {p.rotaryMode}</span></div>
                     )}
                     <div className="text-sm font-bold text-slate-700 text-center">測定するステーション(PC)を選んでください</div>
                     {stations.length > 0 ? (
@@ -12094,7 +12109,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   <Ruler className="w-5 h-5 text-teal-400"/>
                   <div>
                     <div className="text-base font-bold">{activeStep.title}</div>
-                    <div className="text-[10px] text-slate-300 mt-0.5">測定画面 最大化表示 — {lot.model} #{lot.serialNo} ・{displayUnitIdx + 1}台目</div>
+                    <div className="text-xs text-slate-300 mt-0.5">測定画面 最大化表示 — {lot.model} #{lot.serialNo} ・{displayUnitIdx + 1}台目</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -12112,7 +12127,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                     <details className="relative">
                       <summary className="cursor-pointer bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1 list-none"><FileText className="w-3.5 h-3.5"/> 注意事項</summary>
                       <div className="absolute right-0 top-full mt-1 bg-white text-slate-800 rounded-lg shadow-2xl p-3 w-80 max-h-64 overflow-y-auto z-10">
-                        <div className="text-[10px] font-bold text-slate-500 mb-1">作業内容 / 注意事項</div>
+                        <div className="text-xs font-bold text-slate-500 mb-1">作業内容 / 注意事項</div>
                         <div className="text-xs whitespace-pre-wrap leading-relaxed">{activeStep.description}</div>
                       </div>
                     </details>
@@ -12181,7 +12196,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   <ListChecks className="w-5 h-5 text-purple-200"/>
                   <div>
                     <div className="text-base font-bold">{activeStep.title} — 確認チェック</div>
-                    <div className="text-[10px] text-purple-200 mt-0.5">{lot.model} #{lot.serialNo} ・{displayUnitIdx + 1}台目 ・必須 {requiredOkCount}/{requiredItems.length}</div>
+                    <div className="text-xs text-purple-200 mt-0.5">{lot.model} #{lot.serialNo} ・{displayUnitIdx + 1}台目 ・必須 {requiredOkCount}/{requiredItems.length}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -12233,7 +12248,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   <FileText className="w-5 h-5 text-orange-200"/>
                   <div>
                     <div className="text-base font-bold">{activeStep.title} — 注意事項・参考画像</div>
-                    <div className="text-[10px] text-orange-200 mt-0.5">{lot.model} #{lot.serialNo} ・{displayUnitIdx + 1}台目</div>
+                    <div className="text-xs text-orange-200 mt-0.5">{lot.model} #{lot.serialNo} ・{displayUnitIdx + 1}台目</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -12415,7 +12430,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                  <div className="flex flex-col gap-3">
                    {currentStep.description && (
                      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-sm text-slate-700 whitespace-pre-wrap">
-                       <div className="text-[10px] font-bold text-slate-500 mb-1">作業内容 / 注意事項</div>
+                       <div className="text-xs font-bold text-slate-500 mb-1">作業内容 / 注意事項</div>
                        {currentStep.description}
                      </div>
                    )}
@@ -12455,15 +12470,15 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                      {currentStep.images && currentStep.images.length > 0 && (
                        <div className="relative shrink-0 cursor-pointer" onClick={() => setMeasurementFullscreen(true)}>
                          <img src={currentStep.images[0]} className="w-24 h-24 object-contain rounded border border-slate-200" alt="参考"/>
-                         {currentStep.images.length > 1 && <span className="absolute bottom-0.5 right-0.5 bg-black/70 text-white text-[10px] font-bold px-1 rounded">＋{currentStep.images.length - 1}枚</span>}
+                         {currentStep.images.length > 1 && <span className="absolute bottom-0.5 right-0.5 bg-black/70 text-white text-xs font-bold px-1 rounded">＋{currentStep.images.length - 1}枚</span>}
                        </div>
                      )}
                      <div className="flex-1 min-w-0">
                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                         <span className="text-[10px] font-bold text-slate-500">作業内容 / 注意事項</span>
-                         {currentStep.type === 'danger' && <span className="bg-red-100 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5"><AlertOctagon className="w-2.5 h-2.5"/> 危険</span>}
-                         {currentStep.type === 'important' && <span className="bg-amber-100 text-amber-700 text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5"><AlertTriangle className="w-2.5 h-2.5"/> 重要</span>}
-                         {currentStep.pdfData && <button onClick={() => setShowPdf(true)} className="bg-orange-100 text-orange-700 text-[10px] font-bold px-1.5 py-0.5 rounded hover:bg-orange-200 flex items-center gap-0.5"><FileText className="w-2.5 h-2.5"/> PDF</button>}
+                         <span className="text-xs font-bold text-slate-500">作業内容 / 注意事項</span>
+                         {currentStep.type === 'danger' && <span className="bg-red-100 text-red-700 text-xs font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5"><AlertOctagon className="w-2.5 h-2.5"/> 危険</span>}
+                         {currentStep.type === 'important' && <span className="bg-amber-100 text-amber-700 text-xs font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5"><AlertTriangle className="w-2.5 h-2.5"/> 重要</span>}
+                         {currentStep.pdfData && <button onClick={() => setShowPdf(true)} className="bg-orange-100 text-orange-700 text-xs font-bold px-1.5 py-0.5 rounded hover:bg-orange-200 flex items-center gap-0.5"><FileText className="w-2.5 h-2.5"/> PDF</button>}
                        </div>
                        <div className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">{currentStep.description || <span className="text-slate-400 italic">（詳細・注意事項なし）</span>}</div>
                      </div>
@@ -12479,7 +12494,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                          <ListChecks className="w-4 h-4 text-purple-700"/>
                          <span className="text-xs font-bold text-purple-900">測定条件</span>
                          {lot.appliedStandard?.standardNo && (
-                           <span className="text-[10px] bg-purple-200 text-purple-800 px-1.5 py-0.5 rounded font-mono">
+                           <span className="text-xs bg-purple-200 text-purple-800 px-1.5 py-0.5 rounded font-mono">
                              {lot.appliedStandard.standardNo}{lot.appliedStandard.revision ? ` Rev.${lot.appliedStandard.revision}` : ''}
                            </span>
                          )}
@@ -12572,7 +12587,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
         {/* Voice Log Panel (Sequential) - collapsible */}
         {voiceEnabled && voiceLog.length > 0 && (
           <div className="bg-slate-900/90 text-white shrink-0 cursor-pointer" onClick={() => setSeqVoiceLogOpen(prev => !prev)}>
-            <div className="p-2 flex items-center gap-2 text-[10px] font-bold text-blue-300">
+            <div className="p-2 flex items-center gap-2 text-xs font-bold text-blue-300">
               <HelpCircle className="w-3 h-3"/> 音声ログ {seqVoiceLogOpen ? '(クリックで閉じる)' : `(${voiceLog.length}件 - クリックで開く)`}
             </div>
             {seqVoiceLogOpen && (
@@ -12626,7 +12641,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                 <Ruler className="w-5 h-5 text-teal-400"/>
                 <div>
                   <div className="text-base font-bold">{activeStep.title}</div>
-                  <div className="text-[10px] text-slate-300 mt-0.5">測定画面 最大化表示 — {lot.model} #{lot.serialNo}{executionType === 'custom' && ` ・${displayUnitIdx + 1}台目`}</div>
+                  <div className="text-xs text-slate-300 mt-0.5">測定画面 最大化表示 — {lot.model} #{lot.serialNo}{executionType === 'custom' && ` ・${displayUnitIdx + 1}台目`}</div>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -12634,7 +12649,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   <details className="relative">
                     <summary className="cursor-pointer bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1 list-none"><FileText className="w-3.5 h-3.5"/> 注意事項</summary>
                     <div className="absolute right-0 top-full mt-1 bg-white text-slate-800 rounded-lg shadow-2xl p-3 w-80 max-h-64 overflow-y-auto z-10">
-                      <div className="text-[10px] font-bold text-slate-500 mb-1">作業内容 / 注意事項</div>
+                      <div className="text-xs font-bold text-slate-500 mb-1">作業内容 / 注意事項</div>
                       <div className="text-xs whitespace-pre-wrap leading-relaxed">{activeStep.description}</div>
                     </div>
                   </details>
@@ -12718,7 +12733,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                       <a key={i} href={p.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 border rounded-lg px-3 py-2 bg-orange-50/60 hover:bg-orange-100 transition">
                         <FileText className="w-5 h-5 text-orange-600 shrink-0"/>
                         <span className="flex-1 min-w-0 text-sm font-bold text-slate-700 truncate">{p.name || 'document.pdf'}</span>
-                        <span className="text-[11px] text-orange-700 shrink-0">タップで開く ↗</span>
+                        <span className="text-xs text-orange-700 shrink-0">タップで開く ↗</span>
                       </a>
                     ))}
                   </div>
@@ -12873,6 +12888,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
           )}
         </div>
       )}
+      {/* 🚨 2026-09-23: 測定時間表(時間の異常を完了の前に見せる)。custom の return にしか無く、順序実行で完了が押せなかった */}
+      {timeTableModal}
     </div>
   );
 };
@@ -12927,7 +12944,7 @@ const DashboardView = ({ onSetMode, lots, workers, handleMoveLot, saveData, setD
           <span className="font-bold text-slate-700">入荷待ち</span>
           <span className="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-0.5 rounded">{arrivalLots.length}件</span>
         </div>
-        <span className="text-[10px] text-slate-400 flex items-center gap-1">タップで一覧 <ChevronRight className="w-3 h-3"/></span>
+        <span className="text-xs text-slate-400 flex items-center gap-1">タップで一覧 <ChevronRight className="w-3 h-3"/></span>
       </button>
       <ZoneList id="buffer" title={`作業予定${currentUserName && !['フリー','管理者'].includes(currentUserName) ? ` (${currentUserName})` : ''}`} icon={Calendar} color="bg-amber-50" border="border-amber-200"
         onClickHeader={() => onSetMode('planning-execution')}
@@ -12994,12 +13011,12 @@ const ArrivalPlanningView = ({ onBack, lots, workers, templates, handleMoveLot, 
                   <div className="flex items-center gap-1" title={isWorkerPaused(w) ? '休止中です。作業がまだ残っているのでレーンを残しています。付け替えると消えます。' : ''}><User className="w-4 h-4"/> {laneNameOf(w, w.name)}</div>
                   <div className="flex items-center gap-1">
                     {wInProgress > 0 && (
-                      <span className={`text-[10px] font-bold px-1 rounded inline-flex items-center gap-1 ${wProcessing > 0 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`} title="進行中">
+                      <span className={`text-xs font-bold px-1 rounded inline-flex items-center gap-1 ${wProcessing > 0 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`} title="進行中">
                         {wProcessing > 0 && <span className="w-1 h-1 rounded-full bg-blue-500 animate-pulse"/>}
                         中{wInProgress}
                       </span>
                     )}
-                    <div className="text-[10px] bg-blue-100 text-blue-700 px-1.5 rounded font-mono">{formatTime(wPlannedTime)}</div>
+                    <div className="text-xs bg-blue-100 text-blue-700 px-1.5 rounded font-mono">{formatTime(wPlannedTime)}</div>
                   </div>
                 </div>
                 <div className="flex gap-3 text-sm mb-2 border-b pb-1 shrink-0">
@@ -13047,7 +13064,7 @@ const PlanningExecutionView = ({ onBack, workers, lots, templates, handleMoveLot
                        <div className="flex items-center gap-2" title={isWorkerPaused(w) ? '休止中です。作業がまだ残っているのでレーンを残しています。付け替えると消えます。' : ''}><User className="w-4 h-4"/> {laneNameOf(w, w.name)}</div>
                        <div className="flex items-center gap-1">
                          {wInProgress > 0 && (
-                           <span className={`text-[10px] font-bold px-1 rounded inline-flex items-center gap-1 ${wProcessing > 0 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`} title="進行中ロット">
+                           <span className={`text-xs font-bold px-1 rounded inline-flex items-center gap-1 ${wProcessing > 0 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`} title="進行中ロット">
                              {wProcessing > 0 && <span className="w-1 h-1 rounded-full bg-blue-500 animate-pulse"/>}
                              中{wInProgress}
                            </span>
@@ -13055,7 +13072,7 @@ const PlanningExecutionView = ({ onBack, workers, lots, templates, handleMoveLot
                          <span className="text-xs font-normal text-slate-500">({workerLots.length}件)</span>
                        </div>
                      </div>
-                     <div className="flex gap-3 text-[10px] font-normal mt-0.5">
+                     <div className="flex gap-3 text-xs font-normal mt-0.5">
                        <span className="text-blue-600">予定(残): <span className="font-bold font-mono">{formatTime(wPlanTime)}</span></span>
                        <span className="text-emerald-600">本日実績: <span className="font-bold font-mono">{formatTime(wDoneTime)}</span></span>
                      </div>
@@ -13223,13 +13240,13 @@ const TargetTimeHistoryPanel = ({ history }) => {
                 <tbody>
                     {rows.map((u, i) => (
                         <tr key={i} className="border-b border-slate-100 hover:bg-indigo-50/40 align-top">
-                            <td className="px-3 py-2 text-[11px] text-slate-600 whitespace-nowrap">{fmt(u.timestamp)}</td>
+                            <td className="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">{fmt(u.timestamp)}</td>
                             <td className="px-3 py-2 font-bold text-slate-700 whitespace-nowrap">{u.by || '-'}</td>
-                            <td className="px-3 py-2 whitespace-nowrap"><span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded mr-1">{u.targetType === 'app' ? '外観図' : '品目コード'}</span>{u.targetValue}</td>
-                            <td className="px-3 py-2 text-slate-700"><span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded mr-1">{u.category}</span>{u.title}</td>
+                            <td className="px-3 py-2 whitespace-nowrap"><span className="text-xs bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded mr-1">{u.targetType === 'app' ? '外観図' : '品目コード'}</span>{u.targetValue}</td>
+                            <td className="px-3 py-2 text-slate-700"><span className="text-xs bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded mr-1">{u.category}</span>{u.title}</td>
                             <td className="px-3 py-2 text-center font-mono whitespace-nowrap"><span className="text-slate-400 line-through">{u.oldTime}s</span> → <b className="text-blue-600">{u.newTime}s</b></td>
-                            <td className="px-3 py-2"><span className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100 font-bold">{u.strategyName}</span></td>
-                            <td className="px-3 py-2 text-[11px] text-slate-600">{u.evidence ? `期間:${u.evidence.periodLabel} / ${u.evidence.validCount}件 / 平均${u.evidence.mean}s${u.evidence.stdDev != null ? ` / ±${u.evidence.stdDev}s` : ''}` : '-'}</td>
+                            <td className="px-3 py-2"><span className="text-xs bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100 font-bold">{u.strategyName}</span></td>
+                            <td className="px-3 py-2 text-xs text-slate-600">{u.evidence ? `期間:${u.evidence.periodLabel} / ${u.evidence.validCount}件 / 平均${u.evidence.mean}s${u.evidence.stdDev != null ? ` / ±${u.evidence.stdDev}s` : ''}` : '-'}</td>
                         </tr>
                     ))}
                     {rows.length === 0 && <tr><td colSpan={7} className="text-center text-slate-400 py-10">変更履歴はありません</td></tr>}
@@ -13418,14 +13435,14 @@ const MeasurementOverridesPanel = ({ templates, lots, measurementOverrides, save
                                                                     const v = e.target.value;
                                                                     updateOverride(selectedModel, step.id, calc.id, { toleranceEnabled: v === 'default' ? undefined : (v === 'on') });
                                                                 }}
-                                                                className="border rounded p-1 text-[11px]"
+                                                                className="border rounded p-1 text-xs"
                                                             >
                                                                 <option value="default">デフォルト</option>
                                                                 <option value="on">ON (判定する)</option>
                                                                 <option value="off">OFF (記録のみ)</option>
                                                             </select>
                                                         </td>
-                                                        <td className="p-2 text-center text-slate-400 text-[10px]">
+                                                        <td className="p-2 text-center text-slate-400 text-xs">
                                                             <div>基: {calc.nominal ?? 0}</div>
                                                             <div>±: {calc.toleranceLower}〜{calc.toleranceUpper}</div>
                                                         </td>
@@ -13581,7 +13598,7 @@ const WorkScheduleSettingsPanel = ({ workSchedule, saveSettings, workloadEffecti
                 <div>
                     <label className="block text-xs font-bold text-slate-600 mb-1" title="負荷計算で使う実働人数。登録作業者数と異なる場合に上書き">
                         想定作業者数
-                        <span className="text-[10px] font-normal text-slate-400 ml-1">(登録 {registeredWorkerCount}人)</span>
+                        <span className="text-xs font-normal text-slate-400 ml-1">(登録 {registeredWorkerCount}人)</span>
                     </label>
                     <div className="flex items-center gap-1">
                         <input
@@ -13595,12 +13612,12 @@ const WorkScheduleSettingsPanel = ({ workSchedule, saveSettings, workloadEffecti
                             className="flex-1 border rounded p-2 text-sm font-mono"
                         />
                         {workloadEffectiveWorkers != null && workloadEffectiveWorkers !== '' && (
-                            <button type="button" onClick={() => saveSettings({ workloadEffectiveWorkers: null })} className="text-[10px] text-slate-400 hover:text-rose-600 px-1" title="リセット (登録人数を使用)">
+                            <button type="button" onClick={() => saveSettings({ workloadEffectiveWorkers: null })} className="text-xs text-slate-400 hover:text-rose-600 px-1" title="リセット (登録人数を使用)">
                                 <Undo2 className="w-3.5 h-3.5"/>
                             </button>
                         )}
                     </div>
-                    <p className="text-[10px] text-slate-400 mt-0.5">負荷バー/必要人数の計算に使用</p>
+                    <p className="text-xs text-slate-400 mt-0.5">負荷バー/必要人数の計算に使用</p>
                 </div>
                 <div className="flex items-end">
                     <label className="flex items-center gap-2 cursor-pointer p-2 border rounded bg-slate-50 w-full">
@@ -13615,27 +13632,27 @@ const WorkScheduleSettingsPanel = ({ workSchedule, saveSettings, workloadEffecti
                 <div className="text-xs font-bold text-blue-800 mb-2">📊 実働時間 (計算結果)</div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
                     <div>
-                        <div className="text-[10px] text-blue-600 font-bold">1日 (定時内)</div>
+                        <div className="text-xs text-blue-600 font-bold">1日 (定時内)</div>
                         <div className="text-lg font-mono font-black text-blue-800">{formatHoursMinutes(computed.regularMinutes)}</div>
-                        <div className="text-[10px] text-slate-500">{computed.regularHours.toFixed(2)}h</div>
+                        <div className="text-xs text-slate-500">{computed.regularHours.toFixed(2)}h</div>
                     </div>
                     <div>
-                        <div className="text-[10px] text-blue-600 font-bold">1日 (残業含む)</div>
+                        <div className="text-xs text-blue-600 font-bold">1日 (残業含む)</div>
                         <div className="text-lg font-mono font-black text-blue-800">{formatHoursMinutes(computed.totalMinutes)}</div>
-                        <div className="text-[10px] text-slate-500">{computed.totalHours.toFixed(2)}h</div>
+                        <div className="text-xs text-slate-500">{computed.totalHours.toFixed(2)}h</div>
                     </div>
                     <div>
-                        <div className="text-[10px] text-blue-600 font-bold">週 ({sch.daysPerWeek}日)</div>
+                        <div className="text-xs text-blue-600 font-bold">週 ({sch.daysPerWeek}日)</div>
                         <div className="text-lg font-mono font-black text-blue-800">{(computed.regularHours * sch.daysPerWeek).toFixed(1)}h</div>
-                        <div className="text-[10px] text-slate-500">残業込 {(computed.totalHours * sch.daysPerWeek).toFixed(1)}h</div>
+                        <div className="text-xs text-slate-500">残業込 {(computed.totalHours * sch.daysPerWeek).toFixed(1)}h</div>
                     </div>
                     <div>
-                        <div className="text-[10px] text-blue-600 font-bold">月 ({sch.daysPerMonth}日)</div>
+                        <div className="text-xs text-blue-600 font-bold">月 ({sch.daysPerMonth}日)</div>
                         <div className="text-lg font-mono font-black text-blue-800">{(computed.regularHours * sch.daysPerMonth).toFixed(1)}h</div>
-                        <div className="text-[10px] text-slate-500">残業込 {(computed.totalHours * sch.daysPerMonth).toFixed(1)}h</div>
+                        <div className="text-xs text-slate-500">残業込 {(computed.totalHours * sch.daysPerMonth).toFixed(1)}h</div>
                     </div>
                 </div>
-                <div className="text-[10px] text-blue-700 mt-2">
+                <div className="text-xs text-blue-700 mt-2">
                     {sch.includeOvertimeInCapacity ? '✓ 全体進捗の負荷計算は「残業込み」で計算されます' : '✓ 全体進捗の負荷計算は「定時内のみ」で計算されます'}
                 </div>
             </div>
@@ -13919,7 +13936,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mt-6">
             <h3 className="text-lg font-bold mb-2 flex items-center gap-2 text-slate-800">
                 <ClipboardCheck className="w-5 h-5 text-indigo-600" /> 品質規格マスタ
-                <span className="text-[10px] font-normal text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">推奨</span>
+                <span className="text-xs font-normal text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">推奨</span>
             </h3>
             <p className="text-xs text-slate-500 mb-4">
                 品質規格 (QS) = <span className="font-bold">公差・基準値 + 測定条件 + 対象テンプレート群 + Excel取込時の検査日オフセット</span> をひとまとめにしたマスタ。<br/>
@@ -13931,7 +13948,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
             {/* 🚨 2026-09-08 P4: 78px・中身51% の帯だった(横幅の半分が空)。**1文字も消さず** details に畳んだ。
                 閉じている時は1行の札、押すと下の3行がそのまま全部出る。
                 ⚠ 中の文を消さない・details を外して元の div へ戻さない(見張り: ui-density-parts-settings.test.mjs S-1)。 */}
-            <details data-fold="qs-naming-tips" className="bg-amber-50 border border-amber-200 rounded p-2 mb-4 text-[11px] text-amber-800">
+            <details data-fold="qs-naming-tips" className="bg-amber-50 border border-amber-200 rounded p-2 mb-4 text-xs text-amber-800">
                 <summary className="cursor-pointer select-none font-bold min-h-[36px] flex items-center">💡 規格の名前付けのコツ（押すと 例と規格番号の付け方が出ます）</summary>
                 <div className="pt-2">
                 💡 <span className="font-bold">規格の名前付けのコツ</span>: 「どんな製品群か」「どんな仕様か」が後で見て分かる名前を。<br/>
@@ -13971,23 +13988,23 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                 <div className="border border-indigo-200 bg-indigo-50/40 rounded-lg p-3 mb-4 space-y-2">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                         <div>
-                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">規格番号 *</label>
+                            <label className="block text-xs font-bold text-slate-600 mb-0.5">規格番号 *</label>
                             <input value={newStandardNo} onChange={e => setNewStandardNo(e.target.value)} placeholder="例: QS-12345" className="w-full border rounded p-1.5 text-sm" />
                         </div>
                         <div>
-                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5" title="どんな製品群・どんな仕様か分かる名前。品目コードリストから後で自動連想できます">名称 *</label>
+                            <label className="block text-xs font-bold text-slate-600 mb-0.5" title="どんな製品群・どんな仕様か分かる名前。品目コードリストから後で自動連想できます">名称 *</label>
                             <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="例: RT系 標準仕様" className="w-full border rounded p-1.5 text-sm" />
-                            <p className="text-[9px] text-slate-400 mt-0.5">
+                            <p className="text-xs text-slate-400 mt-0.5">
                                 記入例: <span className="font-mono">「RT系 標準仕様」「特注パターンA」「RBSシリーズ 高精度」「KIT-22 改定3」</span>
                             </p>
                         </div>
                         <div>
-                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">リビジョン</label>
+                            <label className="block text-xs font-bold text-slate-600 mb-0.5">リビジョン</label>
                             <input value={newRevision} onChange={e => setNewRevision(e.target.value)} placeholder="A" className="w-full border rounded p-1.5 text-sm" />
                         </div>
                     </div>
                     <div>
-                        <label className="block text-[10px] font-bold text-slate-600 mb-0.5">対象テンプレート *</label>
+                        <label className="block text-xs font-bold text-slate-600 mb-0.5">対象テンプレート *</label>
                         <select value={newTemplateId} onChange={e => setNewTemplateId(e.target.value)} className="w-full border rounded p-1.5 text-sm bg-white">
                             <option value="">-- テンプレートを選択 --</option>
                             {[...templates].sort((a, b) => new Intl.Collator('ja').compare(a.name || '', b.name || '')).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -14006,19 +14023,19 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                     {/* メタ情報 */}
                     <div className="bg-slate-50 rounded-lg p-3 grid grid-cols-1 md:grid-cols-4 gap-2">
                         <div>
-                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">規格番号</label>
+                            <label className="block text-xs font-bold text-slate-600 mb-0.5">規格番号</label>
                             <input value={selectedQs.standardNo || ''} onChange={e => updateQs(selectedQs.id, { standardNo: e.target.value })} className="w-full border rounded p-1 text-sm" />
                         </div>
                         <div>
-                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">リビジョン</label>
+                            <label className="block text-xs font-bold text-slate-600 mb-0.5">リビジョン</label>
                             <input value={selectedQs.revision || ''} onChange={e => updateQs(selectedQs.id, { revision: e.target.value })} className="w-full border rounded p-1 text-sm" />
                         </div>
                         <div className="md:col-span-2">
-                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5" title="どんな製品群・どんな仕様か分かる名前">名称 <span className="font-normal text-slate-400">(記入例: RT系 標準仕様 / 特注パターンA / 高精度モデル)</span></label>
+                            <label className="block text-xs font-bold text-slate-600 mb-0.5" title="どんな製品群・どんな仕様か分かる名前">名称 <span className="font-normal text-slate-400">(記入例: RT系 標準仕様 / 特注パターンA / 高精度モデル)</span></label>
                             <input value={selectedQs.name || ''} onChange={e => updateQs(selectedQs.id, { name: e.target.value })} placeholder="例: RT系 標準仕様" className="w-full border rounded p-1 text-sm" />
                         </div>
                         <div className="md:col-span-3 flex items-end">
-                            <div className="text-[10px] text-slate-500 leading-tight">
+                            <div className="text-xs text-slate-500 leading-tight">
                                 <span className="font-bold text-indigo-700">{templateEntries.length}</span> 件のテンプレートが紐付いています。下のセクションで個別に編集できます。
                             </div>
                         </div>
@@ -14028,7 +14045,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                             </button>
                         </div>
                         <div className="md:col-span-4">
-                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">備考</label>
+                            <label className="block text-xs font-bold text-slate-600 mb-0.5">備考</label>
                             <textarea value={selectedQs.note || ''} onChange={e => updateQs(selectedQs.id, { note: e.target.value })} className="w-full border rounded p-1 text-sm" rows={2} placeholder="規格書の出典・改訂理由など" />
                         </div>
                     </div>
@@ -14062,7 +14079,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                 <input value={newModelInput} onChange={e => setNewModelInput(e.target.value)} placeholder="新規品目名を入力" className="w-40 border rounded p-1.5 text-xs" />
                                 <button type="button" onClick={() => { const m = newModelInput.trim(); if (m) { setModelMapping(m, selectedQs.id); setNewModelInput(''); } }} disabled={!newModelInput.trim()} className="bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white px-3 py-1.5 rounded text-xs font-bold">追加</button>
                             </div>
-                            <p className="text-[10px] text-slate-500 mt-2">既存品目コードに別規格が割当済みの場合は上書きされます。新規ロット作成時から有効。</p>
+                            <p className="text-xs text-slate-500 mt-2">既存品目コードに別規格が割当済みの場合は上書きされます。新規ロット作成時から有効。</p>
                         </div>
                     </div>
 
@@ -14071,7 +14088,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                         <div className="flex items-center justify-between mb-2">
                             <div className="text-sm font-bold text-indigo-900 flex items-center gap-1.5">
                                 <ClipboardList className="w-4 h-4"/> 対象テンプレート ({templateEntries.length} 件)
-                                <span className="text-[10px] font-normal text-indigo-600 ml-1">受入→組立→中間→…→最終 のように順に並べられます</span>
+                                <span className="text-xs font-normal text-indigo-600 ml-1">受入→組立→中間→…→最終 のように順に並べられます</span>
                             </div>
                             <button type="button" onClick={addTemplateEntry} className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded font-bold flex items-center gap-1">
                                 <Plus className="w-3 h-3"/> テンプレート追加
@@ -14110,15 +14127,15 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                         title={isCollapsed ? 'クリックで展開' : 'クリックで折りたたみ'}
                                     >
                                         {isCollapsed ? <ChevronRight className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
-                                        <span className="bg-indigo-600 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center shrink-0">{entryIdx + 1}</span>
+                                        <span className="bg-indigo-600 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center shrink-0">{entryIdx + 1}</span>
                                         <span className="truncate">{tpl?.name || '(テンプレート未選択)'}</span>
                                     </button>
                                     <div className="flex items-center gap-2 shrink-0">
-                                        <span className="text-[10px] text-indigo-700">工程 {stepCount} / 条件 {conditionCount} / 公差 {overrideCount} / 初期値 {defaultsCount}</span>
+                                        <span className="text-xs text-indigo-700">工程 {stepCount} / 条件 {conditionCount} / 公差 {overrideCount} / 初期値 {defaultsCount}</span>
                                         {/* Excel取込時の検査日オフセット (K33基準) */}
                                         <div className="flex items-center gap-1 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5" title="Excel取込時、進捗管理表のZ列 (K33検査予定日) からの日数オフセット。負の数 = 何日前、0 = 当日、正の数 = 何日後">
                                             <FileSpreadsheet className="w-3 h-3 text-emerald-600"/>
-                                            <span className="text-[10px] text-emerald-700 font-bold">K33</span>
+                                            <span className="text-xs text-emerald-700 font-bold">K33</span>
                                             <input
                                                 type="number"
                                                 value={entry.daysBefore ?? ''}
@@ -14129,7 +14146,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                 }}
                                                 className="w-12 border rounded p-0.5 text-xs text-center font-mono bg-white"
                                             />
-                                            <span className="text-[10px] text-emerald-700">日</span>
+                                            <span className="text-xs text-emerald-700">日</span>
                                         </div>
                                         <select
                                             value={entry.templateId || ''}
@@ -14204,7 +14221,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                         <div className="p-3 bg-white border-b border-slate-100">
                                                             <div className="text-xs font-bold text-slate-600 mb-2 flex items-center gap-1.5">
                                                                 <ListChecks className="w-3.5 h-3.5 text-purple-600" /> 測定条件 (HOW)
-                                                                <span className="text-[10px] font-normal text-slate-400 ml-1">どう測るか / 段取り条件</span>
+                                                                <span className="text-xs font-normal text-slate-400 ml-1">どう測るか / 段取り条件</span>
                                                             </div>
                                                             <div className="space-y-1.5">
                                                                 {(condition.params || []).map((p, idx) => (
@@ -14219,7 +14236,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                                 </button>
                                                             </div>
                                                             <div className="mt-2">
-                                                                <label className="block text-[10px] text-slate-500 mb-0.5">条件メモ (自由記述)</label>
+                                                                <label className="block text-xs text-slate-500 mb-0.5">条件メモ (自由記述)</label>
                                                                 <textarea value={condition.note || ''} onChange={e => updateCondition(entryIdx, step.id, { note: e.target.value })} className="w-full border rounded p-1.5 text-xs" rows={2} placeholder="例: ホイール45°毎、ウォーム評価あり、温度23°C基準" />
                                                             </div>
                                                         </div>
@@ -14229,9 +14246,9 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                             <div className="p-3 bg-amber-50/30 border-b border-slate-100">
                                                                 <div className="text-xs font-bold text-slate-600 mb-2 flex items-center gap-1.5">
                                                                     <ListChecks className="w-3.5 h-3.5 text-amber-600" /> 初期値プリセット
-                                                                    <span className="text-[10px] font-normal text-slate-400 ml-1">ブロックゲージ組合せなど。測定画面で「規格の初期値を入力」ボタンが出ます</span>
+                                                                    <span className="text-xs font-normal text-slate-400 ml-1">ブロックゲージ組合せなど。測定画面で「規格の初期値を入力」ボタンが出ます</span>
                                                                     {filledCount > 0 && (
-                                                                        <button type="button" onClick={clearStepDefaults} className="ml-auto text-[10px] text-rose-500 hover:bg-rose-50 px-1.5 py-0.5 rounded font-bold border border-rose-200">
+                                                                        <button type="button" onClick={clearStepDefaults} className="ml-auto text-xs text-rose-500 hover:bg-rose-50 px-1.5 py-0.5 rounded font-bold border border-rose-200">
                                                                             <X className="w-2.5 h-2.5 inline mr-0.5"/>全クリア ({filledCount}件)
                                                                         </button>
                                                                     )}
@@ -14239,7 +14256,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                                 <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-1.5">
                                                                     {inputsList.map(inp => (
                                                                         <div key={inp.id} className="flex flex-col gap-0.5 bg-white border border-amber-200 rounded p-1.5">
-                                                                            <span className="text-[9px] font-bold text-slate-500 truncate" title={inp.label}>
+                                                                            <span className="text-xs font-bold text-slate-500 truncate" title={inp.label}>
                                                                                 {inp.label || inp.id}
                                                                             </span>
                                                                             <input
@@ -14258,16 +14275,16 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                         <div className="p-3 bg-purple-50/30 border-b border-slate-100">
                                                             <div className="text-xs font-bold text-slate-600 mb-2 flex items-center gap-1.5">
                                                                 <ListChecks className="w-3.5 h-3.5 text-purple-600" /> 確認チェック
-                                                                <span className="text-[10px] font-normal text-slate-400 ml-1">
+                                                                <span className="text-xs font-normal text-slate-400 ml-1">
                                                                     {hasCustomChecklist ? '⚙ この規格専用' : 'テンプレ標準を継承'}
                                                                 </span>
                                                                 <span className="ml-auto flex items-center gap-1.5">
                                                                     {!hasCustomChecklist ? (
-                                                                        <button type="button" onClick={() => updateEntryChecklistItems(entryIdx, step.id, [...tplChecklist])} className="text-[10px] bg-purple-100 hover:bg-purple-200 text-purple-700 px-2 py-0.5 rounded font-bold border border-purple-300">
+                                                                        <button type="button" onClick={() => updateEntryChecklistItems(entryIdx, step.id, [...tplChecklist])} className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-2 py-0.5 rounded font-bold border border-purple-300">
                                                                             <Pencil className="w-2.5 h-2.5 inline mr-0.5"/>規格用に編集
                                                                         </button>
                                                                     ) : (
-                                                                        <button type="button" onClick={() => { if (confirm('この規格専用の確認チェック設定を解除し、テンプレ標準に戻しますか？')) updateEntryChecklistItems(entryIdx, step.id, null); }} className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-0.5 rounded font-bold border border-slate-300">
+                                                                        <button type="button" onClick={() => { if (confirm('この規格専用の確認チェック設定を解除し、テンプレ標準に戻しますか？')) updateEntryChecklistItems(entryIdx, step.id, null); }} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-0.5 rounded font-bold border border-slate-300">
                                                                             <Undo2 className="w-2.5 h-2.5 inline mr-0.5"/>テンプレ標準に戻す
                                                                         </button>
                                                                     )}
@@ -14275,16 +14292,16 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                             </div>
                                                             {!hasCustomChecklist ? (
                                                                 tplChecklist.length === 0 ? (
-                                                                    <div className="text-[11px] text-slate-400 text-center py-2 bg-white rounded border border-dashed border-slate-200">
+                                                                    <div className="text-xs text-slate-400 text-center py-2 bg-white rounded border border-dashed border-slate-200">
                                                                         テンプレ側にチェック項目が未設定です。「規格用に編集」で追加できます。
                                                                     </div>
                                                                 ) : (
                                                                     <div className="space-y-1">
                                                                         {tplChecklist.map((item, idx) => (
-                                                                            <div key={item.id || idx} className="bg-white border border-slate-200 rounded px-2 py-1 text-[11px] flex items-center gap-2">
+                                                                            <div key={item.id || idx} className="bg-white border border-slate-200 rounded px-2 py-1 text-xs flex items-center gap-2">
                                                                                 <span className="text-purple-500 font-bold w-4">{idx + 1}.</span>
                                                                                 <span className="flex-1 text-slate-700">{item.label || '(無題)'}</span>
-                                                                                <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${item.required === false ? 'bg-slate-100 text-slate-500' : 'bg-rose-100 text-rose-700'}`}>
+                                                                                <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${item.required === false ? 'bg-slate-100 text-slate-500' : 'bg-rose-100 text-rose-700'}`}>
                                                                                     {item.required === false ? '任意' : '必須'}
                                                                                 </span>
                                                                             </div>
@@ -14304,14 +14321,14 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                                         };
                                                                         return (
                                                                             <div key={item.id || idx} className="bg-white border border-purple-200 rounded p-1.5 flex items-center gap-1.5">
-                                                                                <span className="text-[10px] font-bold text-purple-500 w-5 text-center">{idx + 1}</span>
+                                                                                <span className="text-xs font-bold text-purple-500 w-5 text-center">{idx + 1}</span>
                                                                                 <input
                                                                                     value={item.label || ''}
                                                                                     onChange={e => updateItem({ label: e.target.value })}
                                                                                     placeholder="例: 色見本との一致を確認"
                                                                                     className="flex-1 border rounded px-2 py-0.5 text-xs"
                                                                                 />
-                                                                                <label className="flex items-center gap-1 text-[10px] font-bold text-slate-600 cursor-pointer shrink-0" title="チェック必須項目">
+                                                                                <label className="flex items-center gap-1 text-xs font-bold text-slate-600 cursor-pointer shrink-0" title="チェック必須項目">
                                                                                     <input type="checkbox" checked={item.required !== false} onChange={e => updateItem({ required: e.target.checked })} className="w-3 h-3 accent-purple-600"/>
                                                                                     必須
                                                                                 </label>
@@ -14322,7 +14339,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                                     <button
                                                                         type="button"
                                                                         onClick={() => updateEntryChecklistItems(entryIdx, step.id, [...customChecklist, { id: `chk_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`, label: '', required: true }])}
-                                                                        className="w-full py-1 bg-purple-100 hover:bg-purple-200 text-purple-700 text-[10px] font-bold rounded border border-purple-300 flex items-center justify-center gap-1"
+                                                                        className="w-full py-1 bg-purple-100 hover:bg-purple-200 text-purple-700 text-xs font-bold rounded border border-purple-300 flex items-center justify-center gap-1"
                                                                     >
                                                                         <Plus className="w-3 h-3"/> 項目追加
                                                                     </button>
@@ -14334,7 +14351,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                         <div className="p-3 bg-white">
                                                             <div className="text-xs font-bold text-slate-600 mb-2 flex items-center gap-1.5">
                                                                 <Target className="w-3.5 h-3.5 text-teal-600" /> 公差・基準値 (WHAT)
-                                                                <span className="text-[10px] font-normal text-slate-400 ml-1">合否判定用スペック</span>
+                                                                <span className="text-xs font-normal text-slate-400 ml-1">合否判定用スペック</span>
                                                             </div>
                                                             {calcs.length === 0 ? (
                                                                 <div className="text-xs text-slate-400 py-2 text-center">この工程には計算設定がありません</div>
@@ -14347,7 +14364,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                                             <th className="p-1.5 text-right font-bold">上限(+)</th>
                                                                             <th className="p-1.5 text-right font-bold">下限(-)</th>
                                                                             <th className="p-1.5 text-center font-bold">判定</th>
-                                                                            <th className="p-1.5 text-center font-bold text-[10px]">テンプレ値</th>
+                                                                            <th className="p-1.5 text-center font-bold text-xs">テンプレ値</th>
                                                                         </tr>
                                                                     </thead>
                                                                     <tbody className="divide-y divide-slate-100">
@@ -14361,13 +14378,13 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                                                     <td className="p-1.5"><input type="number" step="0.001" value={fmt(ov.toleranceUpper)} onChange={e => updateOverride(entryIdx, step.id, calc.id, { toleranceUpper: e.target.value === '' ? undefined : Number(e.target.value) })} placeholder={String(calc.toleranceUpper ?? '')} className="w-20 border rounded p-1 text-right font-mono text-xs" /></td>
                                                                                     <td className="p-1.5"><input type="number" step="0.001" value={fmt(ov.toleranceLower)} onChange={e => updateOverride(entryIdx, step.id, calc.id, { toleranceLower: e.target.value === '' ? undefined : Number(e.target.value) })} placeholder={String(calc.toleranceLower ?? '')} className="w-20 border rounded p-1 text-right font-mono text-xs" /></td>
                                                                                     <td className="p-1.5 text-center">
-                                                                                        <select value={ov.toleranceEnabled === undefined ? 'default' : (ov.toleranceEnabled ? 'on' : 'off')} onChange={e => { const v = e.target.value; updateOverride(entryIdx, step.id, calc.id, { toleranceEnabled: v === 'default' ? undefined : (v === 'on') }); }} className="border rounded p-1 text-[10px]">
+                                                                                        <select value={ov.toleranceEnabled === undefined ? 'default' : (ov.toleranceEnabled ? 'on' : 'off')} onChange={e => { const v = e.target.value; updateOverride(entryIdx, step.id, calc.id, { toleranceEnabled: v === 'default' ? undefined : (v === 'on') }); }} className="border rounded p-1 text-xs">
                                                                                             <option value="default">デフォルト</option>
                                                                                             <option value="on">ON</option>
                                                                                             <option value="off">OFF</option>
                                                                                         </select>
                                                                                     </td>
-                                                                                    <td className="p-1.5 text-center text-slate-400 text-[10px]"><div>基: {calc.nominal ?? 0}</div><div>±: {calc.toleranceLower}〜{calc.toleranceUpper}</div></td>
+                                                                                    <td className="p-1.5 text-center text-slate-400 text-xs"><div>基: {calc.nominal ?? 0}</div><div>±: {calc.toleranceLower}〜{calc.toleranceUpper}</div></td>
                                                                                 </tr>
                                                                             );
                                                                         })}
@@ -14387,12 +14404,12 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                   <div className="mt-3 border-t-2 border-indigo-100 pt-2">
                                     <div className="flex items-center justify-between mb-1 flex-wrap gap-1">
                                       <div className="text-xs font-black text-indigo-700">🧩 工程プロファイル（この品目群で使う工程）</div>
-                                      <select className="text-[11px] border rounded px-1 py-0.5 bg-white" value="" onChange={(e)=>{ if(e.target.value){ copyStepProfileFrom(entryIdx, e.target.value); e.target.value=''; } }}>
+                                      <select className="text-xs border rounded px-1 py-0.5 bg-white" value="" onChange={(e)=>{ if(e.target.value){ copyStepProfileFrom(entryIdx, e.target.value); e.target.value=''; } }}>
                                         <option value="">他の規格からコピー…</option>
                                         {Object.values(qualityStandards||{}).filter(q=>q.id!==selectedQs.id).map(q=> <option key={q.id} value={q.id}>{q.standardNo} {q.name}</option>)}
                                       </select>
                                     </div>
-                                    <div className="text-[10px] text-slate-500 mb-1.5">「該当なし」にした工程はこの品目群のロット作成時に自動でスキップ（作業者は検査画面で解除可）。詳細/PDF/写真/目標時間も品目別に上書きできます。</div>
+                                    <div className="text-xs text-slate-500 mb-1.5">「該当なし」にした工程はこの品目群のロット作成時に自動でスキップ（作業者は検査画面で解除可）。詳細/PDF/写真/目標時間も品目別に上書きできます。</div>
                                     <div className="space-y-1">
                                       {(tpl.steps||[]).map(step => {
                                         const prof = entry.stepProfile?.[step.id] || {};
@@ -14405,31 +14422,31 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                           <div key={step.id} className={`rounded border ${enabled ? 'border-slate-200 bg-white' : 'border-slate-300 bg-slate-100'}`}>
                                             <div className="flex items-center gap-2 px-2 py-1">
                                               <button onClick={()=>updateStepProfile(entryIdx, step.id, { enabled: enabled ? false : undefined })}
-                                                className={`text-[11px] font-bold px-2 py-0.5 rounded border whitespace-nowrap ${enabled ? 'bg-emerald-600 text-white border-emerald-700' : 'bg-slate-400 text-white border-slate-500'}`}>
+                                                className={`text-xs font-bold px-2 py-0.5 rounded border whitespace-nowrap ${enabled ? 'bg-emerald-600 text-white border-emerald-700' : 'bg-slate-400 text-white border-slate-500'}`}>
                                                 {enabled ? '使う' : '該当なし'}
                                               </button>
-                                              {isAuto && <span className="text-[9px] bg-purple-100 text-purple-700 px-1 rounded shrink-0">自動</span>}
+                                              {isAuto && <span className="text-xs bg-purple-100 text-purple-700 px-1 rounded shrink-0">自動</span>}
                                               <span className={`text-xs font-bold flex-1 truncate ${enabled ? 'text-slate-800' : 'text-slate-400 line-through'}`} title={step.title}>{step.title}</span>
-                                              {hasOv && <span className="text-[9px] text-indigo-500 shrink-0" title="品目別の上書きあり">●上書</span>}
-                                              <button onClick={()=>setProfileStepOpen(p=>({...p, [pkey]: !open}))} className="text-[10px] text-indigo-600 underline shrink-0">{open ? '閉じる' : '詳細'}</button>
+                                              {hasOv && <span className="text-xs text-indigo-500 shrink-0" title="品目別の上書きあり">●上書</span>}
+                                              <button onClick={()=>setProfileStepOpen(p=>({...p, [pkey]: !open}))} className="text-xs text-indigo-600 underline shrink-0">{open ? '閉じる' : '詳細'}</button>
                                             </div>
                                             {open && (
                                               <div className="px-2 pb-2 space-y-1.5 border-t border-slate-100 pt-1.5 bg-slate-50">
                                                 <div>
-                                                  <label className="text-[10px] text-slate-500">詳細・注意事項（この品目コード用に上書き / 空=テンプレ標準）</label>
+                                                  <label className="text-xs text-slate-500">詳細・注意事項（この品目コード用に上書き / 空=テンプレ標準）</label>
                                                   <textarea value={prof.description || ''} onChange={(e)=>updateStepProfile(entryIdx, step.id, { description: e.target.value || undefined })} className="w-full text-xs border rounded p-1 h-14" placeholder="(空=テンプレ標準)"/>
                                                 </div>
                                                 <div className="flex items-center gap-2 flex-wrap">
-                                                  <label className="text-[10px] text-slate-500">目標時間(秒)</label>
+                                                  <label className="text-xs text-slate-500">目標時間(秒)</label>
                                                   <input type="number" min="0" value={prof.targetTime ?? ''} onChange={(e)=>updateStepProfile(entryIdx, step.id, { targetTime: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value)||0) })} className="w-20 text-xs border rounded p-1" placeholder="標準"/>
-                                                  <label className="text-[10px] text-indigo-600 underline cursor-pointer">PDF差替
+                                                  <label className="text-xs text-indigo-600 underline cursor-pointer">PDF差替
                                                     <input type="file" accept="application/pdf" className="hidden" onChange={async(e)=>{ const f=e.target.files?.[0]; if(f){ try{ const b=await getBase64(f); updateStepProfile(entryIdx, step.id, { pdfData: b }); alert('PDFを上書きしました'); }catch{ alert('PDFエラー'); } } e.target.value=''; }}/>
                                                   </label>
-                                                  {prof.pdfData && <button onClick={()=>updateStepProfile(entryIdx, step.id, { pdfData: undefined })} className="text-[10px] text-rose-500 underline">PDF削除</button>}
-                                                  <label className="text-[10px] text-indigo-600 underline cursor-pointer">写真追加
+                                                  {prof.pdfData && <button onClick={()=>updateStepProfile(entryIdx, step.id, { pdfData: undefined })} className="text-xs text-rose-500 underline">PDF削除</button>}
+                                                  <label className="text-xs text-indigo-600 underline cursor-pointer">写真追加
                                                     <input type="file" accept="image/*" className="hidden" onChange={async(e)=>{ const f=e.target.files?.[0]; if(f){ try{ const b=await getBase64(f); const url=await uploadImageToStorage(b,'qs-profile'); updateStepProfile(entryIdx, step.id, { images: [...(prof.images||[]), url] }); }catch{ alert('画像エラー'); } } e.target.value=''; }}/>
                                                   </label>
-                                                  {(prof.images||[]).length>0 && <span className="text-[10px] text-slate-500">写真{prof.images.length}枚 <button onClick={()=>updateStepProfile(entryIdx, step.id, { images: undefined })} className="text-rose-500 underline">削除</button></span>}
+                                                  {(prof.images||[]).length>0 && <span className="text-xs text-slate-500">写真{prof.images.length}枚 <button onClick={()=>updateStepProfile(entryIdx, step.id, { images: undefined })} className="text-rose-500 underline">削除</button></span>}
                                                 </div>
                                               </div>
                                             )}
@@ -14457,7 +14474,7 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                 <div key={m} className="bg-indigo-50 border border-indigo-200 rounded px-2 py-1.5 text-xs flex items-center justify-between gap-2">
                                     <div className="min-w-0 flex-1">
                                         <div className="font-bold text-indigo-900 truncate">{m}</div>
-                                        <div className="text-indigo-600 text-[10px] truncate">→ {qs ? `${qs.standardNo} Rev.${qs.revision}` : '⚠ 不明な規格'}</div>
+                                        <div className="text-indigo-600 text-xs truncate">→ {qs ? `${qs.standardNo} Rev.${qs.revision}` : '⚠ 不明な規格'}</div>
                                     </div>
                                     <button type="button" onClick={() => { setSelectedQsId(qsId); document.querySelector('[data-qs-panel]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="text-indigo-600 hover:text-indigo-800 p-1" title="この規格を編集"><Pencil className="w-3 h-3" /></button>
                                 </div>
@@ -14732,7 +14749,7 @@ const ModelGroupManager = ({ lots = [], settings = {}, saveSettings }) => {
                   const other = groupOf(m); const inOther = other && other.id !== g.id;
                   return (
                     <button key={m} onClick={() => toggle(g.id, m)} disabled={inOther} title={inOther ? `「${other.name}」に所属中` : ''}
-                      className={`px-2 py-1 rounded text-[11px] font-bold border ${inThis ? 'bg-indigo-600 text-white border-indigo-600' : inOther ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed line-through' : 'bg-white text-slate-600 border-slate-300 hover:bg-indigo-50'}`}>
+                      className={`px-2 py-1 rounded text-xs font-bold border ${inThis ? 'bg-indigo-600 text-white border-indigo-600' : inOther ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed line-through' : 'bg-white text-slate-600 border-slate-300 hover:bg-indigo-50'}`}>
                       {m}{completedCountByModel[m] ? <span className="opacity-60 ml-0.5">({completedCountByModel[m]})</span> : ''}
                     </button>
                   );
@@ -14743,12 +14760,12 @@ const ModelGroupManager = ({ lots = [], settings = {}, saveSettings }) => {
         })}
       </div>
       {groups.length > 0 && ungrouped.length > 0 && (
-        <div className="mt-3 text-[11px] text-slate-400">未所属の品目コード {ungrouped.length} 件はそれぞれ単独で解析されます。</div>
+        <div className="mt-3 text-xs text-slate-400">未所属の品目コード {ungrouped.length} 件はそれぞれ単独で解析されます。</div>
       )}
       {/* 目標時間の一回きりコピー(立ち上げ用) */}
       <div className="mt-4 pt-3 border-t">
         <div className="text-sm font-bold text-slate-700 mb-1 flex items-center gap-1"><Copy className="w-4 h-4 text-indigo-600" /> 目標時間を別品目コードにコピー（一回きり）</div>
-        <div className="text-[11px] text-slate-500 mb-2">立ち上げ時など、ある品目コードの較正済み目標時間を別品目コードへ複製。以後は別々に育ちます。<br />（グループ化していれば自動で引き継ぐので、こちらは“グループにしないが一回だけ流用したい”時用）</div>
+        <div className="text-xs text-slate-500 mb-2">立ち上げ時など、ある品目コードの較正済み目標時間を別品目コードへ複製。以後は別々に育ちます。<br />（グループ化していれば自動で引き継ぐので、こちらは“グループにしないが一回だけ流用したい”時用）</div>
         <div className="flex items-center gap-2 flex-wrap">
           <select value={copyFrom} onChange={e => setCopyFrom(e.target.value)} className="border rounded px-2 py-1 text-sm">
             <option value="">コピー元…</option>
@@ -14813,13 +14830,13 @@ const WorkOrderReviewModal = ({ combo, lots = [], settings = {}, onClose, curren
             </div>
             <div>
               <div className="font-bold text-sm text-slate-700 mb-1">① 作業順の揃い具合</div>
-              <div className="text-[11px] text-slate-500 mb-1">テンプレ順: {data.tmplTitles.join(' › ')}</div>
+              <div className="text-xs text-slate-500 mb-1">テンプレ順: {data.tmplTitles.join(' › ')}</div>
               {orderVaries
                 ? <div className="text-xs text-rose-700 font-bold mb-1">⚠ ロットで作業順がバラついています（{data.orderSignatures.length}パターン）</div>
                 : <div className="text-xs text-emerald-700 font-bold mb-1">✓ 全ロットが同じ作業順</div>}
               <div className="space-y-1">
                 {data.orderSignatures.map((p, i) => (
-                  <div key={i} className="text-[11px] flex items-start gap-2">
+                  <div key={i} className="text-xs flex items-start gap-2">
                     <span className="bg-slate-200 px-1.5 rounded font-bold shrink-0">{p.n}ロット</span>
                     <span className="text-slate-700">{p.sig}</span>
                   </div>
@@ -14831,24 +14848,24 @@ const WorkOrderReviewModal = ({ combo, lots = [], settings = {}, onClose, curren
               <div className="space-y-1.5">
                 {data.perLot.map((p, i) => (
                   <div key={i} className="border rounded-lg p-2 bg-white">
-                    <div className="flex items-center gap-2 text-[11px] mb-1 flex-wrap">
+                    <div className="flex items-center gap-2 text-xs mb-1 flex-wrap">
                       <span className="font-bold text-slate-700">指図{p.orderNo}</span>
                       <span className="text-slate-400">{p.model} / {p.qty}台 / {fmtDate(p.completedAt)}</span>
                       {p.matchesTemplate ? <span className="text-emerald-600 font-bold">✓テンプレ通り</span> : <span className="text-rose-600 font-bold">⚠順序ちがい</span>}
                       {p.ganttUnits && p.ganttUnits.length > 0 && (
-                        <button onClick={() => setOpenLots(o => ({ ...o, [p.orderNo]: !o[p.orderNo] }))} className="ml-auto text-[11px] text-indigo-600 hover:underline font-bold">{openLots[p.orderNo] ? '台ごとの流れを閉じる' : '台ごとの作業の流れ▼'}</button>
+                        <button onClick={() => setOpenLots(o => ({ ...o, [p.orderNo]: !o[p.orderNo] }))} className="ml-auto text-xs text-indigo-600 hover:underline font-bold">{openLots[p.orderNo] ? '台ごとの流れを閉じる' : '台ごとの作業の流れ▼'}</button>
                       )}
                     </div>
                     <div className="flex flex-wrap items-center gap-1">
                       {p.actualOrder.map((t, j) => (
-                        <span key={j} className={`px-1.5 py-0.5 rounded text-[11px] border ${data.autoTitles.includes(t) ? 'bg-purple-50 border-purple-300 text-purple-700' : p.blocks[t] ? 'bg-indigo-100 border-indigo-300 text-indigo-800 font-bold' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                        <span key={j} className={`px-1.5 py-0.5 rounded text-xs border ${data.autoTitles.includes(t) ? 'bg-purple-50 border-purple-300 text-purple-700' : p.blocks[t] ? 'bg-indigo-100 border-indigo-300 text-indigo-800 font-bold' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
                           {p.blocks[t] ? '▦' : ''}{t}
                         </span>
                       ))}
                     </div>
                     {openLots[p.orderNo] && p.ganttUnits && (
                       <div className="mt-2 bg-slate-50 rounded border p-2 max-h-72 overflow-auto">
-                        <div className="text-[10px] text-slate-500 mb-1 flex items-center gap-2"><span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 bg-blue-500 rounded-sm inline-block" />手動</span><span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 bg-violet-500 rounded-sm inline-block" />自動測定</span> ／ 同じ横軸＝並行作業が見える</div>
+                        <div className="text-xs text-slate-500 mb-1 flex items-center gap-2"><span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 bg-blue-500 rounded-sm inline-block" />手動</span><span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 bg-violet-500 rounded-sm inline-block" />自動測定</span> ／ 同じ横軸＝並行作業が見える</div>
                         <MultiUnitGantt lot={{ orderNo: p.orderNo, units: p.ganttUnits }} />
                       </div>
                     )}
@@ -14870,16 +14887,16 @@ const WorkOrderReviewModal = ({ combo, lots = [], settings = {}, onClose, curren
           <div>
             <div className="font-bold text-sm text-slate-700 mb-1 flex items-center gap-1"><Lightbulb className="w-4 h-4 text-indigo-600" /> 現場の気づき・改善（工程の追加・変更の手がかり）</div>
             {improvements.length === 0
-              ? <div className="text-[11px] text-slate-400">まだありません。作業画面の「気づき・改善」から、工程の細分化・追加・変更などを理由つきで残せます（＝工程“追加”の手がかりはここから）。</div>
+              ? <div className="text-xs text-slate-400">まだありません。作業画面の「気づき・改善」から、工程の細分化・追加・変更などを理由つきで残せます（＝工程“追加”の手がかりはここから）。</div>
               : <div className="space-y-1">
                 {improvements.map((it, i) => {
                   const reason = (it.label || '').split('：').slice(1).join('：').trim() || it.label || '';
                   return (
-                    <div key={i} className="text-[11px] border border-indigo-100 bg-indigo-50/40 rounded p-1.5 flex items-start gap-2">
+                    <div key={i} className="text-xs border border-indigo-100 bg-indigo-50/40 rounded p-1.5 flex items-start gap-2">
                       <span className="bg-indigo-600 text-white px-1.5 py-0.5 rounded font-bold shrink-0">{IMPROVE_LABELS[it.improvementKind] || '改善'}</span>
                       <div className="flex-1 min-w-0">
                         <div className="text-slate-700">{it.targetStepTitle && <b className="text-indigo-700">[{it.targetStepTitle}] </b>}{reason}</div>
-                        <div className="text-[10px] text-slate-400">{it.workerName || '?'}・指図{it.lotOrderNo}・{it.timestamp ? new Date(it.timestamp).toLocaleDateString() : ''}</div>
+                        <div className="text-xs text-slate-400">{it.workerName || '?'}・指図{it.lotOrderNo}・{it.timestamp ? new Date(it.timestamp).toLocaleDateString() : ''}</div>
                       </div>
                     </div>
                   );
@@ -14888,7 +14905,7 @@ const WorkOrderReviewModal = ({ combo, lots = [], settings = {}, onClose, curren
           </div>
         </div>
         <div className="px-4 py-2.5 border-t bg-slate-50">
-          <div className="text-[11px] text-slate-500 mb-1.5">見て納得したら、ここから動かす（厳密化・様子見は履歴に残ります）：</div>
+          <div className="text-xs text-slate-500 mb-1.5">見て納得したら、ここから動かす（厳密化・様子見は履歴に残ります）：</div>
           <div className="flex flex-wrap items-center gap-2">
             <button onClick={() => { onMakeStrict && onMakeStrict(); onClose && onClose(); }} disabled={currentStrict === true}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${currentStrict === true ? 'bg-rose-100 text-rose-400 border-rose-200 cursor-default' : 'bg-rose-600 text-white border-rose-700 hover:bg-rose-700'}`}>
@@ -14898,7 +14915,7 @@ const WorkOrderReviewModal = ({ combo, lots = [], settings = {}, onClose, curren
             <button onClick={() => { onSetGuide && onSetGuide(); onClose && onClose(); }} disabled={currentStrict === false}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${currentStrict === false ? 'bg-slate-200 text-slate-400 border-slate-200 cursor-default' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>👀 ガイドで様子見</button>
           </div>
-          <div className="mt-2 text-[10px] text-slate-500 bg-amber-50 border border-amber-200 rounded p-1.5">
+          <div className="mt-2 text-xs text-slate-500 bg-amber-50 border border-amber-200 rounded p-1.5">
             💡 <b>工程の「追加」は時間データからは出ません</b>（既にあてる工程しか記録されないので）。追加の手がかりは現場の<b>「軽微不良・改善提案・不具合・クレーム」</b>です（ヘッダーの「不良/クレーム」やノート）。＝<b>並べ替え・削除・まとめ＝この時間データから／追加＝現場の声から</b>、と出どころが違います。
           </div>
         </div>
@@ -15196,7 +15213,7 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                       <summary className="list-none cursor-pointer select-none relative w-6 h-6 flex items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 text-xs font-bold hover:bg-slate-50 after:content-[''] after:absolute after:top-[-12px] after:bottom-[-12px] after:left-[-12px] after:right-[-12px]" data-help="optimize-head" title="この画面の使い方">？</summary>
                       <div data-fold="optimize-head-howto" className="absolute left-0 top-full mt-1 z-30 w-[380px] max-w-[calc(100vw-3rem)] bg-white border border-slate-200 rounded-lg shadow-lg p-3">
                         <p className="text-xs text-slate-500">実績データからエビデンスを算出し、状況に応じた最適な目標時間を提案します。</p>
-                        <p className="text-[11px] text-emerald-700 font-bold mt-1 flex items-center gap-1">
+                        <p className="text-xs text-emerald-700 font-bold mt-1 flex items-center gap-1">
                           <CheckCircle2 className="w-3 h-3"/> 適用先: 較正した目標時間は<b>新規ロット作成時に自動反映</b>され、ETA・進捗・オススメ順・ガントすべてに使われます
                         </p>
                       </div>
@@ -15252,7 +15269,7 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                         )}
                         {targetValue && insightsData.length > 0 && (
                             <>
-                                <span className="text-[11px] text-slate-600 bg-slate-100 rounded px-2 py-1 whitespace-nowrap">工程<b>{insightsData.length}</b>件 / 有効データ計<b>{insightsData.reduce((s,d)=>s+d.stats.validCount,0)}</b>件で判断</span>
+                                <span className="text-xs text-slate-600 bg-slate-100 rounded px-2 py-1 whitespace-nowrap">工程<b>{insightsData.length}</b>件 / 有効データ計<b>{insightsData.reduce((s,d)=>s+d.stats.validCount,0)}</b>件で判断</span>
                                 <div className="ml-auto flex items-center gap-1.5">
                                     <span className="text-xs font-bold text-slate-600 whitespace-nowrap">全工程に一括:</span>
                                     <select value={bulkStrategy} onChange={(e) => setBulkStrategy(e.target.value)} className="border rounded px-2 py-1.5 text-xs font-bold bg-slate-50">
@@ -15277,28 +15294,28 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                             <button onClick={() => setAlertsOpen(o => !o)} className="w-full flex items-center gap-2 px-3 py-2 text-left">
                                 <AlertOctagon className="w-5 h-5 text-rose-600 shrink-0"/>
                                 <span className="font-black text-rose-900 text-sm">⚠ 目標時間の乖離アラート ({driftAlerts.length}件)</span>
-                                <span className="text-[11px] text-rose-700 hidden md:inline">— 目標と実績が±30%以上ズレ。「開く」で該当工程へジャンプ</span>
-                                <span className="ml-auto text-[11px] font-bold text-rose-600 shrink-0">{alertsOpen ? '▲ 閉じる' : '▼ 一覧を開く'}</span>
+                                <span className="text-xs text-rose-700 hidden md:inline">— 目標と実績が±30%以上ズレ。「開く」で該当工程へジャンプ</span>
+                                <span className="ml-auto text-xs font-bold text-rose-600 shrink-0">{alertsOpen ? '▲ 閉じる' : '▼ 一覧を開く'}</span>
                             </button>
                             {alertsOpen && (
                             <div className="max-h-52 overflow-y-auto space-y-1 px-3 pb-3">
                                 {driftAlerts.slice(0, 30).map((a, i) => (
                                     <div key={i} className="bg-white border border-rose-200 rounded px-2 py-1.5 flex items-center gap-2 text-xs">
-                                        <span className={`text-[10px] font-black px-1.5 py-0.5 rounded shrink-0 ${a.direction === 'over' ? 'bg-rose-100 text-rose-700' : 'bg-blue-100 text-blue-700'}`}>
+                                        <span className={`text-xs font-black px-1.5 py-0.5 rounded shrink-0 ${a.direction === 'over' ? 'bg-rose-100 text-rose-700' : 'bg-blue-100 text-blue-700'}`}>
                                             {a.direction === 'over' ? `${Math.round((a.ratio-1)*100)}% 超過` : `${Math.round((1-a.ratio)*100)}% 短縮`}
                                         </span>
                                         <span className="font-bold text-slate-700 shrink-0">{a.model}</span>
                                         <span className="text-slate-500 truncate">/ {a.title}</span>
                                         <span className="ml-auto font-mono text-slate-600 shrink-0">目標{a.target}s→実績{a.mean}s</span>
-                                        <span className="text-[10px] text-slate-400 shrink-0">n={a.n}{a.calibrated ? ' ✓' : ''}</span>
+                                        <span className="text-xs text-slate-400 shrink-0">n={a.n}{a.calibrated ? ' ✓' : ''}</span>
                                         <button
                                             onClick={() => { setTargetValue(a.model); setFocusStepKey(a.stepKey); }}
-                                            className="text-[10px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-0.5 rounded font-bold shrink-0"
+                                            className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-0.5 rounded font-bold shrink-0"
                                             title="この品目コード・工程の最適化提案へジャンプ"
                                         >開く ▸</button>
                                     </div>
                                 ))}
-                                {driftAlerts.length > 30 && <div className="text-[10px] text-rose-500 mt-1 text-center">他 {driftAlerts.length - 30} 件</div>}
+                                {driftAlerts.length > 30 && <div className="text-xs text-rose-500 mt-1 text-center">他 {driftAlerts.length - 30} 件</div>}
                             </div>
                             )}
                         </div>
@@ -15321,7 +15338,7 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
 
                                         <div className="text-xs font-bold text-indigo-600 mb-1 flex items-center gap-1"><Zap className="w-3 h-3" /> 状況に応じた推奨目標</div>
                                         {data.strategiesSimilar && (
-                                            <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-1 mb-1.5 leading-tight">
+                                            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-1 mb-1.5 leading-tight">
                                                 ※ データが少ない/ばらつきが小さいため、3案の差がほぼありません（バグではありません）。データが貯まると差が出ます。
                                             </div>
                                         )}
@@ -15331,7 +15348,7 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                                                     <div className="flex justify-between items-start">
                                                         <div>
                                                             <div className="text-xs font-bold mb-0.5">{strat.name}</div>
-                                                            <div className="text-[10px] opacity-80 leading-tight pr-2">{strat.desc}</div>
+                                                            <div className="text-xs opacity-80 leading-tight pr-2">{strat.desc}</div>
                                                         </div>
                                                         <div className="font-mono font-black text-lg shrink-0">{strat.value}s</div>
                                                     </div>
@@ -15353,7 +15370,7 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                                             <h4 className="text-sm font-bold text-slate-600 flex items-center gap-1"><Activity className="w-4 h-4" /> 統計エビデンス</h4>
                                             <div className="flex items-center gap-2">
                                                 {/* 【C】信頼度バッジ */}
-                                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${data.confidence === 'high' ? 'bg-emerald-100 text-emerald-700' : data.confidence === 'mid' ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-500'}`}
+                                                <span className={`text-xs font-black px-2 py-0.5 rounded-full ${data.confidence === 'high' ? 'bg-emerald-100 text-emerald-700' : data.confidence === 'mid' ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-500'}`}
                                                   title={`信頼度: 標本${data.stats.validCount}件・変動係数${(data.cv*100).toFixed(0)}%。${data.confidence === 'high' ? 'データ十分・安定 → 較正値を信頼できます' : data.confidence === 'mid' ? '標本やや少 or ばらつき有 → 参考程度に' : 'データ不足 → 手動目標の維持を推奨'}`}>
                                                   信頼度 {data.confidenceLabel}
                                                 </span>
@@ -15362,10 +15379,10 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                                         </div>
 
                                         <div className="mb-4 bg-slate-100 rounded-full h-8 relative flex items-center px-2 shadow-inner overflow-hidden border border-slate-200">
-                                            <span className="absolute left-2 text-[10px] text-slate-400">{data.stats.min}s (最速)</span>
-                                            <span className="absolute right-2 text-[10px] text-slate-400">{data.stats.max}s (最遅)</span>
+                                            <span className="absolute left-2 text-xs text-slate-400">{data.stats.min}s (最速)</span>
+                                            <span className="absolute right-2 text-xs text-slate-400">{data.stats.max}s (最遅)</span>
                                             <div className="absolute top-0 bottom-0 w-0.5 bg-blue-500" style={{ left: '50%', transform: 'translateX(-50%)' }}></div>
-                                            <div className="absolute top-1 -mt-5 bg-blue-600 text-white text-[10px] px-1.5 rounded font-bold" style={{ left: '50%', transform: 'translateX(-50%)' }}>
+                                            <div className="absolute top-1 -mt-5 bg-blue-600 text-white text-xs px-1.5 rounded font-bold" style={{ left: '50%', transform: 'translateX(-50%)' }}>
                                                 平均 {data.stats.mean}s
                                             </div>
                                             <div className="absolute h-2 bg-blue-400/40 rounded-full" style={{ left: '25%', right: '25%', top: '50%', transform: 'translateY(-50%)' }}></div>
@@ -15373,15 +15390,15 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
 
                                         <div className="grid grid-cols-3 gap-2 mb-4 text-center">
                                             <div className="bg-slate-50 p-2 rounded border">
-                                                <div className="text-[10px] text-slate-500 font-bold mb-0.5">平均値</div>
+                                                <div className="text-xs text-slate-500 font-bold mb-0.5">平均値</div>
                                                 <div className="font-mono text-sm font-bold">{data.stats.mean}秒</div>
                                             </div>
                                             <div className="bg-slate-50 p-2 rounded border">
-                                                <div className="text-[10px] text-slate-500 font-bold mb-0.5">中央値</div>
+                                                <div className="text-xs text-slate-500 font-bold mb-0.5">中央値</div>
                                                 <div className="font-mono text-sm font-bold">{data.stats.median}秒</div>
                                             </div>
                                             <div className="bg-slate-50 p-2 rounded border">
-                                                <div className="text-[10px] text-slate-500 font-bold mb-0.5">バラつき(標準偏差)</div>
+                                                <div className="text-xs text-slate-500 font-bold mb-0.5">バラつき(標準偏差)</div>
                                                 <div className="font-mono text-sm font-bold">{'\u00B1'}{data.stats.stdDev}秒</div>
                                             </div>
                                         </div>
@@ -15733,7 +15750,7 @@ const DataExportCenter = ({ lots = [], workers = [], indirectWork = [], settings
   return (
     <div className="h-full overflow-auto p-1 space-y-3">
       <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-        <div className="flex items-center gap-2"><DownloadCloud className="w-5 h-5 text-blue-600" /><h3 className="font-bold text-slate-800">データ書き出しセンター</h3><span className="text-[11px] text-slate-400">種別・期間・絞り込み・列を選んで Excel / CSV / PDF</span></div>
+        <div className="flex items-center gap-2"><DownloadCloud className="w-5 h-5 text-blue-600" /><h3 className="font-bold text-slate-800">データ書き出しセンター</h3><span className="text-xs text-slate-400">種別・期間・絞り込み・列を選んで Excel / CSV / PDF</span></div>
         {/* 種別 */}
         <div className="flex flex-wrap gap-1.5">
           {Object.entries(EXPORT_SOURCES).map(([k, v]) => (
@@ -15742,18 +15759,18 @@ const DataExportCenter = ({ lots = [], workers = [], indirectWork = [], settings
         </div>
         {/* 期間 + 絞り込み */}
         <div className="flex flex-wrap items-end gap-3">
-          <div><label className="block text-[11px] text-slate-500 mb-1">期間(開始)</label><input type="date" value={from} onChange={e => setFrom(e.target.value)} className={inputCls} /></div>
-          <div><label className="block text-[11px] text-slate-500 mb-1">期間(終了)</label><input type="date" value={to} onChange={e => setTo(e.target.value)} className={inputCls} /></div>
+          <div><label className="block text-xs text-slate-500 mb-1">期間(開始)</label><input type="date" value={from} onChange={e => setFrom(e.target.value)} className={inputCls} /></div>
+          <div><label className="block text-xs text-slate-500 mb-1">期間(終了)</label><input type="date" value={to} onChange={e => setTo(e.target.value)} className={inputCls} /></div>
           <div className="flex gap-1">
-            {[['今月', 'thisMonth'], ['先月', 'lastMonth'], ['今年', 'thisYear'], ['全期間', 'all']].map(([lb, m]) => <button key={m} onClick={() => setPeriod(m)} className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600 hover:bg-slate-100">{lb}</button>)}
+            {[['今月', 'thisMonth'], ['先月', 'lastMonth'], ['今年', 'thisYear'], ['全期間', 'all']].map(([lb, m]) => <button key={m} onClick={() => setPeriod(m)} className="px-2 py-1 text-xs rounded border border-slate-300 text-slate-600 hover:bg-slate-100">{lb}</button>)}
           </div>
-          <div><label className="block text-[11px] text-slate-500 mb-1">品目コード</label><select value={modelF} onChange={e => setModelF(e.target.value)} className={inputCls}><option value="">全品目コード</option>{models.map(m => <option key={m} value={m}>{m}</option>)}</select></div>
-          <div><label className="block text-[11px] text-slate-500 mb-1">作業者(含む)</label><input value={workerF} onChange={e => setWorkerF(e.target.value)} placeholder="氏名の一部" className={`${inputCls} w-28`} /></div>
-          <div><label className="block text-[11px] text-slate-500 mb-1">指図(含む)</label><input value={orderF} onChange={e => setOrderF(e.target.value)} placeholder="指図No" className={`${inputCls} w-28`} /></div>
+          <div><label className="block text-xs text-slate-500 mb-1">品目コード</label><select value={modelF} onChange={e => setModelF(e.target.value)} className={inputCls}><option value="">全品目コード</option>{models.map(m => <option key={m} value={m}>{m}</option>)}</select></div>
+          <div><label className="block text-xs text-slate-500 mb-1">作業者(含む)</label><input value={workerF} onChange={e => setWorkerF(e.target.value)} placeholder="氏名の一部" className={`${inputCls} w-28`} /></div>
+          <div><label className="block text-xs text-slate-500 mb-1">指図(含む)</label><input value={orderF} onChange={e => setOrderF(e.target.value)} placeholder="指図No" className={`${inputCls} w-28`} /></div>
         </div>
         {/* 列選択 */}
         <div>
-          <div className="text-[11px] text-slate-500 mb-1">出力する列（チェックで選択）</div>
+          <div className="text-xs text-slate-500 mb-1">出力する列（チェックで選択）</div>
           <div className="flex flex-wrap gap-2">
             {EXPORT_SOURCES[src].cols.map(c => (
               <label key={c.k} className={`flex items-center gap-1 text-xs px-2 py-1 rounded border cursor-pointer ${(cols[src] || []).includes(c.k) ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-slate-300 text-slate-500'}`}>
@@ -15772,15 +15789,15 @@ const DataExportCenter = ({ lots = [], workers = [], indirectWork = [], settings
         </div>
         {/* 提出セット */}
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-          <span className="text-[11px] text-slate-500">提出セット:</span>
-          {presets.length === 0 && <span className="text-[11px] text-slate-400">未保存</span>}
+          <span className="text-xs text-slate-500">提出セット:</span>
+          {presets.length === 0 && <span className="text-xs text-slate-400">未保存</span>}
           {presets.map(p => (
             <span key={p.id} className="inline-flex items-center gap-1 bg-indigo-50 border border-indigo-200 rounded-full pl-2 pr-1 py-0.5 text-xs">
               <button onClick={() => loadPreset(p)} className="font-bold text-indigo-700 hover:underline" title="この条件を読み込む">{p.name}</button>
               <button onClick={() => delPreset(p.id)} className="text-indigo-300 hover:text-rose-600" title="削除"><X className="w-3 h-3" /></button>
             </span>
           ))}
-          <button onClick={savePreset} className="px-2 py-1 text-[11px] rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 font-bold">＋ 今の条件を保存</button>
+          <button onClick={savePreset} className="px-2 py-1 text-xs rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 font-bold">＋ 今の条件を保存</button>
         </div>
       </div>
       {/* プレビュー(先頭50件) */}
@@ -15841,23 +15858,23 @@ const ManagerDashboard = ({ lots = [], settings = {} }) => {
 
   // 前月比表示 (good = 良い方向。dir: 'up' なら増加が良い, 'down' なら減少が良い)
   const Delta = ({ now: n, prev: p, dir, suffix = '' }) => {
-    if (n == null || p == null) return <span className="text-[11px] text-slate-400">前月比 —</span>;
-    const diff = n - p; if (Math.abs(diff) < 0.05) return <span className="text-[11px] text-slate-400">前月比 ±0</span>;
+    if (n == null || p == null) return <span className="text-xs text-slate-400">前月比 —</span>;
+    const diff = n - p; if (Math.abs(diff) < 0.05) return <span className="text-xs text-slate-400">前月比 ±0</span>;
     const good = dir === 'up' ? diff > 0 : diff < 0;
-    return <span className={`text-[11px] font-bold ${good ? 'text-emerald-600' : 'text-rose-600'}`}>{diff > 0 ? '▲' : '▼'} {Math.abs(diff).toFixed(1)}{suffix} 前月比</span>;
+    return <span className={`text-xs font-bold ${good ? 'text-emerald-600' : 'text-rose-600'}`}>{diff > 0 ? '▲' : '▼'} {Math.abs(diff).toFixed(1)}{suffix} 前月比</span>;
   };
   const Card = ({ label, value, unit, sub, delta, color = 'text-slate-800' }) => (
     <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm flex flex-col">
-      <div className="text-[11px] font-bold text-slate-500">{label}</div>
+      <div className="text-xs font-bold text-slate-500">{label}</div>
       <div className="flex items-baseline gap-1 mt-0.5"><span className={`text-2xl font-black ${color}`}>{value}</span><span className="text-xs text-slate-400">{unit}</span></div>
-      {sub && <div className="text-[10px] text-slate-400 mt-0.5">{sub}</div>}
+      {sub && <div className="text-xs text-slate-400 mt-0.5">{sub}</div>}
       <div className="mt-1">{delta}</div>
     </div>
   );
 
   return (
     <div className="h-full overflow-auto p-1 space-y-3">
-      <div className="text-sm font-bold text-slate-600">{now.getFullYear()}年{now.getMonth() + 1}月 サマリー <span className="text-[11px] text-slate-400 font-normal">（管理者向けKPI・前月比）</span></div>
+      <div className="text-sm font-bold text-slate-600">{now.getFullYear()}年{now.getMonth() + 1}月 サマリー <span className="text-xs text-slate-400 font-normal">（管理者向けKPI・前月比）</span></div>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
         <Card label="完了台数" value={cur.units} unit="台" sub={`完了 ${cur.lots} ロット`} color="text-blue-700" delta={<Delta now={cur.units} prev={prev.units} dir="up" suffix="台" />} />
         <Card label="不良率(ロット)" value={cur.defectRate.toFixed(1)} unit="%" sub={`不良 ${cur.defectLots}/${cur.lots} ロット`} color="text-rose-600" delta={<Delta now={cur.defectRate} prev={prev.defectRate} dir="down" suffix="%" />} />
@@ -15867,14 +15884,14 @@ const ManagerDashboard = ({ lots = [], settings = {} }) => {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-3">
-        <div className="text-[11px] font-bold text-slate-500 mb-2">完了台数 12ヶ月トレンド（棒）＋不良率(%)</div>
+        <div className="text-xs font-bold text-slate-500 mb-2">完了台数 12ヶ月トレンド（棒）＋不良率(%)</div>
         <div className="flex items-end gap-1 h-28">
           {trend.map((t, i) => (
             <div key={i} className="flex-1 flex flex-col items-center justify-end gap-0.5" title={`${t.label}: ${t.units}台 / 不良率${t.defectRate.toFixed(1)}%`}>
-              <span className="text-[9px] text-rose-500 font-bold">{t.defectRate > 0 ? t.defectRate.toFixed(0) + '%' : ''}</span>
+              <span className="text-xs text-rose-500 font-bold">{t.defectRate > 0 ? t.defectRate.toFixed(0) + '%' : ''}</span>
               <div className="w-full bg-blue-500 rounded-t" style={{ height: `${Math.max(2, (t.units / maxUnits) * 90)}px` }} />
-              <span className="text-[9px] text-slate-500">{t.label}</span>
-              <span className="text-[9px] text-slate-400">{t.units}</span>
+              <span className="text-xs text-slate-500">{t.label}</span>
+              <span className="text-xs text-slate-400">{t.units}</span>
             </div>
           ))}
         </div>
@@ -15882,19 +15899,19 @@ const ManagerDashboard = ({ lots = [], settings = {} }) => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="bg-white rounded-xl border border-slate-200 p-3">
-          <div className="text-[11px] font-bold text-slate-500 mb-2">当月 品目別 完了台数 (上位5)</div>
+          <div className="text-xs font-bold text-slate-500 mb-2">当月 品目別 完了台数 (上位5)</div>
           {topModels.length === 0 ? <div className="text-xs text-slate-400 py-3 text-center">データなし</div> : topModels.map(([m, c]) => (
             <div key={m} className="flex items-center gap-2 mb-1"><span className="text-xs font-mono w-32 truncate" title={m}>{m}</span><div className="flex-1 bg-slate-100 rounded h-3"><div className="bg-blue-500 h-3 rounded" style={{ width: `${(c / topModels[0][1]) * 100}%` }} /></div><span className="text-xs font-bold w-12 text-right">{c}台</span></div>
           ))}
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-3">
-          <div className="text-[11px] font-bold text-slate-500 mb-2">当月 品目別 不良件数 (上位5)</div>
+          <div className="text-xs font-bold text-slate-500 mb-2">当月 品目別 不良件数 (上位5)</div>
           {topDef.length === 0 ? <div className="text-xs text-emerald-600 py-3 text-center">当月の不良なし 👍</div> : topDef.map(([m, c]) => (
             <div key={m} className="flex items-center gap-2 mb-1"><span className="text-xs font-mono w-32 truncate" title={m}>{m}</span><div className="flex-1 bg-slate-100 rounded h-3"><div className="bg-rose-500 h-3 rounded" style={{ width: `${(c / topDef[0][1]) * 100}%` }} /></div><span className="text-xs font-bold w-12 text-right">{c}件</span></div>
           ))}
         </div>
       </div>
-      <div className="text-[10px] text-slate-400">※ 完了=ステータス完了のロット。不良率=不良が出た完了ロット数÷完了ロット数。納期遵守=完了日が納期以内。リードタイム=入荷→完了の日数平均。</div>
+      <div className="text-xs text-slate-400">※ 完了=ステータス完了のロット。不良率=不良が出た完了ロット数÷完了ロット数。納期遵守=完了日が納期以内。リードタイム=入荷→完了の日数平均。</div>
     </div>
   );
 };
@@ -15999,10 +16016,10 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
 
   const Cards = ({ d, label }) => (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-      <div className="bg-white rounded-xl border border-slate-200 p-3 text-center"><div className="text-[10px] text-slate-500 font-bold">達成率(能率)</div><div className={`text-2xl font-black font-mono ${d.rate == null ? 'text-slate-300' : pctColor(d.rate)}`}>{d.rate == null ? '—' : d.rate.toFixed(1)}<span className="text-xs">%</span></div><div className="text-[9px] text-slate-400">目標{fmtH(d.tg)}h ÷ 実績{fmtH(d.ac)}h</div></div>
-      <div className="bg-white rounded-xl border border-slate-200 p-3 text-center"><div className="text-[10px] text-slate-500 font-bold">目標内タスク率</div><div className="text-2xl font-black font-mono text-indigo-700">{d.n ? (d.within / d.n * 100).toFixed(0) : '—'}<span className="text-xs">%</span></div><div className="text-[9px] text-slate-400">{d.within}/{d.n} タスク</div></div>
-      <div className="bg-white rounded-xl border border-slate-200 p-3 text-center"><div className="text-[10px] text-slate-500 font-bold">対象タスク</div><div className="text-2xl font-black font-mono text-slate-700">{d.n}</div><div className="text-[9px] text-slate-400">目標設定あり・完了のみ</div></div>
-      <div className="bg-white rounded-xl border border-slate-200 p-3 text-center"><div className="text-[10px] text-slate-500 font-bold">{label}</div><div className="text-sm font-bold text-slate-600 mt-2">{mode === 'model' ? ((from || to) ? `${from || '…'} 〜 ${to || '…'}` : '全期間') : (bucket === 'month' ? '直近12ヶ月' : '直近16週')}</div></div>
+      <div className="bg-white rounded-xl border border-slate-200 p-3 text-center"><div className="text-xs text-slate-500 font-bold">達成率(能率)</div><div className={`text-2xl font-black font-mono ${d.rate == null ? 'text-slate-300' : pctColor(d.rate)}`}>{d.rate == null ? '—' : d.rate.toFixed(1)}<span className="text-xs">%</span></div><div className="text-xs text-slate-400">目標{fmtH(d.tg)}h ÷ 実績{fmtH(d.ac)}h</div></div>
+      <div className="bg-white rounded-xl border border-slate-200 p-3 text-center"><div className="text-xs text-slate-500 font-bold">目標内タスク率</div><div className="text-2xl font-black font-mono text-indigo-700">{d.n ? (d.within / d.n * 100).toFixed(0) : '—'}<span className="text-xs">%</span></div><div className="text-xs text-slate-400">{d.within}/{d.n} タスク</div></div>
+      <div className="bg-white rounded-xl border border-slate-200 p-3 text-center"><div className="text-xs text-slate-500 font-bold">対象タスク</div><div className="text-2xl font-black font-mono text-slate-700">{d.n}</div><div className="text-xs text-slate-400">目標設定あり・完了のみ</div></div>
+      <div className="bg-white rounded-xl border border-slate-200 p-3 text-center"><div className="text-xs text-slate-500 font-bold">{label}</div><div className="text-sm font-bold text-slate-600 mt-2">{mode === 'model' ? ((from || to) ? `${from || '…'} 〜 ${to || '…'}` : '全期間') : (bucket === 'month' ? '直近12ヶ月' : '直近16週')}</div></div>
     </div>
   );
 
@@ -16028,7 +16045,7 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
         )}
       </div>
 
-      <div className="text-[11px] text-slate-500 bg-emerald-50 border border-emerald-200 rounded-lg p-2">
+      <div className="text-xs text-slate-500 bg-emerald-50 border border-emerald-200 rounded-lg p-2">
         <b>達成率(能率) = 目標時間の合計 ÷ 実績時間の合計 ×100</b>。100%超 = 目標より速く作業できている。目標時間は較正済みの品目別値（無ければ工程の既定値）。抜取で省略した工程・目標未設定・時間0は集計から除外。
       </div>
 
@@ -16042,7 +16059,7 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
                 <button onClick={() => { setGroupBy('model'); setExpanded(null); }} className={`px-3 py-1 rounded-md text-xs font-bold ${groupBy === 'model' ? 'bg-white shadow text-emerald-700' : 'text-slate-500'}`}>品目コード</button>
                 <button onClick={() => { setGroupBy('modelTpl'); setExpanded(null); }} className={`px-3 py-1 rounded-md text-xs font-bold ${groupBy === 'modelTpl' ? 'bg-white shadow text-emerald-700' : 'text-slate-500'}`}>品目×テンプレ</button>
               </div>
-              <span className="text-[10px] text-slate-400">行をタップ → 工程ごとの達成率を展開</span>
+              <span className="text-xs text-slate-400">行をタップ → 工程ごとの達成率を展開</span>
             </div>
             {byGroup.length === 0 ? <div className="text-xs text-slate-400 py-6 text-center">この期間に対象データがありません</div> : (
               <table className="w-full text-xs border-collapse">
@@ -16055,7 +16072,7 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
                       <tr onClick={() => setExpanded(expanded === x.key ? null : x.key)} className={`border-b border-slate-50 cursor-pointer hover:bg-emerald-50/40 ${expanded === x.key ? 'bg-emerald-50/60' : ''}`}>
                         <td className="p-2 font-mono font-bold">
                           <span className="text-slate-400 mr-1">{expanded === x.key ? '▼' : '▶'}</span>{x.model}
-                          {groupBy === 'modelTpl' && <div className="text-[10px] font-sans font-normal text-indigo-600 pl-4 truncate max-w-[14rem]" title={x.tpl}>{x.tpl}</div>}
+                          {groupBy === 'modelTpl' && <div className="text-xs font-sans font-normal text-indigo-600 pl-4 truncate max-w-[14rem]" title={x.tpl}>{x.tpl}</div>}
                         </td>
                         <td className="p-2 text-right text-slate-500">{x.n}</td>
                         <td className="p-2 text-right font-mono">{fmtH(x.tg)}</td>
@@ -16067,8 +16084,8 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
                         <tr className="border-b border-emerald-100">
                           <td colSpan={6} className="p-0 bg-emerald-50/30">
                             <div className="px-4 py-2">
-                              <div className="text-[11px] font-bold text-emerald-700 mb-1">工程ごとの達成率 — {x.model}{groupBy === 'modelTpl' ? ` / ${x.tpl}` : ''}</div>
-                              <table className="w-full text-[11px] border-collapse">
+                              <div className="text-xs font-bold text-emerald-700 mb-1">工程ごとの達成率 — {x.model}{groupBy === 'modelTpl' ? ` / ${x.tpl}` : ''}</div>
+                              <table className="w-full text-xs border-collapse">
                                 <thead><tr className="text-slate-400 border-b border-emerald-100">
                                   <th className="px-2 py-1 text-left font-bold">工程</th><th className="px-2 py-1 text-right font-bold">タスク</th><th className="px-2 py-1 text-right font-bold">目標(h)</th><th className="px-2 py-1 text-right font-bold">実績(h)</th><th className="px-2 py-1 text-left font-bold w-[30%]">達成率</th><th className="px-2 py-1 text-right font-bold">目標内率</th>
                                 </tr></thead>
@@ -16094,7 +16111,7 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
                 </tbody>
               </table>
             )}
-            <div className="text-[10px] text-slate-400 mt-2">※ バーは150%でフルスケール。緑=100%以上(目標達成)・黄=80%以上・赤=80%未満。行タップで工程別の内訳。</div>
+            <div className="text-xs text-slate-400 mt-2">※ バーは150%でフルスケール。緑=100%以上(目標達成)・黄=80%以上・赤=80%未満。行タップで工程別の内訳。</div>
           </div>
         </>
       ) : (
@@ -16105,15 +16122,15 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
             <div className="flex items-end gap-1.5 h-44 border-b border-slate-200 pb-1">
               {trend.map(b => (
                 <div key={b.key} className="flex-1 flex flex-col items-center justify-end h-full" title={`${b.key}: ${b.rate == null ? 'データなし' : b.rate.toFixed(1) + '%'} (${b.n}タスク)`}>
-                  {b.rate != null && <div className={`text-[9px] font-bold font-mono ${pctColor(b.rate)}`}>{b.rate.toFixed(0)}</div>}
+                  {b.rate != null && <div className={`text-xs font-bold font-mono ${pctColor(b.rate)}`}>{b.rate.toFixed(0)}</div>}
                   <div className={`w-full max-w-[34px] rounded-t ${b.rate == null ? 'bg-slate-100' : barColor(b.rate)}`} style={{ height: `${b.rate == null ? 2 : Math.max(3, Math.min(100, b.rate / 1.5))}%` }} />
                 </div>
               ))}
             </div>
             <div className="flex gap-1.5 mt-1">
-              {trend.map(b => <div key={b.key} className="flex-1 text-center"><div className="text-[9px] text-slate-500 font-bold">{b.label}</div><div className="text-[8px] text-slate-300">{b.n || ''}</div></div>)}
+              {trend.map(b => <div key={b.key} className="flex-1 text-center"><div className="text-xs text-slate-500 font-bold">{b.label}</div><div className="text-[8px] text-slate-300">{b.n || ''}</div></div>)}
             </div>
-            <div className="text-[10px] text-slate-400 mt-2">※ 棒の下の数字=対象タスク数。100%ライン超え（緑）が「標準時間どおりかそれより速い」状態。タスクの完了時刻（無ければロット完了日時）で集計。</div>
+            <div className="text-xs text-slate-400 mt-2">※ 棒の下の数字=対象タスク数。100%ライン超え（緑）が「標準時間どおりかそれより速い」状態。タスクの完了時刻（無ければロット完了日時）で集計。</div>
           </div>
         </>
       )}
@@ -16229,8 +16246,8 @@ const AdminLiveAlerts = ({ lots = [], customTargetTimes = {}, modelGroups = [], 
               </div>
             ))}
             <div className="px-3 py-2 bg-slate-50 flex items-center justify-between">
-              <span className="text-[10px] text-slate-400">5秒毎に自動更新</span>
-              <button onClick={() => { setMutedUntil(Date.now() + 30 * 60 * 1000); setOpen(false); }} className="text-[11px] font-bold text-slate-500 hover:text-slate-700 underline">30分非表示</button>
+              <span className="text-xs text-slate-400">5秒毎に自動更新</span>
+              <button onClick={() => { setMutedUntil(Date.now() + 30 * 60 * 1000); setOpen(false); }} className="text-xs font-bold text-slate-500 hover:text-slate-700 underline">30分非表示</button>
             </div>
           </div>
         )}
@@ -16296,28 +16313,28 @@ const KpiDetailView = ({ lots = [], settings = {}, saveSettings = null, currentU
   return (
     <div className="h-full overflow-auto p-1 space-y-3">
       <div className="flex items-center gap-2">
-        <span className="text-[11px] text-slate-500">期間:</span>
+        <span className="text-xs text-slate-500">期間:</span>
         {[['今月', 'thisMonth'], ['先月', 'lastMonth'], ['今年', 'thisYear'], ['全期間', 'all']].map(([lb, m]) => <button key={m} onClick={() => setPeriod(m)} className={`px-3 py-1 text-xs rounded-lg font-bold border ${period === m ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-white text-slate-600 border-slate-300 hover:bg-indigo-50'}`}>{lb}</button>)}
-        <span className="text-[11px] text-slate-400 ml-2">完了 {D.comp.length}ロット / {D.units}台</span>
+        <span className="text-xs text-slate-400 ml-2">完了 {D.comp.length}ロット / {D.units}台</span>
       </div>
 
       {/* リードタイム */}
       <div className="bg-white rounded-xl border border-slate-200 p-4">
         <div className="text-sm font-bold text-indigo-700 mb-2">リードタイム分析（入荷→完了）</div>
         <div className="grid grid-cols-3 gap-2 mb-3">
-          <div className="bg-indigo-50 rounded-lg p-2 text-center"><div className="text-[10px] text-slate-500">平均</div><div className="text-xl font-black text-indigo-700">{D.avg == null ? '—' : D.avg.toFixed(1)}<span className="text-xs">日</span></div></div>
-          <div className="bg-indigo-50 rounded-lg p-2 text-center"><div className="text-[10px] text-slate-500">中央値</div><div className="text-xl font-black text-indigo-700">{D.median == null ? '—' : D.median.toFixed(1)}<span className="text-xs">日</span></div></div>
-          <div className="bg-rose-50 rounded-lg p-2 text-center"><div className="text-[10px] text-slate-500">最長</div><div className="text-xl font-black text-rose-600">{D.longest ? D.longest.d.toFixed(1) : '—'}<span className="text-xs">日</span></div>{D.longest && <div className="text-[9px] text-slate-400 truncate">{ordKey(D.longest.lot)} {D.longest.lot.model}</div>}</div>
+          <div className="bg-indigo-50 rounded-lg p-2 text-center"><div className="text-xs text-slate-500">平均</div><div className="text-xl font-black text-indigo-700">{D.avg == null ? '—' : D.avg.toFixed(1)}<span className="text-xs">日</span></div></div>
+          <div className="bg-indigo-50 rounded-lg p-2 text-center"><div className="text-xs text-slate-500">中央値</div><div className="text-xl font-black text-indigo-700">{D.median == null ? '—' : D.median.toFixed(1)}<span className="text-xs">日</span></div></div>
+          <div className="bg-rose-50 rounded-lg p-2 text-center"><div className="text-xs text-slate-500">最長</div><div className="text-xl font-black text-rose-600">{D.longest ? D.longest.d.toFixed(1) : '—'}<span className="text-xs">日</span></div>{D.longest && <div className="text-xs text-slate-400 truncate">{ordKey(D.longest.lot)} {D.longest.lot.model}</div>}</div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
-            <div className="text-[11px] font-bold text-slate-500 mb-1">品目別 平均リードタイム (長い順)</div>
+            <div className="text-xs font-bold text-slate-500 mb-1">品目別 平均リードタイム (長い順)</div>
             {D.leadByModel.length === 0 ? <div className="text-xs text-slate-400">データなし</div> : D.leadByModel.map(x => (
               <div key={x.m} className="flex items-center gap-2 mb-0.5 text-xs"><span className="font-mono w-32 truncate" title={x.m}>{x.m}</span><div className="flex-1 bg-slate-100 rounded h-2.5"><div className="bg-indigo-500 h-2.5 rounded" style={{ width: `${Math.min(100, (x.avg / (D.leadByModel[0].avg || 1)) * 100)}%` }} /></div><span className="font-bold w-16 text-right">{x.avg.toFixed(1)}日</span><span className="text-slate-400 w-10 text-right">{x.n}件</span></div>
             ))}
           </div>
           <div>
-            <div className="text-[11px] font-bold text-slate-500 mb-1">滞留中（未完了・入荷から長い順）</div>
+            <div className="text-xs font-bold text-slate-500 mb-1">滞留中（未完了・入荷から長い順）</div>
             {D.stalled.length === 0 ? <div className="text-xs text-emerald-600">滞留なし 👍</div> : D.stalled.map(x => (
               <div key={x.lot.id} className="flex items-center gap-2 mb-0.5 text-xs"><span className="font-mono w-28 truncate" title={ordKey(x.lot)}>{ordKey(x.lot)}</span><span className="text-slate-500 flex-1 truncate">{x.lot.model}</span><span className={`font-bold w-14 text-right ${x.age > 14 ? 'text-rose-600' : 'text-slate-700'}`}>{x.age.toFixed(0)}日</span></div>
             ))}
@@ -16331,13 +16348,13 @@ const KpiDetailView = ({ lots = [], settings = {}, saveSettings = null, currentU
         <div className="flex items-baseline gap-2 mb-3"><span className="text-3xl font-black text-emerald-700">{D.dueRate == null ? '—' : D.dueRate.toFixed(1)}<span className="text-sm">%</span></span><span className="text-xs text-slate-400">{D.withDue ? `${D.onTime}/${D.withDue} 件 期日内` : '納期設定のある完了ロットなし'}</span></div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
-            <div className="text-[11px] font-bold text-slate-500 mb-1">品目別 遵守率 (低い順)</div>
+            <div className="text-xs font-bold text-slate-500 mb-1">品目別 遵守率 (低い順)</div>
             {D.dueByModel.length === 0 ? <div className="text-xs text-slate-400">データなし</div> : D.dueByModel.map(x => (
               <div key={x.m} className="flex items-center gap-2 mb-0.5 text-xs"><span className="font-mono w-32 truncate" title={x.m}>{x.m}</span><div className="flex-1 bg-slate-100 rounded h-2.5"><div className={`h-2.5 rounded ${x.rate >= 90 ? 'bg-emerald-500' : x.rate >= 70 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${x.rate}%` }} /></div><span className="font-bold w-16 text-right">{x.rate.toFixed(0)}%</span><span className="text-slate-400 w-12 text-right">{x.on}/{x.tot}</span></div>
             ))}
           </div>
           <div>
-            <div className="text-[11px] font-bold text-slate-500 mb-1">遅延ロット (遅れ日数順)</div>
+            <div className="text-xs font-bold text-slate-500 mb-1">遅延ロット (遅れ日数順)</div>
             {D.late.length === 0 ? <div className="text-xs text-emerald-600">遅延なし 👍</div> : D.late.slice(0, 8).map(x => (
               <div key={x.lot.id} className="flex items-center gap-2 mb-0.5 text-xs"><span className="font-mono w-28 truncate" title={ordKey(x.lot)}>{ordKey(x.lot)}</span><span className="text-slate-500 flex-1 truncate">{x.lot.model}</span><span className="font-bold w-16 text-right text-rose-600">+{x.daysLate}日</span></div>
             ))}
@@ -16349,39 +16366,39 @@ const KpiDetailView = ({ lots = [], settings = {}, saveSettings = null, currentU
       <div className="bg-white rounded-xl border border-slate-200 p-4">
         <div className="text-sm font-bold text-teal-700 mb-2">コスト換算（検査工数 → 概算人件費）</div>
         <div className="flex flex-wrap items-end gap-3 mb-3">
-          <div><label className="block text-[11px] text-slate-500 mb-1">時給(円/h)</label><input type="number" min="0" step="100" value={rate || ''} onChange={e => setRate(Math.max(0, Number(e.target.value) || 0))} disabled={!isAdmin} className="border border-slate-300 rounded px-2 py-1.5 text-sm w-28 disabled:bg-slate-100" placeholder="例 3000" /></div>
+          <div><label className="block text-xs text-slate-500 mb-1">時給(円/h)</label><input type="number" min="0" step="100" value={rate || ''} onChange={e => setRate(Math.max(0, Number(e.target.value) || 0))} disabled={!isAdmin} className="border border-slate-300 rounded px-2 py-1.5 text-sm w-28 disabled:bg-slate-100" placeholder="例 3000" /></div>
           {isAdmin && <button onClick={() => saveSettings && saveSettings({ laborCostPerHour: Math.max(0, Number(rate) || 0) })} className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold rounded">時給を保存</button>}
-          {!isAdmin && <span className="text-[11px] text-slate-400">時給の設定は管理者のみ</span>}
+          {!isAdmin && <span className="text-xs text-slate-400">時給の設定は管理者のみ</span>}
         </div>
         <div className="grid grid-cols-3 gap-2">
-          <div className="bg-teal-50 rounded-lg p-2 text-center"><div className="text-[10px] text-slate-500">検査工数(直接)</div><div className="text-xl font-black text-teal-700">{D.hours.toFixed(1)}<span className="text-xs">h</span></div></div>
-          <div className="bg-teal-50 rounded-lg p-2 text-center"><div className="text-[10px] text-slate-500">概算人件費</div><div className="text-xl font-black text-teal-700">{cost == null ? '時給未設定' : yen(cost)}</div></div>
-          <div className="bg-teal-50 rounded-lg p-2 text-center"><div className="text-[10px] text-slate-500">1台あたり</div><div className="text-xl font-black text-teal-700">{cost == null || D.units === 0 ? '—' : yen(cost / D.units)}</div></div>
+          <div className="bg-teal-50 rounded-lg p-2 text-center"><div className="text-xs text-slate-500">検査工数(直接)</div><div className="text-xl font-black text-teal-700">{D.hours.toFixed(1)}<span className="text-xs">h</span></div></div>
+          <div className="bg-teal-50 rounded-lg p-2 text-center"><div className="text-xs text-slate-500">概算人件費</div><div className="text-xl font-black text-teal-700">{cost == null ? '時給未設定' : yen(cost)}</div></div>
+          <div className="bg-teal-50 rounded-lg p-2 text-center"><div className="text-xs text-slate-500">1台あたり</div><div className="text-xl font-black text-teal-700">{cost == null || D.units === 0 ? '—' : yen(cost / D.units)}</div></div>
         </div>
-        <div className="text-[10px] text-slate-400 mt-2">※ 工数=当該期間に完了したロットの検査タスク実時間の合計。間接作業・残業割増は含みません（残業/土曜のコストは全体進捗で別途）。</div>
+        <div className="text-xs text-slate-400 mt-2">※ 工数=当該期間に完了したロットの検査タスク実時間の合計。間接作業・残業割増は含みません（残業/土曜のコストは全体進捗で別途）。</div>
       </div>
 
       {/* 年間生産台数（重点工程の金額計算に使う台数） */}
       <div className="bg-white rounded-xl border border-indigo-200 p-4">
         <div className="text-sm font-bold text-indigo-700 mb-1">年間生産台数（重点工程の「年◯円」を実態に合わせる）</div>
-        <div className="text-[11px] text-slate-500 mb-2 leading-relaxed">改善の金額は「<b>年間台数 × 1台の時間 × 時給</b>」で出ます。台数を入れないと<b>測定した台数ベースの推定</b>になり、抜取や未測定の分だけ実態とズレます。品目コードごとに<b>実際の年間生産台数</b>を年別で入れてください（1台の時間は測定データのまま使います）。</div>
+        <div className="text-xs text-slate-500 mb-2 leading-relaxed">改善の金額は「<b>年間台数 × 1台の時間 × 時給</b>」で出ます。台数を入れないと<b>測定した台数ベースの推定</b>になり、抜取や未測定の分だけ実態とズレます。品目コードごとに<b>実際の年間生産台数</b>を年別で入れてください（1台の時間は測定データのまま使います）。</div>
         <div className="flex items-center gap-2 mb-2 flex-wrap">
-          <span className="text-[11px] font-bold text-slate-500">年:</span>
+          <span className="text-xs font-bold text-slate-500">年:</span>
           <select value={editYear} onChange={e => setEditYear(Number(e.target.value))} className="border border-indigo-200 rounded px-2 py-1 text-xs font-bold bg-white">
             {prodYearOpts.map(y => <option key={y} value={y}>{y}年</option>)}
           </select>
-          {isAdmin && <button onClick={() => setProdDraft(d => { const n = { ...d }; prodModels.forEach(m => { if (!(Number(n[m]) > 0)) n[m] = measuredByModel[m] || 0; }); return n; })} className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-bold rounded border" title="空欄に記録上の台数を入れて、あとは手で直す">記録台数を初期値に入れる</button>}
+          {isAdmin && <button onClick={() => setProdDraft(d => { const n = { ...d }; prodModels.forEach(m => { if (!(Number(n[m]) > 0)) n[m] = measuredByModel[m] || 0; }); return n; })} className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded border" title="空欄に記録上の台数を入れて、あとは手で直す">記録台数を初期値に入れる</button>}
           {isAdmin && <button onClick={saveProd} disabled={!prodDirty} className={`px-3 py-1 text-white text-xs font-bold rounded ${prodDirty ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-slate-300 cursor-not-allowed'}`}>{editYear}年の台数を保存</button>}
-          {!isAdmin && <span className="text-[11px] text-slate-400">入力は管理者のみ</span>}
-          {prodDirty && <span className="text-[11px] text-amber-600 font-bold">未保存の変更があります</span>}
+          {!isAdmin && <span className="text-xs text-slate-400">入力は管理者のみ</span>}
+          {prodDirty && <span className="text-xs text-amber-600 font-bold">未保存の変更があります</span>}
         </div>
         {prodModels.length === 0 ? <div className="text-xs text-slate-400 py-4 text-center">完了データのある品目コードがまだありません</div> : (
           <div className="max-h-72 overflow-auto border border-slate-200 rounded">
             <table className="w-full text-xs border-collapse">
               <thead className="sticky top-0 bg-slate-100 text-slate-500"><tr>
                 <th className="px-2 py-1.5 text-left font-bold">品目コード</th>
-                <th className="px-2 py-1.5 text-right font-bold" title="直近365日に完了したロットの台数合計(目安)">記録上の台数<div className="text-[9px] font-normal text-slate-400">参考</div></th>
-                <th className="px-2 py-1.5 text-right font-bold">実際の年間生産台数<div className="text-[9px] font-normal text-slate-400">{editYear}年</div></th>
+                <th className="px-2 py-1.5 text-right font-bold" title="直近365日に完了したロットの台数合計(目安)">記録上の台数<div className="text-xs font-normal text-slate-400">参考</div></th>
+                <th className="px-2 py-1.5 text-right font-bold">実際の年間生産台数<div className="text-xs font-normal text-slate-400">{editYear}年</div></th>
               </tr></thead>
               <tbody>
                 {prodModels.map(m => {
@@ -16400,7 +16417,7 @@ const KpiDetailView = ({ lots = [], settings = {}, saveSettings = null, currentU
             </table>
           </div>
         )}
-        <div className="text-[10px] text-slate-400 mt-2">※ 入力した品目コードは「重点工程」で<b className="text-indigo-600">実数</b>として、未入力の品目コードは<b>推定</b>として金額計算されます。年を切り替えると過去年の台数も入れられます（重点工程の「生産台数の年」で使う年を選択）。保存はこの画面の品目コードのみ更新（他は保持）。</div>
+        <div className="text-xs text-slate-400 mt-2">※ 入力した品目コードは「重点工程」で<b className="text-indigo-600">実数</b>として、未入力の品目コードは<b>推定</b>として金額計算されます。年を切り替えると過去年の台数も入れられます（重点工程の「生産台数の年」で使う年を選択）。保存はこの画面の品目コードのみ更新（他は保持）。</div>
       </div>
     </div>
   );
@@ -16462,7 +16479,7 @@ const LotTimeTable = ({ lot, onSaveTasks }) => {
     <div className="border border-slate-200 rounded-lg overflow-hidden mb-3">
       <div className="px-3 py-2 bg-slate-800 text-white text-xs font-bold flex items-center justify-between gap-2"><span className="truncate">{lot.orderNo} ・ {lot.model} ({qty}台)</span>{anom > 0 ? <span className="bg-rose-600 px-1.5 py-0.5 rounded shrink-0">要確認 {anom}</span> : <span className="bg-emerald-600 px-1.5 py-0.5 rounded shrink-0">OK</span>}</div>
       <div className="overflow-auto max-h-[50vh]">
-        <table className="w-full text-[11px] border-collapse">
+        <table className="w-full text-xs border-collapse">
           <thead className="sticky top-0 bg-slate-100"><tr><th className="px-2 py-1 text-left font-bold border-b sticky left-0 bg-slate-100">工程</th><th className="px-1 py-1 text-center border-b">目標</th>{Array.from({ length: qty }, (_, u) => <th key={u} className="px-1 py-1 text-center border-b">#{u + 1}</th>)}</tr></thead>
           <tbody>
             {steps.map((s, si) => (
@@ -16485,7 +16502,7 @@ const LotTimeTable = ({ lot, onSaveTasks }) => {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="bg-indigo-600 text-white p-3 text-center font-bold text-sm">{ti.label} を直す</div>
             <div className="p-4 space-y-3">
-              {ti.keys.length > 0 && ti.keys.every(k => tasks[k]?.status === 'skipped') && <div className="text-center text-[11px] text-slate-500 bg-slate-50 border rounded py-1">現在「該当なし(対象外)」です</div>}
+              {ti.keys.length > 0 && ti.keys.every(k => tasks[k]?.status === 'skipped') && <div className="text-center text-xs text-slate-500 bg-slate-50 border rounded py-1">現在「該当なし(対象外)」です</div>}
               <div className="flex items-center justify-center gap-1.5"><input type="number" min="0" value={ti.min} onChange={e => setTi(p => ({ ...p, min: e.target.value }))} className="border rounded p-2 text-lg w-16 text-center font-mono" placeholder="0" /><span className="font-bold text-sm">分</span><input type="number" min="0" max="59" value={ti.sec} onChange={e => setTi(p => ({ ...p, sec: e.target.value }))} className="border rounded p-2 text-lg w-16 text-center font-mono" placeholder="0" /><span className="font-bold text-sm">秒</span></div>
               <div className="text-center text-xs text-slate-400">= {tiTotal} 秒</div>
               {ti.targetSec > 0 && <button onClick={() => setTi(p => ({ ...p, min: String(Math.floor(ti.targetSec / 60)), sec: String(ti.targetSec % 60) }))} className="w-full py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-blue-700 font-bold text-xs">目標 {ti.targetSec}秒 を入れる</button>}
@@ -16493,7 +16510,7 @@ const LotTimeTable = ({ lot, onSaveTasks }) => {
               {/* 該当なし(対象外): ロットで1回だけの工程の2台目以降など、本来やらない台。集計・異常から除外。 */}
               {ti.keys.length > 0 && ti.keys.every(k => tasks[k]?.status === 'skipped')
                 ? <button onClick={() => unskip(ti.keys)} className="w-full py-2 border border-slate-300 rounded-xl font-bold text-slate-600 hover:bg-slate-50 text-sm">該当なしを解除（測定値に戻す）</button>
-                : <button onClick={() => markSkip(ti.keys)} className="w-full py-2 border-2 border-amber-300 bg-amber-50 rounded-xl font-bold text-amber-700 hover:bg-amber-100 text-sm">📦 該当なし（対象外）にする<div className="text-[10px] font-normal text-amber-600">この台はこの工程をやらない／ロットで1回だけ等。集計・異常から外します</div></button>}
+                : <button onClick={() => markSkip(ti.keys)} className="w-full py-2 border-2 border-amber-300 bg-amber-50 rounded-xl font-bold text-amber-700 hover:bg-amber-100 text-sm">📦 該当なし（対象外）にする<div className="text-xs font-normal text-amber-600">この台はこの工程をやらない／ロットで1回だけ等。集計・異常から外します</div></button>}
             </div>
           </div>
         </div>
@@ -16674,13 +16691,13 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
             <DownloadCloud className="w-5 h-5 text-emerald-600 shrink-0" />
             <div>
               <h3 className="font-bold text-slate-800 text-sm">全データ バックアップ（JSON書き出し）</h3>
-              <div className="text-[11px] text-slate-500">検査ロット {counts.lots}件・テンプレ {counts.templates}・作業者 {counts.workers}・間接作業 {counts['間接作業']} ＋設定を1ファイルに保存。提出前/月末の保管に。</div>
+              <div className="text-xs text-slate-500">検査ロット {counts.lots}件・テンプレ {counts.templates}・作業者 {counts.workers}・間接作業 {counts['間接作業']} ＋設定を1ファイルに保存。提出前/月末の保管に。</div>
             </div>
           </div>
           <button onClick={doBackup} className="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5 shadow-sm bg-emerald-600 hover:bg-emerald-700 text-white"><DownloadCloud className="w-4 h-4" /> JSONで保存</button>
           <button onClick={exportForPocketBase} title="将来 Firebase から PocketBase へ移したくなった時のための、全コレクションのエクスポート（PocketBaseに取り込みやすい形）。いつでも逃げられる備え。" className="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5 shadow-sm bg-slate-700 hover:bg-slate-800 text-white"><DownloadCloud className="w-4 h-4" /> PocketBase移行用</button>
         </div>
-        <div className="text-[10px] text-slate-400 mt-2">※ 読み取りのみ（現在のデータには一切変更しません）。不良/軽微/気づきの報告はロット内に含まれます。復元(取り込み)は下の「データ復元」から、プレビュー＋確認の上で行えます。<br/>「PocketBase移行用」= 全データを PocketBase に取り込みやすい形で書き出します（いつでも Firebase から移れる備え。取り込みは別途スクリプトで）。</div>
+        <div className="text-xs text-slate-400 mt-2">※ 読み取りのみ（現在のデータには一切変更しません）。不良/軽微/気づきの報告はロット内に含まれます。復元(取り込み)は下の「データ復元」から、プレビュー＋確認の上で行えます。<br/>「PocketBase移行用」= 全データを PocketBase に取り込みやすい形で書き出します（いつでも Firebase から移れる備え。取り込みは別途スクリプトで）。</div>
       </div>
 
       {/* 復元(取り込み) */}
@@ -16689,7 +16706,7 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
           <Upload className="w-5 h-5 text-amber-600 shrink-0" />
           <h3 className="font-bold text-slate-800 text-sm">データ復元（バックアップから取り込み）</h3>
         </div>
-        <div className="text-[11px] text-slate-500 mb-3">書き出したJSONを読み込み、<b>ID単位で上書き／追加</b>します。現在あってファイルに無いデータは<b>消しません</b>。実行直前に<b>現状を自動バックアップ</b>（ダウンロード）してから書き込みます。</div>
+        <div className="text-xs text-slate-500 mb-3">書き出したJSONを読み込み、<b>ID単位で上書き／追加</b>します。現在あってファイルに無いデータは<b>消しません</b>。実行直前に<b>現状を自動バックアップ</b>（ダウンロード）してから書き込みます。</div>
 
         {rstPhase === 'idle' && (
           <div>
@@ -16707,7 +16724,7 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
 
         {rstPhase === 'preview' && rst && rst.parsed && (
           <div className="space-y-3">
-            <div className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded p-2">ファイル: <b>{rst.fileName}</b>{rst.meta && rst.meta.exportedAt ? <> ／ 作成: {new Date(rst.meta.exportedAt).toLocaleString('ja-JP')}</> : null}{rst.meta && rst.meta.by ? <> ／ 担当: {rst.meta.by}</> : null}</div>
+            <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded p-2">ファイル: <b>{rst.fileName}</b>{rst.meta && rst.meta.exportedAt ? <> ／ 作成: {new Date(rst.meta.exportedAt).toLocaleString('ja-JP')}</> : null}{rst.meta && rst.meta.by ? <> ／ 担当: {rst.meta.by}</> : null}</div>
             <div className="overflow-auto border border-slate-100 rounded">
               <table className="w-full text-xs border-collapse">
                 <thead className="bg-slate-100"><tr><th className="px-2 py-1.5 text-left font-bold border-b">種類</th><th className="px-2 py-1.5 text-right font-bold border-b">ファイル件数</th><th className="px-2 py-1.5 text-right font-bold border-b text-emerald-700">新規追加</th><th className="px-2 py-1.5 text-right font-bold border-b text-blue-700">上書き</th><th className="px-2 py-1.5 text-right font-bold border-b text-slate-400">据え置き</th></tr></thead>
@@ -16719,7 +16736,7 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
                 </tbody>
               </table>
             </div>
-            <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">⚠ 「上書き」対象は内容が<b>このファイルの状態に置き換わります</b>。「据え置き」はファイルに無いため変更されません（削除もしません）。実行直前に現状を自動バックアップします。</div>
+            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">⚠ 「上書き」対象は内容が<b>このファイルの状態に置き換わります</b>。「据え置き」はファイルに無いため変更されません（削除もしません）。実行直前に現状を自動バックアップします。</div>
             <label className="flex items-center gap-2 text-xs text-slate-700 select-none"><input type="checkbox" checked={rstChk} onChange={e => setRstChk(e.target.checked)} className="w-4 h-4" />現在のデータを上書きすることを理解しました</label>
             <div className="flex items-center gap-2"><span className="text-xs text-slate-600">確認のため <b className="text-rose-600">復元</b> と入力:</span><input value={rstConfirm} onChange={e => setRstConfirm(e.target.value)} className="border border-slate-300 rounded px-2 py-1 text-xs w-28" placeholder="復元" /></div>
             <div className="flex items-center gap-2">
@@ -16733,7 +16750,7 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
           <div className="space-y-2">
             <div className="text-xs text-slate-600 font-bold">復元中… {rstProg.done}/{rstProg.total}</div>
             <div className="w-full h-2 bg-slate-100 rounded overflow-hidden"><div className="h-full bg-amber-500 transition-all" style={{ width: `${rstProg.total ? Math.round(rstProg.done / rstProg.total * 100) : 0}%` }} /></div>
-            <div className="text-[10px] text-slate-400">画面を閉じたり更新したりしないでください。</div>
+            <div className="text-xs text-slate-400">画面を閉じたり更新したりしないでください。</div>
           </div>
         )}
 
@@ -16756,7 +16773,7 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
         </div>
         {byKind.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-3">
-            {byKind.map(k => <span key={k.kind} className={`text-[11px] px-2 py-1 rounded-full font-bold ${k.sev === 'err' ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>{k.kind}: {k.n}件</span>)}
+            {byKind.map(k => <span key={k.kind} className={`text-xs px-2 py-1 rounded-full font-bold ${k.sev === 'err' ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>{k.kind}: {k.n}件</span>)}
           </div>
         )}
         <div className="overflow-auto max-h-[40vh] border border-slate-100 rounded">
@@ -16775,7 +16792,7 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
             </tbody>
           </table>
         </div>
-        <div className="text-[10px] text-slate-400 mt-2">※ 点検は読み取りのみ。「重大」は提出前に修正推奨（作業時間0・時刻逆転・完了漏れ）。詳細修正はヘッダーの「要確認」(異常値検出)からも行えます。{issues.length > 200 ? '（先頭200件表示）' : ''}</div>
+        <div className="text-xs text-slate-400 mt-2">※ 点検は読み取りのみ。「重大」は提出前に修正推奨（作業時間0・時刻逆転・完了漏れ）。詳細修正はヘッダーの「要確認」(異常値検出)からも行えます。{issues.length > 200 ? '（先頭200件表示）' : ''}</div>
       </div>
     </div>
   );
@@ -16826,7 +16843,7 @@ const PdcaMiniTrend = ({ lots, model, stepKey, kpi, customTargetTimes, modelGrou
     return out;
   }, [lots, model, stepKey, kpi, customTargetTimes, modelGroups, months]);
   const vals = data.filter(x => x.val != null).map(x => x.val);
-  if (vals.length === 0) return <div className="text-[10px] text-slate-400 py-2">推移データなし</div>;
+  if (vals.length === 0) return <div className="text-xs text-slate-400 py-2">推移データなし</div>;
   const max = Math.max(...vals, 1);
   const actMonthStart = actionDate ? new Date(new Date(actionDate).getFullYear(), new Date(actionDate).getMonth(), 1).getTime() : null;
   const fmtV = (v) => v == null ? '' : (kpi === 'achievement' ? `${Math.round(v)}%` : (kpi === 'defectRate' ? `${v}` : pdcaFmtSec(v)));
@@ -16845,7 +16862,7 @@ const PdcaMiniTrend = ({ lots, model, stepKey, kpi, customTargetTimes, modelGrou
           );
         })}
       </div>
-      <div className="text-[9px] text-slate-400 mt-1 flex items-center gap-2"><span className="inline-flex items-center gap-1"><span className="w-2 h-2 bg-slate-300 rounded-sm" />実施前</span><span className="inline-flex items-center gap-1"><span className="w-2 h-2 bg-emerald-400 rounded-sm" />実施後</span>{actionDate ? `・対策実施: ${pdcaFmtDate(actionDate)}` : '・未実施'}</div>
+      <div className="text-xs text-slate-400 mt-1 flex items-center gap-2"><span className="inline-flex items-center gap-1"><span className="w-2 h-2 bg-slate-300 rounded-sm" />実施前</span><span className="inline-flex items-center gap-1"><span className="w-2 h-2 bg-emerald-400 rounded-sm" />実施後</span>{actionDate ? `・対策実施: ${pdcaFmtDate(actionDate)}` : '・未実施'}</div>
     </div>
   );
 };
@@ -16921,7 +16938,7 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
         <div className="bg-indigo-600 text-white px-4 py-3 flex items-center justify-between shrink-0">
           <div className="min-w-0">
             <div className="font-bold flex items-center gap-2 truncate"><ClipboardList className="w-5 h-5 shrink-0" /> {card.model || '品目コード?'} ／ {card.stepTitle || card.stepKey || '工程?'}</div>
-            <div className="text-[11px] opacity-80">主指標: {PDCA_KPIS[card.kpi] || PDCA_KPIS.time}{card.source?.label ? ` ・由来: ${card.source.label}` : ''}</div>
+            <div className="text-xs opacity-80">主指標: {PDCA_KPIS[card.kpi] || PDCA_KPIS.time}{card.source?.label ? ` ・由来: ${card.source.label}` : ''}</div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className={`px-2 py-1 rounded text-xs font-bold border ${meta.color}`}>{meta.label}</span>
@@ -16930,7 +16947,7 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
         </div>
         <div className="flex-1 min-h-0 p-4 overflow-y-auto space-y-4 text-sm">
           {/* タイムライン */}
-          <div className="flex items-center gap-1 text-[11px] flex-wrap bg-slate-50 border rounded-lg p-2">
+          <div className="flex items-center gap-1 text-xs flex-wrap bg-slate-50 border rounded-lg p-2">
             {[['検知', card.createdAt], ['計画', card.createdAt], ['実施', card.actionDate], ['効果測定', card.actionDate], ['判定', card.closedAt]].map((s, i) => (
               <React.Fragment key={i}>
                 {i > 0 && <span className="text-slate-300">→</span>}
@@ -16943,18 +16960,18 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
           {/* 計画(Plan) */}
           <div className="border rounded-lg p-3 space-y-2">
             <div className="text-xs font-bold text-slate-500 flex items-center justify-between">計画 (Plan)
-              <select value={edit.kpi} onChange={e => setEdit(p => ({ ...p, kpi: e.target.value }))} className="border rounded px-1.5 py-0.5 text-[11px] font-normal" disabled={isClosed}>
+              <select value={edit.kpi} onChange={e => setEdit(p => ({ ...p, kpi: e.target.value }))} className="border rounded px-1.5 py-0.5 text-xs font-normal" disabled={isClosed}>
                 {Object.entries(PDCA_KPIS).map(([k, v]) => <option key={k} value={k}>主指標: {v}</option>)}
               </select>
             </div>
-            <div><label className="block text-[10px] text-slate-400">問題 / 現状</label><textarea value={edit.problem} onChange={e => setEdit(p => ({ ...p, problem: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 準備工程が目標の1.7倍かかっている" /></div>
+            <div><label className="block text-xs text-slate-400">問題 / 現状</label><textarea value={edit.problem} onChange={e => setEdit(p => ({ ...p, problem: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 準備工程が目標の1.7倍かかっている" /></div>
             <div className="grid grid-cols-2 gap-2">
-              <div><label className="block text-[10px] text-slate-400">仮説 (なぜ)</label><textarea value={edit.hypothesis} onChange={e => setEdit(p => ({ ...p, hypothesis: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 治具の位置が遠い" /></div>
-              <div><label className="block text-[10px] text-slate-400">対策 (どうする)</label><textarea value={edit.action} onChange={e => setEdit(p => ({ ...p, action: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 治具を手元へ移動・目標を見直す" /></div>
+              <div><label className="block text-xs text-slate-400">仮説 (なぜ)</label><textarea value={edit.hypothesis} onChange={e => setEdit(p => ({ ...p, hypothesis: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 治具の位置が遠い" /></div>
+              <div><label className="block text-xs text-slate-400">対策 (どうする)</label><textarea value={edit.action} onChange={e => setEdit(p => ({ ...p, action: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 治具を手元へ移動・目標を見直す" /></div>
             </div>
             <div className="flex gap-2">
-              <div className="flex-1"><label className="block text-[10px] text-slate-400">担当</label><input value={edit.owner} onChange={e => setEdit(p => ({ ...p, owner: e.target.value }))} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} /></div>
-              <div><label className="block text-[10px] text-slate-400">期限</label><input type="date" value={edit.dueDate} onChange={e => setEdit(p => ({ ...p, dueDate: e.target.value }))} className="border rounded p-1.5 text-xs" disabled={isClosed} /></div>
+              <div className="flex-1"><label className="block text-xs text-slate-400">担当</label><input value={edit.owner} onChange={e => setEdit(p => ({ ...p, owner: e.target.value }))} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} /></div>
+              <div><label className="block text-xs text-slate-400">期限</label><input type="date" value={edit.dueDate} onChange={e => setEdit(p => ({ ...p, dueDate: e.target.value }))} className="border rounded p-1.5 text-xs" disabled={isClosed} /></div>
             </div>
             {!isClosed && <button onClick={savePlan} disabled={busy} className="text-xs px-3 py-1.5 bg-slate-700 text-white rounded font-bold">計画を保存</button>}
           </div>
@@ -16962,13 +16979,13 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
           {/* ベースライン + 実施後 の比較 (エビデンス) */}
           <div className="border rounded-lg p-3 space-y-2">
             <div className="text-xs font-bold text-slate-500">エビデンス: 改善前 → 実施後</div>
-            <div className="text-[10px] text-slate-400">
+            <div className="text-xs text-slate-400">
               ベースライン期間: {card.baseline ? `${pdcaFmtDate(card.baseline.startMs)} 〜 ${pdcaFmtDate(card.baseline.endMs)}` : '—'}
               {card.actionDate ? ` ／ 実施後: ${pdcaFmtDate(card.actionDate)} 〜 ${isClosed && card.closedAt ? pdcaFmtDate(card.closedAt) : '現在'}` : ' ／ 実施後: 未実施'}
             </div>
             <StatRows b={card.baseline} a={after} kpi={edit.kpi} />
             <div className="pt-1">
-              <div className="text-[10px] text-slate-400 mb-0.5">月次推移 ({PDCA_KPIS[edit.kpi] || PDCA_KPIS.time}) — 対策実施を境に色が変わります</div>
+              <div className="text-xs text-slate-400 mb-0.5">月次推移 ({PDCA_KPIS[edit.kpi] || PDCA_KPIS.time}) — 対策実施を境に色が変わります</div>
               <PdcaMiniTrend lots={lots} model={card.model} stepKey={card.stepKey} kpi={edit.kpi} customTargetTimes={customTargetTimes} modelGroups={modelGroups} actionDate={card.actionDate} />
             </div>
             {verdict && (
@@ -16984,15 +17001,15 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
             <div className="border rounded-lg p-3 space-y-2 bg-blue-50/40">
               <div className="text-xs font-bold text-slate-500">実施 (Do) — 対策を行った記録</div>
               <div className="grid grid-cols-3 gap-2">
-                <div><label className="block text-[10px] text-slate-400">変更前</label><input value={edit.changeOld} onChange={e => setEdit(p => ({ ...p, changeOld: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="例 目標300s" /></div>
-                <div><label className="block text-[10px] text-slate-400">変更後</label><input value={edit.changeNew} onChange={e => setEdit(p => ({ ...p, changeNew: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="例 目標240s" /></div>
-                <div><label className="block text-[10px] text-slate-400">内容メモ</label><input value={edit.changeNote} onChange={e => setEdit(p => ({ ...p, changeNote: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="治具移動 等" /></div>
+                <div><label className="block text-xs text-slate-400">変更前</label><input value={edit.changeOld} onChange={e => setEdit(p => ({ ...p, changeOld: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="例 目標300s" /></div>
+                <div><label className="block text-xs text-slate-400">変更後</label><input value={edit.changeNew} onChange={e => setEdit(p => ({ ...p, changeNew: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="例 目標240s" /></div>
+                <div><label className="block text-xs text-slate-400">内容メモ</label><input value={edit.changeNote} onChange={e => setEdit(p => ({ ...p, changeNote: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="治具移動 等" /></div>
               </div>
               <div className="flex gap-2">
                 {card.status === 'plan' && <button onClick={markDoing} disabled={busy} className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded font-bold">実施中にする</button>}
                 <button onClick={recordAction} disabled={busy} className="text-xs px-3 py-1.5 bg-amber-600 text-white rounded font-bold">対策を実施した(今日) → 効果測定へ</button>
               </div>
-              <div className="text-[10px] text-slate-400">「対策を実施した」を押すと、その日を境に before/after を自動測定します。{after && after.n < PDCA_MIN_N ? `(実施後 ${after.n}台・${PDCA_MIN_N}台たまると判定可)` : ''}</div>
+              <div className="text-xs text-slate-400">「対策を実施した」を押すと、その日を境に before/after を自動測定します。{after && after.n < PDCA_MIN_N ? `(実施後 ${after.n}台・${PDCA_MIN_N}台たまると判定可)` : ''}</div>
             </div>
           )}
 
@@ -17006,13 +17023,13 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
                 <button onClick={() => closeWith('worse')} disabled={busy} className="text-xs px-3 py-1.5 bg-rose-600 text-white rounded font-bold">悪化 → 完了</button>
                 <button onClick={() => closeWith('rolledback')} disabled={busy} className="text-xs px-3 py-1.5 bg-purple-600 text-white rounded font-bold">元に戻す(差し戻し)</button>
               </div>
-              <div className="text-[10px] text-slate-400">判定すると実施後の統計が「恒久エビデンス」として凍結保存され、いつでも見返せます。</div>
+              <div className="text-xs text-slate-400">判定すると実施後の統計が「恒久エビデンス」として凍結保存され、いつでも見返せます。</div>
             </div>
           )}
           {isClosed && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-500">判定: {pdcaFmtDateTime(card.closedAt)} ・ {card.closedBy}</span>
-              {!busy && <button onClick={reopen} className="text-[11px] px-2 py-1 border rounded text-slate-600 hover:bg-slate-50">再オープン</button>}
+              {!busy && <button onClick={reopen} className="text-xs px-2 py-1 border rounded text-slate-600 hover:bg-slate-50">再オープン</button>}
             </div>
           )}
 
@@ -17022,14 +17039,14 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
               <div className="text-xs font-bold text-slate-500 mb-1">記録 (監査ログ)</div>
               <div className="space-y-1">
                 {[...card.log].reverse().map((e, i) => (
-                  <div key={i} className="text-[11px] flex items-start gap-2"><span className="text-slate-400 font-mono shrink-0">{pdcaFmtDateTime(e.ts)}</span><span className="text-slate-700">{e.note || e.type}</span><span className="text-slate-400 ml-auto shrink-0">{e.by}</span></div>
+                  <div key={i} className="text-xs flex items-start gap-2"><span className="text-slate-400 font-mono shrink-0">{pdcaFmtDateTime(e.ts)}</span><span className="text-slate-700">{e.note || e.type}</span><span className="text-slate-400 ml-auto shrink-0">{e.by}</span></div>
                 ))}
               </div>
             </div>
           )}
 
           <div className="flex justify-between pt-1">
-            <span className="text-[10px] text-slate-400">作成: {pdcaFmtDateTime(card.createdAt)} ・ {card.createdBy}</span>
+            <span className="text-xs text-slate-400">作成: {pdcaFmtDateTime(card.createdAt)} ・ {card.createdBy}</span>
             {deleteData && <button onClick={doDelete} className="text-xs text-rose-500 hover:text-rose-700 flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> 削除</button>}
           </div>
         </div>
@@ -17080,7 +17097,7 @@ const ProfitDetailModal = ({ row, lots = [], settings = {}, rate = 0, onClose, o
                 {row.hasTarget && row.reductionPerUnit > 0 && <tr><td className="py-1.5 text-emerald-700 font-bold">⑦ 年間削減見込 ＝ ① × ⑥{rate > 0 ? ' × 時給' : ''}</td><td className="py-1.5 text-right font-mono font-bold text-emerald-700">{hrs(row.annualSaveSec)}{rate > 0 ? ` ＝ ${yen(row.annualSaveYen)}` : ''}</td></tr>}
               </tbody>
             </table>
-            <div className="text-[10px] text-slate-400 mt-1">※ 中央値＝実績の真ん中の値（極端に速い/遅い台に引っぱられないため平均でなく中央値）。年間台数は直近1年の完了数。</div>
+            <div className="text-xs text-slate-400 mt-1">※ 中央値＝実績の真ん中の値（極端に速い/遅い台に引っぱられないため平均でなく中央値）。年間台数は直近1年の完了数。</div>
           </div>
 
           {/* 類似比較 */}
@@ -17107,7 +17124,7 @@ const ProfitDetailModal = ({ row, lots = [], settings = {}, rate = 0, onClose, o
                 </tbody>
               </table>
             </div>
-            <div className="text-[10px] text-slate-400 mt-1">指図 {detail.srcLots.length} 件・合計 {detail.srcLots.reduce((s, x) => s + x.count, 0)} 台。この台数と時間から上の②③を計算しています。</div>
+            <div className="text-xs text-slate-400 mt-1">指図 {detail.srcLots.length} 件・合計 {detail.srcLots.reduce((s, x) => s + x.count, 0)} 台。この台数と時間から上の②③を計算しています。</div>
           </div>
 
           {/* CTA */}
@@ -17267,12 +17284,12 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
         <div data-band="scoreboard-summary" className="px-3 py-2 bg-indigo-50 border-b border-indigo-100 flex items-center gap-x-4 gap-y-1 flex-wrap">
           <div className="shrink-0 flex items-center gap-1.5 text-xs font-black text-indigo-800"><Activity className="w-4 h-4" /> 改善スコアボード — 今月のうごき（先月と比べて）</div>
           <div className="shrink-0">
-            <div className="text-[10px] text-indigo-500 font-bold">今月 浮いた時間（先月より速くなった分）</div>
+            <div className="text-xs text-indigo-500 font-bold">今月 浮いた時間（先月より速くなった分）</div>
             <div className="text-2xl font-black text-indigo-700 font-mono">{formatTime(scoreboard.freedSecTotal)}
               {scoreboard.rate > 0 && <span className="text-sm font-bold text-emerald-600 ml-2">≒ {yen(scoreboard.freedYenTotal)}</span>}
             </div>
           </div>
-          <div className="text-[11px] text-slate-600 flex-1 min-w-[220px] leading-relaxed">
+          <div className="text-xs text-slate-600 flex-1 min-w-[220px] leading-relaxed">
             改善 <b className="text-emerald-600">{scoreboard.improvedCount}</b> 工程 / 悪化 <b className="text-rose-600">{scoreboard.worsenedCount}</b> 工程。<br />
             ※ ¥は「<b>浮いた余力（時間）</b>を別の仕事に回せた場合の価値」です。すぐ現金が減るわけではなく、<b>増産・多能工化・内製化・改善活動</b>などに回して初めて利益になります。
           </div>
@@ -17307,7 +17324,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
             </tbody>
           </table>
         </div>
-        <div className="px-3 py-1.5 bg-white text-[11px] text-slate-500 border-t leading-relaxed">
+        <div className="px-3 py-1.5 bg-white text-xs text-slate-500 border-t leading-relaxed">
           <b className="text-slate-700">毎月の使い方：</b>この表を見て <b className="text-rose-600">▲遅くなった</b>／年間の山が大きい工程を<b>1つ</b>選んでクリック → 計算の内訳と根拠データを確認 →「カルテ化」で対策を決めて実施。来月この表で<b className="text-emerald-600">▼速くなった</b>か<u>自動で</u>分かります（人は“やる”だけ）。
         </div>
       </div>
@@ -17326,14 +17343,14 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                 ⚠ この 11px と py-2.5 を小さくしない(見張り: ui-density-parts-bands.test.mjs PB3 が 44 という **数** を見る)。 */}
             <details className="relative font-normal shrink-0">
               <summary className="list-none cursor-pointer select-none relative w-6 h-6 flex items-center justify-center rounded-md border border-emerald-300 bg-white text-emerald-700 text-xs font-bold hover:bg-emerald-100 after:content-[''] after:absolute after:top-[-11px] after:bottom-[-11px] after:left-[-11px] after:right-[-11px]" title="読み方">？</summary>
-              <div data-fold="ranking-howto" className="absolute left-0 top-full mt-1 z-30 w-[560px] max-w-[70vw] bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-[11px] text-slate-500 leading-relaxed">
+              <div data-fold="ranking-howto" className="absolute left-0 top-full mt-1 z-30 w-[560px] max-w-[70vw] bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-xs text-slate-500 leading-relaxed">
                 {rankingView === 'cross'
                   ? <><b className="text-slate-700">読み方：</b>同じ工程（例: 測定準備）を<b>品目コードをまたいで合計</b>しています。「N品目コードに共通・年◯時間」の大きい所ほど、<b>その1工程を直すと全品目コードに効いて大きい</b>。行クリックで品目別の内訳が見られます。</>
                   : <><b className="text-slate-700">読み方：</b>1年でその工程に合計どれだけ時間がかかっているかの大きい順です。<b>行をクリック</b>すると「年間◯台 × 1台◯分 = 年◯時間」の計算の内訳と、集計に使った指図一覧（確認用）が見られます。</>}
               </div>
             </details>
           </span>
-          <div className="flex items-center gap-3 text-[11px] font-normal">
+          <div className="flex items-center gap-3 text-xs font-normal">
             <div className="flex rounded-lg overflow-hidden border border-emerald-300 shrink-0">
               <button onClick={() => setRankingView('model')} className={`px-2.5 py-0.5 font-bold ${rankingView === 'model' ? 'bg-emerald-600 text-white' : 'bg-white text-emerald-700 hover:bg-emerald-100'}`} title="どの品目コードのどの工程か">品目別</button>
               <button onClick={() => setRankingView('cross')} className={`px-2.5 py-0.5 font-bold ${rankingView === 'cross' ? 'bg-emerald-600 text-white' : 'bg-white text-emerald-700 hover:bg-emerald-100'}`} title="工程ごとに品目コードをまとめ、共通ポイントを横断改善">工程横断</button>
@@ -17346,7 +17363,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
         </div>
         {/* 🧹 2026-09-07: ここに在った「読み方：…」の1行の帯は、上の見出しの ？ の中へ畳んだ。文言は両方(工程横断・品目別)とも残っている。 */}
         {/* 生産台数の年: 金額計算の台数をどの年の実生産台数で出すか。未入力品目コードは測定台数ベースの推定にフォールバック。 */}
-        <div className="px-3 py-1.5 bg-indigo-50/40 border-b border-indigo-100 flex items-center gap-2 flex-wrap text-[11px]">
+        <div className="px-3 py-1.5 bg-indigo-50/40 border-b border-indigo-100 flex items-center gap-2 flex-wrap text-xs">
           <span className="font-bold text-indigo-800">金額の元にする 生産台数の年:</span>
           <select value={prodYear} onChange={e => setProdYear(Number(e.target.value))} className="border border-indigo-200 rounded px-2 py-0.5 text-xs font-bold bg-white">
             {prodYears.map(y => <option key={y} value={y}>{y}年</option>)}
@@ -17362,7 +17379,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
           const cVal = (sec, yenv) => cr ? yen(yenv) : `${Math.round(sec / 3600)}h`;
           return (
             <>
-              <div className="px-3 py-2 bg-indigo-50/60 border-b border-indigo-100 flex items-center gap-2 flex-wrap text-[11px]">
+              <div className="px-3 py-2 bg-indigo-50/60 border-b border-indigo-100 flex items-center gap-2 flex-wrap text-xs">
                 <span className="font-bold text-indigo-800">「もし◯%短縮できたら」の仮定：</span>
                 <input type="range" min="10" max="70" step="5" value={crossPct} onChange={e => setCrossPct(Number(e.target.value))} className="accent-indigo-600 w-36" />
                 <span className="font-mono font-bold text-indigo-700 w-10">{crossPct}%</span>
@@ -17374,10 +17391,10 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                     <tr>
                       <th className="px-2 py-1.5 text-left font-bold">共通工程</th>
                       <th className="px-2 py-1.5 text-right font-bold" title="この工程を持つ品目コードの数">品目コード数</th>
-                      <th className="px-2 py-1.5 text-right font-bold" title="全品目コード合計の年間時間（×時給）">年間合計<div className="text-[9px] font-normal text-slate-400">{cr ? '円/年' : '時間/年'}</div></th>
-                      <th className="px-2 py-1.5 text-right font-bold text-emerald-700" title="一番速い品目コードの中央値まで、遅い品目コードを全部揃えたら浮く分（現に出来てる品目コードがあるので実証済み）">①最速に揃える<div className="text-[9px] font-normal text-emerald-500">{cr ? '円/年' : '時間/年'}</div></th>
-                      <th className="px-2 py-1.5 text-right font-bold text-indigo-700" title={`全品目コード合計を${crossPct}%短縮できたらの仮定`}>②{crossPct}%短縮<div className="text-[9px] font-normal text-indigo-400">{cr ? '円/年' : '時間/年'}</div></th>
-                      <th className="px-2 py-1.5 text-right font-bold text-slate-600" title="各品目コードを目標時間まで詰めたら浮く分（堅実な下限）">③目標まで<div className="text-[9px] font-normal text-slate-400">{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold" title="全品目コード合計の年間時間（×時給）">年間合計<div className="text-xs font-normal text-slate-400">{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold text-emerald-700" title="一番速い品目コードの中央値まで、遅い品目コードを全部揃えたら浮く分（現に出来てる品目コードがあるので実証済み）">①最速に揃える<div className="text-xs font-normal text-emerald-500">{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold text-indigo-700" title={`全品目コード合計を${crossPct}%短縮できたらの仮定`}>②{crossPct}%短縮<div className="text-xs font-normal text-indigo-400">{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold text-slate-600" title="各品目コードを目標時間まで詰めたら浮く分（堅実な下限）">③目標まで<div className="text-xs font-normal text-slate-400">{cr ? '円/年' : '時間/年'}</div></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -17389,7 +17406,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                         <React.Fragment key={g.title}>
                           <tr onClick={() => setCrossExpanded(open ? null : g.title)} className={`border-b border-slate-50 cursor-pointer hover:bg-indigo-50/50 ${open ? 'bg-indigo-50/60' : ''}`}>
                             <td className="px-2 py-1.5"><div className="font-bold text-slate-800 truncate max-w-[13rem] flex items-center gap-1" title={`${g.title}（クリックで品目別内訳）`}><span className="text-slate-300">{open ? '▼' : '▶'}</span><span className="text-slate-300">{i + 1}.</span>{g.title}</div></td>
-                            <td className="px-2 py-1.5 text-right font-mono">{g.modelCount}<span className="text-[9px] text-slate-400">品目コード</span>{g.actualModels > 0 && <div className="text-[8px] font-bold text-indigo-600">{g.actualModels}実数</div>}</td>
+                            <td className="px-2 py-1.5 text-right font-mono">{g.modelCount}<span className="text-xs text-slate-400">品目コード</span>{g.actualModels > 0 && <div className="text-[8px] font-bold text-indigo-600">{g.actualModels}実数</div>}</td>
                             <td className="px-2 py-1.5 text-right">
                               <div className="flex items-center gap-1.5 justify-end">
                                 <div className="h-2 w-12 bg-slate-100 rounded overflow-hidden"><div className="h-full bg-slate-400" style={{ width: `${barPct}%` }} /></div>
@@ -17402,8 +17419,8 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                           </tr>
                           {open && (
                             <tr className="bg-indigo-50/30 border-b border-indigo-100"><td colSpan={6} className="px-3 py-2">
-                              <div className="text-[11px] text-slate-600 mb-1.5"><b className="text-indigo-700">「{g.title}」の品目別内訳</b> — 一番速いのは <b>{g.fastestModel}（{pdcaFmtSec(g.fastest)}）</b>。これに全品目コードを揃えれば <b className="text-emerald-700">{cVal(g.saveToFastestSec, g.saveToFastestYen)}/年</b> 浮く。さらにレイアウト等で{crossPct}%短縮できれば <b className="text-indigo-700">{cVal(g.saveByPctSec, g.saveByPctYen)}/年</b>。</div>
-                              <table className="w-full text-[11px] border-collapse">
+                              <div className="text-xs text-slate-600 mb-1.5"><b className="text-indigo-700">「{g.title}」の品目別内訳</b> — 一番速いのは <b>{g.fastestModel}（{pdcaFmtSec(g.fastest)}）</b>。これに全品目コードを揃えれば <b className="text-emerald-700">{cVal(g.saveToFastestSec, g.saveToFastestYen)}/年</b> 浮く。さらにレイアウト等で{crossPct}%短縮できれば <b className="text-indigo-700">{cVal(g.saveByPctSec, g.saveByPctYen)}/年</b>。</div>
+                              <table className="w-full text-xs border-collapse">
                                 <thead><tr className="text-slate-400 border-b border-indigo-100"><th className="px-2 py-0.5 text-left">品目コード</th><th className="px-2 py-0.5 text-right">年間台数</th><th className="px-2 py-0.5 text-right">1台の中央値</th><th className="px-2 py-0.5 text-right">目標</th><th className="px-2 py-0.5 text-right">年間コスト</th></tr></thead>
                                 <tbody>
                                   {g.models.map((m, j) => (
@@ -17417,7 +17434,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                                   ))}
                                 </tbody>
                               </table>
-                              <div className="text-[10px] text-slate-400 mt-1">🏆=この工程で一番速い品目コード（実証済みの到達点）。年間コスト = 年間台数 × 中央値{cr ? ' × 時給' : ''}。</div>
+                              <div className="text-xs text-slate-400 mt-1">🏆=この工程で一番速い品目コード（実証済みの到達点）。年間コスト = 年間台数 × 中央値{cr ? ' × 時給' : ''}。</div>
                             </td></tr>
                           )}
                         </React.Fragment>
@@ -17426,7 +17443,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                   </tbody>
                 </table>
               </div>
-              <div className="px-3 py-1.5 bg-slate-50 text-[10px] text-slate-500 border-t">
+              <div className="px-3 py-1.5 bg-slate-50 text-xs text-slate-500 border-t">
                 ①最速に揃える＝現に一番速い品目コードの中央値まで他を揃えた場合（実証済みの堅い目標）。②{crossPct}%短縮＝レイアウト/治具/自動化など大きい改善の仮置き試算（上のスライダーで率を変更）。③目標まで＝設定目標までの堅実な下限。全品目コード合計で効くので「共通工程を1つ直す」インパクトが見えます。
               </div>
             </>
@@ -17452,10 +17469,10 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
             <thead className="sticky top-0 bg-slate-100 text-slate-500">
               <tr>
                 <th className="px-2 py-1.5 text-left font-bold">品目コード × 工程</th>
-                <th className="px-2 py-1.5 text-right font-bold" title="直近1年に完了した台数">年間台数<div className="text-[9px] font-normal text-slate-400">台/年</div></th>
-                <th className="px-2 py-1.5 text-right font-bold" title="1台あたりの実績(中央値) → 目標">1台の時間→目標<div className="text-[9px] font-normal text-slate-400">分:秒</div></th>
-                <th className="px-2 py-1.5 text-right font-bold" title="年間台数 × 1台の時間 × 時給">年間人件費<div className="text-[9px] font-normal text-slate-400">{ranking.rate > 0 ? '円/年' : '時間/年'}</div></th>
-                <th className="px-2 py-1.5 text-right font-bold" title="目標まで縮めたら浮く分">短縮できれば<div className="text-[9px] font-normal text-slate-400">{ranking.rate > 0 ? '円/年' : '時間/年'}</div></th>
+                <th className="px-2 py-1.5 text-right font-bold" title="直近1年に完了した台数">年間台数<div className="text-xs font-normal text-slate-400">台/年</div></th>
+                <th className="px-2 py-1.5 text-right font-bold" title="1台あたりの実績(中央値) → 目標">1台の時間→目標<div className="text-xs font-normal text-slate-400">分:秒</div></th>
+                <th className="px-2 py-1.5 text-right font-bold" title="年間台数 × 1台の時間 × 時給">年間人件費<div className="text-xs font-normal text-slate-400">{ranking.rate > 0 ? '円/年' : '時間/年'}</div></th>
+                <th className="px-2 py-1.5 text-right font-bold" title="目標まで縮めたら浮く分">短縮できれば<div className="text-xs font-normal text-slate-400">{ranking.rate > 0 ? '円/年' : '時間/年'}</div></th>
                 <th className="px-2 py-1.5"></th>
               </tr>
             </thead>
@@ -17466,7 +17483,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                 const barPct = Math.max(2, Math.round(r.annualCostSec / maxCost * 100));
                 return (
                   <tr key={i} onClick={() => setDetailRow(r)} className={`border-b border-slate-50 cursor-pointer hover:bg-emerald-50/50 ${r.lowFreq ? 'opacity-50' : ''}`}>
-                    <td className="px-2 py-1.5"><div className="font-bold text-slate-800 truncate max-w-[12rem] flex items-center gap-1" title={`${r.model} / ${r.stepTitle}（クリックで詳細）`}><span className="text-slate-300">{i + 1}.</span>{r.model} ／ {r.stepTitle}</div>{r.lowFreq && <span className="text-[10px] text-amber-600">年{r.annualUnits}台・後回し</span>}{!r.hasTarget && <span className="text-[10px] text-slate-400">目標未設定</span>}</td>
+                    <td className="px-2 py-1.5"><div className="font-bold text-slate-800 truncate max-w-[12rem] flex items-center gap-1" title={`${r.model} / ${r.stepTitle}（クリックで詳細）`}><span className="text-slate-300">{i + 1}.</span>{r.model} ／ {r.stepTitle}</div>{r.lowFreq && <span className="text-xs text-amber-600">年{r.annualUnits}台・後回し</span>}{!r.hasTarget && <span className="text-xs text-slate-400">目標未設定</span>}</td>
                     <td className="px-2 py-1.5 text-right font-mono">{r.annualUnits.toLocaleString()}<div className={`text-[8px] font-bold ${r.annualUnitsSource === 'actual' ? 'text-indigo-600' : 'text-slate-400'}`}>{r.annualUnitsSource === 'actual' ? '実数' : '推定'}</div></td>
                     <td className="px-2 py-1.5 text-right font-mono whitespace-nowrap">{pdcaFmtSec(r.median)}<span className="text-slate-400"> → {r.hasTarget ? pdcaFmtSec(r.target) : '—'}</span></td>
                     <td className="px-2 py-1.5 text-right">
@@ -17480,8 +17497,8 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                     </td>
                     <td className="px-2 py-1.5 text-right">
                       {carded
-                        ? <span className="text-[10px] text-slate-400">カルテ有</span>
-                        : <button onClick={(e) => { e.stopPropagation(); cardFromRanking(r); }} className="text-[11px] px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-bold whitespace-nowrap">カルテ化</button>}
+                        ? <span className="text-xs text-slate-400">カルテ有</span>
+                        : <button onClick={(e) => { e.stopPropagation(); cardFromRanking(r); }} className="text-xs px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-bold whitespace-nowrap">カルテ化</button>}
                     </td>
                   </tr>
                 );
@@ -17489,7 +17506,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
             </tbody>
           </table>
         </div>
-        <div className="px-3 py-1.5 bg-slate-50 text-[10px] text-slate-500 border-t">
+        <div className="px-3 py-1.5 bg-slate-50 text-xs text-slate-500 border-t">
           年間人件費 = 年間台数 × 実績中央値 × 時給（＝コストの山＝割合が多い所）。年間削減見込 = 年間台数 × 短縮余地(実績中央値−目標) × 時給。
           {ranking.totalSaveSec <= 60 && rankingRows.length > 0 && <span className="text-amber-600"> ／ 今は目標まで詰める余地が小さい（多くが目標より速い）＝目標が緩い可能性。人件費の山(左の棒)で重点を選ぶか、目標の見直し・自動化を検討。</span>}
         </div>
@@ -17525,7 +17542,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                     <div className="flex items-center gap-1.5"><span className={`w-2 h-2 rounded-full shrink-0 ${meta.dot}`} /><span className="text-xs leading-4 font-bold text-slate-800 truncate">{c.model}</span></div>
                     <div className="text-xs leading-4 text-slate-600 truncate">{c.stepTitle || c.stepKey}</div>
                     <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                      <span className="text-[9px] px-1 py-0.5 rounded bg-slate-100 text-slate-500">{PDCA_KPIS[c.kpi] || PDCA_KPIS.time}</span>
+                      <span className="text-xs px-1 py-0.5 rounded bg-slate-100 text-slate-500">{PDCA_KPIS[c.kpi] || PDCA_KPIS.time}</span>
                       {v && <PdcaVerdictBadge v={v} />}
                     </div>
                   </button>
@@ -17589,7 +17606,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
 // じっと見るモード=工程を要素作業に分けて観測するプランの編集(テンプレ本体は壊さず別コレクションに保存)
 // じっと見るの使い方ガイド(3ステップ+具体例)。「使い方が謎」への対応=設定/計測/確認のどこで何をするかを明示。
 const ObsHelpModal = ({ onClose }) => {
-  const Where = ({ children, color }) => <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${color}`}>{children}</span>;
+  const Where = ({ children, color }) => <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${color}`}>{children}</span>;
   return (
     <div className="fixed inset-0 z-[215] bg-black/50 flex items-center justify-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="bg-white w-full max-w-md max-h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
@@ -17611,7 +17628,7 @@ const ObsHelpModal = ({ onClose }) => {
               <div className="shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs">2</div>
               <div className="flex-1"><div className="font-bold flex items-center gap-1.5"><Where color="bg-emerald-100 text-emerald-700">作業画面で 計測</Where>区切りながら計る</div>
                 <div className="text-[12px] text-slate-600 mt-0.5">次にこの工程を<b>時間取り</b>すると、画面の上に要素ボタンが出ます。1つの動作が終わるたびに <b>「⏱ ○○ 完了 → 次の要素へ」</b> を押す。最後の動作はそのまま工程を完了。</div>
-                <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">※ 途中で一時停止・「作業の続き」にすると内訳は記録されず、工程の合計時間だけ残ります（最後まで一気に区切った時だけ内訳が付きます）。</div></div>
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">※ 途中で一時停止・「作業の続き」にすると内訳は記録されず、工程の合計時間だけ残ります（最後まで一気に区切った時だけ内訳が付きます）。</div></div>
             </div>
             <div className="flex gap-2">
               <div className="shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs">3</div>
@@ -17623,7 +17640,7 @@ const ObsHelpModal = ({ onClose }) => {
             <div className="font-bold text-slate-700 mb-1">例</div>
             「測定」工程（1台 1:20）を ①治具に取付 ②測る ③外す に分けたら、<b>②測る が 50秒で一番長い</b>と分かる → 治具や手順を見直す的が決まる。
           </div>
-          <div className="text-[11px] text-slate-500 leading-relaxed">
+          <div className="text-xs text-slate-500 leading-relaxed">
             <b>コツ:</b> 1要素は<b>6秒以上</b>（短すぎると人手で測れない）。始まり/終わりは<b>はっきりした目印</b>（機械の音・治具の掛け外し・工具を置く）で区切る。<b>手作業と機械の自動</b>は分ける。
           </div>
         </div>
@@ -17670,7 +17687,7 @@ const ObservationPlanEditor = ({ plan, templateId, stepKey, stepTitle, model, mo
             この工程を、作業の中の小さな単位（要素）に分けて観測します。<b>合計は元の工程時間のまま</b>で、要素ごとの内訳も取れます。次に作業者がこの工程を計測すると、要素ごとの「区切り」ボタンが出ます。
           </div>
           <div>
-            <div className="flex items-center justify-between mb-1"><label className="text-xs font-bold text-slate-600">要素（始まり→終わりの順に）</label><label className="flex items-center gap-1 text-[11px] text-slate-500"><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />ON（作業画面で区切りボタンを出す）</label></div>
+            <div className="flex items-center justify-between mb-1"><label className="text-xs font-bold text-slate-600">要素（始まり→終わりの順に）</label><label className="flex items-center gap-1 text-xs text-slate-500"><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />ON（作業画面で区切りボタンを出す）</label></div>
             <div className="space-y-1.5">
               {elements.map((e, i) => (
                 <div key={e.id} className="flex items-center gap-1.5">
@@ -17684,7 +17701,7 @@ const ObservationPlanEditor = ({ plan, templateId, stepKey, stepTitle, model, mo
             </div>
             <button onClick={addEl} className="mt-1.5 text-xs px-2.5 py-1 border border-blue-200 bg-blue-50 text-blue-700 rounded font-bold">＋ 要素を追加</button>
           </div>
-          <div className="text-[11px] text-slate-500 bg-slate-50 border rounded p-2 leading-relaxed">
+          <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2 leading-relaxed">
             コツ：1要素は<b>6秒以上</b>（短すぎると人手で測れない）。始まり/終わりは<b>はっきりした目印</b>（機械の音・治具の掛け外し・工具を置く・手の方向転換）で区切る。<b>手作業と機械の自動</b>は分ける。
           </div>
           <div className="flex items-center gap-2">
@@ -17736,13 +17753,13 @@ const StripPlot = ({ values = [], target = 0 }) => {
         <text x={x(st.min)} y={baseY + 18} fontSize="8" fill="#94a3b8" textAnchor="middle">{fmt(st.min)}</text>
         <text x={x(st.max)} y={baseY + 18} fontSize="8" fill="#94a3b8" textAnchor="middle">{fmt(st.max)}</text>
       </svg>
-      <div className="text-[10px] text-slate-400 flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
+      <div className="text-xs text-slate-400 flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
         <span><span className="text-blue-600">●</span> 各台の実測（{ds.length}台）</span>
         <span><b className="text-slate-700">┃</b> 真ん中の台</span>
         {st.q1 != null && <span>薄い帯＝多くの台がこの範囲</span>}
         {target > 0 && <span className="text-rose-500">┊目標／赤点＝目標より遅い台</span>}
       </div>
-      <div className="text-[10px] text-slate-500 mt-1 font-mono break-words">実測{ds.length}台: {[...ds].sort((a, b) => a - b).map(fmt).join('、 ')}</div>
+      <div className="text-xs text-slate-500 mt-1 font-mono break-words">実測{ds.length}台: {[...ds].sort((a, b) => a - b).map(fmt).join('、 ')}</div>
     </div>
   );
 };
@@ -18184,7 +18201,7 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
           </div>
           {bd.rows.length > 0 && (
             <div data-band="proc-export" className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[11px] text-slate-500 mr-1">出力:</span>
+              <span className="text-xs text-slate-500 mr-1">出力:</span>
               <button onClick={() => printReport(false)} className="px-2.5 py-1 text-xs font-bold rounded border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex items-center gap-1"><Printer className="w-3.5 h-3.5" /> PDF(A4 1枚)</button>
               <button onClick={() => printReport(true)} className="px-2.5 py-1 text-xs font-bold rounded border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex items-center gap-1"><Printer className="w-3.5 h-3.5" /> PDF(詳細)</button>
               <button onClick={exportExcel} disabled={busyExcel} className={`px-2.5 py-1 text-xs font-bold rounded border flex items-center gap-1 ${busyExcel ? 'border-slate-200 bg-slate-100 text-slate-400' : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}><FileSpreadsheet className="w-3.5 h-3.5" /> {busyExcel ? '生成中…' : 'Excel(グラフ入り)'}</button>
@@ -18216,7 +18233,7 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
                 );
               })}
             </div>
-            <div className="text-[10px] text-slate-400 mt-1">棒の長さ＝その工程の年間合計時間（時間の山）。%＝全工程に占める割合。中央値＝1台の真ん中の実績。</div>
+            <div className="text-xs text-slate-400 mt-1">棒の長さ＝その工程の年間合計時間（時間の山）。%＝全工程に占める割合。中央値＝1台の真ん中の実績。</div>
           </div>
 
           {sel && (
@@ -18227,29 +18244,29 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
                 {(() => { const [lbl, cls] = cvBadge(sel.cv); return <span className={`px-2 py-0.5 rounded text-xs font-bold ${cls}`}>{lbl}（CV {Math.round(sel.cv * 100)}%）</span>; })()}
                 {saveData && (
                   selCarded
-                    ? <button onClick={() => onGoToPdca && onGoToPdca()} className="text-[11px] px-2.5 py-1 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 font-bold hover:bg-emerald-100 flex items-center gap-1"><ClipboardList className="w-3.5 h-3.5" />カルテ作成済み → PDCAへ</button>
-                    : <button onClick={makeCard} className="text-[11px] px-2.5 py-1 rounded-lg border-2 border-indigo-300 bg-indigo-50 text-indigo-700 font-black hover:bg-indigo-100 flex items-center gap-1" title="この工程を改善カルテ(計画)にして改善PDCAへ"><ClipboardList className="w-3.5 h-3.5" />📋 カルテ化（改善計画を立てる）</button>
+                    ? <button onClick={() => onGoToPdca && onGoToPdca()} className="text-xs px-2.5 py-1 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 font-bold hover:bg-emerald-100 flex items-center gap-1"><ClipboardList className="w-3.5 h-3.5" />カルテ作成済み → PDCAへ</button>
+                    : <button onClick={makeCard} className="text-xs px-2.5 py-1 rounded-lg border-2 border-indigo-300 bg-indigo-50 text-indigo-700 font-black hover:bg-indigo-100 flex items-center gap-1" title="この工程を改善カルテ(計画)にして改善PDCAへ"><ClipboardList className="w-3.5 h-3.5" />📋 カルテ化（改善計画を立てる）</button>
                 )}
                 <div className="ml-auto flex items-center gap-1.5">
                   {saveData && (
-                    <button onClick={() => setFixMode(m => !m)} className={`text-[11px] px-2 py-1 rounded border font-bold flex items-center gap-1 ${fixMode ? 'border-amber-400 bg-amber-100 text-amber-800' : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'}`} title="グラフを見て生データの異常を感じたら直す">🔧 {fixMode ? '修正モード中' : '生データ修正'}</button>
+                    <button onClick={() => setFixMode(m => !m)} className={`text-xs px-2 py-1 rounded border font-bold flex items-center gap-1 ${fixMode ? 'border-amber-400 bg-amber-100 text-amber-800' : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'}`} title="グラフを見て生データの異常を感じたら直す">🔧 {fixMode ? '修正モード中' : '生データ修正'}</button>
                   )}
                   {!sel.stepKey?.includes('lot') && (
-                    <button onClick={() => setObsHelp(true)} className="text-[11px] px-2 py-1 rounded border border-slate-200 bg-white text-slate-500 font-bold hover:bg-slate-50" title="じっと見るの使い方">❓使い方</button>
+                    <button onClick={() => setObsHelp(true)} className="text-xs px-2 py-1 rounded border border-slate-200 bg-white text-slate-500 font-bold hover:bg-slate-50" title="じっと見るの使い方">❓使い方</button>
                   )}
                   {saveData && !sel.stepKey?.includes('lot') && (
                     templateId
-                      ? <button onClick={() => setObsEditor(true)} className="text-[11px] px-2 py-1 rounded border border-blue-300 bg-blue-50 text-blue-700 font-bold hover:bg-blue-100 flex items-center gap-1"><Eye className="w-3.5 h-3.5" />{planForSel ? 'じっと見る設定' : 'じっと見る（要素に分ける）'}</button>
+                      ? <button onClick={() => setObsEditor(true)} className="text-xs px-2 py-1 rounded border border-blue-300 bg-blue-50 text-blue-700 font-bold hover:bg-blue-100 flex items-center gap-1"><Eye className="w-3.5 h-3.5" />{planForSel ? 'じっと見る設定' : 'じっと見る（要素に分ける）'}</button>
                       : tplOptions.length
-                        ? <button onClick={() => { setTemplateId(tplOptions[0].id); setObsEditor(true); }} className="text-[11px] px-2 py-1 rounded border border-blue-300 bg-blue-50 text-blue-700 font-bold hover:bg-blue-100 flex items-center gap-1"><Eye className="w-3.5 h-3.5" />じっと見る（要素に分ける）</button>
-                        : <span className="text-[10px] text-slate-400">この品目コードに完了データがありません</span>
+                        ? <button onClick={() => { setTemplateId(tplOptions[0].id); setObsEditor(true); }} className="text-xs px-2 py-1 rounded border border-blue-300 bg-blue-50 text-blue-700 font-bold hover:bg-blue-100 flex items-center gap-1"><Eye className="w-3.5 h-3.5" />じっと見る（要素に分ける）</button>
+                        : <span className="text-xs text-slate-400">この品目コードに完了データがありません</span>
                   )}
                 </div>
               </div>
               {/* 統計サマリ */}
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
                 {[['中央値', fmt(sel.median)], ['平均', fmt(sel.mean)], ['ばらつきσ', fmt(sel.sigma)], ['最小', fmt(sel.min)], ['最大', fmt(sel.max)], ['目標', sel.target > 0 ? fmt(sel.target) : '未設定']].map((s, i) => (
-                  <div key={i} className="bg-slate-50 rounded-lg p-1.5"><div className="text-[10px] text-slate-500">{s[0]}</div><div className="text-sm font-bold font-mono text-slate-800">{s[1]}</div></div>
+                  <div key={i} className="bg-slate-50 rounded-lg p-1.5"><div className="text-xs text-slate-500">{s[0]}</div><div className="text-sm font-bold font-mono text-slate-800">{s[1]}</div></div>
                 ))}
               </div>
               {/* ばらつき = 個別値プロット(全台の点+真ん中の線+目標線)。少数台でも見やすい */}
@@ -18257,7 +18274,7 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
                 <div className="text-xs text-slate-500 mb-1">ばらつき — 1台ずつの実測を点で表示（点が散らばる=バラつき大）</div>
                 <StripPlot values={sel.durations} target={sel.target} />
                 {sel.target > 0 && (
-                  <div className="text-[10px] text-slate-400 mt-1">中央値は{sel.median > sel.target ? `目標より ${fmt(sel.median - sel.target)} 遅い` : (sel.median < sel.target ? `目標より ${fmt(sel.target - sel.median)} 速い` : '目標どおり')}。{sel.cv >= 0.5 ? '点がかなり散らばっている＝作業のやり方が安定していない可能性。' : (sel.cv < 0.3 ? '点がまとまっている＝安定した作業。' : '')}</div>
+                  <div className="text-xs text-slate-400 mt-1">中央値は{sel.median > sel.target ? `目標より ${fmt(sel.median - sel.target)} 遅い` : (sel.median < sel.target ? `目標より ${fmt(sel.target - sel.median)} 速い` : '目標どおり')}。{sel.cv >= 0.5 ? '点がかなり散らばっている＝作業のやり方が安定していない可能性。' : (sel.cv < 0.3 ? '点がまとまっている＝安定した作業。' : '')}</div>
                 )}
               </div>
               {/* 修正モード: 生データ一覧(指図/台/値)→異常を直す */}
@@ -18265,10 +18282,10 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
                 <div className="border-2 border-amber-300 bg-amber-50/60 rounded-lg p-2.5">
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="text-xs font-bold text-amber-800">🔧 生データ修正 — 「{sel.stepTitle}」の実測値（大きい順 {rawSamples.length}件）</div>
-                    <div className="text-[10px] text-amber-700">🔴=0/5秒未満/4時間超 ・ 🟡=中央値から大きく外れ</div>
+                    <div className="text-xs text-amber-700">🔴=0/5秒未満/4時間超 ・ 🟡=中央値から大きく外れ</div>
                   </div>
                   {rawSamples.length === 0 ? (
-                    <div className="text-[11px] text-slate-500 py-2">この工程の実測データがありません。</div>
+                    <div className="text-xs text-slate-500 py-2">この工程の実測データがありません。</div>
                   ) : (
                     <div className="max-h-72 overflow-y-auto rounded border border-amber-200 bg-white">
                       <table className="w-full text-xs">
@@ -18278,16 +18295,16 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
                             <tr key={sp.lotId + sp.taskKey + i} className={`border-t border-slate-100 ${fl === 'bad' ? 'bg-rose-50' : fl === 'warn' ? 'bg-amber-50' : ''}`}>
                               <td className="px-2 py-1 truncate max-w-[10rem]" title={String(sp.workOrder)}>{fl === 'bad' ? '🔴' : fl === 'warn' ? '🟡' : ''} {sp.workOrder}</td>
                               <td className="px-2 py-1 text-center text-slate-500">{sp.unitIdx + 1}{sp.isLot ? '回' : ''}</td>
-                              <td className={`px-2 py-1 text-right font-mono font-bold ${fl === 'bad' ? 'text-rose-600' : fl === 'warn' ? 'text-amber-600' : 'text-slate-700'}`}>{fmt(sp.value)}{sp.manual && <span className="text-[9px] text-slate-400 ml-1">手</span>}</td>
-                              <td className="px-2 py-1 text-center text-[10px] text-slate-400">{sp.completedAt ? pdcaFmtDate(sp.completedAt) : '—'}</td>
-                              <td className="px-2 py-1 text-center"><button onClick={() => setFixEdit({ sample: sp })} className="text-[11px] px-2 py-0.5 rounded bg-amber-500 hover:bg-amber-600 text-white font-bold">直す</button></td>
+                              <td className={`px-2 py-1 text-right font-mono font-bold ${fl === 'bad' ? 'text-rose-600' : fl === 'warn' ? 'text-amber-600' : 'text-slate-700'}`}>{fmt(sp.value)}{sp.manual && <span className="text-xs text-slate-400 ml-1">手</span>}</td>
+                              <td className="px-2 py-1 text-center text-xs text-slate-400">{sp.completedAt ? pdcaFmtDate(sp.completedAt) : '—'}</td>
+                              <td className="px-2 py-1 text-center"><button onClick={() => setFixEdit({ sample: sp })} className="text-xs px-2 py-0.5 rounded bg-amber-500 hover:bg-amber-600 text-white font-bold">直す</button></td>
                             </tr>
                           ); })}
                         </tbody>
                       </table>
                     </div>
                   )}
-                  <div className="text-[10px] text-slate-500 mt-1.5">グラフで「明らかにおかしい点」を見つけたら、ここで実測値を直接修正できます（指図の作業データを書き換えます。修正後は分析・グラフに即反映）。</div>
+                  <div className="text-xs text-slate-500 mt-1.5">グラフで「明らかにおかしい点」を見つけたら、ここで実測値を直接修正できます（指図の作業データを書き換えます。修正後は分析・グラフに即反映）。</div>
                 </div>
               )}
               {/* ③ 推移 */}
@@ -18297,7 +18314,7 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
                   <div className="flex items-end gap-1.5 h-20">
                     {trend.map((t, i) => (
                       <div key={i} className="flex-1 flex flex-col items-center justify-end" title={`${t.label} 中央値${fmt(t.median)}・${t.n}台`}>
-                        <div className="text-[9px] text-slate-500">{fmt(t.median)}</div>
+                        <div className="text-xs text-slate-500">{fmt(t.median)}</div>
                         <div className="w-full rounded-t bg-emerald-400" style={{ height: `${Math.max(3, Math.round(t.median / maxTrend * 60))}px` }} />
                         <div className="text-[8px] text-slate-400">{t.label}</div>
                       </div>
@@ -18317,7 +18334,7 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
                     const rate = Number(settings?.laborCostPerHour) || 0;
                     const yenTxt = rate > 0 ? ` ≒ ¥${Math.round(gapSec / 3600 * rate).toLocaleString()}` : '';
                     return (
-                      <div className="mb-1.5 text-[11px] bg-amber-50 border border-amber-200 rounded px-2 py-1 text-amber-800">
+                      <div className="mb-1.5 text-xs bg-amber-50 border border-amber-200 rounded px-2 py-1 text-amber-800">
                         💡 最速「{workerRows[0].name}」に全員が揃えば <b className="font-mono">合計 {(gapSec / 3600).toFixed(1)}時間{yenTxt}</b> 短縮の余地（測定対象期間内・教育/手順統一のレバー）
                       </div>
                     );
@@ -18336,7 +18353,7 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
               {/* ⑤ 要素別の内訳(じっと見る) */}
               {(planForSel || (elStats && elStats.observedUnits > 0)) && (
                 <div className="border-t border-slate-100 pt-2">
-                  <div className="text-xs font-bold text-blue-700 mb-1 flex items-center gap-1"><Eye className="w-3.5 h-3.5" />⑤ 要素別の内訳（じっと見る）{planForSel && planForSel.enabled === false && <span className="text-[10px] text-slate-400 font-normal">（観測OFF）</span>}<button onClick={() => setObsHelp(true)} className="ml-1 text-[10px] text-slate-400 underline font-normal hover:text-blue-600">使い方</button></div>
+                  <div className="text-xs font-bold text-blue-700 mb-1 flex items-center gap-1"><Eye className="w-3.5 h-3.5" />⑤ 要素別の内訳（じっと見る）{planForSel && planForSel.enabled === false && <span className="text-xs text-slate-400 font-normal">（観測OFF）</span>}<button onClick={() => setObsHelp(true)} className="ml-1 text-xs text-slate-400 underline font-normal hover:text-blue-600">使い方</button></div>
                   {elStats && elStats.observedUnits > 0 ? (
                     <div className="space-y-1">
                       {(() => { const maxEl = Math.max(1, ...elStats.rows.map(r => r.median)); return elStats.rows.map((r, i) => (
@@ -18346,14 +18363,14 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
                           <span className="font-mono text-slate-600 w-28 text-right shrink-0">{fmt(r.median)}・{r.sharePct}%・{r.n}台</span>
                         </div>
                       )); })()}
-                      <div className="text-[10px] text-slate-400">各要素の中央値の合計（参考）＝{fmt(elStats.totalMedian)}。一番長い要素＝この工程のボトルネック。{elStats.observedUnits}台ぶんの観測（各要素の台数は右端）。中央値の合計は工程の中央値と完全一致はしません（各台の合計は工程時間に一致）。</div>
+                      <div className="text-xs text-slate-400">各要素の中央値の合計（参考）＝{fmt(elStats.totalMedian)}。一番長い要素＝この工程のボトルネック。{elStats.observedUnits}台ぶんの観測（各要素の台数は右端）。中央値の合計は工程の中央値と完全一致はしません（各台の合計は工程時間に一致）。</div>
                     </div>
                   ) : (
-                    <div className="text-[11px] text-slate-500">観測プランあり（{planForSel?.elements?.length || 0}要素）。<b className="text-emerald-700">次にこの工程を作業画面で時間取りすると</b>、要素ボタンが出て、ここに内訳が出ます。<button onClick={() => setObsHelp(true)} className="text-blue-600 underline">使い方を見る</button></div>
+                    <div className="text-xs text-slate-500">観測プランあり（{planForSel?.elements?.length || 0}要素）。<b className="text-emerald-700">次にこの工程を作業画面で時間取りすると</b>、要素ボタンが出て、ここに内訳が出ます。<button onClick={() => setObsHelp(true)} className="text-blue-600 underline">使い方を見る</button></div>
                   )}
                 </div>
               )}
-              <div className="text-[10px] text-slate-400">この画面は集計を見るだけ（データは変更しません）。改善したい工程は「改善PDCA」タブの重点工程からカルテ化して対策→効果確認へ。</div>
+              <div className="text-xs text-slate-400">この画面は集計を見るだけ（データは変更しません）。改善したい工程は「改善PDCA」タブの重点工程からカルテ化して対策→効果確認へ。</div>
             </div>
           )}
         </>
@@ -19156,7 +19173,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                 直し: 中身の一番上に在った **説明の箱** を この帯の右へ移し、
                       閉じている時は **1行の読み方 + ？**、押すと **元の箱がそのまま** 出る。
                 🚨 文言は1文字も消していない・変えていない(下の <div> の中は移す前と同じ字)。
-                   ただし ① の箱だけ text-[11px] → text-xs にした(決まり7「文字 12px 以上」。11px は前から割れていた)。
+                   ただし ① の箱だけ text-xs → text-xs にした(決まり7「文字 12px 以上」。11px は前から割れていた)。
                 ⚠ flex-1 で **残りの幅を全部埋める**。ml-auto(右端へ飛ばす)は使わない(UG1)。
                 ⚠ 吹き出しは right-0 + max-w-full。土台は この帯(data-band="analysis-sub" の relative)。
                    details 自身に position を付けない(付けると 24px の土台になり、帯が折り返した時に画面の外へ出る。P4 の実測)。
@@ -19225,25 +19242,25 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                    <div className="text-xs font-bold text-rose-600 mb-1">不具合発生ロット</div>
                    <div className="text-3xl font-black text-rose-700">{ds.defectLotCount}<span className="text-sm font-normal ml-1">件</span></div>
                    {/* 🚨 2026-08-23: 何を数えた数字かを画面に書く(この数は完了していないロットも含む) */}
-                   <div className="text-[10px] text-rose-600/80 mt-0.5">作業中・一時停止も含む全ロット</div>
+                   <div className="text-xs text-rose-600/80 mt-0.5">作業中・一時停止も含む全ロット</div>
                  </div>
                  <div className="bg-gradient-to-br from-amber-50 to-amber-100 border-2 border-amber-200 p-4 rounded-xl shadow-sm">
                    <div className="text-xs font-bold text-amber-700 mb-1">不具合率</div>
                    <div className="text-3xl font-black text-amber-700">{ds.defectRate}<span className="text-sm font-normal ml-1">%</span></div>
                    {/* 🚨 2026-08-23: 分子と分母を必ず添える(以前は分子だけ母集団が違い100%超えが出た) */}
-                   <div className="text-[10px] text-amber-700/80 mt-0.5">完了ロット {ds.defectCompletedLotCount} / {ds.totalCompletedLots} 件</div>
+                   <div className="text-xs text-amber-700/80 mt-0.5">完了ロット {ds.defectCompletedLotCount} / {ds.totalCompletedLots} 件</div>
                  </div>
                  <div className="bg-white border-2 border-slate-200 p-4 rounded-xl shadow-sm">
                    <div className="text-xs font-bold text-slate-500 mb-1 flex items-center justify-between">
                      <span>不具合総件数</span>
                      {ds.prevCount > 0 || ds.totalDefects > 0 ? (
-                       <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${ds.diff > 0 ? 'bg-rose-200 text-rose-800' : ds.diff < 0 ? 'bg-emerald-200 text-emerald-800' : 'bg-slate-200 text-slate-600'}`} title={`前期間: ${ds.prevCount}件`}>
+                       <span className={`text-xs font-black px-1.5 py-0.5 rounded ${ds.diff > 0 ? 'bg-rose-200 text-rose-800' : ds.diff < 0 ? 'bg-emerald-200 text-emerald-800' : 'bg-slate-200 text-slate-600'}`} title={`前期間: ${ds.prevCount}件`}>
                          {ds.diff > 0 ? '▲' : ds.diff < 0 ? '▼' : '—'} {Math.abs(ds.diff)}件 ({ds.diffRate > 0 ? '+' : ''}{ds.diffRate.toFixed(0)}%)
                        </span>
                      ) : null}
                    </div>
                    <div className="text-3xl font-black text-slate-700">{ds.totalDefects}<span className="text-sm font-normal ml-1">件</span></div>
-                   <div className="text-[10px] text-slate-500 mt-1">前期間 {ds.prevCount}件</div>
+                   <div className="text-xs text-slate-500 mt-1">前期間 {ds.prevCount}件</div>
                  </div>
                </div>
 
@@ -19256,9 +19273,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                      const isHighlight = m.count === maxMonth && m.count > 0;
                      return (
                        <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1 group">
-                         <div className="text-[10px] font-mono font-bold text-slate-600">{m.count}</div>
+                         <div className="text-xs font-mono font-bold text-slate-600">{m.count}</div>
                          <div className={`w-full rounded-t transition-all ${isHighlight ? 'bg-rose-600' : 'bg-rose-300 group-hover:bg-rose-400'}`} style={{ height: `${Math.max(2, h)}%`, minHeight: m.count > 0 ? '4px' : '2px' }}/>
-                         <div className="text-[10px] text-slate-500 mt-0.5">{m.label}</div>
+                         <div className="text-xs text-slate-500 mt-0.5">{m.label}</div>
                        </div>
                      );
                    })}
@@ -19279,7 +19296,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <span className="text-xs font-bold text-slate-700 w-32 truncate shrink-0" title={m.name}>{i+1}. {m.name}</span>
                            <div className="flex-1 bg-slate-100 rounded-full h-6 relative overflow-hidden">
                              <div className="h-full bg-gradient-to-r from-rose-500 to-rose-600 rounded-full transition-all" style={{ width: `${pct}%` }}/>
-                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{m.count}件 <span className="text-[10px] opacity-70 ml-1">({ratio}%)</span></div>
+                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{m.count}件 <span className="text-xs opacity-70 ml-1">({ratio}%)</span></div>
                            </div>
                          </div>
                        );
@@ -19298,7 +19315,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <span className="text-xs font-bold text-slate-700 w-32 truncate shrink-0" title={s.name}>{i+1}. {s.name}</span>
                            <div className="flex-1 bg-slate-100 rounded-full h-6 relative overflow-hidden">
                              <div className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all" style={{ width: `${pct}%` }}/>
-                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{s.count}件 <span className="text-[10px] opacity-70 ml-1">({ratio}%)</span></div>
+                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{s.count}件 <span className="text-xs opacity-70 ml-1">({ratio}%)</span></div>
                            </div>
                          </div>
                        );
@@ -19321,7 +19338,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <span className="text-xs font-bold text-slate-700 w-32 truncate shrink-0" title={p.name}>{i+1}. {p.name}</span>
                            <div className="flex-1 bg-slate-100 rounded-full h-6 relative overflow-hidden">
                              <div className="h-full bg-gradient-to-r from-orange-500 to-orange-600 rounded-full transition-all" style={{ width: `${pct}%` }}/>
-                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{p.count}件 <span className="text-[10px] opacity-70 ml-1">({ratio}%)</span></div>
+                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{p.count}件 <span className="text-xs opacity-70 ml-1">({ratio}%)</span></div>
                            </div>
                          </div>
                        );
@@ -19419,13 +19436,13 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                    <div className="text-xs font-bold text-purple-600 mb-1 flex items-center justify-between">
                      <span>総報告数</span>
                      {cs.prevCount > 0 || cs.totalComplaints > 0 ? (
-                       <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${cs.diff > 0 ? 'bg-rose-200 text-rose-800' : cs.diff < 0 ? 'bg-emerald-200 text-emerald-800' : 'bg-slate-200 text-slate-600'}`} title={`前期間: ${cs.prevCount}件`}>
+                       <span className={`text-xs font-black px-1.5 py-0.5 rounded ${cs.diff > 0 ? 'bg-rose-200 text-rose-800' : cs.diff < 0 ? 'bg-emerald-200 text-emerald-800' : 'bg-slate-200 text-slate-600'}`} title={`前期間: ${cs.prevCount}件`}>
                          {cs.diff > 0 ? '▲' : cs.diff < 0 ? '▼' : '—'} {Math.abs(cs.diff)}件 ({cs.diffRate > 0 ? '+' : ''}{cs.diffRate.toFixed(0)}%)
                        </span>
                      ) : null}
                    </div>
                    <div className="text-3xl font-black text-purple-700">{cs.totalComplaints}<span className="text-sm font-normal ml-1">件</span></div>
-                   <div className="text-[10px] text-purple-500 mt-1">{cs.avgPerDay > 0 ? `1日平均 ${cs.avgPerDay.toFixed(1)}件 / 前期間 ${cs.prevCount}件` : `前期間 ${cs.prevCount}件`}</div>
+                   <div className="text-xs text-purple-500 mt-1">{cs.avgPerDay > 0 ? `1日平均 ${cs.avgPerDay.toFixed(1)}件 / 前期間 ${cs.prevCount}件` : `前期間 ${cs.prevCount}件`}</div>
                  </div>
                  <div className="bg-white border-2 border-slate-200 p-4 rounded-xl shadow-sm">
                    <div className="text-xs font-bold text-slate-500 mb-1">最多カテゴリ</div>
@@ -19447,21 +19464,21 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                {/* 気づき・改善(工程の提案) ― 軽微不良(品質)とは別概念。タブ名「軽微不良・改善提案」の“改善”側をここに出す。 */}
                <div className="bg-white rounded-xl shadow-sm border-2 border-indigo-200 p-4">
                  <h3 className="font-bold text-indigo-700 mb-2 flex items-center gap-2"><Lightbulb className="w-4 h-4"/> 気づき・改善（工程の提案） <span className="text-indigo-500">{improvementStats.total}件</span></h3>
-                 <div className="text-[11px] text-slate-500 mb-2">作業画面の「気づき・改善」で残した工程の提案（細分化/追加/変更/削除/順番）。軽微不良（品質の不良）とは別物です。</div>
+                 <div className="text-xs text-slate-500 mb-2">作業画面の「気づき・改善」で残した工程の提案（細分化/追加/変更/削除/順番）。軽微不良（品質の不良）とは別物です。</div>
                  {improvementStats.total === 0 ? (
                    <div className="text-slate-400 text-sm py-3">この期間の気づき・改善はありません。</div>
                  ) : (
                    <div className="space-y-3">
                      <div className="flex flex-wrap gap-1.5">
-                       {improvementStats.kinds.map((k, i) => (<span key={i} className="text-[11px] bg-indigo-50 border border-indigo-200 text-indigo-700 rounded px-2 py-0.5 font-bold">{k.name} {k.count}</span>))}
+                       {improvementStats.kinds.map((k, i) => (<span key={i} className="text-xs bg-indigo-50 border border-indigo-200 text-indigo-700 rounded px-2 py-0.5 font-bold">{k.name} {k.count}</span>))}
                      </div>
                      <div className="max-h-80 overflow-y-auto divide-y divide-slate-100 border-t border-slate-100">
                        {improvementStats.items.map((im, i) => (
                          <div key={im.id || i} className="py-2 flex items-start gap-2 text-xs">
-                           <span className="bg-indigo-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0">{im.kindLabel}</span>
+                           <span className="bg-indigo-600 text-white text-xs font-bold px-1.5 py-0.5 rounded shrink-0">{im.kindLabel}</span>
                            <div className="flex-1 min-w-0">
                              <div className="text-slate-800 whitespace-pre-wrap break-words">{im.label || '内容未記載'}</div>
-                             <div className="text-[10px] text-slate-400 mt-0.5">{im.stepTitle} · {im.lot?.model || ''} · {im.lot?.orderNo || ''} · {im.workerName} · {im.timestamp ? new Date(im.timestamp).toLocaleDateString('ja-JP') : ''}</div>
+                             <div className="text-xs text-slate-400 mt-0.5">{im.stepTitle} · {im.lot?.model || ''} · {im.lot?.orderNo || ''} · {im.workerName} · {im.timestamp ? new Date(im.timestamp).toLocaleDateString('ja-JP') : ''}</div>
                            </div>
                            <button onClick={() => triggerDeleteInterruption(im.id, im.lot?.id, '気づき・改善')} className="text-slate-300 hover:text-rose-500 shrink-0" title="削除"><Trash2 className="w-3.5 h-3.5"/></button>
                          </div>
@@ -19480,9 +19497,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                      const isHighlight = m.count === maxMonth && m.count > 0;
                      return (
                        <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1 group">
-                         <div className="text-[10px] font-mono font-bold text-slate-600">{m.count}</div>
+                         <div className="text-xs font-mono font-bold text-slate-600">{m.count}</div>
                          <div className={`w-full rounded-t transition-all ${isHighlight ? 'bg-purple-600' : 'bg-purple-300 group-hover:bg-purple-400'}`} style={{ height: `${Math.max(2, h)}%`, minHeight: m.count > 0 ? '4px' : '2px' }}/>
-                         <div className="text-[10px] text-slate-500 mt-0.5">{m.label}</div>
+                         <div className="text-xs text-slate-500 mt-0.5">{m.label}</div>
                        </div>
                      );
                    })}
@@ -19503,7 +19520,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <span className="text-xs font-bold text-slate-700 w-32 truncate shrink-0" title={m.name}>{m.name}</span>
                            <div className="flex-1 bg-slate-100 rounded-full h-6 relative overflow-hidden">
                              <div className="h-full bg-gradient-to-r from-purple-500 to-purple-600 rounded-full transition-all" style={{ width: `${pct}%` }}/>
-                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{m.count}件 <span className="text-[10px] opacity-70 ml-1">({ratioOfTotal}%)</span></div>
+                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{m.count}件 <span className="text-xs opacity-70 ml-1">({ratioOfTotal}%)</span></div>
                            </div>
                          </div>
                        );
@@ -19522,7 +19539,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <span className="text-xs font-bold text-slate-700 w-32 truncate shrink-0" title={s.name}>{s.name}</span>
                            <div className="flex-1 bg-slate-100 rounded-full h-6 relative overflow-hidden">
                              <div className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all" style={{ width: `${pct}%` }}/>
-                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{s.count}件 <span className="text-[10px] opacity-70 ml-1">({ratio}%)</span></div>
+                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{s.count}件 <span className="text-xs opacity-70 ml-1">({ratio}%)</span></div>
                            </div>
                          </div>
                        );
@@ -19563,7 +19580,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <span className="text-xs font-bold text-slate-700 w-32 truncate shrink-0" title={m.name}>{m.name}</span>
                            <div className="flex-1 bg-slate-100 rounded-full h-6 relative overflow-hidden">
                              <div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-full transition-all" style={{ width: `${pct}%` }}/>
-                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{m.count}件 <span className="text-[10px] opacity-70 ml-1">({ratio}%)</span></div>
+                             <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">{m.count}件 <span className="text-xs opacity-70 ml-1">({ratio}%)</span></div>
                            </div>
                          </div>
                        );
@@ -19691,7 +19708,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                    {catEntries.length > 0 ? catEntries.map(([cat, sec]) => (
                      <div key={cat} className="flex items-center gap-2 mb-2">
                        <span className="text-xs font-bold text-slate-600 w-16 text-right shrink-0">{cat}</span>
-                       <div className="flex-1 bg-slate-100 rounded-full h-6 overflow-hidden"><div className="h-full bg-amber-500 rounded-full flex items-center pl-2" style={{width: `${(sec/maxCat)*100}%`}}><span className="text-[10px] text-white font-bold">{formatTime(sec)}</span></div></div>
+                       <div className="flex-1 bg-slate-100 rounded-full h-6 overflow-hidden"><div className="h-full bg-amber-500 rounded-full flex items-center pl-2" style={{width: `${(sec/maxCat)*100}%`}}><span className="text-xs text-white font-bold">{formatTime(sec)}</span></div></div>
                        <span className="text-xs text-slate-400 w-12 text-right font-mono">{(sec/3600).toFixed(1)}h</span>
                      </div>
                    )) : <div className="text-center text-slate-400 text-sm py-4">データなし</div>}
@@ -19925,22 +19942,22 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                      <div className="bg-white p-2 rounded">
                        <div className="text-slate-500 font-bold">平均タスク時間</div>
                        <div className="font-black text-slate-800 text-lg">{formatTime(Math.round(groupAvgTime))}</div>
-                       <div className="text-[10px] text-slate-400">{allTaskCount}タスクの平均</div>
+                       <div className="text-xs text-slate-400">{allTaskCount}タスクの平均</div>
                      </div>
                      <div className="bg-white p-2 rounded">
                        <div className="text-slate-500 font-bold">目標達成率 平均</div>
                        <div className="font-black text-slate-800 text-lg">{groupAvgOnTarget.toFixed(0)}%</div>
-                       <div className="text-[10px] text-slate-400">targetTime 以内の割合</div>
+                       <div className="text-xs text-slate-400">targetTime 以内の割合</div>
                      </div>
                      <div className="bg-white p-2 rounded">
                        <div className="text-slate-500 font-bold">並列作業率 平均</div>
                        <div className="font-black text-slate-800 text-lg">{groupAvgParallel.toFixed(0)}%</div>
-                       <div className="text-[10px] text-slate-400">自動工程中の他工程進行</div>
+                       <div className="text-xs text-slate-400">自動工程中の他工程進行</div>
                      </div>
                      <div className="bg-white p-2 rounded">
                        <div className="text-slate-500 font-bold">NG発見 平均</div>
                        <div className="font-black text-slate-800 text-lg">{groupAvgNg.toFixed(1)}件</div>
-                       <div className="text-[10px] text-slate-400">1人あたり</div>
+                       <div className="text-xs text-slate-400">1人あたり</div>
                      </div>
                    </div>
                  </div>
@@ -19960,7 +19977,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <div className="text-xs text-slate-500">期間内: {w.lotCount}ロット / {w.completedTasks}タスク完了 / 計 {formatTime(Math.round(w.totalDuration))}</div>
                          </div>
                          <div className="text-right shrink-0">
-                           <div className="text-[10px] text-slate-400 font-bold">順位</div>
+                           <div className="text-xs text-slate-400 font-bold">順位</div>
                            <div className="text-2xl font-black text-amber-500">#{idx + 1}</div>
                          </div>
                        </div>
@@ -19968,32 +19985,32 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                        {/* 4 指標 (実数 + 全体平均比) */}
                        <div className="grid grid-cols-2 gap-2 mb-3">
                          <div className="bg-blue-50 border border-blue-200 p-2 rounded-lg">
-                           <div className="text-[10px] text-blue-600 font-bold mb-0.5">平均タスク時間</div>
+                           <div className="text-xs text-blue-600 font-bold mb-0.5">平均タスク時間</div>
                            <div className="font-black text-blue-700 text-lg">{formatTime(Math.round(w.avgTime))}</div>
-                           <div className={`text-[10px] font-bold ${speedDiff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                           <div className={`text-xs font-bold ${speedDiff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                              {speedDiff >= 0 ? '▲' : '▼'} 平均比 {speedDiff >= 0 ? '+' : ''}{speedDiff.toFixed(0)}%
                            </div>
                          </div>
                          <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-lg">
-                           <div className="text-[10px] text-emerald-600 font-bold mb-0.5">目標達成率</div>
+                           <div className="text-xs text-emerald-600 font-bold mb-0.5">目標達成率</div>
                            <div className="font-black text-emerald-700 text-lg">{w.onTargetRate.toFixed(0)}%</div>
-                           <div className="text-[10px] text-emerald-500">{w.onTargetCount}/{w.onTargetOpportunities}タスク {onTargetDiff !== 0 && `(${onTargetDiff > 0 ? '+' : ''}${onTargetDiff.toFixed(0)}pt)`}</div>
+                           <div className="text-xs text-emerald-500">{w.onTargetCount}/{w.onTargetOpportunities}タスク {onTargetDiff !== 0 && `(${onTargetDiff > 0 ? '+' : ''}${onTargetDiff.toFixed(0)}pt)`}</div>
                          </div>
                          <div className="bg-purple-50 border border-purple-200 p-2 rounded-lg">
-                           <div className="text-[10px] text-purple-600 font-bold mb-0.5">並列作業率</div>
+                           <div className="text-xs text-purple-600 font-bold mb-0.5">並列作業率</div>
                            <div className="font-black text-purple-700 text-lg">{w.parallelRate.toFixed(0)}%</div>
-                           <div className="text-[10px] text-purple-500">自動{formatTime(w.autoTotalSec)}中{formatTime(w.parallelSec)} {parallelDiff !== 0 && `(${parallelDiff > 0 ? '+' : ''}${parallelDiff.toFixed(0)}pt)`}</div>
+                           <div className="text-xs text-purple-500">自動{formatTime(w.autoTotalSec)}中{formatTime(w.parallelSec)} {parallelDiff !== 0 && `(${parallelDiff > 0 ? '+' : ''}${parallelDiff.toFixed(0)}pt)`}</div>
                          </div>
                          <div className="bg-amber-50 border border-amber-200 p-2 rounded-lg">
-                           <div className="text-[10px] text-amber-600 font-bold mb-0.5">最速記録 / NG発見</div>
+                           <div className="text-xs text-amber-600 font-bold mb-0.5">最速記録 / NG発見</div>
                            <div className="font-black text-amber-700 text-lg">{w.bestTimeStepCount}<span className="text-xs">工程</span> / {w.ngCount}<span className="text-xs">件</span></div>
-                           <div className="text-[10px] text-amber-500">{w.fastestStepsList.length > 0 ? `最速: ${w.fastestStepsList.slice(0,2).join(',')}` : '—'}</div>
+                           <div className="text-xs text-amber-500">{w.fastestStepsList.length > 0 ? `最速: ${w.fastestStepsList.slice(0,2).join(',')}` : '—'}</div>
                          </div>
                        </div>
 
                        {/* 強み・改善ポイント (根拠つき) */}
                        <div className="space-y-1.5">
-                         <div className="text-[11px] font-bold text-slate-500">▼ 強み・改善ポイント</div>
+                         <div className="text-xs font-bold text-slate-500">▼ 強み・改善ポイント</div>
                          {w.insights.length === 0 && <div className="text-xs text-slate-400 italic">特筆すべき傾向はありません</div>}
                          {w.insights.map((ins, i) => (
                            <div key={i} className={`text-xs px-2 py-1 rounded ${ins.type === 'strength' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'}`}>
@@ -20278,7 +20295,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                              return (
                                <tr key={i} className={`border-b border-slate-100 ${bg}`}>
                                  <td className="p-2 font-bold text-slate-800 flex items-center gap-1">
-                                   {s.isAuto && <span className="bg-purple-500 text-white text-[9px] font-bold px-1 rounded">自動</span>}
+                                   {s.isAuto && <span className="bg-purple-500 text-white text-xs font-bold px-1 rounded">自動</span>}
                                    {s.step.title}
                                  </td>
                                  <td className="p-2 text-xs text-slate-500 truncate max-w-[200px]">{s.templateName}</td>
@@ -20313,7 +20330,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                          <div key={i} className="border border-slate-200 rounded-lg p-3 bg-slate-50/30">
                            <div className="flex items-center justify-between mb-2">
                              <div className="font-bold text-slate-800 flex items-center gap-1">
-                               {g.isAuto && <span className="bg-purple-500 text-white text-[9px] font-bold px-1 rounded">自動</span>}
+                               {g.isAuto && <span className="bg-purple-500 text-white text-xs font-bold px-1 rounded">自動</span>}
                                {g.title}
                              </div>
                              <div className="text-xs">
@@ -20332,7 +20349,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                                      <div className={`h-full ${isFast ? 'bg-emerald-500' : isSlow ? 'bg-rose-500' : 'bg-amber-500'}`} style={{ width: `${bar}%` }}></div>
                                    </div>
                                    <span className="font-mono text-slate-700 w-16 text-right">{fmtSec(Math.round(w.avg))}</span>
-                                   <span className="text-[10px] text-slate-400 w-12 text-right">n={w.sampleCount}</span>
+                                   <span className="text-xs text-slate-400 w-12 text-right">n={w.sampleCount}</span>
                                  </div>
                                );
                              })}
@@ -20409,15 +20426,15 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                              </span>
                              <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden relative">
                                <div className={`h-full ${isFast ? 'bg-emerald-500' : isSlow ? 'bg-rose-500' : 'bg-blue-400'}`} style={{ width: `${barW}%` }}/>
-                               <div className="absolute inset-0 flex items-center px-2 text-[11px] font-bold text-slate-700">
+                               <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">
                                  ×{w.factor.toFixed(2)} <span className="opacity-60 ml-1">({pct}%)</span>
                                </div>
                              </div>
-                             <span className="text-[10px] text-slate-400 w-24 text-right">{w.stepCount}工程 / {w.sampleTotal}件</span>
+                             <span className="text-xs text-slate-400 w-24 text-right">{w.stepCount}工程 / {w.sampleTotal}件</span>
                            </div>
                          );
                        })}
-                       <div className="text-[11px] text-slate-500 mt-2 bg-slate-50 rounded p-2 leading-relaxed">
+                       <div className="text-xs text-slate-500 mt-2 bg-slate-50 rounded p-2 leading-relaxed">
                          💡 例: 係数 0.7 の作業者は標準より3割速い → その人に任せれば ETA は目標×0.7。逆に 1.8 の新人は教育機会。<br/>
                          この係数は今後 ETA・割当計画の精度向上に活用予定 (【D】応用フェーズ)。
                        </div>
@@ -20447,15 +20464,15 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                              </span>
                              <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden relative">
                                <div className={`h-full ${i < 3 ? 'bg-rose-500' : 'bg-slate-400'}`} style={{ width: `${barW}%` }}/>
-                               <div className="absolute inset-0 flex items-center px-2 text-[11px] font-bold text-slate-700">
+                               <div className="absolute inset-0 flex items-center px-2 text-xs font-bold text-slate-700">
                                  寄与 {fmtSec(b.totalContribSec)} <span className="opacity-60 ml-1">({sharePct}%)</span>
                                </div>
                              </div>
-                             <span className="text-[10px] text-slate-400 w-28 text-right">平均{fmtSec(b.avgSec)} × {b.count}回</span>
+                             <span className="text-xs text-slate-400 w-28 text-right">平均{fmtSec(b.avgSec)} × {b.count}回</span>
                            </div>
                          );
                        })}
-                       <div className="text-[11px] text-slate-500 mt-2 bg-slate-50 rounded p-2 leading-relaxed">
+                       <div className="text-xs text-slate-500 mt-2 bg-slate-50 rounded p-2 leading-relaxed">
                          💡 上位3つ(赤)が改善の最優先。<b>自動工程</b>がボトルネックなら → オススメ順で並列吸収。<b>手動工程</b>なら → 標準化・教育・治具改善。
                        </div>
                      </div>
@@ -21001,7 +21018,7 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
               <div className="bg-teal-50 border border-teal-200 rounded-lg p-3">
                 <div className="flex justify-between items-center mb-2">
                   <label className="text-xs font-bold text-teal-700">入力ポイント ({draftInputs.length}点)</label>
-                  <button onClick={addInput} className="bg-teal-500 hover:bg-teal-600 text-white px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1"><Plus className="w-3 h-3"/> 追加</button>
+                  <button onClick={addInput} className="bg-teal-500 hover:bg-teal-600 text-white px-2 py-1 rounded text-xs font-bold flex items-center gap-1"><Plus className="w-3 h-3"/> 追加</button>
                 </div>
                 <div className="max-h-[420px] overflow-y-auto space-y-2 pr-1">
                   {draftInputs.map((inp, idx) => (
@@ -21009,13 +21026,13 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                       <div className="flex items-center gap-1 text-xs">
                         <input value={inp.id} onChange={e => updateInput(idx, { id: e.target.value })} className="w-14 border rounded px-1 py-0.5 text-xs" placeholder="ID"/>
                         <input value={inp.label} onChange={e => updateInput(idx, { label: e.target.value })} className="flex-1 border rounded px-1 py-0.5 text-xs" placeholder="ラベル"/>
-                        <select value={inp.inputType || 'number'} onChange={e => updateInput(idx, { inputType: e.target.value })} className="w-24 border rounded px-1 py-0.5 text-[10px]">
+                        <select value={inp.inputType || 'number'} onChange={e => updateInput(idx, { inputType: e.target.value })} className="w-24 border rounded px-1 py-0.5 text-xs">
                           <option value="number">数値入力</option>
                           <option value="combobox">選択式</option>
                         </select>
                         <button onClick={() => removeInput(idx)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
                       </div>
-                      <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
                         <span>X:</span>
                         <input type="range" min="0" max="100" value={Math.round(inp.x)} onChange={e => updateInput(idx, { x: Number(e.target.value) })} className="flex-1 h-1 accent-teal-500"/>
                         <span className="w-8 text-right">{Math.round(inp.x)}%</span>
@@ -21025,8 +21042,8 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                       </div>
                       {inp.inputType === 'combobox' && (
                         <div className="flex items-center gap-1 pt-1 border-t border-slate-100">
-                          <span className="text-[10px] text-slate-500 font-bold">プリセット:</span>
-                          <select value={inp.comboPresetId || ''} onChange={e => updateInput(idx, { comboPresetId: e.target.value })} className="flex-1 border rounded px-1 py-0.5 text-[10px]">
+                          <span className="text-xs text-slate-500 font-bold">プリセット:</span>
+                          <select value={inp.comboPresetId || ''} onChange={e => updateInput(idx, { comboPresetId: e.target.value })} className="flex-1 border rounded px-1 py-0.5 text-xs">
                             <option value="">-- 選択 --</option>
                             {comboPresets.map(cp => <option key={cp.id} value={cp.id}>{cp.name} ({cp.values?.length || 0}件)</option>)}
                           </select>
@@ -21034,7 +21051,7 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                       )}
                     </div>
                   ))}
-                  {draftInputs.length === 0 && <div className="text-[10px] text-slate-400 text-center py-4">「+ 追加」で入力ポイントを追加してください</div>}
+                  {draftInputs.length === 0 && <div className="text-xs text-slate-400 text-center py-4">「+ 追加」で入力ポイントを追加してください</div>}
                 </div>
               </div>
 
@@ -21051,8 +21068,8 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
                   <label className="block text-xs font-bold text-slate-500 mb-2">測定図面画像 (任意)</label>
                   <div className="flex gap-2">
-                    <label className="flex-1 cursor-pointer py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-bold rounded flex items-center justify-center gap-1 border"><ImageIcon className="w-3 h-3"/> 画像を選択<input type="file" className="hidden" accept="image/*" onChange={handleDiagramUpload}/></label>
-                    {draftDiagram && <button onClick={() => setDraftDiagram(null)} className="py-1.5 px-3 bg-red-50 hover:bg-red-100 text-red-500 text-[11px] font-bold rounded flex items-center gap-1 border border-red-200"><Trash2 className="w-3 h-3"/> 削除</button>}
+                    <label className="flex-1 cursor-pointer py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded flex items-center justify-center gap-1 border"><ImageIcon className="w-3 h-3"/> 画像を選択<input type="file" className="hidden" accept="image/*" onChange={handleDiagramUpload}/></label>
+                    {draftDiagram && <button onClick={() => setDraftDiagram(null)} className="py-1.5 px-3 bg-red-50 hover:bg-red-100 text-red-500 text-xs font-bold rounded flex items-center gap-1 border border-red-200"><Trash2 className="w-3 h-3"/> 削除</button>}
                   </div>
                 </div>
               </div>
@@ -21062,7 +21079,7 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
             <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3">
               <div className="flex justify-between items-center mb-2">
                 <label className="text-xs font-bold text-indigo-700 flex items-center gap-1"><Calculator className="w-3 h-3"/> 計算設定 ({draftCalcs.length}件)</label>
-                <button onClick={addCalc} disabled={draftCalcs.length >= MAX_CALCULATIONS} className="bg-indigo-500 hover:bg-indigo-600 text-white px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"><Plus className="w-3 h-3"/> 計算を追加</button>
+                <button onClick={addCalc} disabled={draftCalcs.length >= MAX_CALCULATIONS} className="bg-indigo-500 hover:bg-indigo-600 text-white px-2 py-1 rounded text-xs font-bold flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"><Plus className="w-3 h-3"/> 計算を追加</button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {draftCalcs.map((calc, cIdx) => (
@@ -21072,11 +21089,11 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                       {draftCalcs.length > 1 && <button onClick={() => removeCalc(cIdx)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>}
                     </div>
                     <div>
-                      <label className="block text-[10px] text-slate-400 font-bold">計算方法</label>
-                      <select value={calc.method} onChange={e => updateCalc(cIdx, { method: e.target.value })} className="w-full border rounded p-1 text-[11px]">
+                      <label className="block text-xs text-slate-400 font-bold">計算方法</label>
+                      <select value={calc.method} onChange={e => updateCalc(cIdx, { method: e.target.value })} className="w-full border rounded p-1 text-xs">
                         {CALCULATION_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                       </select>
-                      <p className="text-[9px] text-slate-400 mt-0.5">{CALCULATION_METHODS.find(m => m.value === calc.method)?.desc}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">{CALCULATION_METHODS.find(m => m.value === calc.method)?.desc}</p>
                     </div>
                     {calc.method === 'formula' && (() => {
                       const priorCalcs = draftCalcs.slice(0, cIdx);
@@ -21087,35 +21104,35 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                       };
                       return (
                         <div>
-                          <label className="block text-[10px] text-slate-400 font-bold">数式</label>
-                          <input value={calc.formula || ''} onChange={e => updateCalc(cIdx, { formula: e.target.value })} className="w-full border rounded p-1 text-[11px] font-mono" placeholder="例: (b+c)/2+d/2"/>
+                          <label className="block text-xs text-slate-400 font-bold">数式</label>
+                          <input value={calc.formula || ''} onChange={e => updateCalc(cIdx, { formula: e.target.value })} className="w-full border rounded p-1 text-xs font-mono" placeholder="例: (b+c)/2+d/2"/>
                           <details className="mt-1" open>
-                            <summary className="text-[10px] text-blue-600 cursor-pointer font-bold list-none">▶ 使える変数 (タップで挿入)</summary>
+                            <summary className="text-xs text-blue-600 cursor-pointer font-bold list-none">▶ 使える変数 (タップで挿入)</summary>
                             <div className="mt-1 space-y-1.5 bg-slate-50 p-2 rounded border max-h-40 overflow-y-auto">
                               <div>
-                                <div className="text-[9px] font-bold text-teal-700 mb-0.5">プリセットの入力 ({draftInputs.length})</div>
+                                <div className="text-xs font-bold text-teal-700 mb-0.5">プリセットの入力 ({draftInputs.length})</div>
                                 <div className="flex flex-wrap gap-1">
                                   {draftInputs.map(inp => (
-                                    <button type="button" key={inp.id} onClick={() => insertVar(inp.id)} className="text-[9px] bg-white border border-teal-300 text-teal-700 px-1.5 py-0.5 rounded hover:bg-teal-100 font-mono">
+                                    <button type="button" key={inp.id} onClick={() => insertVar(inp.id)} className="text-xs bg-white border border-teal-300 text-teal-700 px-1.5 py-0.5 rounded hover:bg-teal-100 font-mono">
                                       {inp.id}{inp.label && inp.label !== inp.id ? ` (${inp.label})` : ''}
                                     </button>
                                   ))}
-                                  {draftInputs.length === 0 && <span className="text-[9px] text-slate-400">なし</span>}
+                                  {draftInputs.length === 0 && <span className="text-xs text-slate-400">なし</span>}
                                 </div>
                               </div>
                               {priorCalcs.length > 0 && (
                                 <div>
-                                  <div className="text-[9px] font-bold text-indigo-700 mb-0.5">この前の計算結果 ({priorCalcs.length})</div>
+                                  <div className="text-xs font-bold text-indigo-700 mb-0.5">この前の計算結果 ({priorCalcs.length})</div>
                                   <div className="flex flex-wrap gap-1">
                                     {priorCalcs.map(c => (
-                                      <button type="button" key={c.id} onClick={() => insertVar(c.id)} className="text-[9px] bg-white border border-indigo-300 text-indigo-700 px-1.5 py-0.5 rounded hover:bg-indigo-100 font-mono">
+                                      <button type="button" key={c.id} onClick={() => insertVar(c.id)} className="text-xs bg-white border border-indigo-300 text-indigo-700 px-1.5 py-0.5 rounded hover:bg-indigo-100 font-mono">
                                         Σ {c.id}{c.label && c.label !== c.id ? ` (${c.label})` : ''}
                                       </button>
                                     ))}
                                   </div>
                                 </div>
                               )}
-                              <div className="text-[9px] text-slate-500 pt-1 border-t">
+                              <div className="text-xs text-slate-500 pt-1 border-t">
                                 ボタンタップで数式末尾に追加。他工程の参照は <span className="font-bold">工程テンプレート編集画面</span> から行ってください (プリセット側では現プリセット内のみ参照可能)
                               </div>
                             </div>
@@ -21124,7 +21141,7 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                       );
                     })()}
                     <div>
-                      <label className="block text-[10px] text-slate-400 font-bold">対象入力 (空=全て)</label>
+                      <label className="block text-xs text-slate-400 font-bold">対象入力 (空=全て)</label>
                       <div className="flex flex-wrap gap-1 mt-0.5">
                         {draftInputs.map(inp => {
                           const selected = (calc.inputIds || []).includes(inp.id);
@@ -21133,7 +21150,7 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                               const ids = calc.inputIds || [];
                               const newIds = selected ? ids.filter(id => id !== inp.id) : [...ids, inp.id];
                               updateCalc(cIdx, { inputIds: newIds });
-                            }} className={`text-[9px] px-1.5 py-0.5 rounded border ${selected ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-white text-slate-500 border-slate-200'}`}>
+                            }} className={`text-xs px-1.5 py-0.5 rounded border ${selected ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-white text-slate-500 border-slate-200'}`}>
                               {inp.label || inp.id}
                             </button>
                           );
@@ -21148,30 +21165,30 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                           onChange={e => updateCalc(cIdx, { toleranceEnabled: e.target.checked })}
                           className="w-3.5 h-3.5 accent-indigo-600"
                         />
-                        <span className="text-[10px] font-bold text-slate-600">公差判定 (OFFで記録のみ)</span>
+                        <span className="text-xs font-bold text-slate-600">公差判定 (OFFで記録のみ)</span>
                       </label>
                       <div className={`grid grid-cols-3 gap-1 ${calc.toleranceEnabled === false ? 'opacity-40 pointer-events-none' : ''}`}>
                         <div>
-                          <label className="block text-[10px] text-slate-400 font-bold">基準値</label>
-                          <input type="number" step="any" value={calc.nominal ?? ''} onChange={e => updateCalc(cIdx, { nominal: e.target.value === '' ? null : Number(e.target.value) })} placeholder="(0)" className="w-full border rounded p-1 text-[11px] text-right font-mono"/>
+                          <label className="block text-xs text-slate-400 font-bold">基準値</label>
+                          <input type="number" step="any" value={calc.nominal ?? ''} onChange={e => updateCalc(cIdx, { nominal: e.target.value === '' ? null : Number(e.target.value) })} placeholder="(0)" className="w-full border rounded p-1 text-xs text-right font-mono"/>
                         </div>
                         <div>
-                          <label className="block text-[10px] text-slate-400 font-bold">公差上(+)</label>
-                          <input type="number" step="0.001" value={calc.toleranceUpper} onChange={e => updateCalc(cIdx, { toleranceUpper: e.target.value })} className="w-full border rounded p-1 text-[11px] text-right font-mono"/>
+                          <label className="block text-xs text-slate-400 font-bold">公差上(+)</label>
+                          <input type="number" step="0.001" value={calc.toleranceUpper} onChange={e => updateCalc(cIdx, { toleranceUpper: e.target.value })} className="w-full border rounded p-1 text-xs text-right font-mono"/>
                         </div>
                         <div>
-                          <label className="block text-[10px] text-slate-400 font-bold">公差下(-)</label>
-                          <input type="number" step="0.001" value={calc.toleranceLower} onChange={e => updateCalc(cIdx, { toleranceLower: e.target.value })} className="w-full border rounded p-1 text-[11px] text-right font-mono"/>
+                          <label className="block text-xs text-slate-400 font-bold">公差下(-)</label>
+                          <input type="number" step="0.001" value={calc.toleranceLower} onChange={e => updateCalc(cIdx, { toleranceLower: e.target.value })} className="w-full border rounded p-1 text-xs text-right font-mono"/>
                         </div>
                       </div>
                       <div className="grid grid-cols-2 gap-1">
                         <div>
-                          <label className="block text-[10px] text-slate-400 font-bold">単位</label>
-                          <input value={calc.unit || ''} onChange={e => updateCalc(cIdx, { unit: e.target.value })} className="w-full border rounded p-1 text-[11px] text-center" placeholder="mm"/>
+                          <label className="block text-xs text-slate-400 font-bold">単位</label>
+                          <input value={calc.unit || ''} onChange={e => updateCalc(cIdx, { unit: e.target.value })} className="w-full border rounded p-1 text-xs text-center" placeholder="mm"/>
                         </div>
                         <div>
-                          <label className="block text-[10px] text-slate-400 font-bold">表示桁数</label>
-                          <select value={calc.precision ?? 3} onChange={e => updateCalc(cIdx, { precision: Number(e.target.value) })} className="w-full border rounded p-1 text-[11px]">
+                          <label className="block text-xs text-slate-400 font-bold">表示桁数</label>
+                          <select value={calc.precision ?? 3} onChange={e => updateCalc(cIdx, { precision: Number(e.target.value) })} className="w-full border rounded p-1 text-xs">
                             <option value={0}>0桁 (整数)</option>
                             <option value={1}>1桁</option>
                             <option value={2}>2桁</option>
@@ -21185,7 +21202,7 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                     </div>
                   </div>
                 ))}
-                {draftCalcs.length === 0 && <div className="col-span-full text-[10px] text-slate-400 text-center py-4">「+ 計算を追加」で計算設定を追加してください</div>}
+                {draftCalcs.length === 0 && <div className="col-span-full text-xs text-slate-400 text-center py-4">「+ 計算を追加」で計算設定を追加してください</div>}
               </div>
             </div>
 
@@ -21193,9 +21210,9 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
               <div className="flex justify-between items-center mb-2">
                 <label className="text-xs font-bold text-amber-800 flex items-center gap-1">↗↘ 矢印比較 ({draftArrows.length}件)
-                  <span className="text-[9px] font-normal text-amber-600">— 2つの値を比較して大きい方に ↗ / 小さい方に ↘ を測定画像上に表示</span>
+                  <span className="text-xs font-normal text-amber-600">— 2つの値を比較して大きい方に ↗ / 小さい方に ↘ を測定画像上に表示</span>
                 </label>
-                <button onClick={() => setDraftArrows([...draftArrows, initialArrow(draftArrows.length + 1)])} className="bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1"><Plus className="w-3 h-3"/> 矢印を追加</button>
+                <button onClick={() => setDraftArrows([...draftArrows, initialArrow(draftArrows.length + 1)])} className="bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 rounded text-xs font-bold flex items-center gap-1"><Plus className="w-3 h-3"/> 矢印を追加</button>
               </div>
               <div className="space-y-2">
                 {draftArrows.map((ar, aIdx) => {
@@ -21222,8 +21239,8 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                       {/* 比較する2つの値 */}
                       <div className="grid grid-cols-2 gap-2">
                         <div>
-                          <label className="block text-[10px] text-emerald-700 font-bold mb-0.5">比較元 A</label>
-                          <select value={ar.sourceA} onChange={e => updateArrow({ sourceA: e.target.value })} className="w-full border rounded p-1 text-[11px]">
+                          <label className="block text-xs text-emerald-700 font-bold mb-0.5">比較元 A</label>
+                          <select value={ar.sourceA} onChange={e => updateArrow({ sourceA: e.target.value })} className="w-full border rounded p-1 text-xs">
                             <option value="">-- 選択 --</option>
                             <optgroup label="入力ポイント">
                               {draftInputs.map(inp => <option key={inp.id} value={inp.id}>{inp.id}{inp.label && inp.label !== inp.id ? ` (${inp.label})` : ''}</option>)}
@@ -21234,8 +21251,8 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                           </select>
                         </div>
                         <div>
-                          <label className="block text-[10px] text-rose-700 font-bold mb-0.5">比較元 B</label>
-                          <select value={ar.sourceB} onChange={e => updateArrow({ sourceB: e.target.value })} className="w-full border rounded p-1 text-[11px]">
+                          <label className="block text-xs text-rose-700 font-bold mb-0.5">比較元 B</label>
+                          <select value={ar.sourceB} onChange={e => updateArrow({ sourceB: e.target.value })} className="w-full border rounded p-1 text-xs">
                             <option value="">-- 選択 --</option>
                             <optgroup label="入力ポイント">
                               {draftInputs.map(inp => <option key={inp.id} value={inp.id}>{inp.id}{inp.label && inp.label !== inp.id ? ` (${inp.label})` : ''}</option>)}
@@ -21246,7 +21263,7 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                           </select>
                         </div>
                       </div>
-                      <div className="text-[9px] text-slate-500 bg-slate-50 rounded p-1.5">
+                      <div className="text-xs text-slate-500 bg-slate-50 rounded p-1.5">
                         ・A &gt; B → <span className="text-emerald-700 font-black">↗</span> (A側が高い)
                         ・A &lt; B → <span className="text-rose-700 font-black">↘</span> (B側が高い)
                         ・許容差以下 → <span className="text-slate-700 font-black">↔</span> (同等)
@@ -21255,32 +21272,32 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                       {(ar.sourceA && ar.sourceB) && (
                         <div className="bg-amber-50 border border-amber-200 rounded p-1.5 space-y-1">
                           <div className="flex items-center justify-between">
-                            <label className="text-[10px] font-bold text-amber-800">矢印の表示位置</label>
-                            {ar.position && <button onClick={() => updateArrow({ position: null })} className="text-[9px] text-blue-600 hover:underline">A・B の中央にリセット</button>}
+                            <label className="text-xs font-bold text-amber-800">矢印の表示位置</label>
+                            {ar.position && <button onClick={() => updateArrow({ position: null })} className="text-xs text-blue-600 hover:underline">A・B の中央にリセット</button>}
                           </div>
-                          <div className="flex items-center gap-1 text-[10px]">
+                          <div className="flex items-center gap-1 text-xs">
                             <span className="text-slate-600 font-bold w-3">X:</span>
                             <input type="range" min="0" max="100" value={Math.round(posX)} onChange={e => setPos({ x: Number(e.target.value) })} className="flex-1 h-1 accent-amber-500"/>
-                            <input type="number" value={Math.round(posX)} onChange={e => setPos({ x: Number(e.target.value) })} className="w-12 border rounded px-1 py-0 text-[10px] text-right"/>
+                            <input type="number" value={Math.round(posX)} onChange={e => setPos({ x: Number(e.target.value) })} className="w-12 border rounded px-1 py-0 text-xs text-right"/>
                             <span className="text-slate-400">%</span>
                           </div>
-                          <div className="flex items-center gap-1 text-[10px]">
+                          <div className="flex items-center gap-1 text-xs">
                             <span className="text-slate-600 font-bold w-3">Y:</span>
                             <input type="range" min="0" max="100" value={Math.round(posY)} onChange={e => setPos({ y: Number(e.target.value) })} className="flex-1 h-1 accent-amber-500"/>
-                            <input type="number" value={Math.round(posY)} onChange={e => setPos({ y: Number(e.target.value) })} className="w-12 border rounded px-1 py-0 text-[10px] text-right"/>
+                            <input type="number" value={Math.round(posY)} onChange={e => setPos({ y: Number(e.target.value) })} className="w-12 border rounded px-1 py-0 text-xs text-right"/>
                             <span className="text-slate-400">%</span>
                           </div>
                         </div>
                       )}
-                      <div className="flex items-center gap-2 text-[10px]">
+                      <div className="flex items-center gap-2 text-xs">
                         <label className="text-slate-500 font-bold">許容差:</label>
-                        <input type="number" step="0.001" value={ar.threshold} onChange={e => updateArrow({ threshold: e.target.value })} className="w-20 border rounded p-0.5 text-[10px] text-right"/>
+                        <input type="number" step="0.001" value={ar.threshold} onChange={e => updateArrow({ threshold: e.target.value })} className="w-20 border rounded p-0.5 text-xs text-right"/>
                         <span className="text-slate-400">差がこの値以下なら ↔</span>
                       </div>
                       {/* プレビュー: 実画面と同じアスペクト比 (4:3) */}
                       {(ar.sourceA && ar.sourceB) && (
                         <div>
-                          <div className="text-[9px] text-slate-500 font-bold mb-0.5">プレビュー (A &gt; B 想定で ↗ を表示)</div>
+                          <div className="text-xs text-slate-500 font-bold mb-0.5">プレビュー (A &gt; B 想定で ↗ を表示)</div>
                           <div className="relative w-full bg-white border rounded overflow-hidden" style={{ aspectRatio: '4 / 3', ...(draftDiagram ? { backgroundImage: `url(${draftDiagram})`, backgroundSize: 'contain', backgroundRepeat: 'no-repeat', backgroundPosition: 'center' } : {}) }}>
                             {/* 入力ポイント (薄く) */}
                             {draftInputs.map((inp, idx) => {
@@ -21299,13 +21316,13 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                               {ar.label && <span className="text-[8px] font-bold text-slate-700 bg-white/90 px-1 rounded mt-0.5 whitespace-nowrap shadow-sm">{ar.label}</span>}
                             </div>
                           </div>
-                          <div className="text-[9px] text-slate-400 mt-0.5">※ 実際は A,B の値で ↗/↘/↔ が切り替わります</div>
+                          <div className="text-xs text-slate-400 mt-0.5">※ 実際は A,B の値で ↗/↘/↔ が切り替わります</div>
                         </div>
                       )}
                     </div>
                   );
                 })}
-                {draftArrows.length === 0 && <div className="text-[10px] text-amber-700 text-center py-2">「+ 矢印を追加」で 2つの値を比較できる矢印を追加できます (例: 左の通り vs 右の通り)</div>}
+                {draftArrows.length === 0 && <div className="text-xs text-amber-700 text-center py-2">「+ 矢印を追加」で 2つの値を比較できる矢印を追加できます (例: 左の通り vs 右の通り)</div>}
               </div>
             </div>
 
@@ -21314,15 +21331,15 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
               <div className="flex justify-between items-center mb-1.5">
                 <label className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
                   <ListChecks className="w-3.5 h-3.5"/> 測定条件 (プリセット既定)
-                  <span className="text-[10px] font-normal text-purple-600 ml-1">作業者に表示する段取り条件</span>
+                  <span className="text-xs font-normal text-purple-600 ml-1">作業者に表示する段取り条件</span>
                 </label>
                 <button
                   type="button"
                   onClick={() => setDraftCondition({ params: [...(draftCondition.params || []), { key: '', value: '' }], note: draftCondition.note || '' })}
-                  className="bg-purple-500 hover:bg-purple-600 text-white px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1"
+                  className="bg-purple-500 hover:bg-purple-600 text-white px-2 py-1 rounded text-xs font-bold flex items-center gap-1"
                 ><Plus className="w-3 h-3"/> 条件を追加</button>
               </div>
-              <p className="text-[10px] text-slate-500 mb-2">
+              <p className="text-xs text-slate-500 mb-2">
                 例: 分割数, 角度刻み, 評価種別 (ウォーム/ピニオン) など。<br/>
                 適用優先順位: <span className="font-bold text-indigo-700">品質規格</span> &gt; テンプレ工程の条件 &gt; <span className="font-bold text-purple-700">このプリセット既定</span>
               </p>
@@ -21360,11 +21377,11 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
                   </div>
                 ))}
                 {(!draftCondition.params || draftCondition.params.length === 0) && (
-                  <div className="text-[10px] text-purple-700 text-center py-2">「+ 条件を追加」で項目を追加できます (任意・空のままでも OK)</div>
+                  <div className="text-xs text-purple-700 text-center py-2">「+ 条件を追加」で項目を追加できます (任意・空のままでも OK)</div>
                 )}
               </div>
               <div className="mt-2">
-                <label className="block text-[10px] text-slate-500 mb-0.5">条件メモ (自由記述)</label>
+                <label className="block text-xs text-slate-500 mb-0.5">条件メモ (自由記述)</label>
                 <textarea
                   value={draftCondition.note || ''}
                   onChange={e => setDraftCondition({ ...draftCondition, note: e.target.value })}
@@ -21399,15 +21416,15 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
         <div className="flex-1 cursor-pointer min-w-0" onClick={() => startEdit(kind, k)}>
           <div className="flex items-center gap-2 flex-wrap">
             <div className={`font-bold ${palette.textBold} truncate`}>{v.label}</div>
-            {kind === 'builtin' && <span className="text-[9px] bg-blue-200 text-blue-800 px-1.5 py-0.5 rounded font-bold">組み込み</span>}
-            {isOverridden && <span className="text-[9px] bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded font-bold">編集済み</span>}
+            {kind === 'builtin' && <span className="text-xs bg-blue-200 text-blue-800 px-1.5 py-0.5 rounded font-bold">組み込み</span>}
+            {isOverridden && <span className="text-xs bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded font-bold">編集済み</span>}
           </div>
           <div className={`text-xs ${palette.textSub} mt-0.5`}>
             {v.inputs?.length || 0}点
             {v.calculations?.length > 0 && ` ・計算${v.calculations.length}件`}
             {v.diagramImage && ' ・図面付き'}
             {v.conditionPreset && ((v.conditionPreset.params && v.conditionPreset.params.length > 0) || v.conditionPreset.note) && (
-              <span className="ml-1 text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-bold">条件あり</span>
+              <span className="ml-1 text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-bold">条件あり</span>
             )}
           </div>
         </div>
@@ -21595,7 +21612,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
           >
             <Filter className="w-3.5 h-3.5"/> フィルタ
             {filterFeatures.length > 0 && (
-              <span className="bg-indigo-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center">{filterFeatures.length}</span>
+              <span className="bg-indigo-600 text-white text-xs font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center">{filterFeatures.length}</span>
             )}
           </button>
         </div>
@@ -21606,7 +21623,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-bold text-indigo-700">含まれる要素で絞り込み (複数選択可・AND)</span>
               {filterFeatures.length > 0 && (
-                <button onClick={() => setFilterFeatures([])} className="text-[10px] text-rose-600 hover:bg-rose-50 px-2 py-0.5 rounded font-bold border border-rose-200">✕ クリア</button>
+                <button onClick={() => setFilterFeatures([])} className="text-xs text-rose-600 hover:bg-rose-50 px-2 py-0.5 rounded font-bold border border-rose-200">✕ クリア</button>
               )}
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -21621,7 +21638,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                     style={active ? { backgroundColor: '#4f46e5', color: 'white', borderColor: '#4338ca' } : {}}
                   >
                     <span>{info.icon}</span>{info.label}
-                    <span className={`text-[10px] px-1 rounded ${active ? 'bg-white/30' : 'bg-white/60'}`}>{count}</span>
+                    <span className={`text-xs px-1 rounded ${active ? 'bg-white/30' : 'bg-white/60'}`}>{count}</span>
                   </button>
                 );
               })}
@@ -21630,7 +21647,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
         )}
 
         {/* 件数表示 */}
-        <div className="text-[11px] text-slate-500 mb-2">
+        <div className="text-xs text-slate-500 mb-2">
           表示: <span className="font-bold text-slate-700">{filteredTemplates.length}</span> 件
           {(searchQuery || filterFeatures.length > 0) && <span className="ml-2">/ 全 {templates.length} 件</span>}
         </div>
@@ -21659,7 +21676,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                     {Array.from(features).map(f => {
                       const info = FEATURE_LABELS[f];
                       return info ? (
-                        <span key={f} className={`text-[10px] ${info.color} border rounded px-1.5 py-0.5 font-bold`}>{info.icon} {info.label}</span>
+                        <span key={f} className={`text-xs ${info.color} border rounded px-1.5 py-0.5 font-bold`}>{info.icon} {info.label}</span>
                       ) : null;
                     })}
                   </div>
@@ -21964,7 +21981,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                  <div className="flex items-center gap-2 p-3 bg-slate-50 cursor-pointer hover:bg-slate-100" onClick={() => setExpandedPresetId(expandedPresetId === preset.id ? null : preset.id)}>
                    <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${expandedPresetId === preset.id ? 'rotate-90' : ''}`}/>
                    <input value={preset.name} onClick={e => e.stopPropagation()} onChange={e => { const np = [...localComboPresets]; np[pIdx] = { ...np[pIdx], name: e.target.value }; setLocalComboPresets(np); }} className="flex-1 bg-transparent font-bold text-sm border-none outline-none focus:bg-white focus:border focus:rounded focus:px-2" placeholder="プリセット名"/>
-                   <span className="text-[10px] text-slate-400">{preset.values?.length || 0}件</span>
+                   <span className="text-xs text-slate-400">{preset.values?.length || 0}件</span>
                    <button onClick={(e) => { e.stopPropagation(); if (confirm('このプリセットを削除しますか？')) setLocalComboPresets(localComboPresets.filter(p => p.id !== preset.id)); }} className="text-slate-400 hover:text-rose-500 p-1"><Trash2 className="w-4 h-4"/></button>
                  </div>
                  {expandedPresetId === preset.id && (
@@ -21982,8 +21999,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                        <button onClick={() => { const el = document.getElementById(`combo-preset-add-${preset.id}`); if (el && el.value.trim()) { const np = [...localComboPresets]; np[pIdx] = { ...np[pIdx], values: [...(np[pIdx].values || []), el.value.trim()] }; setLocalComboPresets(np); el.value = ''; } }} className="bg-amber-500 text-white px-3 py-1.5 rounded text-sm font-bold hover:bg-amber-600">追加</button>
                      </div>
                      <div className="flex gap-2 pt-1 border-t">
-                       <button onClick={() => { const np = [...localComboPresets]; np[pIdx] = { ...np[pIdx], values: BLOCK_GAUGE_PRESETS.map(String) }; setLocalComboPresets(np); }} className="text-[10px] bg-teal-100 text-teal-700 px-2 py-1 rounded font-bold hover:bg-teal-200">ブロックゲージ規格を設定</button>
-                       <button onClick={() => { const np = [...localComboPresets]; np[pIdx] = { ...np[pIdx], values: [] }; setLocalComboPresets(np); }} className="text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded font-bold hover:bg-slate-200">全てクリア</button>
+                       <button onClick={() => { const np = [...localComboPresets]; np[pIdx] = { ...np[pIdx], values: BLOCK_GAUGE_PRESETS.map(String) }; setLocalComboPresets(np); }} className="text-xs bg-teal-100 text-teal-700 px-2 py-1 rounded font-bold hover:bg-teal-200">ブロックゲージ規格を設定</button>
+                       <button onClick={() => { const np = [...localComboPresets]; np[pIdx] = { ...np[pIdx], values: [] }; setLocalComboPresets(np); }} className="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded font-bold hover:bg-slate-200">全てクリア</button>
                      </div>
                    </div>
                  )}
@@ -22115,7 +22132,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                          <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-[220px]">
                            <span className="text-xs font-bold text-slate-600">うっすら下地</span>
                            <input type="checkbox" checked={oa.gaugeTrack !== false} onChange={e => setOA({ gaugeTrack: e.target.checked })} className="w-4 h-4 accent-emerald-600" />
-                           <span className="text-[10px] text-slate-400">枠の全周を薄く表示して「どこまで塗られるか」を見せる</span>
+                           <span className="text-xs text-slate-400">枠の全周を薄く表示して「どこまで塗られるか」を見せる</span>
                          </label>
                        </div>
                        <div className="flex items-center gap-3 flex-wrap">
@@ -22128,7 +22145,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                            ))}
                            <input type="color" value={oa.gaugeColor || '#10B981'} onChange={e => setOA({ gaugeColor: e.target.value })} className="w-8 h-6 border rounded cursor-pointer" title="自由な色" />
                          </div>
-                         <span className="text-[10px] text-slate-400">警告・超過になったら上で設定した警告色／超過色に変わります</span>
+                         <span className="text-xs text-slate-400">警告・超過になったら上で設定した警告色／超過色に変わります</span>
                        </div>
                        {/* 「うっすら下地」は上の「太さ」の行へ並べた(消していない・働きも同じ)。 */}
                        <div className="flex items-center gap-3 flex-wrap">
@@ -22160,7 +22177,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                      <button onClick={() => playOverrunBeep('warn')} className="px-3 py-1.5 text-xs font-bold rounded border bg-slate-50 hover:bg-slate-100 text-slate-600">警告音を試聴</button>
                      <button onClick={() => playOverrunBeep('over')} className="px-3 py-1.5 text-xs font-bold rounded border bg-rose-50 hover:bg-rose-100 text-rose-600">超過音を試聴</button>
                    </div>
-                   <p className="text-[11px] text-slate-400">※ 音はタスクごとに段階を跨いだ瞬間に1回だけ鳴ります（鳴り続けません）。タブレットは音量設定を確認してください。</p>
+                   <p className="text-xs text-slate-400">※ 音はタスクごとに段階を跨いだ瞬間に1回だけ鳴ります（鳴り続けません）。タブレットは音量設定を確認してください。</p>
                  </div>
                </div>
              );
@@ -22192,7 +22209,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
              <div className="flex items-center gap-4">
                <div className="w-40 shrink-0">
                  <div className="text-sm font-bold text-slate-700">現場マップ エリア名</div>
-                 <div className="text-[10px] text-slate-400">中間分割 / 完品分割 などのゾーン見出し</div>
+                 <div className="text-xs text-slate-400">中間分割 / 完品分割 などのゾーン見出し</div>
                </div>
                <input
                  type="range"
@@ -22232,7 +22249,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                  <div key={area.key} className="flex items-center gap-4">
                    <div className="w-40 shrink-0">
                      <div className="text-sm font-bold text-slate-700">{area.label}</div>
-                     <div className="text-[10px] text-slate-400">{area.desc}</div>
+                     <div className="text-xs text-slate-400">{area.desc}</div>
                    </div>
                    <input
                      type="range"
@@ -22318,13 +22335,13 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                return (
                  <div key={key} className="flex flex-wrap items-center gap-x-3 gap-y-1 border rounded-lg p-2.5">
                    <span className="text-sm font-bold text-slate-700 w-36 shrink-0">{label}</span>
-                   <label className="text-[11px] text-slate-500">最大px</label>
+                   <label className="text-xs text-slate-500">最大px</label>
                    <input type="range" min="400" max="2000" step="100" value={cur.maxDim} onChange={e => set({ maxDim: Number(e.target.value) })} className="w-28 accent-teal-600" />
                    <span className="text-xs font-mono w-14 text-right">{cur.maxDim}px</span>
-                   <label className="text-[11px] text-slate-500 ml-2">画質</label>
+                   <label className="text-xs text-slate-500 ml-2">画質</label>
                    <input type="range" min="0.3" max="0.9" step="0.05" value={cur.quality} onChange={e => set({ quality: Number(e.target.value) })} className="w-28 accent-teal-600" />
                    <span className="text-xs font-mono w-10 text-right">{cur.quality.toFixed(2)}</span>
-                   <span className={`text-[10px] font-bold ${tier.c} w-16 text-right`}>{tier.t}</span>
+                   <span className={`text-xs font-bold ${tier.c} w-16 text-right`}>{tier.t}</span>
                  </div>
                );
              })}
@@ -22499,7 +22516,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                  onChange={e => setLocalVoiceSettings(prev => ({ ...prev, rate: parseFloat(e.target.value) }))}
                  className="w-full"
                />
-               <div className="flex justify-between text-[10px] text-slate-400"><span>遅い (0.5)</span><span>標準 (1.1)</span><span>速い (2.0)</span></div>
+               <div className="flex justify-between text-xs text-slate-400"><span>遅い (0.5)</span><span>標準 (1.1)</span><span>速い (2.0)</span></div>
              </div>
              <div>
                <label className="block text-xs font-bold text-slate-500 mb-1">音量: {Math.round(localVoiceSettings.volume * 100)}%</label>
@@ -22512,7 +22529,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                  onChange={e => setLocalVoiceSettings(prev => ({ ...prev, volume: parseFloat(e.target.value) }))}
                  className="w-full"
                />
-               <div className="flex justify-between text-[10px] text-slate-400"><span>無音 (0)</span><span>最大 (100%)</span></div>
+               <div className="flex justify-between text-xs text-slate-400"><span>無音 (0)</span><span>最大 (100%)</span></div>
              </div>
              <button
                onClick={() => {
@@ -22536,7 +22553,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                    <div key={cmd.id} className="bg-slate-50 rounded-lg p-3">
                      <div className="flex items-center gap-2 mb-1">
                        <span className="font-bold text-sm text-slate-700">{cmd.label}</span>
-                       <span className="text-[10px] text-slate-400">— {cmd.description}</span>
+                       <span className="text-xs text-slate-400">— {cmd.description}</span>
                      </div>
                      <input
                        value={cmd.keywords}
@@ -22699,20 +22716,20 @@ const WorkOrderOptimizerModal = ({ lot, lots, templates = [], currentExecutionTy
               {/* 共通: データ量サマリ */}
               <div className="mb-4 flex flex-wrap gap-3 text-sm">
                 <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2">
-                  <div className="text-[10px] text-indigo-600 font-bold">サンプルロット</div>
+                  <div className="text-xs text-indigo-600 font-bold">サンプルロット</div>
                   <div className="text-lg font-black text-indigo-900">{analysis.sampleLotCount}件</div>
-                  {!analysis.hasEnoughData && <div className="text-[10px] text-amber-600">⚠ データが少ないため精度は限定的</div>}
+                  {!analysis.hasEnoughData && <div className="text-xs text-amber-600">⚠ データが少ないため精度は限定的</div>}
                 </div>
                 <div className="bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
-                  <div className="text-[10px] text-purple-600 font-bold">自動工程</div>
+                  <div className="text-xs text-purple-600 font-bold">自動工程</div>
                   <div className="text-lg font-black text-purple-900">{analysis.autoCount}件</div>
                 </div>
                 <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
-                  <div className="text-[10px] text-blue-600 font-bold">手動工程</div>
+                  <div className="text-xs text-blue-600 font-bold">手動工程</div>
                   <div className="text-lg font-black text-blue-900">{analysis.manualCount}件</div>
                 </div>
                 <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-                  <div className="text-[10px] text-emerald-600 font-bold">想定時短</div>
+                  <div className="text-xs text-emerald-600 font-bold">想定時短</div>
                   <div className="text-lg font-black text-emerald-900">{fmtSec(analysis.timeSavedSec)} ({analysis.timeSavedPercent}%)</div>
                 </div>
               </div>
@@ -22755,14 +22772,14 @@ const WorkOrderOptimizerModal = ({ lot, lots, templates = [], currentExecutionTy
                               return (
                                 <div key={j} className="bg-white border border-blue-200 rounded px-2 py-1 flex items-center gap-2 text-sm">
                                   <span className="text-blue-600 text-xs font-bold w-6">{j+1}.</span>
-                                  <span className="bg-blue-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded shrink-0">#{t.unitIdx + 1}台目</span>
+                                  <span className="bg-blue-600 text-white text-xs font-black px-1.5 py-0.5 rounded shrink-0">#{t.unitIdx + 1}台目</span>
                                   <span className="font-bold text-slate-800 flex-1">{t.step.title}</span>
                                   <span className="text-xs text-slate-500 font-mono">{fmtSec(t.durationSec)}</span>
-                                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${evColor}`} title="この候補が認められた根拠">{evLabel}</span>
+                                  <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${evColor}`} title="この候補が認められた根拠">{evLabel}</span>
                                 </div>
                               );
                             })}
-                            <div className="text-[10px] text-emerald-700 mt-2 bg-emerald-50 px-2 py-1 rounded border border-emerald-200 font-bold">
+                            <div className="text-xs text-emerald-700 mt-2 bg-emerald-50 px-2 py-1 rounded border border-emerald-200 font-bold">
                               合計 {fmtSec(op.filledSec)} を並行 → 自動測定 {fmtSec(op.autoDurationSec)} の間に他の台の作業がここまで進む
                             </div>
                           </div>
@@ -22876,7 +22893,7 @@ const WorkOrderOptimizerModal = ({ lot, lots, templates = [], currentExecutionTy
                           <span className={`w-1.5 h-4 ${s.isAuto ? 'bg-purple-500' : 'bg-blue-500'}`}></span>
                           <span className="flex-1 truncate">{s.step.title}</span>
                           <span className="font-mono text-slate-600">{fmtSec(s.avgSec)}</span>
-                          <span className="text-[10px] text-slate-400 w-12 text-right">n={s.sampleCount}</span>
+                          <span className="text-xs text-slate-400 w-12 text-right">n={s.sampleCount}</span>
                         </div>
                       ))}
                     </div>
@@ -23030,7 +23047,7 @@ const LotAssignmentModal = ({ lot, workers, mapZones, currentUserName, onClose, 
                 <button key={z.id} type="button"
                   onClick={() => setSelectedZone(z)}
                   className={`p-3 rounded-lg border-2 text-left font-bold transition-all ${selectedZone?.id === z.id ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200' : 'border-slate-200 hover:border-blue-300 bg-white'}`}>
-                  <div className="flex items-center gap-2"><MapPin className="w-4 h-4"/> {z.name}{z.isPersonal && z.name === selectedWorker?.name && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 rounded">担当エリア</span>}</div>
+                  <div className="flex items-center gap-2"><MapPin className="w-4 h-4"/> {z.name}{z.isPersonal && z.name === selectedWorker?.name && <span className="text-xs bg-blue-100 text-blue-700 px-1.5 rounded">担当エリア</span>}</div>
                 </button>
               ))}
             </div>
@@ -23133,17 +23150,17 @@ const OrderGroupCard = ({ group, workers, templates, onOpen, onEdit = null, onDe
             <div key={lot.id} data-order-group-line={lot.id} className={`flex items-stretch ${st.key === 'done' ? 'opacity-70' : ''}`}>
             <button type="button" data-order-group-row={lot.id} data-order-group-state={st.key} onClick={() => onOpen(lot)}
               className="flex-1 min-w-0 text-left px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 hover:bg-indigo-50" style={{ minHeight: 'max(2.75rem, 44px)' }}>
-              <span className="text-[11px] font-bold text-indigo-800 bg-indigo-100 border border-indigo-300 rounded px-2 py-0.5 inline-flex items-center gap-1 max-w-[16rem] truncate" title={tplName(lot)}>
+              <span className="text-xs font-bold text-indigo-800 bg-indigo-100 border border-indigo-300 rounded px-2 py-0.5 inline-flex items-center gap-1 max-w-[16rem] truncate" title={tplName(lot)}>
                 <ClipboardList className="w-3.5 h-3.5 shrink-0" /><span className="truncate">{tplName(lot)}</span>
               </span>
-              <span className="text-[11px] text-slate-500">{lot.quantity}台</span>
-              <span className="text-[11px] text-slate-600" title="入庫時間（検査へ来た日時）＝入荷（検査へ来た日）" data-order-group-entry={lot.id}>入庫 <b className="text-slate-800">{fmtMdHm(lot.entryAt) || fmtMd(lot.entryAt) || '—'}</b></span>
-              <span className="text-[11px] text-slate-600" title="納期">納期 <b className="text-slate-800">{fmtDueShort(lot.dueDate) || '—'}</b></span>
-              {st.key === 'done' ? <span className="text-[11px] text-emerald-800" title="検査完了（完了した日時）" data-order-group-done={lot.id}>検査完了 <b>{fmtMdHm(st.at) || '—'}</b></span> : null}
-              <span className={`ml-auto text-[11px] font-black border rounded px-2 py-0.5 ${GROUP_STATE_CLS[st.key]}`}>
+              <span className="text-xs text-slate-500">{lot.quantity}台</span>
+              <span className="text-xs text-slate-600" title="入庫時間（検査へ来た日時）＝入荷（検査へ来た日）" data-order-group-entry={lot.id}>入庫 <b className="text-slate-800">{fmtMdHm(lot.entryAt) || fmtMd(lot.entryAt) || '—'}</b></span>
+              <span className="text-xs text-slate-600" title="納期">納期 <b className="text-slate-800">{fmtDueShort(lot.dueDate) || '—'}</b></span>
+              {st.key === 'done' ? <span className="text-xs text-emerald-800" title="検査完了（完了した日時）" data-order-group-done={lot.id}>検査完了 <b>{fmtMdHm(st.at) || '—'}</b></span> : null}
+              <span className={`ml-auto text-xs font-black border rounded px-2 py-0.5 ${GROUP_STATE_CLS[st.key]}`}>
                 {st.label}{/* 完了の日時は隣の「検査完了 M/D HH:MM」に出す(2026-09-09)。ここに日付を重ねて出さない */}
               </span>
-              {st.who ? <span className="text-[11px] font-bold text-blue-800">{st.who}</span> : null}
+              {st.who ? <span className="text-xs font-bold text-blue-800">{st.who}</span> : null}
             </button>
             {/* ✏編集／🗑削除(2026-09-09 清水さん)。行の押す所(割当画面)とは別の 44px の押す物。
                 ⚠ 渡されていない所(閲覧だけ)には出さない。押しても行の onOpen へは伝えない。 */}
@@ -23390,7 +23407,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
             <Search className="w-4 h-4 text-slate-400 shrink-0" />
             {/* 指図 */}
             <div className={`flex items-center gap-1 bg-white px-2 py-1 rounded-lg border shadow-sm ${searchOrderNo ? 'border-blue-400 ring-1 ring-blue-100' : ''}`}>
-              <span className="text-[10px] font-bold text-slate-400 shrink-0">指図</span>
+              <span className="text-xs font-bold text-slate-400 shrink-0">指図</span>
               <input
                 type="text"
                 placeholder="番号..."
@@ -23407,7 +23424,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
             </div>
             {/* 品目コード */}
             <div className={`flex items-center gap-1 bg-white px-2 py-1 rounded-lg border shadow-sm ${searchModel ? 'border-blue-400 ring-1 ring-blue-100' : ''}`}>
-              <span className="text-[10px] font-bold text-slate-400 shrink-0">品目</span>
+              <span className="text-xs font-bold text-slate-400 shrink-0">品目</span>
               <input
                 type="text"
                 placeholder="コード/品名..."
@@ -23424,7 +23441,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
             </div>
             {/* テンプレ */}
             <div className={`flex items-center gap-1 bg-white px-2 py-1 rounded-lg border shadow-sm ${searchTemplate ? 'border-blue-400 ring-1 ring-blue-100' : ''}`}>
-              <span className="text-[10px] font-bold text-slate-400 shrink-0">テンプレ</span>
+              <span className="text-xs font-bold text-slate-400 shrink-0">テンプレ</span>
               <input
                 type="text"
                 placeholder="名前..."
@@ -23466,7 +23483,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           >
             <Filter className="w-4 h-4"/> 詳細フィルタ
             {activeAdvancedCount > 0 && (
-              <span className="bg-indigo-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center">{activeAdvancedCount}</span>
+              <span className="bg-indigo-600 text-white text-xs font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center">{activeAdvancedCount}</span>
             )}
           </button>
         </div>
@@ -23496,7 +23513,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
 
           {/* テンプレート */}
           <div>
-            <div className="text-[11px] font-bold text-slate-500 mb-1 flex items-center gap-1">
+            <div className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1">
               <ClipboardList className="w-3 h-3"/> テンプレート (複数選択可)
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -23514,7 +23531,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                     className={`px-2.5 py-1 rounded-full text-xs font-bold border transition-colors inline-flex items-center gap-1 ${active ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-white text-slate-600 border-slate-200 hover:bg-indigo-50 hover:border-indigo-300'}`}
                   >
                     {t.name}
-                    <span className={`text-[10px] px-1 rounded ${active ? 'bg-white/20' : 'bg-slate-100 text-slate-500'}`}>{count}</span>
+                    <span className={`text-xs px-1 rounded ${active ? 'bg-white/20' : 'bg-slate-100 text-slate-500'}`}>{count}</span>
                   </button>
                 );
               })}
@@ -23523,7 +23540,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
 
           {/* 状態 */}
           <div>
-            <div className="text-[11px] font-bold text-slate-500 mb-1 flex items-center gap-1">
+            <div className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1">
               <Clock className="w-3 h-3"/> 状態 (複数選択可)
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -23548,7 +23565,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
 
           {/* 優先度 */}
           <div>
-            <div className="text-[11px] font-bold text-slate-500 mb-1 flex items-center gap-1">
+            <div className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1">
               <AlertTriangle className="w-3 h-3"/> 優先度 (複数選択可)
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -23565,7 +23582,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
 
           {/* 遅延状況 */}
           <div>
-            <div className="text-[11px] font-bold text-slate-500 mb-1 flex items-center gap-1">
+            <div className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1">
               <Clock className="w-3 h-3"/> 遅延状況 (複数選択可)
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -23596,7 +23613,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           {templateFilter.map(tid => {
             const t = tid === 'demo' ? {id:'demo',name:'詳細デモ手順 (4工程)'} : templates.find(x => x.id === tid);
             return (
-              <span key={`tpl-${tid}`} className="bg-white border border-indigo-300 text-indigo-700 text-[11px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+              <span key={`tpl-${tid}`} className="bg-white border border-indigo-300 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
                 {t?.name || tid}
                 <button onClick={() => setTemplateFilter(templateFilter.filter(x => x !== tid))} className="hover:bg-indigo-100 rounded-full"><X className="w-3 h-3"/></button>
               </span>
@@ -23605,14 +23622,14 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           {statusFilter.map(s => {
             const label = s === 'waiting' ? '未着手' : s === 'progress' ? '進捗あり' : s === 'processing' ? '作業中' : '一時停止';
             return (
-              <span key={`st-${s}`} className="bg-white border border-indigo-300 text-indigo-700 text-[11px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+              <span key={`st-${s}`} className="bg-white border border-indigo-300 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
                 {label}
                 <button onClick={() => setStatusFilter(statusFilter.filter(x => x !== s))} className="hover:bg-indigo-100 rounded-full"><X className="w-3 h-3"/></button>
               </span>
             );
           })}
           {priorityFilter.map(p => (
-            <span key={`pr-${p}`} className="bg-white border border-indigo-300 text-indigo-700 text-[11px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+            <span key={`pr-${p}`} className="bg-white border border-indigo-300 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
               {p === 'high' ? '急ぎ' : '通常'}
               <button onClick={() => setPriorityFilter(priorityFilter.filter(x => x !== p))} className="hover:bg-indigo-100 rounded-full"><X className="w-3 h-3"/></button>
             </span>
@@ -23620,13 +23637,13 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           {delayFilter.map(d => {
             const label = d === 'critical' ? '大幅遅延' : d === 'warning' ? '遅れ気味' : d === 'ontime' ? '予定通り' : '前倒し';
             return (
-              <span key={`dl-${d}`} className="bg-white border border-indigo-300 text-indigo-700 text-[11px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+              <span key={`dl-${d}`} className="bg-white border border-indigo-300 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
                 {label}
                 <button onClick={() => setDelayFilter(delayFilter.filter(x => x !== d))} className="hover:bg-indigo-100 rounded-full"><X className="w-3 h-3"/></button>
               </span>
             );
           })}
-          <button onClick={clearAllAdvancedFilters} className="ml-auto text-[11px] text-rose-600 hover:bg-rose-50 px-2 py-0.5 rounded font-bold border border-rose-200 flex items-center gap-1">
+          <button onClick={clearAllAdvancedFilters} className="ml-auto text-xs text-rose-600 hover:bg-rose-50 px-2 py-0.5 rounded font-bold border border-rose-200 flex items-center gap-1">
             <X className="w-3 h-3"/> 全クリア
           </button>
         </div>
@@ -23679,13 +23696,13 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                     </div>
                     {/* テンプレート名 */}
                     {templateName && (
-                      <div className="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5 inline-flex items-center gap-1 truncate w-fit max-w-full" title={templateName}>
+                      <div className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5 inline-flex items-center gap-1 truncate w-fit max-w-full" title={templateName}>
                         <ClipboardList className="w-3 h-3 shrink-0"/> <span className="truncate">{templateName}</span>
                       </div>
                     )}
                     {/* 🧾 抜取判定でスキップと決めたロット(2026-09-06)。消さずに札で残す。押して完了にするだけ。 */}
                     {isTemplateSkippedLot(lot) && (
-                      <div data-lot-template-skip="1" className="text-[11px] font-black text-emerald-800 bg-emerald-100 border border-emerald-300 rounded px-2 py-0.5 inline-flex items-center gap-1 w-fit" title={`品目×テンプレの実績(連続無欠点 ${lot.templateSkip?.streak ?? '?'}ロット)で検査せず流す判定。全工程はシステムがスキップ済み。押して完了にするだけ`}>
+                      <div data-lot-template-skip="1" className="text-xs font-black text-emerald-800 bg-emerald-100 border border-emerald-300 rounded px-2 py-0.5 inline-flex items-center gap-1 w-fit" title={`品目×テンプレの実績(連続無欠点 ${lot.templateSkip?.streak ?? '?'}ロット)で検査せず流す判定。全工程はシステムがスキップ済み。押して完了にするだけ`}>
                         ⏭ スキップ（流すだけ）
                       </div>
                     )}                    {/* 停止理由バッジ */}
@@ -23694,7 +23711,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                       const startTime = lot.pauseReason.startTime;
                       const elapsedDisplay = startTime ? formatWorkElapsed(startTime, settings?.workSchedule) : '';
                       return (
-                        <div className={`text-[10px] ${cm.bg} ${cm.border} ${cm.text} border rounded px-1.5 py-0.5 inline-flex items-center gap-1 w-fit max-w-full font-bold`} title={lot.pauseReason.note || lot.pauseReason.label}>
+                        <div className={`text-xs ${cm.bg} ${cm.border} ${cm.text} border rounded px-1.5 py-0.5 inline-flex items-center gap-1 w-fit max-w-full font-bold`} title={lot.pauseReason.note || lot.pauseReason.label}>
                           <span>{cm.emoji}</span>
                           <span>{lot.pauseReason.label}</span>
                           {startTime && <span className="font-mono opacity-70">{elapsedDisplay}</span>}
@@ -23707,7 +23724,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                       {lot.dueDate && <span className="ml-2 text-blue-600 font-bold">納期: {lot.dueDate}</span>}
                     </div>
                     {(zoneName || workerName) && (
-                      <div className="flex gap-2 text-[10px] items-center">
+                      <div className="flex gap-2 text-xs items-center">
                         {zoneName && <span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-bold flex items-center gap-1"><MapPin className="w-3 h-3" />{zoneName}</span>}
                         {workerName && <WorkerBadge id={lot.workerId} workers={workers} />}
                       </div>
@@ -23715,7 +23732,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                     {/* 進捗バー */}
                     {totalTasks > 0 && (
                       <div>
-                        <div className="flex items-center justify-between text-[10px] mb-0.5">
+                        <div className="flex items-center justify-between text-xs mb-0.5">
                           <span className="text-slate-500">進捗</span>
                           <span className="font-mono font-bold text-slate-700">{completedCount}/{totalTasks} ({progressPct}%)</span>
                         </div>
@@ -23739,7 +23756,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                       </span>
                       {/* 遅延ステータス */}
                       {prog?.isProcessing && delayLevel && delayLevel !== 'ontime' && delayLevel !== 'completed' && (
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
                           delayLevel === 'critical' ? 'bg-rose-100 text-rose-700' :
                           delayLevel === 'warning' ? 'bg-amber-100 text-amber-700' :
                           delayLevel === 'ahead' ? 'bg-emerald-100 text-emerald-700' : ''
@@ -23803,7 +23820,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                         </td>
                         <td className="p-3">
                           {templateName !== '-' ? (
-                            <span className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5 inline-flex items-center gap-1 max-w-[160px]" title={templateName}>
+                            <span className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5 inline-flex items-center gap-1 max-w-[160px]" title={templateName}>
                               <ClipboardList className="w-3 h-3 shrink-0"/>
                               <span className="truncate">{templateName}</span>
                             </span>
@@ -23844,7 +23861,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                         <td className="p-3">
                           {totalTasks > 0 ? (
                             <div className="min-w-[150px]">
-                              <div className="flex items-center justify-between text-[10px] mb-0.5">
+                              <div className="flex items-center justify-between text-xs mb-0.5">
                                 <span className="font-mono font-bold text-slate-700">{completedCount}/{totalTasks}</span>
                                 <span className="font-mono font-bold text-slate-700">{progressPct}%</span>
                               </div>
@@ -23860,7 +23877,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                                 />
                               </div>
                               {prog?.isProcessing && delayLevel && delayLevel !== 'ontime' && delayLevel !== 'completed' && (
-                                <div className={`text-[9px] font-bold mt-0.5 ${
+                                <div className={`text-xs font-bold mt-0.5 ${
                                   delayLevel === 'critical' ? 'text-rose-700' :
                                   delayLevel === 'warning' ? 'text-amber-700' :
                                   delayLevel === 'ahead' ? 'text-emerald-700' : 'text-slate-600'
@@ -23883,7 +23900,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                               const startTime = lot.pauseReason.startTime;
                               const elapsedDisplay = startTime ? formatWorkElapsed(startTime, settings?.workSchedule) : '';
                               return (
-                                <span className={`text-[10px] ${cm.bg} ${cm.border} ${cm.text} border rounded px-1.5 py-0.5 inline-flex items-center gap-1 font-bold whitespace-nowrap`} title={lot.pauseReason.note || lot.pauseReason.label}>
+                                <span className={`text-xs ${cm.bg} ${cm.border} ${cm.text} border rounded px-1.5 py-0.5 inline-flex items-center gap-1 font-bold whitespace-nowrap`} title={lot.pauseReason.note || lot.pauseReason.label}>
                                   <span>{cm.emoji}</span>
                                   <span>{lot.pauseReason.label}</span>
                                   {startTime && <span className="font-mono opacity-70">{elapsedDisplay}</span>}
@@ -24027,7 +24044,7 @@ const EditTimeModal = ({ lot, onClose, onSave }) => {
                 {Array.from({ length: qty }).map((_, i) => (
                   <th key={i} className="p-2 text-center font-bold min-w-[80px] border-l border-slate-200">
                     #{i+1}
-                    {lot.unitSerialNumbers?.[i] && <div className="font-normal text-slate-400 text-[10px]">{lot.unitSerialNumbers[i]}</div>}
+                    {lot.unitSerialNumbers?.[i] && <div className="font-normal text-slate-400 text-xs">{lot.unitSerialNumbers[i]}</div>}
                   </th>
                 ))}
                 <th className="p-2 text-right font-bold bg-slate-200 min-w-[80px] border-l-2 border-slate-300">工程計</th>
@@ -24041,11 +24058,11 @@ const EditTimeModal = ({ lot, onClose, onSave }) => {
                   <tr key={step.id || sIdx} className="border-b hover:bg-blue-50/30">
                     <td className="p-2 sticky left-0 bg-white border-r border-slate-200">
                       <div className="flex items-center gap-1.5">
-                        {isAuto && <span className="bg-purple-500 text-white text-[9px] font-bold px-1 rounded shrink-0">自動</span>}
+                        {isAuto && <span className="bg-purple-500 text-white text-xs font-bold px-1 rounded shrink-0">自動</span>}
                         <span className="font-bold text-slate-700 truncate" title={step.title}>{step.title}</span>
                       </div>
-                      {step.category && <div className="text-[10px] text-slate-400 mt-0.5">{step.category}</div>}
-                      {step.lotOnce && <div className="text-[9px] text-teal-600 font-bold mt-0.5">📦ロット1回(回数)</div>}
+                      {step.category && <div className="text-xs text-slate-400 mt-0.5">{step.category}</div>}
+                      {step.lotOnce && <div className="text-xs text-teal-600 font-bold mt-0.5">📦ロット1回(回数)</div>}
                     </td>
                     {step.lotOnce ? (() => {
                       // ロット1回(段取り)工程: 台列の代わりに回数(lot-k)の入力を colSpan で並べる
@@ -24053,7 +24070,7 @@ const EditTimeModal = ({ lot, onClose, onSave }) => {
                       return (
                         <td colSpan={qty} className="p-1 border-l border-slate-100">
                           {loKeys.length === 0 ? (
-                            <span className="text-slate-300 text-[11px] pl-1">実績なし</span>
+                            <span className="text-slate-300 text-xs pl-1">実績なし</span>
                           ) : (
                             <div className="flex flex-wrap items-center gap-2">
                               {loKeys.map((key, kIdx) => {
@@ -24061,13 +24078,13 @@ const EditTimeModal = ({ lot, onClose, onSave }) => {
                                 const editable = task.status === 'completed' || task.status === 'ng';
                                 return (
                                   <div key={key} className={`flex items-center gap-1 rounded px-1.5 py-0.5 ${task.status === 'ng' ? 'bg-rose-50' : task.status === 'skipped' ? 'bg-slate-50' : 'bg-teal-50'}`}>
-                                    <span className="text-[10px] font-bold text-slate-600">{kIdx + 1}回目</span>
+                                    <span className="text-xs font-bold text-slate-600">{kIdx + 1}回目</span>
                                     {editable ? (
                                       <input type="number" value={task.duration || 0} onChange={(e) => handleDurationChange(key, e.target.value)} className={`w-16 border rounded px-1 py-0.5 text-right font-mono text-xs focus:ring-2 focus:ring-blue-500 outline-none ${task.status === 'ng' ? 'border-rose-300' : 'border-slate-300'}`} min="0" />
                                     ) : (
-                                      <span className="text-[10px] text-slate-400">{task.status === 'skipped' ? '該当なし' : task.status === 'paused' ? '停止' : task.status === 'processing' ? '進行中' : '未着手'}</span>
+                                      <span className="text-xs text-slate-400">{task.status === 'skipped' ? '該当なし' : task.status === 'paused' ? '停止' : task.status === 'processing' ? '進行中' : '未着手'}</span>
                                     )}
-                                    {task.status === 'ng' && <span className="text-[9px] text-rose-600 font-bold">NG</span>}
+                                    {task.status === 'ng' && <span className="text-xs text-rose-600 font-bold">NG</span>}
                                   </div>
                                 );
                               })}
@@ -24083,12 +24100,12 @@ const EditTimeModal = ({ lot, onClose, onSave }) => {
                       const isCompleted = task.status === 'completed';
                       if (isSkipped) {
                         return <td key={u} className="p-1 text-center bg-slate-50 border-l border-slate-100">
-                          <span className="text-slate-400 text-[10px] font-bold">該当なし</span>
+                          <span className="text-slate-400 text-xs font-bold">該当なし</span>
                         </td>;
                       }
                       if (!isCompleted && !isNg) {
                         return <td key={u} className="p-1 text-center bg-amber-50 border-l border-slate-100">
-                          <span className="text-amber-600 text-[10px]" title={task.status}>{task.status === 'paused' ? '停止' : task.status === 'processing' ? '進行中' : task.status === 'waiting' ? '未着手' : task.status}</span>
+                          <span className="text-amber-600 text-xs" title={task.status}>{task.status === 'paused' ? '停止' : task.status === 'processing' ? '進行中' : task.status === 'waiting' ? '未着手' : task.status}</span>
                         </td>;
                       }
                       return (
@@ -24101,7 +24118,7 @@ const EditTimeModal = ({ lot, onClose, onSave }) => {
                             min="0"
                             title={isNg ? 'NG タスクの実時間' : '作業時間 (秒)'}
                           />
-                          {isNg && <div className="text-[9px] text-rose-600 font-bold mt-0.5">NG</div>}
+                          {isNg && <div className="text-xs text-rose-600 font-bold mt-0.5">NG</div>}
                         </td>
                       );
                     })}
@@ -24281,7 +24298,7 @@ const EditMeasurementModal = ({ lot, onClose, onSave }) => {
                           <td className="p-2 font-bold text-blue-800">
                             {calc.label || '計算結果'}
                             {calc.toleranceLower != null && calc.toleranceUpper != null && (
-                              <div className="text-[10px] font-normal text-slate-500">{calc.toleranceLower}~{calc.toleranceUpper} {calc.unit || ''}</div>
+                              <div className="text-xs font-normal text-slate-500">{calc.toleranceLower}~{calc.toleranceUpper} {calc.unit || ''}</div>
                             )}
                           </td>
                           {Array.from({ length: lot.quantity || 1 }).map((_, i) => {
@@ -24292,7 +24309,7 @@ const EditMeasurementModal = ({ lot, onClose, onSave }) => {
                               <td key={i} className="p-2 text-center font-mono font-bold">
                                 {cr && cr.result != null ? (
                                   <span className={cr.isOk ? 'text-green-700' : 'text-red-600'}>
-                                    {cr.result.toFixed(cr.precision ?? 3)} <span className="text-[10px]">{cr.isOk ? 'OK' : 'NG'}</span>
+                                    {cr.result.toFixed(cr.precision ?? 3)} <span className="text-xs">{cr.isOk ? 'OK' : 'NG'}</span>
                                   </span>
                                 ) : '-'}
                               </td>
@@ -24386,7 +24403,7 @@ const TableReportDiagram = ({ config, measValues, calcResults, unitLabel }) => {
             // 設定プレビューと同じ並び順 (上が値, 下がラベル) で位置を一致させる
             return (
               <div key={inp.id} className="absolute flex flex-col items-center" style={{ left: `${inp.x}%`, top: `${inp.y}%`, transform: 'translate(-50%, -50%)' }}>
-                <div className={`text-[9px] font-mono font-bold rounded border px-1 py-0.5 whitespace-nowrap shadow-sm leading-none ${isFilled ? 'border-emerald-400 bg-emerald-50 text-emerald-800' : 'border-slate-300 bg-slate-100 text-slate-400'}`}>
+                <div className={`text-xs font-mono font-bold rounded border px-1 py-0.5 whitespace-nowrap shadow-sm leading-none ${isFilled ? 'border-emerald-400 bg-emerald-50 text-emerald-800' : 'border-slate-300 bg-slate-100 text-slate-400'}`}>
                   {isFilled ? numVal.toFixed(3) : '---'}
                 </div>
                 <span className="text-[8px] font-bold text-slate-600 mt-0.5 bg-white/90 px-0.5 rounded leading-none whitespace-nowrap">{inp.label}</span>
@@ -24437,7 +24454,7 @@ const TableReportDiagram = ({ config, measValues, calcResults, unitLabel }) => {
                   <div className="text-[6px] text-slate-400 truncate leading-tight">{rangeText}</div>
                 </div>
                 <div className="text-right whitespace-nowrap shrink-0">
-                  <span className="font-mono font-black text-[10px] text-slate-800">{cr.result != null ? cr.result.toFixed(cr.precision ?? 3) : '---'}</span>
+                  <span className="font-mono font-black text-xs text-slate-800">{cr.result != null ? cr.result.toFixed(cr.precision ?? 3) : '---'}</span>
                   <span className="text-[6px] text-slate-500 ml-0.5">{cr.unit || ''}</span>
                 </div>
                 <div className="w-6 text-center shrink-0">
@@ -24457,7 +24474,7 @@ const TableReportDiagram = ({ config, measValues, calcResults, unitLabel }) => {
                 <div className="font-bold text-slate-700 leading-tight break-words" title={cr.label || '計算結果'}>{cr.label || '計算結果'}</div>
                 <div className="text-[6px] text-slate-400 leading-tight">{rangeText}</div>
                 <div className="flex items-baseline justify-between gap-1 mt-0.5">
-                  <span className="font-mono font-black text-[10px] text-slate-800 truncate">{cr.result != null ? cr.result.toFixed(cr.precision ?? 3) : '---'}<span className="text-[6px] text-slate-500 ml-0.5">{cr.unit || ''}</span></span>
+                  <span className="font-mono font-black text-xs text-slate-800 truncate">{cr.result != null ? cr.result.toFixed(cr.precision ?? 3) : '---'}<span className="text-[6px] text-slate-500 ml-0.5">{cr.unit || ''}</span></span>
                   {cr.result != null && cr.isOk != null && (
                     <span className={`text-[7px] font-black px-1 rounded shrink-0 ${cr.isOk ? 'bg-emerald-200 text-emerald-800' : 'bg-rose-200 text-rose-800'}`}>{cr.isOk ? 'OK' : 'NG'}</span>
                   )}
@@ -24866,29 +24883,29 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
             <div className="print-page bg-white">
               <div className="flex justify-between items-start mb-3">
                 <div>
-                  <div className="text-[10px] font-bold text-slate-500">部品検査</div>
+                  <div className="text-xs font-bold text-slate-500">部品検査</div>
                   <h1 className="text-xl font-serif font-bold">部品検査チェックシート (多台用)</h1>
                 </div>
-                <div className="text-right text-[10px]">
+                <div className="text-right text-xs">
                   <div>完了: {toDateTimeJp(lot.completedAt || lot.updatedAt)}</div>
                   <div>帳票: <span className="font-bold">{customReportNo}</span></div>
                 </div>
               </div>
-              <div className="flex border border-black mb-2 text-[10px]">
-                <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-gray-300">指図</span><span className="font-bold px-2">{lot.orderNo}</span></div>
-                <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-gray-300">品目コード</span><span className="font-bold px-2">{lot.model}</span></div>
-                <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-gray-300">台数</span><span className="px-2">{lot.quantity || 1}台</span></div>
-                <div className="border-r border-black flex items-center flex-1 min-w-0"><span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-gray-300 shrink-0">担当</span><span className="px-2 truncate">{worker}</span></div>
-                <div className="flex items-center flex-1 min-w-0"><span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-gray-300 shrink-0">備考</span><span className="px-2 truncate">{defects ? <span className="text-red-700 font-bold">{defects.replace(/\n/g, ' / ')}</span> : ''}</span></div>
+              <div className="flex border border-black mb-2 text-xs">
+                <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-gray-300">指図</span><span className="font-bold px-2">{lot.orderNo}</span></div>
+                <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-gray-300">品目コード</span><span className="font-bold px-2">{lot.model}</span></div>
+                <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-gray-300">台数</span><span className="px-2">{lot.quantity || 1}台</span></div>
+                <div className="border-r border-black flex items-center flex-1 min-w-0"><span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-gray-300 shrink-0">担当</span><span className="px-2 truncate">{worker}</span></div>
+                <div className="flex items-center flex-1 min-w-0"><span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-gray-300 shrink-0">備考</span><span className="px-2 truncate">{defects ? <span className="text-red-700 font-bold">{defects.replace(/\n/g, ' / ')}</span> : ''}</span></div>
               </div>
               {/* 適用品質規格 (ロット作成時に焼き付けたスナップショット) */}
               {lot.appliedStandard?.standardNo && lot.appliedStandard.source === 'qualityStandard' && (
-                <div className="flex border border-black mb-2 text-[10px]">
-                  <span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-black">適用規格</span>
+                <div className="flex border border-black mb-2 text-xs">
+                  <span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-black">適用規格</span>
                   <span className="font-bold px-2 border-r border-gray-300">{lot.appliedStandard.standardNo}</span>
                   {lot.appliedStandard.revision && <span className="px-2 border-r border-gray-300">Rev.{lot.appliedStandard.revision}</span>}
                   <span className="px-2 flex-1 truncate text-slate-700">{lot.appliedStandard.name}</span>
-                  {lot.appliedStandard.appliedAt && <span className="px-2 text-slate-500 border-l border-gray-300 text-[9px]">適用: {toDateShort(lot.appliedStandard.appliedAt)}</span>}
+                  {lot.appliedStandard.appliedAt && <span className="px-2 text-slate-500 border-l border-gray-300 text-xs">適用: {toDateShort(lot.appliedStandard.appliedAt)}</span>}
                 </div>
               )}
               {/* 大テーブル: 行=計算、列=機番 */}
@@ -24903,7 +24920,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                         <div className="font-bold">#{i+1}</div>
                         {/* 🚨 2026-08-23: 機番が text-[6px] + truncate だった。紙で外へ出る物なので
                             読めない/末尾が黙って消えるのは追跡できないという事。9px へ上げ、切らずに折り返す。 */}
-                        <div className="font-normal text-[9px] text-slate-600 break-all leading-tight">{lot.unitSerialNumbers?.[i] || ''}</div>
+                        <div className="font-normal text-xs text-slate-600 break-all leading-tight">{lot.unitSerialNumbers?.[i] || ''}</div>
                       </th>
                     ))}
                   </tr>
@@ -24981,7 +24998,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                               const color = mark === '✓' ? 'text-emerald-700' : mark === '－' ? 'text-slate-400' : 'text-rose-500';
                               return (
                                 <td key={i} className="border border-black px-0.5 py-0.5 text-center">
-                                  <span className={`text-[10px] font-bold ${color}`}>{mark || '×'}</span>
+                                  <span className={`text-xs font-bold ${color}`}>{mark || '×'}</span>
                                 </td>
                               );
                             })}
@@ -24999,7 +25016,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                                 const isChecked = !!checked[item.id];
                                 return (
                                   <td key={i} className="border border-black px-0.5 py-0.5 text-center">
-                                    <span className={`text-[10px] font-bold ${isChecked ? 'text-emerald-700' : item.required === false ? 'text-slate-400' : 'text-rose-500'}`}>
+                                    <span className={`text-xs font-bold ${isChecked ? 'text-emerald-700' : item.required === false ? 'text-slate-400' : 'text-rose-500'}`}>
                                       {isChecked ? '✓' : item.required === false ? '－' : '×'}
                                     </span>
                                   </td>
@@ -25014,12 +25031,12 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                   )}
                 </tbody>
               </table>
-              <div className="mt-2 flex justify-between items-center text-[10px]">
+              <div className="mt-2 flex justify-between items-center text-xs">
                 <div>判定: <span className="text-base font-bold ml-2">合格</span></div>
                 <div className="flex gap-2">
                   {['承認', '職長', '担当'].map((title, i) => (
                     <div key={i} className="border border-black text-center">
-                      <div className="bg-gray-100 px-2 py-0.5 text-[9px] border-b border-black">{title}</div>
+                      <div className="bg-gray-100 px-2 py-0.5 text-xs border-b border-black">{title}</div>
                       <div className="h-10 w-14"></div>
                     </div>
                   ))}
@@ -25043,20 +25060,20 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                 </div>
               </div>
               <div className="grid grid-cols-4 gap-4 text-sm">
-                <div className="bg-slate-50 rounded-lg p-3"><div className="text-[10px] text-slate-400 font-bold">指図</div><div className="font-bold text-lg">{lot.orderNo}</div></div>
-                <div className="bg-slate-50 rounded-lg p-3"><div className="text-[10px] text-slate-400 font-bold">品目コード</div><div className="font-bold text-lg">{lot.model}</div></div>
-                <div className="bg-slate-50 rounded-lg p-3"><div className="text-[10px] text-slate-400 font-bold">台数</div><div className="font-bold text-lg">{lot.quantity || 1} 台</div></div>
-                <div className="bg-slate-50 rounded-lg p-3"><div className="text-[10px] text-slate-400 font-bold">担当</div><div className="font-bold text-lg">{worker}</div></div>
+                <div className="bg-slate-50 rounded-lg p-3"><div className="text-xs text-slate-400 font-bold">指図</div><div className="font-bold text-lg">{lot.orderNo}</div></div>
+                <div className="bg-slate-50 rounded-lg p-3"><div className="text-xs text-slate-400 font-bold">品目コード</div><div className="font-bold text-lg">{lot.model}</div></div>
+                <div className="bg-slate-50 rounded-lg p-3"><div className="text-xs text-slate-400 font-bold">台数</div><div className="font-bold text-lg">{lot.quantity || 1} 台</div></div>
+                <div className="bg-slate-50 rounded-lg p-3"><div className="text-xs text-slate-400 font-bold">担当</div><div className="font-bold text-lg">{worker}</div></div>
               </div>
               {/* 適用品質規格 */}
               {lot.appliedStandard?.standardNo && lot.appliedStandard.source === 'qualityStandard' && (
                 <div className="mt-3 bg-indigo-50 border border-indigo-200 rounded-lg p-3 flex items-center gap-3 text-sm">
                   <ClipboardCheck className="w-4 h-4 text-indigo-700"/>
-                  <div className="text-[10px] text-indigo-700 font-bold">適用品質規格</div>
+                  <div className="text-xs text-indigo-700 font-bold">適用品質規格</div>
                   <div className="font-bold text-indigo-900">{lot.appliedStandard.standardNo}</div>
                   {lot.appliedStandard.revision && <div className="text-indigo-700">Rev.{lot.appliedStandard.revision}</div>}
                   <div className="flex-1 text-indigo-800">{lot.appliedStandard.name}</div>
-                  {lot.appliedStandard.appliedAt && <div className="text-[10px] text-indigo-600">適用: {toDateShort(lot.appliedStandard.appliedAt)}</div>}
+                  {lot.appliedStandard.appliedAt && <div className="text-xs text-indigo-600">適用: {toDateShort(lot.appliedStandard.appliedAt)}</div>}
                 </div>
               )}
             </div>
@@ -25082,7 +25099,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                   {/* 測定条件 */}
                   {hasCondition && (
                     <div className={`bg-purple-50 border-b border-purple-200 ${pageLayout === 'compact' ? 'px-3 py-1' : 'px-5 py-2'} text-purple-900`}>
-                      <div className={`flex flex-wrap items-center gap-2 ${pageLayout === 'compact' ? 'text-[10px]' : 'text-xs'}`}>
+                      <div className={`flex flex-wrap items-center gap-2 ${pageLayout === 'compact' ? 'text-xs' : 'text-xs'}`}>
                         <ListChecks className={pageLayout === 'compact' ? 'w-3 h-3' : 'w-3.5 h-3.5'}/>
                         <span className="font-bold">測定条件:</span>
                         {cp.params?.filter(p => p.key || p.value).map((p, i) => (
@@ -25092,7 +25109,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                         ))}
                       </div>
                       {cp.note && (
-                        <div className={`mt-1 italic ${pageLayout === 'compact' ? 'text-[10px]' : 'text-xs'} whitespace-pre-wrap`}>
+                        <div className={`mt-1 italic ${pageLayout === 'compact' ? 'text-xs' : 'text-xs'} whitespace-pre-wrap`}>
                           {cp.note}
                         </div>
                       )}
@@ -25165,9 +25182,9 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                               const val = measValues[inp.id];
                               const isFilled = val != null && val !== '';
                               // spread (1台/A4): 診断図が大きいので文字も大きく
-                              const valFontSize = isSpread ? 'text-base' : (pageLayout === 'compact' || isA4Row) ? 'text-[9px]' : 'text-sm';
+                              const valFontSize = isSpread ? 'text-base' : (pageLayout === 'compact' || isA4Row) ? 'text-xs' : 'text-sm';
                               const valBox = isSpread ? 'h-9 px-3' : (pageLayout === 'compact' || isA4Row) ? 'h-5 px-1' : 'h-7 px-2';
-                              const labelSize = isSpread ? 'text-xs' : (pageLayout === 'compact' || isA4Row) ? 'text-[7px]' : 'text-[9px]';
+                              const labelSize = isSpread ? 'text-xs' : (pageLayout === 'compact' || isA4Row) ? 'text-[7px]' : 'text-xs';
                               return (
                                 <div key={inp.id} className="absolute flex flex-col items-center" style={{ left: `${inp.x}%`, top: `${inp.y}%`, transform: 'translate(-50%, -50%)' }}>
                                   <span className={`${labelSize} font-bold text-slate-500 mb-0.5 bg-white/90 px-1 rounded whitespace-nowrap`}>{inp.label}</span>
@@ -25187,7 +25204,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                               return (
                                 <div key={ai} className="absolute flex flex-col items-center z-20" style={{ left: `${ar.pos.x}%`, top: `${ar.pos.y}%`, transform: 'translate(-50%, -50%)' }}>
                                   <div className={`${color} ${fontSize} font-black px-1.5 rounded-full shadow border-2`} style={{ lineHeight: 1 }}>{ch}</div>
-                                  {ar.label && <span className={`${isSpread ? 'text-xs' : (pageLayout === 'compact' || isA4Row) ? 'text-[7px]' : 'text-[9px]'} font-bold text-slate-700 bg-white/90 px-1 rounded mt-0.5 whitespace-nowrap shadow-sm`}>{ar.label}</span>}
+                                  {ar.label && <span className={`${isSpread ? 'text-xs' : (pageLayout === 'compact' || isA4Row) ? 'text-[7px]' : 'text-xs'} font-bold text-slate-700 bg-white/90 px-1 rounded mt-0.5 whitespace-nowrap shadow-sm`}>{ar.label}</span>}
                                 </div>
                               );
                             })}
@@ -25200,8 +25217,8 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                               if (isHoriz) {
                                 // 8:2 横並び時: 縦並びの計算カード (右パネル内で縦に積む)
                                 const cardSizes = isSpread
-                                  ? { label: 'text-sm', value: 'text-2xl', badge: 'text-xs px-1.5', unit: 'text-xs', tol: 'text-[10px]', pad: 'px-2 py-1.5' }
-                                  : { label: 'text-[9px]', value: 'text-sm', badge: 'text-[8px] px-1', unit: 'text-[7px]', tol: 'text-[7px]', pad: 'px-1.5 py-1' };
+                                  ? { label: 'text-sm', value: 'text-2xl', badge: 'text-xs px-1.5', unit: 'text-xs', tol: 'text-xs', pad: 'px-2 py-1.5' }
+                                  : { label: 'text-xs', value: 'text-sm', badge: 'text-[8px] px-1', unit: 'text-[7px]', tol: 'text-[7px]', pad: 'px-1.5 py-1' };
                                 return (
                                   <div key={calc.id || ci} className={`rounded border ${cr?.isOk === false ? 'border-rose-300 bg-rose-50/40' : cr?.isOk ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200'} ${cardSizes.pad}`}>
                                     <div className="flex items-center justify-between gap-1 mb-0.5">
@@ -25220,14 +25237,14 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                               }
                               return (
                                 <div key={calc.id || ci} className="flex items-center justify-between">
-                                  <div className={pageLayout === 'compact' ? 'text-[10px]' : 'text-xs'}>
+                                  <div className={pageLayout === 'compact' ? 'text-xs' : 'text-xs'}>
                                     <span className="font-bold text-slate-700">{calc.label || '計算結果'}</span>
                                     {pageLayout !== 'compact' && <span className="text-slate-400 ml-2">{calc.toleranceLower != null ? `${calc.toleranceLower}~${calc.toleranceUpper}` : ''} {calc.unit || ''}</span>}
                                   </div>
                                   <div className="flex items-center gap-1.5">
                                     <span className={`${pageLayout === 'compact' ? 'text-sm' : 'text-lg'} font-mono font-black text-slate-800`}>{cr?.result != null ? cr.result.toFixed(cr?.precision ?? 4) : '---'}</span>
                                     {cr?.result != null && (
-                                      <span className={`${pageLayout === 'compact' ? 'text-[9px] px-1' : 'text-xs px-2'} py-0.5 rounded font-bold ${cr.isOk ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                      <span className={`${pageLayout === 'compact' ? 'text-xs px-1' : 'text-xs px-2'} py-0.5 rounded font-bold ${cr.isOk ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
                                         {cr.isOk ? 'OK' : 'NG'}
                                       </span>
                                     )}
@@ -25300,40 +25317,40 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                 <div className="text-xl font-serif font-bold">部品検査チェックシート</div>
               </div>
               <div className="flex gap-4">
-                <div className="text-[10px] border border-black p-1 min-w-[100px]">
+                <div className="text-xs border border-black p-1 min-w-[100px]">
                   <div>完了: {toDateTimeJp(lot.completedAt || lot.updatedAt)}</div>
                 </div>
                 <div className="flex border border-black text-center text-xs h-14 items-stretch divide-x divide-black">
-                  <div className="w-12 flex flex-col"><div className="bg-gray-100 border-b border-black px-1 py-0.5 text-[10px]">承認</div><div className="flex-1"></div></div>
-                  <div className="w-12 flex flex-col"><div className="bg-gray-100 border-b border-black px-1 py-0.5 text-[10px]">職長</div><div className="flex-1"></div></div>
-                  <div className="w-12 flex flex-col"><div className="bg-gray-100 border-b border-black px-1 py-0.5 text-[10px]">担当</div><div className="flex-1 flex items-center justify-center font-bold break-all p-1 text-[9px] leading-tight">{worker}</div></div>
+                  <div className="w-12 flex flex-col"><div className="bg-gray-100 border-b border-black px-1 py-0.5 text-xs">承認</div><div className="flex-1"></div></div>
+                  <div className="w-12 flex flex-col"><div className="bg-gray-100 border-b border-black px-1 py-0.5 text-xs">職長</div><div className="flex-1"></div></div>
+                  <div className="w-12 flex flex-col"><div className="bg-gray-100 border-b border-black px-1 py-0.5 text-xs">担当</div><div className="flex-1 flex items-center justify-center font-bold break-all p-1 text-xs leading-tight">{worker}</div></div>
                 </div>
               </div>
             </div>
             {/* ヘッダー: 指図/品目コード/台数/機番/備考 を横一列 */}
-            <div className="flex border border-black mb-2 text-[10px] items-stretch">
-              <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-gray-300">指図</span><span className="font-bold px-2">{lot.orderNo}</span></div>
-              <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-gray-300">品目コード</span><span className="font-bold px-2">{lot.model}</span></div>
-              <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-gray-300">台数</span><span className="px-2">{lot.quantity || 1}台</span></div>
-              <div className="border-r border-black flex items-center flex-1 min-w-0"><span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-gray-300 shrink-0">機番</span><span className="px-2 truncate font-mono">{(lot.unitSerialNumbers || []).join(' / ') || '-'}</span></div>
-              <div className="flex items-center flex-1 min-w-0"><span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-gray-300 shrink-0">備考</span><span className="px-2 truncate">{defects ? <span className="text-red-700 font-bold">{defects.replace(/\n/g, ' / ')}</span> : ''}</span></div>
+            <div className="flex border border-black mb-2 text-xs items-stretch">
+              <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-gray-300">指図</span><span className="font-bold px-2">{lot.orderNo}</span></div>
+              <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-gray-300">品目コード</span><span className="font-bold px-2">{lot.model}</span></div>
+              <div className="border-r border-black flex items-center"><span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-gray-300">台数</span><span className="px-2">{lot.quantity || 1}台</span></div>
+              <div className="border-r border-black flex items-center flex-1 min-w-0"><span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-gray-300 shrink-0">機番</span><span className="px-2 truncate font-mono">{(lot.unitSerialNumbers || []).join(' / ') || '-'}</span></div>
+              <div className="flex items-center flex-1 min-w-0"><span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-gray-300 shrink-0">備考</span><span className="px-2 truncate">{defects ? <span className="text-red-700 font-bold">{defects.replace(/\n/g, ' / ')}</span> : ''}</span></div>
             </div>
             {/* 適用品質規格 */}
             {lot.appliedStandard?.standardNo && lot.appliedStandard.source === 'qualityStandard' && (
-              <div className="flex border border-black mb-2 text-[10px] items-stretch">
-                <span className="bg-gray-100 px-1 py-1 text-[9px] font-bold border-r border-black">適用規格</span>
+              <div className="flex border border-black mb-2 text-xs items-stretch">
+                <span className="bg-gray-100 px-1 py-1 text-xs font-bold border-r border-black">適用規格</span>
                 <span className="font-bold px-2 border-r border-gray-300">{lot.appliedStandard.standardNo}</span>
                 {lot.appliedStandard.revision && <span className="px-2 border-r border-gray-300">Rev.{lot.appliedStandard.revision}</span>}
                 <span className="px-2 flex-1 truncate text-slate-700">{lot.appliedStandard.name}</span>
-                {lot.appliedStandard.appliedAt && <span className="px-2 text-slate-500 border-l border-gray-300 text-[9px]">適用: {toDateShort(lot.appliedStandard.appliedAt)}</span>}
+                {lot.appliedStandard.appliedAt && <span className="px-2 text-slate-500 border-l border-gray-300 text-xs">適用: {toDateShort(lot.appliedStandard.appliedAt)}</span>}
               </div>
             )}
-            <table className="w-full border-collapse border border-black text-[10px]">
+            <table className="w-full border-collapse border border-black text-xs">
               <tbody>
                 {Object.entries(stepsByCategory).map(([cat, catSteps]) => (
                   <React.Fragment key={cat}>
                     <tr className="bg-gray-200">
-                      <td className="border border-black p-1 font-bold text-left pl-2 text-[9px]">{cat}</td>
+                      <td className="border border-black p-1 font-bold text-left pl-2 text-xs">{cat}</td>
                     </tr>
                     {catSteps.map(step => {
                       const stepIdx = steps.findIndex(s => s.id === step.id);
@@ -25354,7 +25371,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                         return (
                           <tr key={step.id}>
                             <td className="border border-black p-1 align-middle">
-                              <div className="flex items-center gap-2 text-[10px]">
+                              <div className="flex items-center gap-2 text-xs">
                                 <span className="font-bold whitespace-nowrap">{step.title}</span>
                                 <span className="text-gray-600 flex-1 truncate">{step.description || ''}</span>
                                 <span className="flex gap-0.5 shrink-0 font-mono">
@@ -25362,7 +25379,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                                     <span key={i} className={`w-3 text-center font-bold ${m === '✓' ? 'text-emerald-700' : m === '－' ? 'text-slate-400' : 'text-rose-500'}`}>{m || '×'}</span>
                                   ))}
                                 </span>
-                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${allOk ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{allOk ? 'OK' : '未'}</span>
+                                <span className={`text-xs font-bold px-1.5 py-0.5 rounded shrink-0 ${allOk ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{allOk ? 'OK' : '未'}</span>
                               </div>
                             </td>
                           </tr>
@@ -25377,7 +25394,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
                         <React.Fragment key={step.id}>
                           {/* 測定項目ヘッダー */}
                           <tr className="bg-blue-50">
-                            <td className="border border-black p-1 font-bold text-[9px] pl-2">📐 {step.title} {step.description ? `— ${step.description}` : ''}</td>
+                            <td className="border border-black p-1 font-bold text-xs pl-2">📐 {step.title} {step.description ? `— ${step.description}` : ''}</td>
                           </tr>
                           {/* 測定条件 */}
                           {hasCondition && (
@@ -25750,7 +25767,7 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
             className="border rounded px-2 py-1 text-sm bg-slate-50 font-mono"
           />
           <button onClick={() => setSelectedDate(todayStr)} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-2 py-1 rounded font-bold">今日</button>
-          <span className="text-[10px] text-slate-500">実績 {totalActuals}件 / 予定 {totalPlanned}件</span>
+          <span className="text-xs text-slate-500">実績 {totalActuals}件 / 予定 {totalPlanned}件</span>
         </div>
       </div>
       <div className="p-3">
@@ -25763,7 +25780,7 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
               <div className="w-24 shrink-0"></div>
               <div className="flex-1 relative h-5 border-b border-slate-200">
                 {hourMarks.map(m => (
-                  <div key={m.label} className="absolute top-0 bottom-0 border-l border-slate-300 text-[9px] text-slate-500 pl-0.5 font-mono" style={{ left: `${m.left}%` }}>{m.label}</div>
+                  <div key={m.label} className="absolute top-0 bottom-0 border-l border-slate-300 text-xs text-slate-500 pl-0.5 font-mono" style={{ left: `${m.left}%` }}>{m.label}</div>
                 ))}
                 {/* 休憩のグレー帯 */}
                 {breaks.map((b, i) => {
@@ -25823,17 +25840,17 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
                     <div className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center"><User className="w-3 h-3"/></div>
                     <span className="text-xs font-bold text-slate-700 truncate" title={worker.name}>{worker.name}</span>
                   </div>
-                  <div className="text-[10px] text-slate-700 ml-6 leading-tight font-mono font-bold" title="実労働時間 (休憩除外・自動と手動の並行進行を考慮)">
+                  <div className="text-xs text-slate-700 ml-6 leading-tight font-mono font-bold" title="実労働時間 (休憩除外・自動と手動の並行進行を考慮)">
                     実労 {formatTime(realLaborSec)}
                   </div>
-                  <div className="text-[9px] text-slate-500 ml-6 leading-tight font-mono">
+                  <div className="text-xs text-slate-500 ml-6 leading-tight font-mono">
                     自{formatTime(autoLaborSec)} / 手{formatTime(manualLaborSec)}
                   </div>
-                  <div className="text-[9px] text-slate-400 ml-6 leading-tight">
+                  <div className="text-xs text-slate-400 ml-6 leading-tight">
                     {taskCount}項目 / 予{lotCountPlanned}ロット
                   </div>
                   {noTimeCount > 0 && (
-                    <div className="text-[9px] text-amber-500 ml-6 leading-tight font-bold" title="開始時刻が記録されていないため時間軸に表示できない項目数">時刻なし{noTimeCount}</div>
+                    <div className="text-xs text-amber-500 ml-6 leading-tight font-bold" title="開始時刻が記録されていないため時間軸に表示できない項目数">時刻なし{noTimeCount}</div>
                   )}
                 </div>
                 <div className="flex-1 flex flex-col gap-0.5">
@@ -25861,7 +25878,7 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
           </div>
         )}
         {/* 凡例 */}
-        <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-500">
+        <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
           <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-2 rounded bg-purple-400"/>自動工程 (完了)</span>
           <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-2 rounded bg-purple-500"/>自動工程 (進行中)</span>
           <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-2 rounded bg-emerald-500"/>手動工程 (完了)</span>
@@ -25870,7 +25887,7 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
           <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-2 rounded bg-rose-500"/>NG/再作業</span>
           <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-2 border border-dashed border-slate-400 bg-slate-100"/>予定 (未着手)</span>
           <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-2 rounded bg-slate-200"/>休憩</span>
-          <span className="ml-auto text-[10px] text-slate-400">各バー=1項目の実開始〜実終了。同時刻に自動+手動が並ぶ＝並列作業。{totalNoTime > 0 ? ` 時刻記録のない ${totalNoTime} 項目は非表示。` : ''}</span>
+          <span className="ml-auto text-xs text-slate-400">各バー=1項目の実開始〜実終了。同時刻に自動+手動が並ぶ＝並列作業。{totalNoTime > 0 ? ` 時刻記録のない ${totalNoTime} 項目は非表示。` : ''}</span>
         </div>
       </div>
     </div>
@@ -25944,7 +25961,7 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
     <div className="bg-white rounded-xl border border-slate-200 p-4">
       <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
         <div className="text-sm font-bold text-slate-700 flex items-center gap-2"><Users className="w-4 h-4 text-indigo-600" /> 作業者ロスター（今日からの在席）</div>
-        <div className="text-[11px] text-slate-400">セルをタップで 出勤→休み→他工場 を切替</div>
+        <div className="text-xs text-slate-400">セルをタップで 出勤→休み→他工場 を切替</div>
       </div>
       {/* 🚨 2026-09-08 P4: 表は7日ぶんしか無いのに横帯を1本まるごと使い、右の4分の3が空だった(188px・中身24%)。
           表の**右へ**、上に在った読み方の文と、下に在った凡例(出勤／休み／他工場／※の1行)をそのまま並べた。
@@ -25955,7 +25972,7 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
         <table className="text-xs border-collapse">
           <thead><tr className="text-slate-400">
             <th className="px-2 py-1 text-left font-bold sticky left-0 bg-white z-10">作業者</th>
-            {cols.map(ms => { const d = new Date(ms); const wend = d.getDay() === 0 || d.getDay() === 6; return <th key={ms} className={`px-1 py-1 text-center font-bold min-w-[2.4rem] ${wend ? 'text-slate-300' : ''}`}>{d.getMonth() + 1}/{d.getDate()}<div className="text-[9px] font-normal">{DOW[d.getDay()]}</div></th>; })}
+            {cols.map(ms => { const d = new Date(ms); const wend = d.getDay() === 0 || d.getDay() === 6; return <th key={ms} className={`px-1 py-1 text-center font-bold min-w-[2.4rem] ${wend ? 'text-slate-300' : ''}`}>{d.getMonth() + 1}/{d.getDate()}<div className="text-xs font-normal">{DOW[d.getDay()]}</div></th>; })}
           </tr></thead>
           <tbody>
             {names.map(w => (
@@ -25966,14 +25983,14 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
             ))}
             <tr className="border-t-2 border-slate-200 font-bold">
               <td className="px-2 py-1 text-slate-500 sticky left-0 bg-white z-10">在席</td>
-              {cols.map(ms => { const st = rosterDayStats(settings, names, rymd(ms)); return <td key={ms} className="px-1 py-1 text-center"><span className="text-emerald-700">{st.present}</span>{(st.off + st.other) > 0 && <span className="text-[9px] text-slate-400">/{st.total}</span>}</td>; })}
+              {cols.map(ms => { const st = rosterDayStats(settings, names, rymd(ms)); return <td key={ms} className="px-1 py-1 text-center"><span className="text-emerald-700">{st.present}</span>{(st.off + st.other) > 0 && <span className="text-xs text-slate-400">/{st.total}</span>}</td>; })}
             </tr>
           </tbody>
         </table>
       </div>
       <div className="flex-1 min-w-[240px] flex flex-col gap-2">
-        <div data-textfill="1" className="text-[11px] text-slate-500">休み・他工場（製品/最終を掛け持つ人が今日は別工場）の人を外して、<b>その日に本当にこの工場で使える人数</b>を出します。下のキャパ計算もこの在席人数を使います。</div>
-        <div data-textfill="1" className="flex items-center gap-3 text-[10px] text-slate-500 flex-wrap">
+        <div data-textfill="1" className="text-xs text-slate-500">休み・他工場（製品/最終を掛け持つ人が今日は別工場）の人を外して、<b>その日に本当にこの工場で使える人数</b>を出します。下のキャパ計算もこの在席人数を使います。</div>
+        <div data-textfill="1" className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
           <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-emerald-100" />出勤</span>
           <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-200" />休み</span>
           <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-100" />他工場（共有作業者が今日は別工場）</span>
@@ -26240,10 +26257,10 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
           <span className="text-xs text-slate-600">係数 {factor}× ／ 残業 {maxOtPerDay}h/人 ／ 実効 {teamCapacityWeekH.toFixed(1)}h週・{teamCapacityMonthH.toFixed(1)}h月</span>
         </summary>
         <div className="p-3 flex flex-wrap items-end gap-4">
-          <span className="w-full text-[11px] text-slate-500">必要人数・余力判定は「間接作業を加味した実効直工キャパ」で計算します</span>
+          <span className="w-full text-xs text-slate-500">必要人数・余力判定は「間接作業を加味した実効直工キャパ」で計算します</span>
           {/* 間接込み係数 */}
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-bold text-slate-600">間接込み係数</label>
+            <label className="text-xs font-bold text-slate-600">間接込み係数</label>
             <div className="flex items-center gap-1">
               <input
                 type="number" step="0.05" min="1"
@@ -26252,12 +26269,12 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                 className="w-24 border border-slate-300 rounded p-1.5 text-center font-bold text-indigo-700"
                 title="直工1hあたり何h相当の総工数が必要か (1.0=間接ゼロ, 1.3=間接30%)"
               />
-              <span className="text-[10px] text-slate-400">×</span>
+              <span className="text-xs text-slate-400">×</span>
             </div>
           </div>
           {/* 1人1日の最大残業時間 */}
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-bold text-slate-600">1人1日の最大残業</label>
+            <label className="text-xs font-bold text-slate-600">1人1日の最大残業</label>
             <div className="flex items-center gap-1">
               <input
                 type="number" step="0.5" min="0"
@@ -26266,13 +26283,13 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                 className="w-24 border border-slate-300 rounded p-1.5 text-center font-bold text-indigo-700"
                 title="通常勤務でキャパを超えた場合に、まず残業で何h/人まで処理するか。超えた分は土曜出勤で算出します"
               />
-              <span className="text-[10px] text-slate-400">h/人</span>
-              <span className="text-[10px] text-slate-400">×</span>
+              <span className="text-xs text-slate-400">h/人</span>
+              <span className="text-xs text-slate-400">×</span>
             </div>
           </div>
           {/* しきい値 3つ */}
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-bold text-slate-600">余力判定しきい値 (稼働率%)</label>
+            <label className="text-xs font-bold text-slate-600">余力判定しきい値 (稼働率%)</label>
             <div className="flex items-center gap-1.5 text-xs">
               <span className="text-emerald-700">余裕&lt;</span>
               <input type="number" min="1" max="100" value={capLevels.yoyu}
@@ -26290,16 +26307,16 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
           </div>
           {/* 実効直工キャパ表示 */}
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-bold text-slate-600">実効直工キャパ</label>
-            <div className="text-sm font-bold text-slate-800">{teamCapacityWeekH.toFixed(1)}<span className="text-[10px] font-normal text-slate-500">h/週</span> ・ {teamCapacityMonthH.toFixed(1)}<span className="text-[10px] font-normal text-slate-500">h/月</span></div>
+            <label className="text-xs font-bold text-slate-600">実効直工キャパ</label>
+            <div className="text-sm font-bold text-slate-800">{teamCapacityWeekH.toFixed(1)}<span className="text-xs font-normal text-slate-500">h/週</span> ・ {teamCapacityMonthH.toFixed(1)}<span className="text-xs font-normal text-slate-500">h/月</span></div>
           </div>
           {/* 実測係数 + 反映 */}
           <div className="flex flex-col gap-1 ml-auto">
-            <label className="text-[11px] font-bold text-slate-600">実測間接込み係数 <span className="font-normal text-slate-400">(直近90日)</span></label>
+            <label className="text-xs font-bold text-slate-600">実測間接込み係数 <span className="font-normal text-slate-400">(直近90日)</span></label>
             <div className="flex items-center gap-2">
               {measuredFactor.hasData ? (
                 <span className="text-sm font-bold text-slate-800" title={`直工 ${fmtHours(measuredFactor.directSec)} / 間接 ${fmtHours(measuredFactor.indirectSec)}`}>
-                  {measuredFactor.factor.toFixed(2)}<span className="text-[10px] font-normal text-slate-500"> ×</span>
+                  {measuredFactor.factor.toFixed(2)}<span className="text-xs font-normal text-slate-500"> ×</span>
                 </span>
               ) : (
                 <span className="text-xs font-bold text-slate-400">データ不足</span>
@@ -26308,7 +26325,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                 type="button"
                 disabled={!measuredFactor.hasData || !saveSettings}
                 onClick={() => saveSettings && saveSettings({ indirectFactor: Math.round(measuredFactor.factor * 100) / 100 })}
-                className="text-[11px] font-bold px-2.5 py-1 rounded bg-indigo-600 text-white disabled:bg-slate-300 disabled:cursor-not-allowed hover:bg-indigo-700"
+                className="text-xs font-bold px-2.5 py-1 rounded bg-indigo-600 text-white disabled:bg-slate-300 disabled:cursor-not-allowed hover:bg-indigo-700"
                 title="実測した間接込み係数を上の入力に反映します"
               >実測値を係数に反映</button>
             </div>
@@ -26320,7 +26337,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
         <div className="p-3 border-b flex items-center justify-between">
           <h3 className="font-bold text-lg flex items-center gap-2"><Users className="w-5 h-5 text-blue-600"/> 作業者の現状 <span className="text-xs font-normal text-slate-500 ml-2">(次にどう指示するかを判断)</span></h3>
-          <span className="text-[10px] text-slate-500">30秒ごとに自動更新</span>
+          <span className="text-xs text-slate-500">30秒ごとに自動更新</span>
         </div>
         <div className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
           {workerStatuses.length === 0 && (
@@ -26335,27 +26352,27 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                     <div className={`w-7 h-7 rounded-full ${c.badge} text-white flex items-center justify-center shrink-0`}><User className="w-4 h-4"/></div>
                     <span className="text-sm truncate">{worker.name}</span>
                   </div>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${c.badge} text-white whitespace-nowrap ${state === 'processing' ? 'animate-pulse' : ''}`}>{stateLabel}</span>
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${c.badge} text-white whitespace-nowrap ${state === 'processing' ? 'animate-pulse' : ''}`}>{stateLabel}</span>
                 </div>
                 {activeLot && activeProgress && (
                   <div className="bg-white/80 rounded p-1.5 mb-1.5 border border-white/60">
                     <div className="font-bold text-xs text-slate-800 truncate">{activeLot.model}</div>
-                    <div className="text-[10px] text-slate-500 truncate">{activeLot.orderNo} ・{activeLot.quantity}台</div>
+                    <div className="text-xs text-slate-500 truncate">{activeLot.orderNo} ・{activeLot.quantity}台</div>
                     <div className="mt-1 h-1.5 bg-slate-200 rounded-full overflow-hidden">
                       <div className={`h-full ${c.badge}`} style={{ width: `${activeProgress.progressPct}%` }}/>
                     </div>
-                    <div className="flex items-center justify-between mt-0.5 text-[10px]">
+                    <div className="flex items-center justify-between mt-0.5 text-xs">
                       <span className="font-bold">{activeProgress.progressPct}%</span>
                       {activeProgress.etaMs > 0 && <span className="font-mono text-slate-500">予測 {formatHHMM(activeProgress.etaMs)}</span>}
                     </div>
                   </div>
                 )}
-                <div className="flex items-center justify-between text-[11px]">
+                <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-600">待ち <span className="font-bold text-slate-800">{queued.length}</span> 件</span>
                   <span className="text-slate-600">残り <span className={`font-bold ${c.text}`}>{fmtHours(remainingSec)}</span></span>
                 </div>
                 {hint && (
-                  <div className={`mt-1 text-[10px] font-bold ${c.text} flex items-center gap-1`}>
+                  <div className={`mt-1 text-xs font-bold ${c.text} flex items-center gap-1`}>
                     <ArrowRight className="w-3 h-3"/> <span className="truncate">{hint}</span>
                   </div>
                 )}
@@ -26420,13 +26437,13 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
               </button>
             </div>
           </div>
-          <div className="text-[11px] text-slate-500">
-            想定: <span className="font-bold">{HOURS_PER_DAY.toFixed(2)}h/日 ({includeOT ? '残業込' : '定時'}) × {DAYS_PER_WEEK}日</span> = {HOURS_PER_WEEK.toFixed(1)}h/週 ・<span title={isWorkerOverride ? `マスタ設定で上書き (登録${registeredWorkers}人)` : isRosterDriven ? `作業者ロスターの今週平均在席 (登録${registeredWorkers}人・休/他工場を除く)` : '登録作業者数'}>{isWorkerOverride ? '想定' : isRosterDriven ? '在席' : '在籍'} <span className="font-bold">{totalWorkers}</span>人{isWorkerOverride && <span className="text-amber-600 text-[10px] ml-0.5">(設定値)</span>}{isRosterDriven && <span className="text-indigo-600 text-[10px] ml-0.5">(ロスター)</span>}</span> → 実効直工キャパ <span className="font-bold">{teamCapacityWeekH.toFixed(1)}h/週</span>{factor !== 1 && <span className="text-indigo-600 ml-0.5">(間接込み係数{factor.toFixed(2)})</span>}
+          <div className="text-xs text-slate-500">
+            想定: <span className="font-bold">{HOURS_PER_DAY.toFixed(2)}h/日 ({includeOT ? '残業込' : '定時'}) × {DAYS_PER_WEEK}日</span> = {HOURS_PER_WEEK.toFixed(1)}h/週 ・<span title={isWorkerOverride ? `マスタ設定で上書き (登録${registeredWorkers}人)` : isRosterDriven ? `作業者ロスターの今週平均在席 (登録${registeredWorkers}人・休/他工場を除く)` : '登録作業者数'}>{isWorkerOverride ? '想定' : isRosterDriven ? '在席' : '在籍'} <span className="font-bold">{totalWorkers}</span>人{isWorkerOverride && <span className="text-amber-600 text-xs ml-0.5">(設定値)</span>}{isRosterDriven && <span className="text-indigo-600 text-xs ml-0.5">(ロスター)</span>}</span> → 実効直工キャパ <span className="font-bold">{teamCapacityWeekH.toFixed(1)}h/週</span>{factor !== 1 && <span className="text-indigo-600 ml-0.5">(間接込み係数{factor.toFixed(2)})</span>}
           </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600 text-[11px]">
+            <thead className="bg-slate-50 text-slate-600 text-xs">
               <tr>
                 <th className="p-2 text-left font-bold w-8"></th>
                 <th className="p-2 text-left font-bold">週</th>
@@ -26500,13 +26517,13 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                       {isExpanded ? <ChevronDown className="w-4 h-4"/> : <ChevronRight className="w-4 h-4"/>}
                     </td>
                     <td className="p-2 font-bold text-slate-700">{wk.label}</td>
-                    <td className="p-2 text-[11px] text-slate-500 font-mono whitespace-nowrap">{wk.start.getMonth()+1}/{wk.start.getDate()}〜{wk.end.getMonth()+1}/{wk.end.getDate()}</td>
+                    <td className="p-2 text-xs text-slate-500 font-mono whitespace-nowrap">{wk.start.getMonth()+1}/{wk.start.getDate()}〜{wk.end.getMonth()+1}/{wk.end.getDate()}</td>
                     {/* ロット数: split時は内訳付き */}
                     <td className="p-2 text-right">
                       {splitMode === 'split' && wk.lots.length > 0 ? (
                         <div className="flex flex-col items-end leading-tight">
                           <span className="font-bold">{wk.lots.length}</span>
-                          <span className="text-[10px] flex gap-1 font-mono">
+                          <span className="text-xs flex gap-1 font-mono">
                             <span className="text-cyan-700">中{wk.byCategory.intermediate.lots.length}</span>
                             <span className="text-violet-700">完{wk.byCategory.final.lots.length}</span>
                           </span>
@@ -26520,7 +26537,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                       {splitMode === 'split' && wk.totalQty > 0 ? (
                         <div className="flex flex-col items-end leading-tight">
                           <span className="font-bold text-blue-700">{wk.totalQty}</span>
-                          <span className="text-[10px] flex gap-1 font-mono">
+                          <span className="text-xs flex gap-1 font-mono">
                             <span className="text-cyan-700">中{wk.byCategory.intermediate.qty}</span>
                             <span className="text-violet-700">完{wk.byCategory.final.qty}</span>
                           </span>
@@ -26534,7 +26551,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                       {splitMode === 'split' && wk.totalSec > 0 ? (
                         <div className="flex flex-col items-end leading-tight">
                           <span className="font-bold">{fmtHours(wk.totalSec)}</span>
-                          <span className="text-[10px] flex gap-1">
+                          <span className="text-xs flex gap-1">
                             <span className="text-cyan-700">中{fmtHours(wk.byCategory.intermediate.sec)}</span>
                             <span className="text-violet-700">完{fmtHours(wk.byCategory.final.sec)}</span>
                           </span>
@@ -26568,9 +26585,9 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                         const plan = overflowPlan(wk.totalSec / 3600, totalWorkers, factor, HOURS_PER_WEEK, HOURS_PER_DAY, DAYS_PER_WEEK, maxOtPerDay);
                         return (
                           <div className="flex flex-col items-center gap-1">
-                            <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${c.badge} text-white whitespace-nowrap`}>{lv.label}</span>
+                            <span className={`inline-block text-xs font-bold px-2 py-0.5 rounded-full ${c.badge} text-white whitespace-nowrap`}>{lv.label}</span>
                             {plan.over && (
-                              <span className="inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-300 whitespace-nowrap leading-tight" title={`通常勤務(${teamCapacityWeekH.toFixed(1)}h/週)を ${plan.excessH.toFixed(1)}h 超過。残業のべ${plan.otClockH.toFixed(1)}h${plan.satDays > 0 ? ` + 土曜${plan.satDays}日` : ''}で処理可能。`}>
+                              <span className="inline-block text-xs font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-300 whitespace-nowrap leading-tight" title={`通常勤務(${teamCapacityWeekH.toFixed(1)}h/週)を ${plan.excessH.toFixed(1)}h 超過。残業のべ${plan.otClockH.toFixed(1)}h${plan.satDays > 0 ? ` + 土曜${plan.satDays}日` : ''}で処理可能。`}>
                                 要残業 のべ{plan.otClockH.toFixed(1)}h（約{plan.otPerPersonH.toFixed(1)}h/人）{plan.satDays > 0 ? ` ＋ 土曜出勤 ${plan.satDays}日` : ''}
                               </span>
                             )}
@@ -26616,7 +26633,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                                       <span className="text-base">{dowJp[dowIdx]}</span>
                                       <span className="ml-1.5 text-slate-500 text-xs">{d.ds.getMonth()+1}/{d.ds.getDate()}</span>
                                     </div>
-                                    <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded-full ${dayC.badge} text-white`}>{dayLv.label}</span>
+                                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${dayC.badge} text-white`}>{dayLv.label}</span>
                                   </div>
                                   <div className="text-sm text-slate-500">
                                     <span className="font-mono font-black text-base text-slate-800">{d.sec > 0 ? fmtHours(d.sec) : '-'}</span>
@@ -26625,7 +26642,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                                   </div>
                                   {/* カテゴリ別内訳 (split時) */}
                                   {splitMode === 'split' && d.sec > 0 && (
-                                    <div className="grid grid-cols-2 gap-1 text-[10px]">
+                                    <div className="grid grid-cols-2 gap-1 text-xs">
                                       {dayCatAgg.intermediate.sec > 0 && (
                                         <div className="bg-cyan-50 border border-cyan-200 rounded px-1 py-0.5">
                                           <div className="font-bold text-cyan-700">中間</div>
@@ -26663,10 +26680,10 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                                           <div key={l.id} className={`bg-white border-l-2 ${catC.border} border-y border-r border-slate-200 rounded px-1.5 py-1 text-xs leading-tight`}>
                                             <div className="flex items-center justify-between gap-1">
                                               <span className="font-bold text-slate-800 truncate" title={`${l.orderNo} ${l.model}`}>{l.orderNo}</span>
-                                              <span className="text-[10px] text-blue-600 font-bold shrink-0">{l.quantity || 1}台</span>
+                                              <span className="text-xs text-blue-600 font-bold shrink-0">{l.quantity || 1}台</span>
                                               <span className="font-mono font-bold text-slate-600 shrink-0">{fmtHours(sec)}</span>
                                             </div>
-                                            <div className="text-[11px] text-slate-600 truncate" title={`${l.model} ${tplName}`}>
+                                            <div className="text-xs text-slate-600 truncate" title={`${l.model} ${tplName}`}>
                                               <span className="font-bold">{l.model}</span>{tplName && <span className={catC.text}> / {tplName}</span>}
                                             </div>
                                           </div>
@@ -26728,13 +26745,13 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
         <div className="p-3 border-b flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-bold text-lg flex items-center gap-2"><Calendar className="w-5 h-5 text-teal-600"/> 月次仕事量 <span className="text-xs font-normal text-slate-500">(納期ベース)</span></h3>
-          <div className="text-[11px] text-slate-500">
-            想定: <span className="font-bold">{HOURS_PER_DAY.toFixed(2)}h/日 ({includeOT ? '残業込' : '定時'}) × {DAYS_PER_MONTH}日</span> = {HOURS_PER_MONTH.toFixed(1)}h/月 ・<span title={isWorkerOverride ? `マスタ設定で上書き (登録${registeredWorkers}人)` : '登録作業者数'}>{isWorkerOverride ? '想定' : '在籍'} <span className="font-bold">{totalWorkers}</span>人{isWorkerOverride && <span className="text-amber-600 text-[10px] ml-0.5">(設定値)</span>}</span> → 実効直工キャパ <span className="font-bold">{teamCapacityMonthH.toFixed(1)}h/月</span>{factor !== 1 && <span className="text-indigo-600 ml-0.5">(間接込み係数{factor.toFixed(2)})</span>}
+          <div className="text-xs text-slate-500">
+            想定: <span className="font-bold">{HOURS_PER_DAY.toFixed(2)}h/日 ({includeOT ? '残業込' : '定時'}) × {DAYS_PER_MONTH}日</span> = {HOURS_PER_MONTH.toFixed(1)}h/月 ・<span title={isWorkerOverride ? `マスタ設定で上書き (登録${registeredWorkers}人)` : '登録作業者数'}>{isWorkerOverride ? '想定' : '在籍'} <span className="font-bold">{totalWorkers}</span>人{isWorkerOverride && <span className="text-amber-600 text-xs ml-0.5">(設定値)</span>}</span> → 実効直工キャパ <span className="font-bold">{teamCapacityMonthH.toFixed(1)}h/月</span>{factor !== 1 && <span className="text-indigo-600 ml-0.5">(間接込み係数{factor.toFixed(2)})</span>}
           </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600 text-[11px]">
+            <thead className="bg-slate-50 text-slate-600 text-xs">
               <tr>
                 <th className="p-2 text-left font-bold">月</th>
                 <th className="p-2 text-right font-bold">ロット</th>
@@ -26769,7 +26786,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                     </td>
                     <td className="p-2 text-center">
                       {mo.totalSec > 0 ? (
-                        <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${c.badge} text-white whitespace-nowrap`}>{lv.label}</span>
+                        <span className={`inline-block text-xs font-bold px-2 py-0.5 rounded-full ${c.badge} text-white whitespace-nowrap`}>{lv.label}</span>
                       ) : <span className="text-slate-300 text-xs">空き</span>}
                     </td>
                   </tr>
@@ -26781,7 +26798,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
       </div>
 
       {/* 凡例 */}
-      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-[11px] text-slate-600 flex flex-wrap items-center gap-3">
+      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs text-slate-600 flex flex-wrap items-center gap-3">
         <span className="font-bold">負荷状態の見方 (稼働率):</span>
         <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-emerald-500"/>余裕あり (&lt;{capLevels.yoyu}%)</span>
         <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-blue-500"/>適正 (&lt;{capLevels.tekisei}%)</span>
@@ -27493,18 +27510,18 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
           <p className="text-xs text-slate-500 mb-3">対象月を選び、<b>月初の作業計画報告書</b>と<b>月末の業務実績報告書</b>を PDF / Excel で出力します。すべて実データに基づきます。</p>
           <div data-band="monthly-head" className="flex flex-wrap items-end gap-4">
             <div>
-              <label className="block text-[11px] font-bold text-slate-500 mb-1">対象月</label>
+              <label className="block text-xs font-bold text-slate-500 mb-1">対象月</label>
               <input type="month" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} className="border border-slate-300 rounded px-3 py-1.5 font-bold text-slate-700" />
             </div>
             <div>
-              <label className="block text-[11px] font-bold text-slate-500 mb-1">提出先</label>
+              <label className="block text-xs font-bold text-slate-500 mb-1">提出先</label>
               <input type="text" value={orgName} onChange={e => persistOrg(e.target.value)} onBlur={commitOrgDept} placeholder="例: ○○製作所" className="border border-slate-300 rounded px-3 py-1.5 text-sm w-48" />
             </div>
             <div>
-              <label className="block text-[11px] font-bold text-slate-500 mb-1">グループ / 部署名</label>
+              <label className="block text-xs font-bold text-slate-500 mb-1">グループ / 部署名</label>
               <input type="text" value={deptName} onChange={e => persistDept(e.target.value)} onBlur={commitOrgDept} placeholder="例: 品質保証部 検査課" className="border border-slate-300 rounded px-3 py-1.5 text-sm w-56" />
             </div>
-            <div className="text-[11px] text-slate-500">作成者: <b className="text-slate-700">{currentUserName || '—'}</b> / 作成日: <b className="text-slate-700">{todayStr}</b></div>
+            <div className="text-xs text-slate-500">作成者: <b className="text-slate-700">{currentUserName || '—'}</b> / 作成日: <b className="text-slate-700">{todayStr}</b></div>
             {/* 🧹 2026-09-07: 「出力:」だけの箱(本番実測 70px・中身47%)を、この対象月の行へ合体した(決まり1・3)。押す物・文言はそのまま。
                 🧹 2026-09-08: ml-auto をやめた。max-w-screen-xl(1280px)で必ず2行目へ折り返し、その行の左に 659px(53%)の空きが
                 出ていた(1366px で実測)。決まり1の⚠「内側の空きが幅の25%を超えたら直す」。
@@ -27543,12 +27560,12 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
               <div className="grid grid-cols-3 gap-2">
                 {[['予定ロット', p.lotCount, '件'], ['予定台数', p.totalQty, '台'], ['予定総工数', num1(p.totalHours), 'h'], ['週平均必要人数', num1(p.avgReqWorkers), '名'], ['在籍人数', effectiveWorkers, '名'], ['余力判定', p.capacityLabel, '']].map(([l, v, u], i) => (
                   <div key={i} className="border border-slate-200 rounded-lg p-2 text-center bg-slate-50">
-                    <div className="text-[10px] text-slate-500">{l}</div>
-                    <div className="text-lg font-black text-slate-800">{v}<span className="text-[10px] font-normal ml-0.5">{u}</span></div>
+                    <div className="text-xs text-slate-500">{l}</div>
+                    <div className="text-lg font-black text-slate-800">{v}<span className="text-xs font-normal ml-0.5">{u}</span></div>
                   </div>
                 ))}
               </div>
-              <div className="text-[11px] text-slate-500 bg-indigo-50/60 border border-indigo-100 rounded px-2 py-1.5">
+              <div className="text-xs text-slate-500 bg-indigo-50/60 border border-indigo-100 rounded px-2 py-1.5">
                 実効直工キャパ <span className="font-bold text-slate-700">{teamCapacityWeekH.toFixed(1)}h/週</span>
                 {factor !== 1 && <span className="text-indigo-600"> (間接込み係数 {factor.toFixed(2)})</span>}
                 <span className="text-slate-400"> ・必要人数は間接作業を加味した値</span>
@@ -27556,7 +27573,7 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
               <div>
                 <div className="text-xs font-bold text-slate-600 mb-1">週次計画</div>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-[11px] border-collapse">
+                  <table className="w-full text-xs border-collapse">
                     <thead><tr className="bg-slate-100 text-slate-600"><th className="border border-slate-200 px-1.5 py-1">週</th><th className="border border-slate-200 px-1.5 py-1">ロット</th><th className="border border-slate-200 px-1.5 py-1">台数</th><th className="border border-slate-200 px-1.5 py-1">工数h</th><th className="border border-slate-200 px-1.5 py-1">必要人数</th><th className="border border-slate-200 px-1.5 py-1">残業/土曜</th></tr></thead>
                     <tbody>
                       {p.weeks.every(w => w.lots === 0) ? <tr><td colSpan={6} className="text-center text-slate-400 py-3">該当なし</td></tr> :
@@ -27570,11 +27587,11 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
                   </table>
                 </div>
                 {p.overflow.any ? (
-                  <div className="mt-1.5 text-[11px] bg-rose-50 border border-rose-200 rounded px-2 py-1.5 text-rose-800">
+                  <div className="mt-1.5 text-xs bg-rose-50 border border-rose-200 rounded px-2 py-1.5 text-rose-800">
                     当月をこなすには（通常勤務に加えて）: <span className="font-bold">残業 のべ {num1(p.overflow.otClockH)} h ＋ 土曜出勤 {p.overflow.satDays} 日</span> → これで全件処理可能
                   </div>
                 ) : (
-                  <div className="mt-1.5 text-[11px] bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5 text-emerald-800">
+                  <div className="mt-1.5 text-xs bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5 text-emerald-800">
                     通常勤務内で処理可能（残業・土曜は不要）
                   </div>
                 )}
@@ -27582,7 +27599,7 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
               <div>
                 <div className="text-xs font-bold text-slate-600 mb-1">品目別 予定 (上位)</div>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-[11px] border-collapse">
+                  <table className="w-full text-xs border-collapse">
                     <thead><tr className="bg-slate-100 text-slate-600"><th className="border border-slate-200 px-1.5 py-1 text-left">品目コード</th><th className="border border-slate-200 px-1.5 py-1">台数</th><th className="border border-slate-200 px-1.5 py-1">工数h</th></tr></thead>
                     <tbody>
                       {p.byModel.length === 0 ? <tr><td colSpan={3} className="text-center text-slate-400 py-3">該当なし</td></tr> :
@@ -27594,7 +27611,7 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
                 </div>
               </div>
               {(p.overdueCount > 0 || p.noDueInfo > 0) && (
-                <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
                   {p.overdueCount > 0 && <div>納期超過: {p.overdueCount}件 ({num1(p.overdueSec / 3600)}h)</div>}
                   {p.noDueInfo > 0 && <div>納期未設定(進行中): {p.noDueInfo}件 — 計画対象外</div>}
                 </div>
@@ -27610,15 +27627,15 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
               <div className="grid grid-cols-3 gap-2">
                 {[['完了ロット', a.lotCount, '件'], ['完了台数', a.totalQty, '台'], ['実総工数', num1(a.totalHours), 'h'], ['稼働作業者', a.activeWorkerCount, '名'], ['1人当工数', a.activeWorkerCount ? num1(a.perWorkerHours) : '—', 'h'], ['直工比率', directIndirect.hasData ? num1(directIndirect.directPct) : '—', directIndirect.hasData ? '%' : '']].map(([l, v, u], i) => (
                   <div key={i} className="border border-slate-200 rounded-lg p-2 text-center bg-slate-50">
-                    <div className="text-[10px] text-slate-500">{l}</div>
-                    <div className="text-lg font-black text-slate-800">{v}<span className="text-[10px] font-normal ml-0.5">{u}</span></div>
+                    <div className="text-xs text-slate-500">{l}</div>
+                    <div className="text-lg font-black text-slate-800">{v}<span className="text-xs font-normal ml-0.5">{u}</span></div>
                   </div>
                 ))}
               </div>
               <div>
                 <div className="text-xs font-bold text-slate-600 mb-1">週次実績</div>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-[11px] border-collapse">
+                  <table className="w-full text-xs border-collapse">
                     <thead><tr className="bg-slate-100 text-slate-600"><th className="border border-slate-200 px-1.5 py-1">週</th><th className="border border-slate-200 px-1.5 py-1">完了ロット</th><th className="border border-slate-200 px-1.5 py-1">台数</th><th className="border border-slate-200 px-1.5 py-1">実工数h</th></tr></thead>
                     <tbody>
                       {a.weeks.every(w => w.lots === 0) ? <tr><td colSpan={4} className="text-center text-slate-400 py-3">該当なし</td></tr> :
@@ -27632,7 +27649,7 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
               <div>
                 <div className="text-xs font-bold text-slate-600 mb-1">作業者別 実績 (上位)</div>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-[11px] border-collapse">
+                  <table className="w-full text-xs border-collapse">
                     <thead><tr className="bg-slate-100 text-slate-600"><th className="border border-slate-200 px-1.5 py-1 text-left">作業者</th><th className="border border-slate-200 px-1.5 py-1">台数</th><th className="border border-slate-200 px-1.5 py-1">工数h</th>{a.hasNgRework && <th className="border border-slate-200 px-1.5 py-1">NG</th>}{a.hasNgRework && <th className="border border-slate-200 px-1.5 py-1">手直し</th>}</tr></thead>
                     <tbody>
                       {a.byWorker.length === 0 ? <tr><td colSpan={a.hasNgRework ? 5 : 3} className="text-center text-slate-400 py-3">該当なし</td></tr> :
@@ -27644,30 +27661,30 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-2">
-                <div className="border border-rose-200 bg-rose-50 rounded-lg p-2 text-center"><div className="text-[10px] text-rose-600">不具合</div><div className="text-lg font-black text-rose-700">{q.defects.length}<span className="text-[10px] font-normal">件</span></div></div>
-                <div className="border border-purple-200 bg-purple-50 rounded-lg p-2 text-center"><div className="text-[10px] text-purple-600">軽微不良</div><div className="text-lg font-black text-purple-700">{q.complaints.length}<span className="text-[10px] font-normal">件</span></div></div>
-                <div className="border border-indigo-200 bg-indigo-50 rounded-lg p-2 text-center"><div className="text-[10px] text-indigo-600">気づき改善</div><div className="text-lg font-black text-indigo-700">{q.improvements.length}<span className="text-[10px] font-normal">件</span></div></div>
+                <div className="border border-rose-200 bg-rose-50 rounded-lg p-2 text-center"><div className="text-xs text-rose-600">不具合</div><div className="text-lg font-black text-rose-700">{q.defects.length}<span className="text-xs font-normal">件</span></div></div>
+                <div className="border border-purple-200 bg-purple-50 rounded-lg p-2 text-center"><div className="text-xs text-purple-600">軽微不良</div><div className="text-lg font-black text-purple-700">{q.complaints.length}<span className="text-xs font-normal">件</span></div></div>
+                <div className="border border-indigo-200 bg-indigo-50 rounded-lg p-2 text-center"><div className="text-xs text-indigo-600">気づき改善</div><div className="text-lg font-black text-indigo-700">{q.improvements.length}<span className="text-xs font-normal">件</span></div></div>
               </div>
               {/* 改善PDCA(改善カルテ) 当月サマリー */}
               <div className="mt-2 border border-emerald-200 bg-emerald-50/60 rounded-lg p-2">
-                <div className="text-[11px] font-bold text-emerald-800 mb-1 flex items-center gap-1"><ClipboardList className="w-3.5 h-3.5"/> 改善PDCA（当月）</div>
+                <div className="text-xs font-bold text-emerald-800 mb-1 flex items-center gap-1"><ClipboardList className="w-3.5 h-3.5"/> 改善PDCA（当月）</div>
                 <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 text-center">
-                  <div className="bg-white rounded p-1"><div className="text-[9px] text-slate-500">起票</div><div className="text-base font-black text-slate-700">{pdcaData.createdN}</div></div>
-                  <div className="bg-white rounded p-1"><div className="text-[9px] text-slate-500">実施</div><div className="text-base font-black text-blue-700">{pdcaData.actedN}</div></div>
-                  <div className="bg-white rounded p-1"><div className="text-[9px] text-slate-500">定着</div><div className="text-base font-black text-emerald-700">{pdcaData.effectiveN}</div></div>
-                  <div className="bg-white rounded p-1"><div className="text-[9px] text-slate-500">削減(確定分)</div><div className="text-sm font-black text-emerald-700">{pdcaData.savedHours >= 0.1 ? `${pdcaData.savedHours.toFixed(1)}h` : '—'}</div></div>
-                  <div className="bg-white rounded p-1"><div className="text-[9px] text-slate-500">不具合減(月)</div><div className="text-base font-black text-rose-700">{pdcaData.defectCut || 0}</div></div>
+                  <div className="bg-white rounded p-1"><div className="text-xs text-slate-500">起票</div><div className="text-base font-black text-slate-700">{pdcaData.createdN}</div></div>
+                  <div className="bg-white rounded p-1"><div className="text-xs text-slate-500">実施</div><div className="text-base font-black text-blue-700">{pdcaData.actedN}</div></div>
+                  <div className="bg-white rounded p-1"><div className="text-xs text-slate-500">定着</div><div className="text-base font-black text-emerald-700">{pdcaData.effectiveN}</div></div>
+                  <div className="bg-white rounded p-1"><div className="text-xs text-slate-500">削減(確定分)</div><div className="text-sm font-black text-emerald-700">{pdcaData.savedHours >= 0.1 ? `${pdcaData.savedHours.toFixed(1)}h` : '—'}</div></div>
+                  <div className="bg-white rounded p-1"><div className="text-xs text-slate-500">不具合減(月)</div><div className="text-base font-black text-rose-700">{pdcaData.defectCut || 0}</div></div>
                 </div>
-                <div className="text-[10px] text-slate-500 mt-1">進行中 {pdcaData.runningN}件 ・ 効果なし完了 {pdcaData.noeffectN}件</div>
+                <div className="text-xs text-slate-500 mt-1">進行中 {pdcaData.runningN}件 ・ 効果なし完了 {pdcaData.noeffectN}件</div>
               </div>
-              <div className="text-[11px] text-slate-600">
+              <div className="text-xs text-slate-600">
                 <span className="font-bold">当月の目標時間更新:</span> {targetUpdates.length > 0 ? `${targetUpdates.length}件` : 'なし'}
                 {targetUpdates.length > 0 && <span className="text-slate-400"> (詳細はPDF/Excel §6)</span>}
               </div>
             </div>
           </div>
         </div>
-        <div className="text-[11px] text-slate-400 text-center pb-4">※ プレビューは主要な表のみを表示しています。完全版 (注記・全明細・品質詳細・目標時間更新一覧) は PDF / Excel に含まれます。</div>
+        <div className="text-xs text-slate-400 text-center pb-4">※ プレビューは主要な表のみを表示しています。完全版 (注記・全明細・品質詳細・目標時間更新一覧) は PDF / Excel に含まれます。</div>
       </div>
     </div>
   );
@@ -27843,7 +27860,7 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
               <button onClick={() => setViewGridLot(null)} className="hover:bg-white/20 rounded-full p-1.5"><X className="w-5 h-5"/></button>
             </div>
             <div className="flex-1 overflow-auto p-4 bg-slate-50">
-              <div className="text-[11px] text-slate-500 mb-2">※ 閲覧専用です（ここからは変更できません）。✓完了 ▶作業中 修正=やり直し NG –該当なし。</div>
+              <div className="text-xs text-slate-500 mb-2">※ 閲覧専用です（ここからは変更できません）。✓完了 ▶作業中 修正=やり直し NG –該当なし。</div>
               <CustomCompactGrid localSteps={viewGridLot.steps || []} lot={viewGridLot} tasks={viewGridLot.tasks || {}} batchStartTimes={{}} globalNextTask={null} getTaskStatusColor={() => ''} formatTime={formatTime} activeCustomTaskKey={null} onCellClick={() => {}} onBatchClick={() => {}} onSkipRow={() => {}} />
             </div>
           </div>
@@ -27899,13 +27916,16 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 items-start pb-10">
             {sortedCompletedLots.map(lot => (
               <div key={lot.id} className="bg-white border rounded-xl p-4 shadow-sm flex flex-col gap-2 h-auto hover:shadow-md transition-shadow">
-                <div className="flex justify-between items-start gap-2">
+                {/* 🧹 2026-09-23: 品目コードと品名を1つの塊に。縮まない6つの押す物に挟まれて コードが1文字ずつ縦に並んでいた(1024〜1600px)。押す物は下の段へ(44px) */}
+                <div className="flex flex-col gap-2">
+                  <div className="min-w-0">
                   <div className="font-bold text-lg text-slate-800 break-all">{lot.model}</div>
                   {/* 🏷 品名(品目テキスト)。品目コードだけでは何の部品か分からない(2026-09-21 清水さん) */}
                   {resolveItemName(lot.model, lot.modelText, settings?.itemMaster) ? (
                     <div className="text-xs text-slate-600 break-all" data-history-card-model-text>{resolveItemName(lot.model, lot.modelText, settings?.itemMaster)}</div>
                   ) : null}
-                  <div className="flex gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 [&>button]:inline-flex [&>button]:min-h-11 [&>button]:min-w-11 [&>button]:items-center [&>button]:justify-center" onClick={(e) => e.stopPropagation()}>
                     <button onClick={() => setViewGridLot(lot)} className="p-1.5 border rounded hover:bg-indigo-50 text-indigo-600 transition-colors" title="作業表で見る（工程×台）"><LayoutGrid className="w-4 h-4" /></button>
                     <button onClick={() => setReportLot(lot)} className="p-1.5 border rounded hover:bg-green-50 text-green-600 transition-colors" title="成績表プレビュー"><Printer className="w-4 h-4" /></button>
                     <button onClick={() => setEditingTimeLot(lot)} className="p-1.5 border rounded hover:bg-amber-50 text-amber-600 transition-colors" title="作業時間編集"><Clock className="w-4 h-4" /></button>
@@ -27927,7 +27947,7 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
                     // 🚨投げっぱなしにしない(2026-08-31)。失敗は saveData が画面の保存失敗バナーと
                     //   「全部送り直す」の控えで人に知らせる。ここは受け取って console に残す(誰も受け取らない拒否にしない)。
                     saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }).catch((err) => console.error('🚨 検査リストへの復帰を保存できませんでした', lot.id, err));
-                  }} className="text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 px-2 py-0.5 rounded font-bold flex items-center gap-1 shrink-0" title="完了を取り消して検査リストへ戻す"><RotateCcw className="w-3 h-3"/> 検査リストへ復帰</button>
+                  }} className="text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 min-h-11 px-2 rounded font-bold flex items-center gap-1 shrink-0" title="完了を取り消して検査リストへ戻す"><RotateCcw className="w-3 h-3"/> 検査リストへ復帰</button>
                 </div>
               </div>
             ))}
@@ -31191,7 +31211,7 @@ const QuotaStoppedPanel = ({ until }) => (
                🚨 <b>この間、ロットの保存は止めています</b>（手元が空のまま書くと検査記録が消えるため）。
                入力した内容は画面に残っています。<b>画面を閉じないでください。</b>
              </div>
-             <div className="text-[11px] opacity-80 mt-1">止まった読み取り: {quotaBlock.cols.join(' / ')}（自動では読み直しません）</div>
+             <div className="text-xs opacity-80 mt-1">止まった読み取り: {quotaBlock.cols.join(' / ')}（自動では読み直しません）</div>
            </div>
            <div className="flex flex-col gap-1 shrink-0">
              <button onClick={() => setShowReadBudget(true)} className="bg-white text-rose-700 px-3 py-1 rounded font-bold text-xs hover:bg-rose-50">通信量を見る</button>
@@ -31214,9 +31234,9 @@ const QuotaStoppedPanel = ({ until }) => (
                  <div className={`mt-3 inline-block px-4 py-2 rounded-lg font-black ${quotaPercent(readTally.total) >= 50 ? 'bg-rose-100 text-rose-700' : quotaPercent(readTally.total) >= 20 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
                    無料枠の {quotaPercent(readTally.total)}%
                  </div>
-                 <div className="text-[11px] text-slate-500 mt-1">無料枠 = 1日 {FREE_TIER_DAILY_READS.toLocaleString()}件・<b>4つのアプリで1つ</b></div>
+                 <div className="text-xs text-slate-500 mt-1">無料枠 = 1日 {FREE_TIER_DAILY_READS.toLocaleString()}件・<b>4つのアプリで1つ</b></div>
                </div>
-               <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-[11px] text-amber-900 leading-relaxed">
+               <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900 leading-relaxed">
                  ⚠ ここに出るのは <b>この端末の分だけ</b> です。他の人の端末や、製品検査・最終検査・司令塔が読んだ分は
                  このアプリからは分かりません。<b>全部の合計はもっと多い</b>と思ってください（正確な合計は Firebase コンソールの使用量）。
                </div>
@@ -31232,7 +31252,7 @@ const QuotaStoppedPanel = ({ until }) => (
                    {Object.keys(readTally.byCol).length === 0 && <div className="px-3 py-3 text-xs text-slate-400 text-center">まだ数えていません</div>}
                  </div>
                </div>
-               <div className="mt-4 text-[11px] text-slate-600 leading-relaxed space-y-1">
+               <div className="mt-4 text-xs text-slate-600 leading-relaxed space-y-1">
                  <div>・繋ぎ直した回数: <b>{readTally.attaches}回</b>（1回ごとに、そのぶんをもう一度読みます）</div>
                  <div>・枠が戻るのは <b>{formatClock(nextQuotaResetAt(Date.now()))} 頃</b>（米西部の0時）</div>
                  <div>・数え方: 最初に読んだ件数＋あとで変わった件数。<b>0件でも1件ぶん</b>かかります。</div>
@@ -31243,10 +31263,10 @@ const QuotaStoppedPanel = ({ until }) => (
                </div>
                <div className="mt-4">
                  <div className="font-black text-slate-700 mb-1 text-xs">直す前 ⇔ 直した後 の突き合わせ（ロット件数）</div>
-                 {lotsWindowWhole && <div className="text-[11px] bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-emerald-800">ロットが窓（{LOTS_LIVE_LIMIT}件）に全部収まっているので、<b>今までと同じ物をそのまま出しています</b>（合体すら起きていません）。</div>}
-                 {!lotsWindowWhole && lotsMergeDiff === null && <div className="text-[11px] bg-slate-50 border rounded px-3 py-2 text-slate-500">まだ過去を読んでいないので突き合わせていません（完了履歴・分析・達成率のどれかを開くと読みます）。</div>}
+                 {lotsWindowWhole && <div className="text-xs bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-emerald-800">ロットが窓（{LOTS_LIVE_LIMIT}件）に全部収まっているので、<b>今までと同じ物をそのまま出しています</b>（合体すら起きていません）。</div>}
+                 {!lotsWindowWhole && lotsMergeDiff === null && <div className="text-xs bg-slate-50 border rounded px-3 py-2 text-slate-500">まだ過去を読んでいないので突き合わせていません（完了履歴・分析・達成率のどれかを開くと読みます）。</div>}
                  {!lotsWindowWhole && lotsMergeDiff && (
-                   <div className={`text-[11px] rounded px-3 py-2 border ${lotsMergeDiff.missing > 0 ? 'bg-rose-50 border-rose-300 text-rose-800' : lotsMergeDiff.extra > 0 ? 'bg-amber-50 border-amber-300 text-amber-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
+                   <div className={`text-xs rounded px-3 py-2 border ${lotsMergeDiff.missing > 0 ? 'bg-rose-50 border-rose-300 text-rose-800' : lotsMergeDiff.extra > 0 ? 'bg-amber-50 border-amber-300 text-amber-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
                      今までの読み方（新しい方から{LOTS_HISTORY_LIMIT}件）= <b>{lotsMergeDiff.base}件</b> / いま画面が使っている = <b>{lotsMergeDiff.merged}件</b><br />
                      {lotsMergeDiff.missing > 0 ? <>🚨 <b>{lotsMergeDiff.missing}件 少ない = 欠陥です。</b>この数字は信じないでください。</>
                        : lotsMergeDiff.extra > 0 ? <>⚠ {lotsMergeDiff.extra}件 多い（{LOTS_HISTORY_LIMIT}件の窓の外に居た<b>未完了ロット</b>を拾いました。今までは作業画面にも出ていなかった分です）。</>
@@ -31381,7 +31401,7 @@ const QuotaStoppedPanel = ({ until }) => (
            <div className="flex items-center gap-1">
              <button onClick={(e) => openHdrMenu('docs', e)} className="relative bg-slate-600 hover:bg-slate-500 text-white px-2 py-1.5 rounded-md shadow-sm flex items-center gap-0.5" title="資料 (作業標準 / ノート)">
                <BookOpen className="w-4 h-4" /><ChevronDown className="w-3 h-3" />
-               {notes.filter(n => n.isPersonal && n.author === currentUserName).length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-[9px] text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{notes.filter(n => n.isPersonal && n.author === currentUserName).length}</span>}
+               {notes.filter(n => n.isPersonal && n.author === currentUserName).length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-xs text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{notes.filter(n => n.isPersonal && n.author === currentUserName).length}</span>}
              </button>
              <button onClick={(e) => openHdrMenu('time', e)} className={`px-2 py-1.5 rounded-md shadow-sm flex items-center gap-1 text-xs font-bold whitespace-nowrap ${activeIndirect ? 'bg-amber-500 hover:bg-amber-600 text-white animate-pulse' : 'bg-amber-600 hover:bg-amber-700 text-white'}`} title="時間 (間接作業 / 日次集計)">
                <Coffee className="w-4 h-4" />{activeIndirect ? <span>{activeIndirect.category}...</span> : null}<ChevronDown className="w-3 h-3" />
@@ -31404,7 +31424,7 @@ const QuotaStoppedPanel = ({ until }) => (
                  title="異常値の件数は、過去のロットを読んでから出します（押すと読みに行きます）"
                >
                  <AlertTriangle className="w-4 h-4"/>
-                 <span className="absolute -top-1 -right-1 bg-slate-600 text-[9px] text-white rounded-full w-5 h-4 flex items-center justify-center font-black">?</span>
+                 <span className="absolute -top-1 -right-1 bg-slate-600 text-xs text-white rounded-full w-5 h-4 flex items-center justify-center font-black">?</span>
                </button>
              )}
              {lotsHistoryReady && anomalyCount > 0 && (
@@ -31414,12 +31434,12 @@ const QuotaStoppedPanel = ({ until }) => (
                  title={`異常値 ${anomalyCount} 件を検出 — クリックで一覧表示&修正`}
                >
                  <AlertTriangle className="w-4 h-4"/>
-                 <span className="absolute -top-1 -right-1 bg-rose-600 text-[9px] text-white rounded-full w-5 h-4 flex items-center justify-center font-black">{anomalyCount > 99 ? '99+' : anomalyCount}</span>
+                 <span className="absolute -top-1 -right-1 bg-rose-600 text-xs text-white rounded-full w-5 h-4 flex items-center justify-center font-black">{anomalyCount > 99 ? '99+' : anomalyCount}</span>
                </button>
              )}
              <button onClick={(e) => openHdrMenu('more', e)} className="relative bg-slate-600 hover:bg-slate-500 text-white px-2 py-1.5 rounded-md shadow-sm flex items-center gap-0.5" title="その他 (使い方 / お知らせ)">
                <Wrench className="w-4 h-4" /><ChevronDown className="w-3 h-3" />
-               {(() => { const unread = announcements.filter(a => (a.mode || 'confirm') === 'confirm' && !(a.confirmedBy || []).includes(currentUserName)).length; return unread > 0 ? <span className="absolute -top-1 -right-1 bg-red-500 text-[9px] text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{unread}</span> : null; })()}
+               {(() => { const unread = announcements.filter(a => (a.mode || 'confirm') === 'confirm' && !(a.confirmedBy || []).includes(currentUserName)).length; return unread > 0 ? <span className="absolute -top-1 -right-1 bg-red-500 text-xs text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{unread}</span> : null; })()}
              </button>
              {/* 厳密モードは「作業最適化」タブに統合（ヘッダーボタンは廃止） */}
              <button onClick={() => { setEditingLot(null); setLotFormQty(1); setShowLotModal(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md text-sm font-bold flex items-center gap-1.5 shadow-sm" title="入荷登録">
@@ -31439,12 +31459,12 @@ const QuotaStoppedPanel = ({ until }) => (
              </>)}
              {hdrMenu.type === 'docs' && (<>
                <button onClick={() => { setHdrMenu(null); setShowWorkStandardsLib(true); }} className="w-full text-left px-3 py-2 hover:bg-orange-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><BookOpen className="w-4 h-4 text-orange-600" /> 作業標準</button>
-               <button onClick={() => { setHdrMenu(null); setShowNoteModal(true); }} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><FileText className="w-4 h-4 text-slate-600" /> ノート{notes.filter(n => n.isPersonal && n.author === currentUserName).length > 0 && <span className="ml-auto bg-amber-400 text-[9px] text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{notes.filter(n => n.isPersonal && n.author === currentUserName).length}</span>}</button>
+               <button onClick={() => { setHdrMenu(null); setShowNoteModal(true); }} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><FileText className="w-4 h-4 text-slate-600" /> ノート{notes.filter(n => n.isPersonal && n.author === currentUserName).length > 0 && <span className="ml-auto bg-amber-400 text-xs text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{notes.filter(n => n.isPersonal && n.author === currentUserName).length}</span>}</button>
              </>)}
              {hdrMenu.type === 'more' && (<>
                <button onClick={() => { setHdrMenu(null); setShowHelp(true); }} className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><HelpCircle className="w-4 h-4 text-blue-600" /> 使い方</button>
-               <button onClick={() => { setHdrMenu(null); setShowReadBudget(true); }} className="w-full text-left px-3 py-2 hover:bg-emerald-50 flex items-center gap-2 text-slate-700 text-sm font-bold" title="この端末が今日読んだ件数と、無料枠に対する割合"><Activity className="w-4 h-4 text-emerald-600" /> 通信量（この端末）{readTally.total > 0 && <span className={`ml-auto text-[9px] text-white rounded px-1 font-black ${quotaPercent(readTally.total) >= 20 ? 'bg-rose-500' : 'bg-emerald-500'}`}>{quotaPercent(readTally.total)}%</span>}</button>
-               <button onClick={() => { setHdrMenu(null); setShowAnnouncementModal(true); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><Megaphone className="w-4 h-4 text-purple-600" /> お知らせ{(() => { const unread = announcements.filter(a => (a.mode || 'confirm') === 'confirm' && !(a.confirmedBy || []).includes(currentUserName)).length; return unread > 0 ? <span className="ml-auto bg-red-500 text-[9px] text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{unread}</span> : null; })()}</button>
+               <button onClick={() => { setHdrMenu(null); setShowReadBudget(true); }} className="w-full text-left px-3 py-2 hover:bg-emerald-50 flex items-center gap-2 text-slate-700 text-sm font-bold" title="この端末が今日読んだ件数と、無料枠に対する割合"><Activity className="w-4 h-4 text-emerald-600" /> 通信量（この端末）{readTally.total > 0 && <span className={`ml-auto text-xs text-white rounded px-1 font-black ${quotaPercent(readTally.total) >= 20 ? 'bg-rose-500' : 'bg-emerald-500'}`}>{quotaPercent(readTally.total)}%</span>}</button>
+               <button onClick={() => { setHdrMenu(null); setShowAnnouncementModal(true); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><Megaphone className="w-4 h-4 text-purple-600" /> お知らせ{(() => { const unread = announcements.filter(a => (a.mode || 'confirm') === 'confirm' && !(a.confirmedBy || []).includes(currentUserName)).length; return unread > 0 ? <span className="ml-auto bg-red-500 text-xs text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{unread}</span> : null; })()}</button>
              </>)}
            </div>
          </>
@@ -31492,7 +31512,7 @@ const QuotaStoppedPanel = ({ until }) => (
          {activeTab === 'progress' && (
            quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
            : !progressDataReady ? <DataLoadingPanel what="過去のロットと間接作業" />
-           : <ProgressOverviewView lots={lots} workers={workers} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} />
+           : <ProgressOverviewView lots={lots} /* 🧹 2026-09-23 休止中の人を在籍・ロスター・タイムラインに数えない(製品と同じ。作業者の現状の5人と合わせる) */ workers={activeWorkersOf(workers || [])} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} />
          )}
          {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)} />}
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
@@ -31514,7 +31534,7 @@ const QuotaStoppedPanel = ({ until }) => (
                <div className="h-7 w-px bg-slate-300 mx-1" />
                <div className="flex bg-slate-100 rounded-lg p-1">
                  <button onClick={() => setOptimizeView('target')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'target' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}><Target className="w-4 h-4" /> 目標時間最適化</button>
-                 <button onClick={() => setOptimizeView('strict')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'strict' ? 'bg-white shadow text-rose-600' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 厳密モード{strictReviewCount > 0 && <span className="bg-amber-400 text-white text-[9px] rounded-full w-4 h-4 flex items-center justify-center font-black">{strictReviewCount}</span>}</button>
+                 <button onClick={() => setOptimizeView('strict')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'strict' ? 'bg-white shadow text-rose-600' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 厳密モード{strictReviewCount > 0 && <span className="bg-amber-400 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-black">{strictReviewCount}</span>}</button>
                  <button onClick={() => setOptimizeView('skill')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'skill' ? 'bg-white shadow text-orange-600' : 'text-slate-500 hover:text-slate-700'}`}><Award className="w-4 h-4" /> スキルマップ</button>
                  <button onClick={() => setOptimizeView('modelgroup')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'modelgroup' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}><Layers className="w-4 h-4" /> 品目グループ</button>
                  <button onClick={() => setOptimizeView('tskip')} data-optimize-tab="tskip" className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'tskip' ? 'bg-white shadow text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 抜取/スキップ</button>
@@ -31672,7 +31692,7 @@ const QuotaStoppedPanel = ({ until }) => (
                  <div className="text-center py-12 text-emerald-600"><CheckCircle2 className="w-12 h-12 mx-auto mb-2"/> 異常値なし — データはクリーンです 🎉</div>
                ) : (
                  <>
-                   <div className="mb-3 text-[11px] text-slate-600 bg-amber-50 border border-amber-200 rounded-lg p-2.5 leading-relaxed">
+                   <div className="mb-3 text-xs text-slate-600 bg-amber-50 border border-amber-200 rounded-lg p-2.5 leading-relaxed">
                      <b>色付き＝注意のヒント</b>です（<span className="text-rose-700 font-bold">赤</span>=0秒/4時間超/時刻の矛盾、<span className="text-amber-700 font-bold">黄</span>=5秒未満）。<u>判定ではありません</u>。<br/>
                      セルをタップ →「目標で埋める / 実時間を手入力 / <b className="text-amber-700">📦該当なし(対象外)</b> / そのまま」。<br/>
                      <b className="text-amber-700">該当なし(対象外)</b>＝この台はこの工程をやらない（例: 制御装置用意など「ロットで1回だけ」の工程の2台目以降）。集計・異常から外れます。<b>工程名をタップ</b>すると「#2以降をまとめて該当なし」にできます（過去データの片付け用・1台目は残す）。
@@ -31871,7 +31891,7 @@ const QuotaStoppedPanel = ({ until }) => (
                     </select>
                  </div>
                  <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-1">納期 <span className="text-[10px] font-normal text-slate-400">(2026/5/15 or 2026-05-15)</span></label>
+                    <label className="block text-sm font-bold text-slate-700 mb-1">納期 <span className="text-xs font-normal text-slate-400">(2026/5/15 or 2026-05-15)</span></label>
                     <input
                       name="dueDate"
                       type="text"
@@ -31886,7 +31906,7 @@ const QuotaStoppedPanel = ({ until }) => (
 
                {/* Added: Entry Date Field */}
                <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-1">入庫日時 <span className="text-[10px] font-normal text-slate-400">(時刻省略時は 08:30 を自動設定)</span></label>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">入庫日時 <span className="text-xs font-normal text-slate-400">(時刻省略時は 08:30 を自動設定)</span></label>
                   <input
                     name="entryAt"
                     type="text"

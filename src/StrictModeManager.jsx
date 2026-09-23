@@ -135,11 +135,11 @@ export function MultiUnitGantt({ lot }) {
   const { map, breaks } = buildCompressedAxis(allIv);
   return (
     <div>
-      <div className="text-[10px] text-slate-400 mb-1">指図 {lot.orderNo}（代表ロット・{lot.units.length}台）／横軸＝実時間（長い空き時間は ┊ で圧縮）</div>
+      <div className="text-xs text-slate-400 mb-1">指図 {lot.orderNo}（代表ロット・{lot.units.length}台）／横軸＝実時間（長い空き時間は ┊ で圧縮）</div>
       <div className="space-y-1">
         {lot.units.map((u, ri) => (
           <div key={ri} className="flex items-center gap-2">
-            <div className="w-9 text-[11px] font-bold text-slate-600 shrink-0 text-right flex items-center justify-end gap-0.5">台{u.unitNo}{u.ok ? <CheckCircle2 className="w-3 h-3 text-emerald-500" /> : <AlertTriangle className="w-3 h-3 text-rose-500" />}</div>
+            <div className="w-9 text-xs font-bold text-slate-600 shrink-0 text-right flex items-center justify-end gap-0.5">台{u.unitNo}{u.ok ? <CheckCircle2 className="w-3 h-3 text-emerald-500" /> : <AlertTriangle className="w-3 h-3 text-rose-500" />}</div>
             <div className="flex-1 relative h-5 bg-slate-100 rounded">
               {breaks.map((b, i) => <div key={'b' + i} className="absolute top-0 h-5 border-l border-dashed border-slate-300" style={{ left: b + '%' }} />)}
               {u.steps.map((s, i) => {
@@ -174,7 +174,7 @@ function EvidenceDetail({ row }) {
             <div className="space-y-1">
               {stepStats.map(s => {
                 if (s.timed === 0) return (
-                  <div key={s.title} className="flex items-center gap-2 text-[11px]">
+                  <div key={s.title} className="flex items-center gap-2 text-xs">
                     <div className="w-28 truncate text-slate-400" title={s.title}>{s.title}</div>
                     <div className="flex-1 h-2 rounded border border-dashed border-slate-300 bg-slate-50" />
                     <div className="w-36 text-right text-slate-400 shrink-0">記録なし <span className="text-slate-300">0/{s.started}台</span></div>
@@ -183,7 +183,7 @@ function EvidenceDetail({ row }) {
                 const reliable = s.timed >= 2;
                 const ratio = reliable && s.mean > 0 ? Math.min(1, s.std / s.mean) : 0;
                 return (
-                  <div key={s.title} className="flex items-center gap-2 text-[11px]">
+                  <div key={s.title} className="flex items-center gap-2 text-xs">
                     <div className="w-28 truncate text-slate-700 font-bold" title={s.title}>{s.title}</div>
                     <div className="flex-1 h-2 bg-slate-200 rounded overflow-hidden">
                       <div className={`h-2 ${!reliable ? 'bg-amber-300' : ratio > 0.4 ? 'bg-rose-400' : ratio > 0.15 ? 'bg-amber-400' : 'bg-emerald-400'}`} style={{ width: Math.max(4, (reliable ? ratio : 0.5) * 100) + '%' }} />
@@ -193,21 +193,21 @@ function EvidenceDetail({ row }) {
                 );
               })}
             </div>
-            <div className="text-[10px] text-slate-400 mt-1">※ <b>時間(&gt;0)が記録された台だけ</b>で算出。<b>「記録なし」＝時間が取れていない工程</b>（順番のみ記録）。短い(緑)＝安定／長い(赤)＝バラつき大／1台のみ(橙)＝判定不可。</div>
+            <div className="text-xs text-slate-400 mt-1">※ <b>時間(&gt;0)が記録された台だけ</b>で算出。<b>「記録なし」＝時間が取れていない工程</b>（順番のみ記録）。短い(緑)＝安定／長い(赤)＝バラつき大／1台のみ(橙)＝判定不可。</div>
           </div>
           {/* 複数台の作業の流れ（並行作業のイメージ）— 実時間が十分あるときだけ */}
           <div>
             <div className="text-xs font-black text-slate-700 mb-1.5 flex items-center gap-2 flex-wrap">作業の流れ（並行作業のイメージ）
-              <span className="inline-flex items-center gap-1 text-[10px] text-slate-500"><span className="w-2.5 h-2.5 rounded bg-blue-500 inline-block" /><Hand className="w-3 h-3" />手動</span>
-              <span className="inline-flex items-center gap-1 text-[10px] text-slate-500"><span className="w-2.5 h-2.5 rounded bg-violet-500 inline-block" /><Cpu className="w-3 h-3" />自動測定</span>
+              <span className="inline-flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded bg-blue-500 inline-block" /><Hand className="w-3 h-3" />手動</span>
+              <span className="inline-flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded bg-violet-500 inline-block" /><Cpu className="w-3 h-3" />自動測定</span>
             </div>
             {ganttUseful ? (
               <>
                 <div className="bg-white rounded border border-slate-200 p-2 max-h-72 overflow-auto"><MultiUnitGantt lot={ganttLot} /></div>
-                <div className="text-[10px] text-slate-400 mt-1">※ 全台が同じ横軸。<b>ある台の自動測定(紫)中に別の台で手動(青)が進んでいれば「自動測定中にできる作業」</b>。細い灰色＝時間記録なし(0s)。✓＝テンプレ順どおり。</div>
+                <div className="text-xs text-slate-400 mt-1">※ 全台が同じ横軸。<b>ある台の自動測定(紫)中に別の台で手動(青)が進んでいれば「自動測定中にできる作業」</b>。細い灰色＝時間記録なし(0s)。✓＝テンプレ順どおり。</div>
               </>
             ) : (
-              <div className="bg-white rounded border border-dashed border-slate-300 p-4 text-[11px] text-slate-500 leading-relaxed">
+              <div className="bg-white rounded border border-dashed border-slate-300 p-4 text-xs text-slate-500 leading-relaxed">
                 <b>時間記録が不十分</b>で、作業の流れ（並行作業のイメージ）は表示できません。<br />各工程の<b>実作業時間</b>が記録された台が増えると表示されます。今は<b>順番の一貫性</b>のみで判断してください。
               </div>
             )}
@@ -244,7 +244,7 @@ export function StrictModeManagerModal({ lots, templates, rules = {}, history = 
           <ShieldCheck className="w-6 h-6" />
           <div className="flex-1 min-w-0">
             <div className="font-black text-lg leading-tight">作業データ分析・改善（品目コード × テンプレ）</div>
-            <div className="text-[11px] text-rose-100">各コンボの実データを見て判断 →「<b>📊 実データ分析</b>」で全ロットの実作業を確認 → <b>厳密化／テンプレ改善／様子見</b>を選ぶ。厳密化はその中の1アクション。</div>
+            <div className="text-xs text-rose-100">各コンボの実データを見て判断 →「<b>📊 実データ分析</b>」で全ロットの実作業を確認 → <b>厳密化／テンプレ改善／様子見</b>を選ぶ。厳密化はその中の1アクション。</div>
           </div>
           <div className="flex bg-white/15 rounded-lg p-0.5">
             <button onClick={() => setView('table')} className={`px-3 py-1.5 rounded text-xs font-bold ${view === 'table' ? 'bg-white text-rose-700' : 'text-white'}`}>管理表</button>
@@ -264,7 +264,7 @@ export function StrictModeManagerModal({ lots, templates, rules = {}, history = 
               <label className="flex items-center gap-1.5 text-sm font-bold text-slate-600">確立とみなす台数:
                 <input type="number" min="1" max="999" value={maturityUnits} onChange={e => onSetMaturity && onSetMaturity(Math.max(1, Math.min(999, Number(e.target.value) || 1)))} className="border border-slate-300 rounded px-2 py-1 text-sm w-16" /> 台
               </label>
-              <div className="ml-auto text-[11px] text-slate-500">決定済み {decided}（厳密 {strictOn}）{goodUndecided > 0 && <span className="ml-1 text-emerald-700 font-bold">・確立し未設定 {goodUndecided}</span>}</div>
+              <div className="ml-auto text-xs text-slate-500">決定済み {decided}（厳密 {strictOn}）{goodUndecided > 0 && <span className="ml-1 text-emerald-700 font-bold">・確立し未設定 {goodUndecided}</span>}</div>
             </div>
 
             <div className="flex-1 overflow-auto">
@@ -294,10 +294,10 @@ export function StrictModeManagerModal({ lots, templates, rules = {}, history = 
                           <td className="px-3 py-2 text-center font-mono text-slate-700">{r.completedUnits}台</td>
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`inline-flex items-center gap-1 text-[11px] font-black px-1.5 py-0.5 rounded border ${Q.cls}`}><Q.Icon className="w-3 h-3" />{Q.label}</span>
+                              <span className={`inline-flex items-center gap-1 text-xs font-black px-1.5 py-0.5 rounded border ${Q.cls}`}><Q.Icon className="w-3 h-3" />{Q.label}</span>
                               <span className="text-xs text-slate-600">{r.timedUnits > 0 ? `実時刻 ${r.timedUnits}台中 ${r.consistentUnits}台が順番どおり（${r.consistencyPct}%）` : '実時刻データなし'}</span>
-                              <button onClick={() => toggle(r.key)} className="text-[11px] text-rose-600 hover:underline font-bold">{isOpen ? '閉じる' : '根拠を見る▼'}</button>
-                              {onOpenAnalysis && <button onClick={() => onOpenAnalysis(r)} className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-2 py-0.5 rounded flex items-center gap-1">📊 実データ分析</button>}
+                              <button onClick={() => toggle(r.key)} className="text-xs text-rose-600 hover:underline font-bold">{isOpen ? '閉じる' : '根拠を見る▼'}</button>
+                              {onOpenAnalysis && <button onClick={() => onOpenAnalysis(r)} className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-2 py-0.5 rounded flex items-center gap-1">📊 実データ分析</button>}
                             </div>
                           </td>
                           <td className="px-3 py-2 text-center"><StateBadge enabled={rule?.enabled} /></td>
@@ -305,32 +305,32 @@ export function StrictModeManagerModal({ lots, templates, rules = {}, history = 
                             {(() => {
                               const o = optimalByCombo[r.key];
                               const oEnabled = rule?.optimalOrder?.enabled === true;
-                              if (!o) return <span className="text-[11px] text-slate-400">対象データなし</span>;
+                              if (!o) return <span className="text-xs text-slate-400">対象データなし</span>;
                               const thin = !o.hasEnoughData;            // 時刻ありロットが3件未満
                               const noTimeData = o.lotsWithTime === 0;
                               return (
                                 <div className="flex flex-col gap-1 min-w-[200px]">
                                   {/* データ素性を最初に正直に出す */}
-                                  <div className={`text-[10px] font-bold ${thin ? 'text-amber-700' : 'text-slate-500'}`}>
+                                  <div className={`text-xs font-bold ${thin ? 'text-amber-700' : 'text-slate-500'}`}>
                                     時刻データ {o.lotsWithTime}/{o.sampleLotCount}ロット{o.lotsNoTime > 0 && <span className="text-slate-400">（{o.lotsNoTime}件は時刻なしで除外）</span>}
                                     {thin && <span className="ml-1 bg-amber-100 text-amber-800 px-1 rounded">データ不足・参考値</span>}
                                   </div>
                                   {noTimeData ? (
-                                    <div className="text-[11px] text-slate-400">時刻データが無く算出不可</div>
+                                    <div className="text-xs text-slate-400">時刻データが無く算出不可</div>
                                   ) : (
                                     <>
-                                      <div className="text-[11px] text-slate-600">
+                                      <div className="text-xs text-slate-600">
                                         <b className="text-indigo-700">▲{o.savedPct}% 短縮</b>
                                         <span className="text-slate-400"> ({Math.round(o.serialSec / 60)}→{Math.round(o.optimalSec / 60)}分)</span>
                                       </div>
                                       {o.batchSteps.length > 0
-                                        ? <div className="text-[10px] text-slate-500 leading-snug">まとめ作業: {o.batchSteps.map((b, i) => (
+                                        ? <div className="text-xs text-slate-500 leading-snug">まとめ作業: {o.batchSteps.map((b, i) => (
                                             <span key={i} className="inline-block mr-1">
                                               {b.title}
                                               <span className={`ml-0.5 px-1 rounded ${b.confident ? 'bg-emerald-100 text-emerald-700 font-bold' : 'bg-slate-100 text-slate-400'}`}>{b.batched}/{b.total}={b.ratePct}%{b.confident ? '・確定' : '・参考'}</span>
                                             </span>
                                           ))}</div>
-                                        : <div className="text-[10px] text-slate-400">まとめ作業の実績なし（時刻データ上）</div>}
+                                        : <div className="text-xs text-slate-400">まとめ作業の実績なし（時刻データ上）</div>}
                                     </>
                                   )}
                                   {onDecideOptimal && (
@@ -338,19 +338,19 @@ export function StrictModeManagerModal({ lots, templates, rules = {}, history = 
                                       onClick={() => onDecideOptimal(r, !oEnabled)}
                                       disabled={rule?.enabled !== true || noTimeData}
                                       title={rule?.enabled !== true ? 'まず「厳密」をONにしてください（最適順は厳密モードの“どの順番か”を決めるもの）' : (thin ? 'データが少ないので強制は非推奨（参考値）' : '')}
-                                      className={`mt-0.5 px-2 py-1 rounded text-[10px] font-bold border w-fit ${rule?.enabled !== true || noTimeData ? 'bg-slate-50 text-slate-300 border-slate-200 cursor-not-allowed' : oEnabled ? 'bg-indigo-600 text-white border-indigo-600' : thin ? 'bg-white text-amber-700 border-amber-300 hover:bg-amber-50' : 'bg-white text-indigo-700 border-indigo-300 hover:bg-indigo-50'}`}
+                                      className={`mt-0.5 px-2 py-1 rounded text-xs font-bold border w-fit ${rule?.enabled !== true || noTimeData ? 'bg-slate-50 text-slate-300 border-slate-200 cursor-not-allowed' : oEnabled ? 'bg-indigo-600 text-white border-indigo-600' : thin ? 'bg-white text-amber-700 border-amber-300 hover:bg-amber-50' : 'bg-white text-indigo-700 border-indigo-300 hover:bg-indigo-50'}`}
                                     >{oEnabled ? '✓ データ最適順を強制中' : thin ? '強制する（参考・非推奨）' : 'データ最適順を強制する'}</button>
                                   )}
                                 </div>
                               );
                             })()}
                           </td>
-                          <td className="px-3 py-2 text-[11px] text-slate-500 whitespace-nowrap">{rule?.decidedAt ? <>{rule.decidedBy || '?'}<br />{fmtWhen(rule.decidedAt)}</> : '-'}</td>
+                          <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">{rule?.decidedAt ? <>{rule.decidedBy || '?'}<br />{fmtWhen(rule.decidedAt)}</> : '-'}</td>
                           <td className="px-3 py-2">
                             <div className="flex gap-1 justify-center">
-                              <button title="この組み合わせを厳密(順番強制)に" onClick={() => onDecide(r, true)} className={`px-2 py-1 rounded text-[11px] font-bold border ${rule?.enabled === true ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-rose-700 border-rose-300 hover:bg-rose-50'}`}>厳密</button>
-                              <button title="ガイド(警告のみ・飛ばし可)に" onClick={() => onDecide(r, false)} className={`px-2 py-1 rounded text-[11px] font-bold border ${rule?.enabled === false ? 'bg-slate-600 text-white border-slate-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>ガイド</button>
-                              {rule?.enabled != null && <button title="未設定に戻す" onClick={() => onDecide(r, null)} className="px-2 py-1 rounded text-[11px] font-bold border bg-white text-slate-400 border-slate-200 hover:bg-slate-50">解除</button>}
+                              <button title="この組み合わせを厳密(順番強制)に" onClick={() => onDecide(r, true)} className={`px-2 py-1 rounded text-xs font-bold border ${rule?.enabled === true ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-rose-700 border-rose-300 hover:bg-rose-50'}`}>厳密</button>
+                              <button title="ガイド(警告のみ・飛ばし可)に" onClick={() => onDecide(r, false)} className={`px-2 py-1 rounded text-xs font-bold border ${rule?.enabled === false ? 'bg-slate-600 text-white border-slate-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>ガイド</button>
+                              {rule?.enabled != null && <button title="未設定に戻す" onClick={() => onDecide(r, null)} className="px-2 py-1 rounded text-xs font-bold border bg-white text-slate-400 border-slate-200 hover:bg-slate-50">解除</button>}
                             </div>
                           </td>
                         </tr>
@@ -362,7 +362,7 @@ export function StrictModeManagerModal({ lots, templates, rules = {}, history = 
                 </tbody>
               </table>
             </div>
-            <div className="shrink-0 px-4 py-2 border-t border-slate-200 bg-slate-50 text-[11px] text-slate-500">
+            <div className="shrink-0 px-4 py-2 border-t border-slate-200 bg-slate-50 text-xs text-slate-500">
               💡 「根拠を見る」で、台ごとの作業の流れ・工程ごとの時間バラつきを確認 → 納得して「厳密／ガイド」を選択。決定時のエビデンスは変更履歴に残ります。データが薄い／ばらつき大のまま厳密にするのは非推奨。
             </div>
           </>
@@ -384,11 +384,11 @@ export function StrictModeManagerModal({ lots, templates, rules = {}, history = 
                   const ev = h.evidence;
                   return (
                     <tr key={h.id} className="border-b border-slate-100 align-top">
-                      <td className="px-3 py-2 text-[11px] text-slate-600 whitespace-nowrap">{fmtWhen(h.at)}</td>
+                      <td className="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">{fmtWhen(h.at)}</td>
                       <td className="px-3 py-2 font-bold text-slate-700 whitespace-nowrap">{h.by || '?'}</td>
                       <td className="px-3 py-2 text-slate-700">{h.model} <span className="text-slate-400">×</span> {h.templateName || h.templateId}</td>
                       <td className="px-3 py-2 whitespace-nowrap"><span className="text-slate-400">{lbl(h.old)}</span> <span className="text-slate-400">→</span> <b className={h.new === true ? 'text-rose-700' : 'text-slate-700'}>{lbl(h.new)}</b></td>
-                      <td className="px-3 py-2 text-[11px] text-slate-600">{ev ? `完了${ev.completedUnits ?? ev.completedCount ?? '?'}台・実時刻${ev.timedUnits ?? ev.timedCount ?? '?'}台中${ev.consistentUnits ?? ev.consistentCount ?? '?'}台一致${(ev.consistencyPct != null) ? `(${ev.consistencyPct}%)` : ''}` : '-'}</td>
+                      <td className="px-3 py-2 text-xs text-slate-600">{ev ? `完了${ev.completedUnits ?? ev.completedCount ?? '?'}台・実時刻${ev.timedUnits ?? ev.timedCount ?? '?'}台中${ev.consistentUnits ?? ev.consistentCount ?? '?'}台一致${(ev.consistencyPct != null) ? `(${ev.consistencyPct}%)` : ''}` : '-'}</td>
                     </tr>
                   );
                 })}

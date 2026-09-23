@@ -53,7 +53,7 @@ export default function TemplateSkipPanel({ lots = [], templates = [], settings 
             <div className="font-black text-slate-800 text-sm flex flex-wrap items-center gap-1.5">抜取／スキップ（{unitLabel}×テンプレ）
               <span className={`rounded-full px-2 py-0.5 text-xs ${cfg.enabled ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{cfg.enabled ? '稼働中（ON）' : '停止中（OFF）'}</span>
             </div>
-            <div className="text-[11px] text-slate-500">{cfg.enabled ? '新しいロットを登録した時に、許可した{unitLabel}×テンプレで条件がそろっていれば「スキップ」で流します' : 'OFF = 今までどおり全数。候補と見込みの確認だけ'}</div>
+            <div className="text-xs text-slate-500">{cfg.enabled ? '新しいロットを登録した時に、許可した{unitLabel}×テンプレで条件がそろっていれば「スキップ」で流します' : 'OFF = 今までどおり全数。候補と見込みの確認だけ'}</div>
           </div>
           <button type="button" disabled={!canEdit} onClick={toggleEnabled} data-template-skip-toggle={cfg.enabled ? '1' : '0'} className={`min-h-[40px] px-4 rounded-lg font-bold text-sm shadow-sm text-white disabled:opacity-40 ${cfg.enabled ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}>{cfg.enabled ? 'OFFにする' : 'ONにする'}</button>
           <div className="ml-auto min-w-[16rem] flex-1 max-w-lg" data-template-skip-bar={`${sum.allowed}/${sum.never}/${sum.combos - sum.allowed - sum.never}`}>
@@ -62,7 +62,7 @@ export default function TemplateSkipPanel({ lots = [], templates = [], settings 
               {sum.never > 0 ? <div className="bg-rose-500 h-full" style={{ width: `${(sum.never / total) * 100}%` }} /> : null}
               {(sum.combos - sum.allowed - sum.never) > 0 ? <div className="bg-slate-400 h-full" style={{ width: `${((sum.combos - sum.allowed - sum.never) / total) * 100}%` }} /> : null}
             </div>
-            <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] font-bold">
+            <div className="mt-1 flex flex-wrap gap-x-3 text-xs font-bold">
               <span className="text-emerald-700">■ 許可 <b className="text-[13px]">{sum.allowed}</b></span>
               <span className="text-rose-700">■ 🔒 絶対に減らさない <b className="text-[13px]">{sum.never}</b></span>
               <span className="text-slate-600">■ 未決定（＝全数） <b className="text-[13px]">{sum.combos - sum.allowed - sum.never}</b></span>
@@ -87,18 +87,18 @@ export default function TemplateSkipPanel({ lots = [], templates = [], settings 
         <div className="bg-white rounded-xl border-2 border-emerald-300 p-3">
           <div className="text-xs font-black text-slate-600">いまの許可で 減る見込み（月）</div>
           <div className="text-3xl font-black text-emerald-700" data-template-skip-min-allowed={Math.round(sum.minPerMonthAllowed)}>{fmtMin(sum.minPerMonthAllowed)}</div>
-          <div className="text-[11px] text-slate-500">許可済みで条件がそろっている組の合計</div>
+          <div className="text-xs text-slate-500">許可済みで条件がそろっている組の合計</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-3">
           <div className="text-xs font-black text-slate-600">条件がそろっている組を全部許可したら（月）</div>
           <div className="text-3xl font-black text-slate-800">{fmtMin(sum.minPerMonthIfAll)}</div>
-          <div className="text-[11px] text-slate-500">上限（絶対に減らさない以外を全部流したら） {fmtMin(sum.minPerMonthCeiling)}</div>
+          <div className="text-xs text-slate-500">上限（絶対に減らさない以外を全部流したら） {fmtMin(sum.minPerMonthCeiling)}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-3 flex flex-col gap-1.5">
           <div className="text-xs font-black text-slate-600">数え方</div>
-          <div className="text-[11px] text-slate-600 leading-relaxed">直近3か月の完了ロットの実測から「1ロットの平均分 × 月のロット数 × (N−1)/N」。目標時間では計算しません。予想であって約束ではありません。</div>
+          <div className="text-xs text-slate-600 leading-relaxed">直近3か月の完了ロットの実測から「1ロットの平均分 × 月のロット数 × (N−1)/N」。目標時間では計算しません。予想であって約束ではありません。</div>
           {typeof onOpenOpsim === 'function' ? (
-            <button type="button" onClick={onOpenOpsim} data-template-skip-open-opsim="1" className="self-start rounded-md border border-cyan-300 bg-cyan-50 px-2 py-1 text-[11px] font-black text-cyan-800 hover:bg-cyan-100" title="スキップで流したロットは残り工程0として割付に効きます">
+            <button type="button" onClick={onOpenOpsim} data-template-skip-open-opsim="1" className="self-start rounded-md border border-cyan-300 bg-cyan-50 px-2 py-1 text-xs font-black text-cyan-800 hover:bg-cyan-100" title="スキップで流したロットは残り工程0として割付に効きます">
               <Activity className="inline w-3.5 h-3.5 mr-1" />操業シミュレーションで見る ▸
             </button>
           ) : null}
@@ -112,7 +112,7 @@ export default function TemplateSkipPanel({ lots = [], templates = [], settings 
           <span className="text-sm font-black text-slate-800">{unitLabel}×テンプレごとの実績と決めごと</span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`${unitLabel}・テンプレで絞る（例: SS）`} data-template-skip-search="1" className="border rounded px-2 py-1 text-xs w-56" />
           <label className="text-xs font-bold text-slate-600 flex items-center gap-1"><input type="checkbox" checked={onlyReady} onChange={(e) => setOnlyReady(e.target.checked)} className="w-4 h-4" />条件がそろった組だけ</label>
-          <span className="ml-auto text-[11px] text-slate-400">{shown.length} 組</span>
+          <span className="ml-auto text-xs text-slate-400">{shown.length} 組</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs border-collapse min-w-[56rem]" data-template-skip-table="1">
@@ -148,7 +148,7 @@ export default function TemplateSkipPanel({ lots = [], templates = [], settings 
                       <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden">
                         {[['full', '必ず全数'], ['allow', '許可'], ['never', '🔒']].map(([k, label]) => (
                           <button key={k} type="button" disabled={!canEdit} onClick={() => setPolicy(r.key, k)} data-template-skip-policy={`${r.key}:${k}`}
-                            className={`px-2 py-1 text-[11px] font-bold whitespace-nowrap disabled:opacity-40 ${pol === k ? (k === 'allow' ? 'bg-emerald-600 text-white' : k === 'never' ? 'bg-rose-600 text-white' : 'bg-slate-700 text-white') : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+                            className={`px-2 py-1 text-xs font-bold whitespace-nowrap disabled:opacity-40 ${pol === k ? (k === 'allow' ? 'bg-emerald-600 text-white' : k === 'never' ? 'bg-rose-600 text-white' : 'bg-slate-700 text-white') : 'bg-white text-slate-600 hover:bg-slate-50'}`}
                             title={k === 'never' ? '絶対に減らさない（クレーム対象など）' : k === 'allow' ? '条件がそろったら スキップで流す' : '今までどおり全数'}>{label}</button>
                         ))}
                       </div>
@@ -160,7 +160,7 @@ export default function TemplateSkipPanel({ lots = [], templates = [], settings 
             </tbody>
           </table>
         </div>
-        <div className="mt-2 text-[10px] text-slate-500 flex items-center gap-1"><Lock className="w-3 h-3" />変更は操作者と日時つきで設定の履歴に残ります（最新200件）。判定はロット登録の瞬間に行い、根拠（連続数・条件）をロットに保存します。</div>
+        <div className="mt-2 text-xs text-slate-500 flex items-center gap-1"><Lock className="w-3 h-3" />変更は操作者と日時つきで設定の履歴に残ります（最新200件）。判定はロット登録の瞬間に行い、根拠（連続数・条件）をロットに保存します。</div>
       </div>
     </div>
   );

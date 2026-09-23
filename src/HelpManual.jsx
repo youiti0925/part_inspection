@@ -67,7 +67,7 @@ function ShotSlot({ slotKey, cap, images, canEdit, onUpload, onDelete }) {
           <div className="text-sm font-bold text-slate-500">{cap || '画面写真'}</div>
           {canEdit
             ? <div className="text-xs text-blue-600 font-bold flex items-center gap-1"><Upload className="w-3.5 h-3.5" /> タップして写真を追加</div>
-            : <div className="text-[11px] text-slate-400">写真は準備中です</div>}
+            : <div className="text-xs text-slate-400">写真は準備中です</div>}
         </div>
       )}
       {cap && <figcaption className="text-center text-xs text-slate-500 mt-1.5">{img ? '▲ ' : ''}{cap}</figcaption>}
@@ -189,9 +189,9 @@ export function HelpManualModal({ appLabel = 'アプリ', sections, images = {},
           <BookOpen className="w-6 h-6" />
           <div className="flex-1 min-w-0">
             <div className="font-black text-lg leading-tight">{appLabel} 使い方ガイド</div>
-            <div className="text-[11px] text-blue-100">画面の写真つきで操作を説明します。わからない言葉は上の検索からも探せます。</div>
+            <div className="text-xs text-blue-100">画面の写真つきで操作を説明します。わからない言葉は上の検索からも探せます。</div>
           </div>
-          {canEdit && <span className="hidden sm:inline text-[11px] bg-white/15 px-2 py-1 rounded-full font-bold">管理者: 写真を追加・差し替えできます</span>}
+          {canEdit && <span className="hidden sm:inline text-xs bg-white/15 px-2 py-1 rounded-full font-bold">管理者: 写真を追加・差し替えできます</span>}
           <button onClick={onClose} className="bg-white/15 hover:bg-white/30 rounded-full p-2"><X className="w-5 h-5" /></button>
         </div>
 
@@ -217,7 +217,7 @@ export function HelpManualModal({ appLabel = 'アプリ', sections, images = {},
               })}
               {filtered.length === 0 && <div className="text-xs text-slate-400 text-center py-6">該当する項目がありません</div>}
             </nav>
-            <div className="p-2.5 border-t border-slate-200 text-[10px] text-slate-400 text-center">全 {sections.length} 章</div>
+            <div className="p-2.5 border-t border-slate-200 text-xs text-slate-400 text-center">全 {sections.length} 章</div>
           </aside>
 
           {/* 右: 本文 */}

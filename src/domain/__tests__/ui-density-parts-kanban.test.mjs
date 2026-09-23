@@ -117,7 +117,8 @@ test('PK5 押す物 44px 以上・足した文字を 12px 未満にしていな�
   // 自分が触った所に 12px 未満の直書きを **増やしていない**。
   // ⚠ text-[9px] の札1つは直す前から在る物(アプリ全体で151か所の共通の大きさ)。増やしも減らしもしない。
   const tiny = [...b.matchAll(/text-\[(\d+)px\]/g)].map((x) => Number(x[1])).filter((n) => n < 12);
-  assert.deepEqual(tiny, [9], `カンバンの中の 12px 未満の文字が ${tiny.join(', ')}(直す前から在る 9px の1つだけのはず)`);
+  // 📏 2026-09-23 9px の札も text-xs(12px)へ大きくした(部品の 12px 未満 900か所を一括で)。0個のまま
+  assert.deepEqual(tiny, [], `カンバンの中の 12px 未満の文字が ${tiny.join(', ')}(0個のはず)`);
   // 直す前に在った 11px の2か所は text-xs(12px)へ **大きく** した(小さく戻していない)
   assert.ok(!/text-\[11px\] text-slate-600 truncate/.test(b), 'カードの工程名が 11px に戻っている');
   assert.ok(!/text-slate-300 text-\[11px\] py-2/.test(b), '「なし」が 11px に戻っている');

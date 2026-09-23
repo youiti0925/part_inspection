@@ -90,8 +90,9 @@ export const CHECKS = {
     for (const s of TIPS_FOLDED) {
       assert.ok(det.includes(s), `💡 のコツから文が消えている: 「${s}」`);
     }
+    // 📏 2026-09-23 部品の 12px 未満の直書きを text-xs(12px)へ一括で大きくした。見本の文字列もそれに合わせた(見ている物は同じ)
     // 畳む前の「ただの div」へ戻していない
-    assert.ok(!code.includes('<div className="bg-amber-50 border border-amber-200 rounded p-2 mb-4 text-[11px] text-amber-800">'),
+    assert.ok(!code.includes('<div className="bg-amber-50 border border-amber-200 rounded p-2 mb-4 text-xs text-amber-800">'),
       '💡 のコツが畳む前の div へ戻っている(78px・中身51%の帯が復活する)');
   },
 
@@ -248,9 +249,9 @@ export const CHECKS = {
     assert.ok(r.includes('onClick={() => cycle(ymd, w)}'), 'ロスターのセルを押した時の働きが消えている');
     assert.ok(r.includes('在席'), 'ロスターの「在席」の行が消えている');
     // 表の上・下へ戻していない
-    assert.ok(!r.includes('<div className="text-[11px] text-slate-500 mb-2">休み・他工場'),
+    assert.ok(!r.includes('<div className="text-xs text-slate-500 mb-2">休み・他工場'),
       '読み方の文が表の上へ戻っている(表の右が 4分の3 空く)');
-    assert.ok(!r.includes('<div className="flex items-center gap-3 mt-2 text-[10px] text-slate-500 flex-wrap">'),
+    assert.ok(!r.includes('<div className="flex items-center gap-3 mt-2 text-xs text-slate-500 flex-wrap">'),
       '凡例が表の下へ戻っている(表の右が 4分の3 空く)');
   },
 };
@@ -275,8 +276,8 @@ const TITLES = {
 // ---------------------------------------------------------------------------
 export const BREAKS_FOR_PROOF = [
   ['S1', '③ 💡 のコツを畳む前の div へ戻す', (s) => s
-    .replace('<details data-fold="qs-naming-tips" className="bg-amber-50 border border-amber-200 rounded p-2 mb-4 text-[11px] text-amber-800">',
-      '<div className="bg-amber-50 border border-amber-200 rounded p-2 mb-4 text-[11px] text-amber-800">')],
+    .replace('<details data-fold="qs-naming-tips" className="bg-amber-50 border border-amber-200 rounded p-2 mb-4 text-xs text-amber-800">',
+      '<div className="bg-amber-50 border border-amber-200 rounded p-2 mb-4 text-xs text-amber-800">')],
   ['S1', '① 畳んだ文を1つ消す', (s) => s.replace(') や 図面番号 / 仕様書番号 をそのまま流用してOK。', '')],
   ['S2', '③ 入れる所と札を別々の行へ戻す', (s) => s
     .replace('<div className="flex gap-2 items-start flex-wrap mb-1">', '<div className="flex gap-2 mb-4">\n             <input\n               value={newProcessOpt}')],
@@ -315,8 +316,8 @@ export const BREAKS_FOR_PROOF = [
   ['S9', '② 親タブを描くのをやめる', (s) => s
     .replace('{parentTabs && <div data-band="templates-tabs" className="ml-auto flex items-center gap-1">{parentTabs}</div>}', '')],
   ['S10', '③ 読み方の文を表の上へ戻す', (s) => s
-    .replace('<div data-textfill="1" className="text-[11px] text-slate-500">休み・他工場',
-      '<div className="text-[11px] text-slate-500 mb-2">休み・他工場')],
+    .replace('<div data-textfill="1" className="text-xs text-slate-500">休み・他工場',
+      '<div className="text-xs text-slate-500 mb-2">休み・他工場')],
   ['S10', '① 凡例の「他工場」を消す', (s) => s
     .replace('他工場（共有作業者が今日は別工場）', '')],
   ['S10', '② 表の箱を横に伸ばす形へ戻す', (s) => s

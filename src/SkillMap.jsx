@@ -75,7 +75,7 @@ export function SkillMapView({ lots, templates, workers = [], skills, workerSkil
         <Award className="w-6 h-6" />
         <div className="flex-1 min-w-0">
           <div className="font-black text-lg leading-tight">スキルマップ（作業者 × スキル）</div>
-          <div className="text-[11px] text-amber-100">レベルは管理者が設定。<b>回数は完了データから自動集計</b>（テンプレが使うスキル × 担当者）。将来の自動配置の土台。</div>
+          <div className="text-xs text-amber-100">レベルは管理者が設定。<b>回数は完了データから自動集計</b>（テンプレが使うスキル × 担当者）。将来の自動配置の土台。</div>
         </div>
         {canEdit && <button onClick={() => setShowConfig(s => !s)} className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 ${showConfig ? 'bg-white text-orange-600' : 'bg-white/15 hover:bg-white/30'}`}><Cog className="w-3.5 h-3.5" />設定</button>}
       </div>
@@ -96,7 +96,7 @@ export function SkillMapView({ lots, templates, workers = [], skills, workerSkil
                 <div className="space-y-1">
                   {skillList.map((s, i) => (
                     <div key={s.id} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded px-2 py-1">
-                      <span className="text-[10px] text-slate-400 w-5 text-center">{i + 1}</span>
+                      <span className="text-xs text-slate-400 w-5 text-center">{i + 1}</span>
                       <div className="flex flex-col leading-none">
                         <button title="上へ" disabled={i === 0} onClick={() => { const a = [...skillList]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; onSaveSkills(a); }} className="text-slate-400 hover:text-orange-600 disabled:opacity-20"><ChevronUp className="w-4 h-4" /></button>
                         <button title="下へ" disabled={i === skillList.length - 1} onClick={() => { const a = [...skillList]; [a[i + 1], a[i]] = [a[i], a[i + 1]]; onSaveSkills(a); }} className="text-slate-400 hover:text-orange-600 disabled:opacity-20"><ChevronDown className="w-4 h-4" /></button>
@@ -106,11 +106,11 @@ export function SkillMapView({ lots, templates, workers = [], skills, workerSkil
                     </div>
                   ))}
                 </div>
-                <div className="text-[10px] text-slate-400 mt-2">※ ▲▼で並び替え（表の列順に反映）／名前は直接編集（フォーカスを外すと保存）／既定の種別も自由に変更できます。</div>
+                <div className="text-xs text-slate-400 mt-2">※ ▲▼で並び替え（表の列順に反映）／名前は直接編集（フォーカスを外すと保存）／既定の種別も自由に変更できます。</div>
               </div>
             ) : (
               <div>
-                <div className="text-[11px] text-slate-500 mb-2">各テンプレが<b>どのスキルを使うか</b>をチェック。チェックした分が、そのテンプレの仕事を完了した作業者の回数に加算されます。</div>
+                <div className="text-xs text-slate-500 mb-2">各テンプレが<b>どのスキルを使うか</b>をチェック。チェックした分が、そのテンプレの仕事を完了した作業者の回数に加算されます。</div>
                 <table className="w-full text-xs border-collapse">
                   <thead><tr><th className="text-left px-2 py-1 border-b border-slate-200 sticky left-0 bg-white">テンプレ</th>{skillList.map(s => <th key={s.id} className="px-1 py-1 border-b border-slate-200 text-center font-bold" style={{ writingMode: 'vertical-rl' }}>{s.name}</th>)}</tr></thead>
                   <tbody>
@@ -164,7 +164,7 @@ export function SkillMapView({ lots, templates, workers = [], skills, workerSkil
                         ) : (
                           <span className={`text-lg font-black ${L.cls}`} title={L.label}>{L.mark}</span>
                         )}
-                        <span className={`text-[10px] ${cnt > 0 ? 'text-slate-500' : 'text-slate-300'}`} title="携わった回数(完了ロット)">{cnt}回</span>
+                        <span className={`text-xs ${cnt > 0 ? 'text-slate-500' : 'text-slate-300'}`} title="携わった回数(完了ロット)">{cnt}回</span>
                       </div>
                     </td>
                   );
@@ -175,7 +175,7 @@ export function SkillMapView({ lots, templates, workers = [], skills, workerSkil
           </tbody>
         </table>
       </div>
-      <div className="shrink-0 px-4 py-2 border-t border-slate-200 bg-slate-50 text-[11px] text-slate-500">
+      <div className="shrink-0 px-4 py-2 border-t border-slate-200 bg-slate-50 text-xs text-slate-500">
         記号: <b className="text-emerald-700">◎熟練</b> / <b className="text-blue-600">○一人前</b> / <b className="text-amber-600">△見習い</b> / −なし。下の数字＝<b>携わった回数</b>（完了ロット）。{canEdit ? '右上「設定」でテンプレが使うスキルを設定すると、過去の完了分から回数が入ります。' : 'レベル設定は管理者のみ。'}
       </div>
     </div>

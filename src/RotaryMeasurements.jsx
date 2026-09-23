@@ -144,10 +144,10 @@ export default function RotaryMeasurementsPanel({ db }) {
                     <b className="text-sm text-slate-800 truncate">{m.model || '型式?'} / {m.machine || '機番?'}</b>
                     <JudgeBadge j={m.judgement} />
                   </div>
-                  <div className="text-[11px] text-slate-500 mt-0.5 truncate">
+                  <div className="text-xs text-slate-500 mt-0.5 truncate">
                     {[m.mode, m.operator, m.temperature != null ? `${m.temperature}°C` : null].filter(Boolean).join(' ／ ')}
                   </div>
-                  <div className="text-[11px] text-slate-400">{savedLabel(m)}</div>
+                  <div className="text-xs text-slate-400">{savedLabel(m)}</div>
                 </button>
               );
             })}
@@ -184,7 +184,7 @@ export default function RotaryMeasurementsPanel({ db }) {
                     onClick={() => setZoom(true)}
                     className="max-w-full border border-slate-300 rounded-lg cursor-zoom-in"
                   />
-                  <div className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5"><FileImage className="w-3.5 h-3.5" />クリックで拡大</div>
+                  <div className="text-xs text-slate-400 flex items-center gap-1 mt-0.5"><FileImage className="w-3.5 h-3.5" />クリックで拡大</div>
                 </div>
               )}
 
@@ -209,7 +209,7 @@ export default function RotaryMeasurementsPanel({ db }) {
               )}
 
               {(selected.filePath || selected.savePath || selected.path) && (
-                <div className="text-[11px] text-slate-400 mt-3 break-all">
+                <div className="text-xs text-slate-400 mt-3 break-all">
                   保存先: {selected.filePath || selected.savePath || selected.path}
                 </div>
               )}
