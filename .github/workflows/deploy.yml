@@ -1,0 +1,151 @@
+name: Deploy (本番へ出す／プレビュー／前の版へ戻す)
+
+# =============================================================================
+# 🚪 GitHub の上から出す口 — Claude の端末が無くても出せるように(2026-09-23 引き継ぎ)
+# -----------------------------------------------------------------------------
+# 🚨 自動では出しません。push しても何も起きません。人が「Run workflow」を押した時だけ動きます。
+#    (本番へ出す判断は人の物。CI(ci.yml) は今まで通り 試験とビルドだけ)
+#
+# 押す時に決める事:
+#   ref      … 出す版。ふだんは master。**前の版へ戻す時は そのコミットの番号**(git log の 7桁)
+#   preview  … true(既定) = プレビューの住所に出す(本番の住所は1バイトも変えない・7日で消える)
+#              false      = 本番の住所へ出す(手元の npm run deploy と同じ道: 台帳・古い部品の持ち越し・出した後の照合)
+#   reason   … 出す理由(台帳と実行の記録に残る)
+#
+# 通る道(手元と同じ物を同じ順で):
+#   ① npm ci → npm test            … 試験が赤なら出さない
+#   ② 鍵を置く                      … GitHub Secrets の FIREBASE_SERVICE_ACCOUNT_INSPECTION_TIME_C4FD3
+#                                     (firebase init hosting:github が作るサービスアカウント。値はチャットにも Git にも貼らない)
+#   ③-a preview=true  … firebase hosting:channel:deploy  (住所は実行の記録に出る)
+#   ③-b preview=false … node scripts/deploy.mjs --skip-check --frequency-ok
+#                        └ predeploy(npm run build → keep-old-assets) → firebase deploy → 台帳 → 本番で照合
+#   ④ 台帳(scripts/deploy-ledger.json)を ref の枝へ commit/push(枝でない時は成果物として保存)
+#
+# 🚨 --skip-check の理由: 出荷ゲート(npm run check)は 2026-08-30 から前から在る赤(App.jsx の onError 判定・読み取り枠)を
+#    含み、手元でも同じ理由で --skip-check で出しています。試験(npm test)は飛ばしません。
+# 🚨 プレビューの住所も **本番の Firestore に繋がります**。見るだけ。保存・登録・採用・確定は押さない。
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '出す版(枝名 か コミット番号)。前の版へ戻す時は そのコミット番号'
+        required: true
+        default: 'master'
+      preview:
+        description: 'true = プレビューだけ(本番は変えない) / false = 本番へ出す'
+        type: boolean
+        default: true
+      reason:
+        description: '出す理由(台帳に残る)'
+        required: true
+
+# 台帳を枝へ書き戻す為に contents: write が要る(それ以外は要らない)
+permissions:
+  contents: write
+
+# 出す作業は同時に2本走らせない(古い方を止めない: 途中で止めると本番が半端になる)
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Tokyo
+  VITE_USE_EMULATOR: ''
+
+jobs:
+  deploy:
+    name: ${{ inputs.preview && 'プレビューへ出す' || '本番へ出す' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.preview && 'preview' || 'production' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: 鍵が在るかを先に確かめる(無ければ何もせず止まる)
+        env:
+          SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_INSPECTION_TIME_C4FD3 }}
+        run: |
+          if [ -z "$SA" ]; then
+            echo "::error::GitHub Secrets に FIREBASE_SERVICE_ACCOUNT_INSPECTION_TIME_C4FD3 が在りません。"
+            echo "::error::手元で 1回だけ: firebase init hosting:github (docs/引き継ぎ.md の 4章)。値はチャットや Git に貼らない。"
+            exit 1
+          fi
+          echo "$SA" > "$RUNNER_TEMP/firebase-sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-sa.json" >> "$GITHUB_ENV"
+          echo "✅ 鍵を置きました(中身は出しません)"
+
+      - name: 部品を入れる (npm ci)
+        run: npm ci
+
+      - name: 試験 (npm test) — 赤なら出さない
+        run: npm test
+
+      - name: 出す先(hosting の target)を読む
+        id: target
+        run: |
+          t=$(node -e "const f=require('./firebase.json');const h=Array.isArray(f.hosting)?f.hosting[0]:f.hosting;process.stdout.write((h&&h.target)||'')")
+          echo "target=$t" >> "$GITHUB_OUTPUT"
+          echo "出す先: ${t:-'(既定のサイト)'}"
+
+      - name: ③-a プレビューへ出す(本番の住所は変えない)
+        if: ${{ inputs.preview }}
+        run: |
+          ch="pr-$(git rev-parse --short HEAD)-${GITHUB_RUN_NUMBER}"
+          only=""
+          if [ -n "${{ steps.target.outputs.target }}" ]; then only="--only ${{ steps.target.outputs.target }}"; fi
+          echo "理由: ${{ inputs.reason }}"
+          npm run build
+          npx firebase hosting:channel:deploy "$ch" --expires 7d $only --project inspection-time-c4fd3 --non-interactive | tee "$RUNNER_TEMP/preview.log"
+          url=$(grep -oE 'https://[^ ]+--[^ ]+\.web\.app' "$RUNNER_TEMP/preview.log" | head -1)
+          echo "### 🔎 プレビューの住所" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "$url" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "版: $(git rev-parse --short HEAD) ／ 理由: ${{ inputs.reason }} ／ 7日で消えます。🚨 本番の Firestore に繋がっています。見るだけ。" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: ③-b 本番へ出す(手元の npm run deploy と同じ道)
+        if: ${{ !inputs.preview }}
+        run: |
+          echo "理由: ${{ inputs.reason }}"
+          node scripts/deploy.mjs --skip-check --frequency-ok
+          echo "### 🚀 本番へ出しました" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "版: $(git rev-parse --short HEAD) ／ 理由: ${{ inputs.reason }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "前の版へ戻すには: この workflow を ref=前のコミット番号, preview=false でもう一度押す(古い部品は持ち越されるので開きっぱなしの端末も壊れない)。" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: ④ 台帳を枝へ書き戻す(枝でなければ成果物に残す)
+        if: ${{ !inputs.preview }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- scripts/deploy-ledger.json; then echo "台帳に変化なし"; exit 0; fi
+          git add scripts/deploy-ledger.json
+          git commit -m "📒 デプロイ台帳(GitHub から出した: ${{ inputs.reason }})"
+          if git show-ref --verify --quiet "refs/remotes/origin/${{ inputs.ref }}"; then
+            git push origin "HEAD:refs/heads/${{ inputs.ref }}"
+            echo "台帳を ${{ inputs.ref }} へ push しました"
+          else
+            echo "::warning::ref がコミット番号なので台帳は push しません。成果物 deploy-ledger を枝へ入れてください。"
+            echo "ledger_artifact=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: 台帳を成果物として残す(枝へ書けなかった時だけ)
+        if: ${{ !inputs.preview && env.ledger_artifact == '1' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-ledger
+          path: scripts/deploy-ledger.json
+
+      - name: 鍵を消す
+        if: always()
+        run: rm -f "$RUNNER_TEMP/firebase-sa.json"

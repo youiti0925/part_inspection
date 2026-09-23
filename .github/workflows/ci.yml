@@ -1,0 +1,140 @@
+name: CI
+
+# =============================================================================
+# 🟢🔴 GitHub の上で試験を走らせて、コミットに緑／赤を付ける
+# -----------------------------------------------------------------------------
+# なぜこれが要るか(2026-08-30 清水さんの指摘):
+#   「試験2000件全緑」は Claude の手元で走らせた報告でしかなく、
+#   GitHub のコミットには何の印も付いていなかった(ステータスチェック0件)。
+#   = 第三者が確かめられない。ここで機械に走らせて、印を付けます。
+#
+# 🚨 この CI がやらない事(わざとやりません):
+#   ・Firebase 本番への接続       … 一切しません
+#   ・デプロイ(firebase deploy)   … 一切しません
+#   ・firebase CLI の実行         … 一切しません
+#   ・秘密の値(APIキー・トークン) … 1つも要りません。GitHub Secrets も使いません
+#   CI がやるのは「試験」と「ビルド」と「見張り」の3つだけです。
+#
+# 🚨 なぜ本番 Firestore に繋がらないと言えるか(下の「繋がらない事の確認」の段で毎回機械が確かめます):
+#   ① 試験(node --test)は src/domain と src/data の純粋な計算だけで、
+#      firebase を1つも読み込みません。読み込む試験が1つでも増えたら、この CI は赤になります。
+#   ② ビルド(vite build)は JavaScript を束ねるだけで、束ねた物を走らせません。
+#      = 束の中に何が書いてあっても、CI の中では1バイトも通信しません。
+#   ③ エミュレータへ繋ぐ道は `import.meta.env.DEV` の中にしか無く、
+#      本番ビルドでは DEV=false なので、その道自体が束に入りません。
+#
+# ⚠ Node の版について:
+#   このリポジトリには .nvmrc も package.json の engines もありません。
+#   ただし「20 にする」とこの CI は**本当の欠陥と関係なく赤になります**。理由は2つ:
+#     ・scripts/check-all.mjs が fs.globSync を使っている (Node 22 以降)
+#     ・`node --test "src/**/*.test.mjs"` の * の展開 (Node 22 以降)
+#   さらに vite の engines は ^20.19.0 || >=22.12.0 です。
+#   実際に「全緑」を測った手元の版が Node 24.14.0 なので、24 に合わせます。
+#   (= CI は手元と同じ物を同じ版で走らせている、と言える形にします)
+# =============================================================================
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# CI は読むだけ。書き込みの権限は渡しません。
+permissions:
+  contents: read
+
+# 同じ枝に続けて push した時は、古い方を止めます(無駄な待ち時間を減らすだけ)。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 🚨 本番を向かない事を、環境変数の側からも念押しします。
+  #    (VITE_USE_EMULATOR は import.meta.env.DEV の中でしか見ないので、
+  #     本番ビルドには元々入りません。ここは「意図」を残す為の記述です)
+  VITE_USE_EMULATOR: ''
+
+  # 🚨🚨 時計の帯(2026-08-30 この CI を入れて初めて分かった事):
+  #   GitHub の走らせ手は既定で UTC です。UTC のまま走らせると、
+  #   時刻に関わる試験が落ちます(実測: 司令塔③ R09 が 16:00 のはずが 07:00 = ちょうど9時間ずれ)。
+  #   これらの試験が見ているのは「日本時間16:00に無料枠が戻る」という**現場の決まり**で、
+  #   検査アプリが動く端末は日本に在ります。
+  #   → 走らせ手の時計を現場と同じ帯に合わせます。
+  #   ⚠これは試験を緩めていません。判定は1文字も変えず、「どの時計で走らせるか」を
+  #     手元まかせにせず、はっきり書いただけです(手元でも UTC にすると同じく落ちます)。
+  TZ: Asia/Tokyo
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # ① 試験とビルド — 「全緑」と言っている物は、これです。
+  #    🚨 ここが緑でないなら「全緑」と言ってはいけません。
+  # ---------------------------------------------------------------------------
+  test:
+    name: 試験とビルド (test + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: 本番Firestoreへ繋がらない事の確認
+        run: |
+          fail=0
+
+          # ① 試験が firebase を読み込んでいないか
+          hits=$(grep -rlE "from ['\"]firebase|require\(['\"]firebase|rules-unit-testing" \
+                   src/domain src/data --include='*.test.mjs' 2>/dev/null || true)
+          if [ -n "$hits" ]; then
+            echo "::error::試験が firebase を読み込んでいます。CIは試験とビルドだけです:"
+            echo "$hits"
+            fail=1
+          else
+            echo "✅ firebase を読み込む試験 … 0件"
+          fi
+
+          # ② 秘密の値を持ち込んでいないか(.env が checkout に含まれていないか)
+          if [ -f .env ] || [ -f .env.local ]; then
+            echo "::error::.env / .env.local が checkout に入っています。秘密の値がリポジトリに入った疑いがあります。"
+            fail=1
+          else
+            echo "✅ .env / .env.local … CI には在りません(= 秘密の値は1つも要りません)"
+          fi
+
+          exit $fail
+
+      - name: 部品を入れる (npm ci)
+        run: npm ci
+
+      - name: 試験 (npm test)
+        run: npm test
+
+      - name: ビルド (npm run build)
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # ② 出荷ゲート — 試験より広い見張り一式(npm run check)。
+  #    🚨 2026-08-30 の時点で、3アプリとも**元から赤**です(手元でも赤)。
+  #       これは CI の不具合ではなく、既に在る宿題がそのまま見えているだけです。
+  #    🚨 ここを continue-on-error で緑に見せる事はしません。
+  #       赤い理由の方を直してください(見張りを緩めない)。
+  #    ① と別の仕事にしてあるのは、「試験は緑／ゲートは赤」を
+  #       コミットの上で**別々の印**として見分けられるようにする為です。
+  # ---------------------------------------------------------------------------
+  gate:
+    name: 出荷ゲート (npm run check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: 部品を入れる (npm ci)
+        run: npm ci
+
+      - name: 見張り一式 (npm run check)
+        run: npm run check
