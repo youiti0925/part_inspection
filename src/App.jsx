@@ -3731,10 +3731,10 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
 
   return (
     // 外枠: dashboard モードは飾り枠あり (ダッシュボード内の1パネルなので)、map-only モードは枠なし (画面いっぱい)
-    <div className={`h-full relative bg-white overflow-hidden flex flex-col ${isDashboard ? 'rounded-xl border-2 border-blue-400 shadow-lg cursor-pointer' : ''}`}>
+    <div className={`h-full relative bg-white overflow-hidden flex flex-col ${isDashboard ? 'group/dashmap rounded-xl border-2 border-blue-400 shadow-lg cursor-pointer' : ''}`}>
        {!isDashboard && !EMBED_MAP && headerContent} {/* 埋め込み(③)はマップだけ: 操作バー非表示 */}
        {isDashboard && (
-         <div className="absolute top-2 left-2 z-30 bg-white/80 backdrop-blur px-3 py-1 rounded-full border shadow-sm pointer-events-none">
+         <div className="absolute top-2 left-2 z-30 bg-white/80 backdrop-blur px-3 py-1 rounded-full border shadow-sm pointer-events-none opacity-0 group-hover/dashmap:opacity-100 transition-opacity">{/* 🧹 2026-09-23: 1つ目のエリアの名前を覆っていた。マウスを置いた時だけ */}
            <span className="text-xs font-bold text-blue-800 flex items-center gap-1"><MapIcon className="w-3 h-3"/> 作業エリア (Clickで拡大)</span>
          </div>
        )}
@@ -21387,7 +21387,15 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
       ? { border: 'border-blue-200', bg: 'bg-blue-50', hover: 'hover:border-blue-400', textBold: 'text-blue-800', textSub: 'text-blue-600', dot: 'bg-blue-500' }
       : { border: 'border-teal-200', bg: 'bg-teal-50', hover: 'hover:border-teal-400', textBold: 'text-teal-800', textSub: 'text-teal-600', dot: 'bg-teal-500' };
     return (
-      <div key={`${kind}_${k}`} className={`border ${palette.border} ${palette.bg} rounded-lg p-3 flex items-center gap-3 ${palette.hover} transition-colors`}>
+      <div key={`${kind}_${k}`} data-mt-preset-tile="1" className={`border ${palette.border} ${palette.bg} rounded-xl p-2 flex flex-col gap-2 ${palette.hover} transition-colors`}>
+        {/* 🧹 2026-09-23: 図面が主役。上に大きく(4:3)、測る点をその上に重ねる */}
+        <button type="button" onClick={() => startEdit(kind, k)} title="押すと編集" className="relative w-full aspect-[4/3] bg-white border rounded-lg overflow-hidden" style={v.diagramImage ? { backgroundImage: `url(${v.diagramImage})`, backgroundSize: 'contain', backgroundRepeat: 'no-repeat', backgroundPosition: 'center' } : {}}>
+          {(v.inputs || []).map((inp, idx) => (
+            <span key={idx} className={`absolute ${palette.dot} rounded-full w-2.5 h-2.5 ring-2 ring-white`} style={{ left: `${inp.x}%`, top: `${inp.y}%`, transform: 'translate(-50%, -50%)' }}/>
+          ))}
+          {!v.diagramImage && !(v.inputs || []).length && <span className="absolute inset-0 flex items-center justify-center text-xs text-slate-400">図面なし</span>}
+        </button>
+        <div className="flex items-start gap-1">
         <div className="flex-1 cursor-pointer min-w-0" onClick={() => startEdit(kind, k)}>
           <div className="flex items-center gap-2 flex-wrap">
             <div className={`font-bold ${palette.textBold} truncate`}>{v.label}</div>
@@ -21403,24 +21411,20 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
             )}
           </div>
         </div>
-        <div className="relative w-24 h-16 bg-white border rounded overflow-hidden hidden md:block" style={v.diagramImage ? { backgroundImage: `url(${v.diagramImage})`, backgroundSize: 'contain', backgroundRepeat: 'no-repeat', backgroundPosition: 'center' } : {}}>
-          {(v.inputs || []).map((inp, idx) => (
-            <div key={idx} className={`absolute ${palette.dot} rounded-full w-1.5 h-1.5`} style={{ left: `${inp.x}%`, top: `${inp.y}%`, transform: 'translate(-50%, -50%)' }}/>
-          ))}
-        </div>
-        <button onClick={() => startEdit(kind, k)} className="p-2 text-slate-400 hover:text-teal-600 bg-white rounded" title="編集"><Pencil className="w-4 h-4"/></button>
+        <button onClick={() => startEdit(kind, k)} className="min-h-11 min-w-11 flex items-center justify-center text-slate-400 hover:text-teal-600 bg-white rounded-lg border border-slate-200" title="編集"><Pencil className="w-4 h-4"/></button>
         {kind === 'custom' ? (
-          <button onClick={() => deleteCustom(k)} className="p-2 text-slate-400 hover:text-rose-600 bg-white rounded" title="削除"><Trash2 className="w-4 h-4"/></button>
+          <button onClick={() => deleteCustom(k)} className="min-h-11 min-w-11 flex items-center justify-center text-slate-400 hover:text-rose-600 bg-white rounded-lg border border-slate-200" title="削除"><Trash2 className="w-4 h-4"/></button>
         ) : (
-          <button onClick={() => hideBuiltIn(k)} className="p-2 text-slate-400 hover:text-rose-600 bg-white rounded" title="一覧から非表示"><Trash2 className="w-4 h-4"/></button>
+          <button onClick={() => hideBuiltIn(k)} className="min-h-11 min-w-11 flex items-center justify-center text-slate-400 hover:text-rose-600 bg-white rounded-lg border border-slate-200" title="一覧から非表示"><Trash2 className="w-4 h-4"/></button>
         )}
+        </div>
       </div>
     );
   };
 
   return (
-    <div className="p-6 max-w-5xl mx-auto h-full overflow-y-auto space-y-4">
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+    <div className="p-4 max-w-7xl mx-auto h-full overflow-y-auto space-y-4">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
         <div className="flex justify-between items-center mb-4">
           <div>
             <h3 className="font-bold text-lg flex items-center gap-2"><Ruler className="w-5 h-5 text-teal-600"/> 測定設定 — レイアウトプリセット</h3>
@@ -21442,7 +21446,7 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
               カスタムプリセットはまだありません。「新規登録」から作成できます。
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
               {Object.entries(customLayouts).map(([k, v]) => renderPresetCard('custom', k, v))}
             </div>
           )}
@@ -21459,7 +21463,7 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
               )}
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
               {Object.entries(effectiveBuiltIns).map(([k, v]) => renderPresetCard('builtin', k, v))}
             </div>
           )}
