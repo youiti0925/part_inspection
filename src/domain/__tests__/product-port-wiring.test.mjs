@@ -64,3 +64,9 @@ test('PP5 自動終了: autoCatchUp 1本(開始+自動終了の秒で遡る・�
   assert.doesNotMatch(app, /autoEnded: true, workerName: t\.workerName \|\| inspectorNameRefAE\.current/, '古い自動終了(終わり=気づいた時刻)が残っている');
   assert.doesNotMatch(app, /__at:/, '部品の onSave が知らない __at を渡している(保存データに混ざる)');
 });
+
+test('PP6 完了前の確認チェック: ロット1回は画面が書く鍵(id-k-checklist)も読み、記録は id-lot-k を見る', () => {
+  const h = bodyOf('const findIncompleteChecklists = () => {', 2500);
+  assert.match(h, /mrNow\[chkKey\] \|\| \(step\.lotOnce \? mrNow\[`\$\{step\.id\}-\$\{u\}-checklist`\] : null\)/, 'ロット1回のチェックを画面が書く鍵で読んでいない(完了がいつまでも止まる)');
+  assert.match(h, /step\.lotOnce && step\.id \? `\$\{step\.id\}-lot-\$\{u\}`/, 'ロット1回の記録の鍵を見ていない');
+});

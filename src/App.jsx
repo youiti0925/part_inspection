@@ -8964,11 +8964,15 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
       // ロット1回工程: 台数ではなく実施回数分のチェック (キーは lot-k ベース)
       const unitsN = step.lotOnce ? lotOnceCountOf(tasksRef.current, step) : totalUnits;
       for (let u = 0; u < unitsN; u++) {
+        // 🖐 ロット1回のチェックは 画面が `${id}-${k}-checklist` に書いていて、ここは `${id}-lot-${k}-checklist` だけを読んでいた
+        //   (完了がいつまでも止まる)。両方読む(製品検査 2026-09-24 と同じ直し)。
         const chkKey = step.lotOnce ? `${step.id}-lot-${u}-checklist` : `${step.id}-${u}-checklist`;
-        const checked = measurementResults[chkKey] || {};
+        const mrNow = measurementResultsRef.current || measurementResults; // 音声の輪の古い写しを読まない(製品と同じ)
+        const checked = mrNow[chkKey] || (step.lotOnce ? mrNow[`${step.id}-${u}-checklist`] : null) || {};
         const missing = requiredItems.filter(it => !checked[it.id]);
         // タスクが skipped/completed 以外 (=実作業対象) のみチェック対象
-        const taskKey = step.id ? `${step.id}-${u}` : `${sIdx}-${u}`;
+        // ロット1回工程の記録は `${id}-lot-${k}`(前は台の鍵を見ていたので、済んだロット1回も「未完了」と数えていた)
+        const taskKey = step.lotOnce && step.id ? `${step.id}-lot-${u}` : (step.id ? `${step.id}-${u}` : `${sIdx}-${u}`);
         const t = tasksRef.current[taskKey];
         const taskNeeded = !t || (t.status !== 'skipped' && t.status !== 'completed');
         // sequential モードでは 1台目で代表
