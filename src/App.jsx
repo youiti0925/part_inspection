@@ -9356,7 +9356,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           const task = otherTasks[key] || otherTasks[numKey];
           if (task && task.status === 'processing' && task.startTime) {
             const elapsedMs = now - task.startTime;
-            const targetMs = (step.targetTime || 0) * 1000;
+            // ⏱ 2026-09-27 帯の「残り」は自動終了の秒(無ければ目標)で数える。掛け持ち案内と同じ関数(製品と同じ)。
+            //   前は目標時間で数えていて、帯「残14:18」と案内「5:18 使える」が食い違っていた(写しで実測)。
+            const targetMs = (autoLimitSecOf(step, (templates.find(t => t.id === otherLot.templateId)?.steps) || []) || 0) * 1000;
             list.push({
               lotId: otherLot.id,
               lotModel: otherLot.model,
@@ -9393,7 +9395,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       });
     });
     return list;
-  }, [lots, lot.id, lot.workerId, mapZones, workers, currentUserName, otherAutoTick]);
+  }, [lots, lot.id, lot.workerId, mapZones, workers, templates, currentUserName, otherAutoTick]);
 
   // === データ成熟度: 同テンプレの完了ロット数 (厳密モード推奨の判断材料) ===
   const templateDataMaturity = useMemo(() => {
@@ -9536,7 +9538,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         if (t && t.status === 'processing' && t.startTime) {
           const elapsedSec = Math.floor((Date.now() - t.startTime) / 1000);
           if (!runningAuto || elapsedSec > runningAuto.elapsedSec) {
-            runningAuto = { step, sIdx, unitIdx: u, startTime: t.startTime, elapsedSec, targetSec: step.targetTime || 0 };
+            runningAuto = { step, sIdx, unitIdx: u, startTime: t.startTime, elapsedSec, targetSec: autoLimitSecOf(step, (templates.find(tp => tp.id === lot.templateId)?.steps) || []) || 0 }; // ⏱ 自動終了の秒で(掛け持ち案内と同じ・製品と同じ)
           }
         }
       }
@@ -9593,7 +9595,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       overrunSec: isOverrun ? runningAuto.elapsedSec - runningAuto.targetSec : 0,
       remainingSec: runningAuto.targetSec > 0 ? Math.max(0, runningAuto.targetSec - runningAuto.elapsedSec) : 0,
     };
-  }, [tasks, localSteps, lot.quantity, otherAutoTick]);
+  }, [tasks, localSteps, lot.quantity, lot.templateId, templates, otherAutoTick]);
 
   // 🚶 掛け持ち案内(製品検査 2026-09-26 と同じ): この自動測定の残りの間に、別のロットへ行って何ができるか。計算は domain/juggleGuide.js。
   //   残りは 自動終了の秒(テンプレも見る) → 目標時間 の順。
@@ -9817,7 +9819,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       setActiveCustomTaskKey(key);
       setTasks(newTasks);
       onSave({ tasks: newTasks, status: 'processing' });
-      startUndoTimer({ key, type: 'task', previousTasks });
+      // 🗣 2026-09-27 始めた時の帯は「開始しました」(前は始めただけでも「完了しました」と出て作業者が迷った)
+      startUndoTimer({ key, type: 'task', previousTasks, verb: '開始' });
     } else if (currentTask.status === 'processing') {
       const previousTasks = { ...tasks };
       const now = Date.now();
@@ -10310,7 +10313,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         setBatchStartTimes({ ...batchStartTimes, [stepIdx]: groupStart });
         setTasks(newTasks);
         onSave({ tasks: newTasks, status: 'processing' });
-        startUndoTimer({ key: `batch-start-${stepIdx}`, type: 'batch', previousTasks, previousBatchStartTimes });
+        startUndoTimer({ key: `batch-start-${stepIdx}`, type: 'batch', previousTasks, previousBatchStartTimes, verb: 'まとめて開始' });
     } else {
         const previousTasks = { ...tasks };
         const previousBatchStartTimes = { ...batchStartTimes };
@@ -12347,7 +12350,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           {/* Undo Bar */}
           {pendingUndo && (
             <div className="shrink-0 bg-amber-500 text-white p-3 flex items-center justify-between z-50 shadow-lg">
-              <span className="font-bold">完了しました ({undoCountdown}秒以内に取り消し可能)</span>
+              <span className="font-bold">{(pendingUndo && pendingUndo.verb) || '完了'}しました ({undoCountdown}秒以内に取り消し可能)</span>
               <button onClick={handleUndo} className="px-4 py-1 bg-white text-amber-700 rounded font-bold">取り消し</button>
             </div>
           )}
@@ -12908,7 +12911,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         {/* Undo Bar (Sequential) */}
         {pendingUndo && (
           <div className="shrink-0 bg-amber-500 text-white p-3 flex items-center justify-between z-50 shadow-lg">
-            <span className="font-bold">完了しました ({undoCountdown}秒以内に取り消し可能)</span>
+            <span className="font-bold">{(pendingUndo && pendingUndo.verb) || '完了'}しました ({undoCountdown}秒以内に取り消し可能)</span>
             <button onClick={handleUndo} className="px-4 py-1 bg-white text-amber-700 rounded font-bold">取り消し</button>
           </div>
         )}
