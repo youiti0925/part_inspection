@@ -9081,9 +9081,12 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
       finishingRef.current = true;
       setIsFinishing(true);
       try {
-          // 🚨 **await する**。ここが受け取られる前に onFinish() で画面を消すと、
-          //   詰まっている間の記録は待ち行列に一度も入らないまま消える。
-          await onSave({
+          // 🚨 結果を待つ。ただし **最大3秒**(settleSaveBriefly・製品検査と同じ)。
+          //   ⚠前は onSave を最後まで await していたので、電波が無いと「保存中…」のまま画面が固まった
+          //     (Firestore は書き込みを端末の待ち行列に入れたまま、届くまで約束を返さない)。
+          //   'error'(拒否)は閉じない。'pending'(まだ送れていない)は閉じてよい:
+          //   書き込みは端末の待ち行列に入っており、送れていない事は帯とタブを閉じる時の警告で出続ける。
+          const saved = await settleSaveBriefly(onSave({
               status: 'completed', location: 'completed',
               totalWorkTime: elapsed,
               // workStartTime を null にすると「ロット作業開始時刻」が失われる → 保持する
@@ -9093,11 +9096,21 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
               stepTimes, stepUnitTimes,
               tasks: skippedTasks,
               ...(deadTaskKeys.length ? { __deleteMapKeys: { tasks: deadTaskKeys } } : {}),
-              interruptions, measurementResults,
+              // ⚠interruptions は **書かない**(製品検査と同じ)。ここで手元の配列を書き戻すと、作業画面を開いてから
+              //   完了確定までに他端末が足した記録が、この1回でまとめて消える(窓は数時間になりうる)。
+              //   中断・不具合の記録は起きた時/止めた時にその都度 onSave({ interruptions }) で書いてある。
+              measurementResults,
               completedAt,
               ...meta
-          });
-          // 受け取られた時だけ閉じる。
+          }));
+          if (saved === 'error') {
+              // ⚠ここで閉じたら、作業者は「完了した」と思って帰る。**閉じない。**
+              alert('🚨 完了の保存ができませんでした。\n\n作業の記録はまだこの画面に残っています。'
+                + '通信を確かめて、もう一度「完了確定」を押してください。\n'
+                + '（電波が弱いだけで送れていない時は、この画面は閉じ、端末が自動で送ります。タブを閉じる時は警告が出ます）');
+              return false;
+          }
+          // 受け取られた(ok)か、待ち行列に入った(pending)時だけ閉じる。
           onFinish();
           return true;
       } catch (e) {

@@ -49,3 +49,11 @@ test('PP3 まとめて開始の時間が消えない4件(開き直しの復元�
   // 表示は liveSecOf
   assert.ok((app.match(/liveSecOf\(task\)/g) || []).length >= 2, '表示がバッチ台の起点を見ていない');
 });
+
+test('PP4 完了確定: 保存は最大3秒だけ待つ(電波なしで固まらない)・拒否なら閉じない・interruptions を書き戻さない', () => {
+  const h = bodyOf('const finalizeComplete = async (overrideMeta = null) => {', 7000);
+  assert.match(h, /const saved = await settleSaveBriefly\(onSave\(\{/, '保存を settleSaveBriefly で待っていない(電波が無いと画面が固まる)');
+  assert.match(h, /if \(saved === 'error'\) \{/, '拒否を見ていない');
+  const payload = h.slice(h.indexOf('settleSaveBriefly(onSave({'), h.indexOf("if (saved === 'error')"));
+  assert.doesNotMatch(payload, /\binterruptions\b/, '完了確定で interruptions を丸ごと書き戻している(他端末の記録を消す)');
+});
