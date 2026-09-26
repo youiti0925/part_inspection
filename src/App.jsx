@@ -9635,6 +9635,11 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       // 担当なしのロットへ移る時は自分を担当にする。⚠投げっぱなしにしない(失敗は saveData が画面へ出す)
       try { await saveData('lots', targetId, { workerId: mine.id }); } catch { /* saveData が画面へ出す */ }
     }
+    // 🚶 2026-09-27 離れるロットが担当なしなら、自分を担当にしてから移る(自動測定を置いていくのは自分)。
+    //   これが無いと、移った先の「測定中の元のロット ↩ 戻る」の帯が「自分の物」と分からず出なかった(部品の写しで実測)。
+    if (!lot.workerId && mine && mine.id && saveData) {
+      try { await saveData('lots', lot.id, { workerId: mine.id }); } catch { /* saveData が画面へ出す */ }
+    }
     onSwitchLot(targetId);
   };
 

@@ -26,7 +26,7 @@ const Fact = ({ label, value, unit = '', mono = false, strong = false, shrink = 
 function Row({ c, onGo, blocked, main }) {
   const goBtn = c.go === false || !main ? 'bg-white border-2 border-teal-700 text-teal-800' : 'bg-teal-700 text-white';
   return (
-    <div className="flex items-center gap-3 min-w-0" data-juggle-card={c.lotId} data-juggle-go={String(c.go)}>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0" data-juggle-card={c.lotId} data-juggle-go={String(c.go)}>
       <span className={`rounded-lg px-3 py-1.5 text-white text-lg font-black shrink-0 ${main && c.go !== false ? 'bg-teal-700' : 'bg-slate-600'}`}>{c.zoneName || '区画 未定'}</span>
       <span className="text-base font-bold text-slate-900 shrink-0 max-w-[11rem] truncate">{c.orderNo || c.model || 'ロット'}</span>
       {main && c.model && c.orderNo ? <span className="font-mono text-sm text-slate-500 truncate hidden lg:inline">{c.model}</span> : null}
