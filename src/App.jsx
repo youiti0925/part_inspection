@@ -104,6 +104,9 @@ import {
 } from './domain/noteImages.js';
 // 💾 「保存してから画面を閉じてよいか」(2026-08-17 の是正。製品検査と同一ファイル)
 import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './domain/settleSave.js';
+// ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
+//   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
+import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
 // 工場の暦(祝日・全社休業・休日出勤)。4アプリで同じ物(md5 一致)。
 //   🚨 登録が空なら 月〜金 = 今までと1ミリも同じ挙動。
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
@@ -6842,9 +6845,9 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
   // セルの短い表示 (ステータス記号 + 時間)。tgt>0 の作業中は目標オーバー(赤点滅)/80%警告(黄リング)を出す
   const cellContent = (task, tgt = 0) => {
     const st = task.status;
-    const dur = task.status === 'processing' && task.startTime
-      ? task.duration + Math.floor((Date.now() - task.startTime) / 1000)
-      : task.duration;
+    // バッチ(まとめて開始)の台は duration に積まない設計(完了時に按分)なので、
+    // batchStartedAt 起点の liveSecOf で出す。再開で startTime が変わっても0に戻らず、中断中も凍結表示(製品検査と同じ)。
+    const dur = liveSecOf(task);
     if (st === 'completed') return { mark: '✓', time: formatTime(dur), cls: 'bg-emerald-500 text-white' };
     if (st === 'ng') return { mark: 'NG', time: formatTime(dur), cls: 'bg-red-600 text-white' };
     // 修正中: メインは元の作業時間を保持し、修正の回数/各回の時間は下のチップで表示 (カードと同様)
@@ -7345,6 +7348,22 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   
   // Batch processing state for custom mode
   const [batchStartTimes, setBatchStartTimes] = useState({});
+  // 🛡「まとめて開始」の起点を保存データ(tasks)から復元する(製品検査と同じ)。
+  //   batchStartTimes は state にしか無いので、作業画面を閉じて開き直すと空に戻り、
+  //   ボタンが「まとめて開始」に逆戻り → そこから開始すると batchStartedAt が今の時刻で
+  //   上書きされ、バッチ台の唯一の時間の持ち主が消えて実測が全損していた(製品の実機再現: 12:55→00:02)。
+  //   ⚠既にある値は上書きしない(休憩シフト済みの画面側の値が正)。
+  //   ⚠ロットが変わったら前のロットの起点を持ち越さない(別ロットに「まとめて完了」が出る)。
+  const batchRestoreLotRef = useRef(null);
+  useEffect(() => {
+    const restored = rebuildBatchStartTimes(tasks);
+    if (batchRestoreLotRef.current !== lot.id) {
+      batchRestoreLotRef.current = lot.id;
+      setBatchStartTimes(restored);
+      return;
+    }
+    setBatchStartTimes(prev => mergeRestoredBatchStartTimes(prev, restored));
+  }, [lot.id, tasks]);
   // 範囲指定でまとめて開始するモーダル: { stepIdx, from, to } | null
   const [batchRangeModal, setBatchRangeModal] = useState(null);
 
@@ -7896,8 +7915,12 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
       let breakMs = 0;
       Object.entries(tasks).forEach(([k, t]) => {
         if (t?.status === 'paused' && t.pausedAt) {
-          if (!breakMs) breakMs = Math.max(0, now - t.pausedAt); // 休憩時間(全タスク共通の停止→再開幅)
-          newTasks[k] = { ...t, status: 'processing', startTime: now, pausedAt: null, firstStartTime: t.firstStartTime || now };
+          // 休憩幅は「その台が止まっていた時間」= 台ごとに出す(製品検査と同じ)。
+          //   ⚠全台を最初の1台の幅でずらすと、止まった時刻が違う台の止まっていた時間が作業時間に混ざる。
+          const myBreakMs = Math.max(0, now - t.pausedAt);
+          if (!breakMs) breakMs = myBreakMs; // 下の batchStartTimes(グループ起点・旧データ用フォールバック)のシフトに使う
+          // batchStartedAt も休憩分シフト。ずらさないとバッチ台の時間に休憩が混ざる／まとめて完了の所属から外れる。
+          newTasks[k] = { ...t, status: 'processing', startTime: now, pausedAt: null, firstStartTime: t.firstStartTime || now, ...(t.batchStartedAt != null ? { batchStartedAt: t.batchStartedAt + myBreakMs } : {}) };
         } else if (t?.status === 'reworking' && t.reworkPausedAt) {
           // 一時停止していた修正(リワーク)を再開: reworkStartTime を再セット (積み上げ分は reworks[last].duration に確定済み)。
           newTasks[k] = { ...t, reworkStartTime: now, reworkPausedAt: null };
@@ -8454,15 +8477,25 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
       const cur = prev[key] || { status: 'waiting', duration: 0, startTime: null };
       if (cur.status === 'waiting' || cur.status === 'paused') {
         const nowTs = Date.now();
-        const updated = { ...prev, [key]: { ...cur, status: 'processing', startTime: nowTs, firstStartTime: cur.firstStartTime || nowTs } };
+        // ⏸→▶ 音声での再開もタップ(toggleTask)と同じ補正: バッチ台は壁時計の起点 batchStartedAt を
+        //   停止していた時間ぶん後ろへずらして休憩を除外し、使い終わった pausedAt は必ず null に戻す
+        //   (残すと toggleBreak の再開で同じ台が二重にシフトされる・製品検査と同じ)。
+        const updated = { ...prev, [key]: { ...cur, status: 'processing', startTime: nowTs, firstStartTime: cur.firstStartTime || nowTs,
+          ...(cur.status === 'paused' && cur.pausedAt
+            ? { pausedAt: null, ...(cur.batchStartedAt != null ? { batchStartedAt: cur.batchStartedAt + Math.max(0, nowTs - cur.pausedAt) } : {}) }
+            : {}) } };
         onSave({ tasks: updated, status: 'processing' });
         startUndoTimer({ key, type: 'task', previousTasks: prev });
         return updated;
       } else if (cur.status === 'processing') {
         const now = Date.now();
-        const dur = cur.startTime ? Math.floor((now - cur.startTime) / 1000) : 0;
+        // バッチ(まとめて開始)の台は duration に積まない設計のため、startTime 起点だと中断→再開を
+        //   またいだ「中断前の時間」が消える → batchStartedAt(休憩分シフト済み)起点で全経過を確定する(タップ経路と同じ)。
+        const dur = cur.batchStartedAt != null
+          ? Math.max(0, Math.floor((now - cur.batchStartedAt) / 1000))
+          : (cur.startTime ? Math.floor((now - cur.startTime) / 1000) : 0);
         // batchOwner/batchStartedAt は完了時に必ず外す(残すと後日の同工程バッチ完了に巻き込まれ実測が上書きされる)
-        const updated = { ...prev, [key]: { ...cur, status: 'completed', duration: cur.duration + dur, startTime: null, endTime: now, firstStartTime: cur.firstStartTime || cur.startTime || now, workerName: inspectorName, batchOwner: null, batchStartedAt: null } };
+        const updated = { ...prev, [key]: { ...cur, status: 'completed', duration: (cur.duration || 0) + dur, startTime: null, endTime: now, firstStartTime: cur.firstStartTime || cur.startTime || now, workerName: inspectorName, batchOwner: null, batchStartedAt: null } };
         onSave({ tasks: updated, status: 'processing' });
         startUndoTimer({ key, type: 'task', previousTasks: prev });
         return updated;
@@ -8554,18 +8587,23 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   };
   const voiceBatchComplete = (sIdx) => {
     const base = tasksRef.current; const now = Date.now();
-    const bs = batchStartTimes[sIdx] || null; // いま走っているバッチの開始時刻(=世代)
+    const bs = batchStartTimes[sIdx] || null; // いま走っているバッチの開始時刻
     const members = [];
     for (let u = 0; u < lot.quantity; u++) {
       const key = getTaskKey(sIdx, u); const t = base[key];
-      // batchStartedAt の世代一致で「過去バッチの残留マーカー」を巻き込まない(旧データの未設定は互換で許容)
-      if (t && t.status === 'processing' && t.batchOwner === sIdx && (bs == null || t.batchStartedAt == null || t.batchStartedAt === bs)) members.push({ key, t });
+      // ⚠batchStartedAt の一致は要求しない — 個別タップ再開(⏸→▶)が batchStartedAt を台ごとにずらすため、
+      //   一致要求だと再開した台が置き去りになる(toggleBatch と同じ是正・製品検査と同じ)。
+      if (t && t.status === 'processing' && t.batchOwner === sIdx) members.push({ key, t });
     }
     if (members.length === 0) return { ok: false };
-    const startAt = bs || Math.min(...members.map(m => m.t.batchStartedAt || m.t.startTime || now));
-    const per = Math.floor(Math.max(0, (now - startAt) / 1000) / members.length); // 合計壁時計÷台数
+    // 按分は台ごと: その台の壁時計起点(batchStartedAt。個別再開でズレる)からの経過÷台数。
+    //   全台同一起点なら従来の「合計壁時計÷台数」と同額(後方互換)。
+    const perOf = (t) => {
+      const startAt = t.batchStartedAt ?? bs ?? t.startTime ?? now;
+      return Math.max(0, Math.floor(Math.max(0, (now - startAt) / 1000) / members.length));
+    };
     const nt = { ...base };
-    members.forEach(({ key, t }) => { nt[key] = { ...t, status: 'completed', duration: (t.duration || 0) + per, startTime: null, endTime: now, firstStartTime: t.firstStartTime || t.startTime || now, batchOwner: null, batchStartedAt: null, workerName: inspectorName || t.workerName }; });
+    members.forEach(({ key, t }) => { nt[key] = { ...t, status: 'completed', duration: (t.duration || 0) + perOf(t), startTime: null, endTime: now, firstStartTime: t.firstStartTime || t.startTime || now, batchOwner: null, batchStartedAt: null, workerName: inspectorName || t.workerName }; });
     setTasks(nt);
     setBatchStartTimes(prev => { const c = { ...prev }; delete c[sIdx]; return c; });
     onSave({ tasks: nt, status: 'processing' });
@@ -9608,6 +9646,13 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
         startTime: nowTs,
         // firstStartTime: 一番最初に着手した時刻 (中断・再開で変わらない)
         firstStartTime: currentTask.firstStartTime || nowTs,
+        // ⏸→▶ 個別タップでの再開: バッチ(まとめて開始)の台は duration に積まない設計なので、
+        //   壁時計の起点 batchStartedAt を停止していた時間ぶん後ろへずらして休憩を除外する
+        //   (ヘッダー再開 toggleBreak と同じ補正・製品検査と同じ)。使い終わった pausedAt は必ず null に戻す。
+        //   ⚠batchStartTimes(state)はこの経路では触らない(触るとヘッダー再開のシフトと二重になる)。
+        ...(currentTask.status === 'paused' && currentTask.pausedAt
+          ? { pausedAt: null, ...(currentTask.batchStartedAt != null ? { batchStartedAt: currentTask.batchStartedAt + Math.max(0, nowTs - currentTask.pausedAt) } : {}) }
+          : {}),
       };
       setActiveCustomTaskKey(key);
       setTasks(newTasks);
@@ -9616,11 +9661,17 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     } else if (currentTask.status === 'processing') {
       const previousTasks = { ...tasks };
       const now = Date.now();
-      const sessionDuration = currentTask.startTime ? Math.floor((now - currentTask.startTime) / 1000) : 0;
+      // 個別タップで完了する台の今回ぶんの実測(製品検査と同じ):
+      //   ・通常タスク: 今セッション(startTime起点)を duration に加算。
+      //   ・バッチ(まとめて開始)の台: duration に積まない設計のため、startTime 起点だと
+      //     中断→再開をまたいだ「中断前の時間」が消える → batchStartedAt(休憩分シフト済み)起点で全経過を確定する。
+      const sessionDuration = currentTask.batchStartedAt != null
+        ? Math.max(0, Math.floor((now - currentTask.batchStartedAt) / 1000))
+        : (currentTask.startTime ? Math.floor((now - currentTask.startTime) / 1000) : 0);
       const completed = {
         ...currentTask,
         status: 'completed',
-        duration: currentTask.duration + sessionDuration,
+        duration: (currentTask.duration || 0) + sessionDuration,
         startTime: null,
         // endTime: 完了した時刻 (ガントの「いつ終わったか」を確定するために必須)
         endTime: now,
@@ -9984,6 +10035,16 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
       return;
     }
     if (batchStartTimes[stepIdx]) {
+      // 🛡⏸中断中の台が残ったまま「まとめて完了」すると、所属判定(status==='processing')から外れて
+      //   1台も按分されず、起点(batchStartTimes)だけ消えて時間が永久に失われる経路があった(製品 2026-08 監査)。
+      //   → 中断中のバッチ台が1台でもあれば完了させず、先に再開してもらう。
+      for (let u = 0; u < lot.quantity; u++) {
+        const t = tasks[getTaskKey(stepIdx, u)] || tasks[`${stepIdx}-${u}`];
+        if (t && t.status === 'paused' && t.batchOwner === stepIdx) {
+          setOrderHint('⏸ 中断中です。先に再開してから、まとめて完了を押してください');
+          return;
+        }
+      }
       toggleBatch(stepIdx);
       return;
     }
@@ -10029,7 +10090,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
   //   過去のバグ: バッチは ${stepIdx}-${uIdx} (数値) を使い、個別タスクは ${step.id}-${uIdx} で保存
   //   → 表示は step.id 優先のため、バッチで更新した duration が見えなくなる事故が発生
   // selectedIndices (Set or Array) を渡すと、その台だけを対象にする (飛び番選択用)。
-  const toggleBatch = (stepIdx, fromIdx = 0, toIdx = lot.quantity - 1, selectedIndices = null) => {
+  // resetDuration=true: 「最初から開始」— 一時停止までの累積時間を捨てて0からタイマーを始める(製品検査と同じ)
+  const toggleBatch = (stepIdx, fromIdx = 0, toIdx = lot.quantity - 1, selectedIndices = null, resetDuration = false) => {
     const isBatchStarted = !!batchStartTimes[stepIdx];
     const newTasks = { ...tasks };
     const now = Date.now();
@@ -10047,6 +10109,17 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
             targetUnits = [];
             for (let u = lo; u <= hi; u++) targetUnits.push(u);
         }
+        // 🛡バッチ台の時間の持ち主は batchStartedAt ただ1つ(duration には積まない設計)。
+        //   「続きから開始」で無条件に now を書くと、前回のバッチ計測ぶんが丸ごと消える。
+        //   → 既に batchStartedAt を持っている台は起点を引き継ぐ。中断中(paused+pausedAt)の台は
+        //     他の再開経路(toggleBreak / 個別タップ)と同じく休憩ぶんだけ後ろへシフトして休憩を除外する。
+        //   「最初から開始」(resetDuration) のときだけ now で取り直す。
+        const startedAtFor = (t) => {
+            if (resetDuration || t.batchStartedAt == null) return now;
+            if (t.status === 'paused' && t.pausedAt) return t.batchStartedAt + Math.max(0, now - t.pausedAt);
+            return t.batchStartedAt;
+        };
+        const assignedStarts = [];
         for (const uIdx of targetUnits) {
             const key = getTaskKey(stepIdx, uIdx);  // ← 統一キー
             const currentTask = newTasks[key] || { status: 'waiting', duration: 0, startTime: null };
@@ -10054,10 +10127,16 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                 // firstStartTime: 一度設定したら維持 (中断・再開で変わらない)
                 // batchOwner: このバッチに属する安定マーカー。休憩(toggleBreak)で startTime が書き換わっても所属が壊れないようにする
                 //   (旧実装は startTime===batchStart で所属判定→休憩再開で除外され、再開した台が未完了で取り残された)。
-                newTasks[key] = { ...currentTask, status: 'processing', startTime: now, firstStartTime: currentTask.firstStartTime || now, batchOwner: stepIdx, batchStartedAt: now };
+                // pausedAt: 再開したら必ず消す(残すと同じ台が二重にシフトされる/中断中と誤判定される)。
+                const startedAt = startedAtFor(currentTask);
+                assignedStarts.push(startedAt);
+                newTasks[key] = { ...currentTask, status: 'processing', startTime: now, pausedAt: null, firstStartTime: currentTask.firstStartTime || now, batchOwner: stepIdx, batchStartedAt: startedAt, ...(resetDuration ? { duration: 0 } : {}) };
             }
         }
-        setBatchStartTimes({ ...batchStartTimes, [stepIdx]: now });
+        // グループの起点は「一番古い台」に合わせる。完了時の按分は台ごとの batchStartedAt を使い、
+        //   ここは旧データ(マーカー無し)のフォールバックにしか使われないので、最小値なら安全側。
+        const groupStart = assignedStarts.length ? Math.min(...assignedStarts) : now;
+        setBatchStartTimes({ ...batchStartTimes, [stepIdx]: groupStart });
         setTasks(newTasks);
         onSave({ tasks: newTasks, status: 'processing' });
         startUndoTimer({ key: `batch-start-${stepIdx}`, type: 'batch', previousTasks, previousBatchStartTimes });
@@ -10065,17 +10144,33 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
         const previousTasks = { ...tasks };
         const previousBatchStartTimes = { ...batchStartTimes };
         const batchStart = batchStartTimes[stepIdx];
-        const totalDuration = Math.floor((now - batchStart) / 1000);
         let processedCount = 0;
         // バッチ所属判定: batchOwner マーカー優先。旧データ(マーカー無し)は従来の startTime===batchStart にフォールバック。
-        const belongsToBatch = (t) => t && t.status === 'processing' && ((t.batchOwner === stepIdx && (t.batchStartedAt == null || t.batchStartedAt === batchStart)) || (t.batchOwner == null && t.startTime === batchStart));
+        //   ⚠batchStartedAt の一致は要求しない — 個別タップ再開(⏸→▶)は batchStartedAt を休憩分だけ「台ごと」に
+        //     後ろへずらすため、一致を要求すると再開した台がバッチ非所属になり「まとめて完了」が永久に不能になる
+        //     (+個別完了すると全経過が満額つき N倍水増し)。完了時に batchOwner を必ず null へ戻す規約なので、
+        //     過去バッチの残留マーカーは発生しない。
+        const belongsToBatch = (t) => t && t.status === 'processing' && (t.batchOwner === stepIdx || (t.batchOwner == null && t.startTime === batchStart));
         Array.from({ length: lot.quantity }).forEach((_, uIdx) => {
             const key = getTaskKey(stepIdx, uIdx);  // ← 統一キー
             if (belongsToBatch(newTasks[key])) {
                 processedCount++;
             }
         });
-        const perUnitTime = processedCount > 0 ? Math.floor(totalDuration / processedCount) : 0;
+        // 🛡完了できる台が1台も無い(全台⏸中断中 など)のに続行すると、誰も完了しないまま
+        //   batchStartTimes[stepIdx] だけ削除され、壁時計の起点が永久に失われる(=時間が消える)。
+        //   → 何も書かずに中止。起点は残るので、再開すれば今までどおり「まとめて完了」できる。
+        if (processedCount === 0) {
+          setOrderHint('⏸ まとめて完了できる作業中の台がありません。中断中なら先に再開してください');
+          return;
+        }
+        // 按分は台ごと: その台の壁時計起点(batchStartedAt。個別再開で休憩分だけ台ごとに後ろへズレる)からの
+        //   経過秒÷台数 を加算する。全台が同じ batchStartedAt(=batchStart)なら従来と完全に同額(後方互換)。
+        const perUnitOf = (t) => {
+          const startAt = t.batchStartedAt ?? batchStart ?? now;
+          const elapsedSec = Math.max(0, Math.floor((now - startAt) / 1000));
+          return Math.max(0, Math.floor(elapsedSec / processedCount));
+        };
 
         // このバッチで開始した台のみ完了。範囲外で個別開始した台は壊さない。
         Array.from({ length: lot.quantity }).forEach((_, uIdx) => {
@@ -10085,7 +10180,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                 newTasks[key] = {
                     ...currentTask,
                     status: 'completed',
-                    duration: (currentTask.duration || 0) + perUnitTime,
+                    duration: (currentTask.duration || 0) + perUnitOf(currentTask),
                     startTime: null,
                     endTime: now,
                     firstStartTime: currentTask.firstStartTime || currentTask.startTime || batchStart,
@@ -11069,14 +11164,28 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   </button>
                   <button
                     onClick={() => {
+                      // 最初から: 一時停止までの累積時間を0にリセットしてタイマー開始(誤タップで時間を失わないよう確認)
+                      if (!window.confirm('これまでに記録した時間(一時停止までの分)を捨てて、0から開始します。よろしいですか？')) return;
                       const { stepIdx } = batchRangeModal;
-                      // 個別選択モード: selectedUnits をそのまま渡す
+                      toggleBatch(stepIdx, 0, lot.quantity - 1, selectedUnits, true);
+                      setBatchRangeModal(null);
+                    }}
+                    disabled={selectedCount < 1}
+                    title="これまでの時間を捨てて、0からタイマーを開始します"
+                    className="px-4 py-2 bg-white border-2 border-orange-500 text-orange-600 hover:bg-orange-50 disabled:border-slate-300 disabled:text-slate-300 disabled:cursor-not-allowed rounded-lg font-bold flex items-center gap-1">
+                    <RotateCcw className="w-4 h-4"/> 最初から開始
+                  </button>
+                  <button
+                    onClick={() => {
+                      const { stepIdx } = batchRangeModal;
+                      // 続きから(既定): 一時停止した台はこれまでの時間に足していく(個別選択モード: selectedUnits をそのまま渡す)
                       toggleBatch(stepIdx, 0, lot.quantity - 1, selectedUnits);
                       setBatchRangeModal(null);
                     }}
                     disabled={selectedCount < 1}
+                    title="一時停止した台は、これまでの時間に続けて足していきます"
                     className="px-4 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-lg font-bold flex items-center gap-1">
-                    <PlayCircle className="w-4 h-4"/> 開始 ({selectedCount}台)
+                    <PlayCircle className="w-4 h-4"/> 続きから開始 ({selectedCount}台)
                   </button>
                 </div>
               </div>
@@ -11683,7 +11792,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                                    // 目標時間との比較 (作業中のみライブ判定)。一括(バッチ)中は目標×N台と比較(完了時に按分されるため)。
                                    const cellBN = (task.status === 'processing' && task.startTime) ? Math.max(1, procCountsBySIdx[sIdx]?.[task.startTime] || 1) : 1;
                                    const cellTgt = (effTargetsBySIdx[sIdx] || 0) * cellBN;
-                                   const liveSec = task.status === 'processing' && task.startTime ? (task.duration || 0) + Math.floor((Date.now() - task.startTime) / 1000) : (task.duration || 0);
+                                   const liveSec = liveSecOf(task);
                                    const cellOver = oaCfg.enabled && cellTgt > 0 && task.status === 'processing' && liveSec >= cellTgt * ((oaCfg.overPct || 100) / 100);
                                    const cellWarn = oaCfg.enabled && cellTgt > 0 && task.status === 'processing' && !cellOver && liveSec >= cellTgt * (oaCfg.warnPct / 100);
                                    const handleClick = () => {
