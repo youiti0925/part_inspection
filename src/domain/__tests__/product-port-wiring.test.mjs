@@ -57,3 +57,10 @@ test('PP4 完了確定: 保存は最大3秒だけ待つ(電波なしで固まら
   const payload = h.slice(h.indexOf('settleSaveBriefly(onSave({'), h.indexOf("if (saved === 'error')"));
   assert.doesNotMatch(payload, /\binterruptions\b/, '完了確定で interruptions を丸ごと書き戻している(他端末の記録を消す)');
 });
+
+test('PP5 自動終了: autoCatchUp 1本(開始+自動終了の秒で遡る・ロット1回の鍵も・一時停止中に processing を書かない)', () => {
+  assert.match(app, /const r = autoCatchUp\(\{ lot: \{ steps, tasks: cur, quantity: qty, status: lotStatusRefAE\.current \}, tplSteps, now, isAuto: isAutoStep, inspectorName: inspectorNameRefAE\.current \}\);/, '自動終了が autoCatchUp を通っていない');
+  assert.match(app, /onSaveRefAE\.current\?\.\(\{ tasks: r\.tasks, \.\.\.\(lotStatusRefAE\.current === 'paused' \? \{\} : \{ status: 'processing' \}\) \}\)/, '一時停止中のロットにも status:processing を書いている');
+  assert.doesNotMatch(app, /autoEnded: true, workerName: t\.workerName \|\| inspectorNameRefAE\.current/, '古い自動終了(終わり=気づいた時刻)が残っている');
+  assert.doesNotMatch(app, /__at:/, '部品の onSave が知らない __at を渡している(保存データに混ざる)');
+});

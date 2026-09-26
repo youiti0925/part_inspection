@@ -107,6 +107,10 @@ import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './do
 // ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
+// 🤖 自動工程の判定・開始ガードの唯一の正(製品検査 src/domain/workExecution.js と md5 一致の写し)
+import { isAutoStep } from './domain/workExecution.js';
+// 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
+import { autoCatchUp } from './domain/juggleGuide.js';
 // 工場の暦(祝日・全社休業・休日出勤)。4アプリで同じ物(md5 一致)。
 //   🚨 登録が空なら 月〜金 = 今までと1ミリも同じ挙動。
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
@@ -9508,34 +9512,14 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
       if (lotStatusRefAE.current === 'completed') return; // 完了ロットは触らない(状態巻き戻し防止)
       const cur = tasksRefAE.current || {}; const steps = stepsRefAE.current || []; const qty = lot.quantity || 1; const now = Date.now();
       const tplSteps = tplStepsRefAE.current || [];
-      // 自動終了の有効秒数を解決: ①ロット工程自身 ②無ければ元テンプレの同一工程(id→題名一致)
-      const autoSecOf = (step) => {
-        if (step?.executionMode === 'batch' && step?.autoEndEnabled && step?.autoEndSec > 0) return step.autoEndSec;
-        const ts = tplSteps.find(x => x.id === step.id) || tplSteps.find(x => (x.title || '') === (step.title || ''));
-        if (ts && ts.executionMode === 'batch' && ts.autoEndEnabled && ts.autoEndSec > 0) return ts.autoEndSec;
-        return 0;
-      };
-      let nt = null; let lastTitle = '';
-      steps.forEach((step, sIdx) => {
-        const limitSec = autoSecOf(step);
-        if (!(limitSec > 0)) return;
-        for (let u = 0; u < qty; u++) {
-          const idKey = step.id ? `${step.id}-${u}` : null;
-          const numKey = `${sIdx}-${u}`;
-          const key = (idKey && cur[idKey]) ? idKey : (cur[numKey] ? numKey : (idKey || numKey));
-          const t = cur[key];
-          if (!t || t.status !== 'processing') continue;
-          // セッション(今回の連続作業) = now - startTime。これが autoEndSec に達したら自動完了。
-          //   duration は既存に autoEndSec を加算する → 作業続き(追加測定)で 6分→12分。初回は 0+6分=6分。
-          const session = t.startTime ? Math.floor((now - t.startTime) / 1000) : 0;
-          if (session >= limitSec) {
-            if (!nt) nt = { ...cur };
-            nt[key] = { ...t, status: 'completed', duration: (t.duration || 0) + limitSec, startTime: null, endTime: now, firstStartTime: t.firstStartTime || t.startTime || now, autoEnded: true, workerName: t.workerName || inspectorNameRefAE.current };
-            lastTitle = step.title;
-          }
-        }
-      });
-      if (nt) { setTasks(nt); onSaveRefAE.current?.({ tasks: nt, status: 'processing' }); setAutoEndToast({ title: lastTitle }); }
+      // 🚶 判定と書く値は domain/juggleGuide.js の autoCatchUp 1本(製品検査と同じ)。
+      //   ・終わりの時刻は 開始+自動終了の秒(遡る)。前は「気づいた時刻(now)」だったので、別のロットにいる間に時間が来ると
+      //     戻って開き直した時刻が終わりになり、実際より長く残っていた(製品の控え: 6分測定70回のうち13回が6.5分超)。
+      //   ・ロット1回工程の鍵(`${id}-lot-k`)も見る(前は台の鍵しか見ず、ロット1回の自動測定は終わらなかった)。
+      //   ・一時停止中のロットで status:'processing' を無条件に書かない(止めた札が勝手に「作業中」へ戻っていた)。
+      //   ⚠製品は __at(実際に終わった時刻)も渡すが、部品の onSave はこの合図を知らない(保存データに混ざる)ので渡さない。
+      const r = autoCatchUp({ lot: { steps, tasks: cur, quantity: qty, status: lotStatusRefAE.current }, tplSteps, now, isAuto: isAutoStep, inspectorName: inspectorNameRefAE.current });
+      if (r.tasks) { setTasks(r.tasks); onSaveRefAE.current?.({ tasks: r.tasks, ...(lotStatusRefAE.current === 'paused' ? {} : { status: 'processing' }) }); setAutoEndToast({ title: r.ended[r.ended.length - 1].title }); }
     }, 1000);
     return () => clearInterval(iv);
     // ⚠inspectorName / onSave は deps に入れず ref(inspectorNameRefAE / onSaveRefAE)で最新を読む。

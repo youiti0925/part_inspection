@@ -23,6 +23,9 @@ const md5Lf = (p) => crypto.createHash('md5')
 // { file: 部品の src/ からの道, product: 製品の写し元, md5: LF に揃えた md5 }
 const PAIRS = [
   { file: 'domain/batchLiveTime.js', product: 'product-inspection-app/src/domain/batchLiveTime.js', md5: '2aec8b81656561a403b6ebd8d9cbef94' },
+  { file: 'domain/workExecution.js', product: 'product-inspection-app/src/domain/workExecution.js', md5: 'eecf1fc35e7711da656012987b76387e' },
+  // juggleGuide.js: 製品 ea16d6a で 2分の決まり(MIN_TRIP_WORK_MIN)を lotPair.js から移し、import 無しにしてから写した
+  { file: 'domain/juggleGuide.js', product: 'product-inspection-app/src/domain/juggleGuide.js', md5: '8429300b801f9ed5fd663f18e874fbe8' },
 ];
 
 for (const p of PAIRS) {
