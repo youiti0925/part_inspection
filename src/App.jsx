@@ -8070,6 +8070,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     });
   };
   const handlePause = () => {
+    // 🖐 画面の【中断】の後に 音声で「中断」と言うと もう一度走り、止める前の作業分と休憩の時間を二重に足していた(製品 fb4a1bc)
+    if (!isTimerRunning) return false;
     const now = Date.now();
     // 現在の工程×台に費やした経過秒を退避。再開時 handleStart が stepUnitStartRef を now にリセットするため、
     //   退避しないと休憩前の作業時間が「次へ」の per-unit 時間から丸ごと欠落する。
@@ -8310,8 +8312,9 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
           await speakAsyncWithLog('全作業を完了しますか？');
           const confirm = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
           if (matchYes(confirm) || confirm === null) {
-            handleCompleteTrigger();
-            return;
+            // ⚠弾かれた(確認チェック未完了/測定時間の確認)ときは return しない。
+            //   ここで抜けると音声ループが終わり、二度と反応しなくなる(製品と同じ)。
+            if (await (voiceLatestRef.current.voiceTryCompleteAll || voiceTryCompleteAll)()) return;
           }
           continue;
         }
@@ -8340,7 +8343,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
           } else {
             await speakAsyncWithLog('最後の工程です。全作業完了しますか？');
             const confirm = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
-            if (matchYes(confirm) || confirm === null) { handleCompleteTrigger(); return; }
+            // 弾かれたら下の continue で待受を続ける(音声ループを止めない)
+            if (matchYes(confirm) || confirm === null) { if (await (voiceLatestRef.current.voiceTryCompleteAll || voiceTryCompleteAll)()) return; }
           }
           continue;
         }
@@ -8443,8 +8447,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
             await speakAsyncWithLog('全工程が終了しました。全作業完了しますか？');
             const confirm = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
             if (matchYes(confirm) || confirm === null) {
-              handleCompleteTrigger();
-              return;
+              // 弾かれたら return せず、待受ループへ戻る(音声ループを止めない)
+              if (await (voiceLatestRef.current.voiceTryCompleteAll || voiceTryCompleteAll)()) return;
             }
           }
         } else {
@@ -8759,7 +8763,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
         } else {
           await speakAsyncWithLog('最後の工程です。全作業完了しますか？');
           const confirm = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
-          if (matchYes(confirm) || confirm === null) { handleCompleteTrigger(); return; }
+          // 弾かれても下の return で**待受ループへ戻るだけ**なので音声は生きている
+          if (matchYes(confirm) || confirm === null) { await (voiceLatestRef.current.voiceTryCompleteAll || voiceTryCompleteAll)(); }
         }
         return;
 
@@ -8777,7 +8782,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
           await runVoiceCustomTaskFlow(nextS, nextU);
         } else {
           await speakAsyncWithLog('全工程が終了しました');
-          handleCompleteTrigger();
+          // 弾かれても下の return で待受ループへ戻るだけ(音声は生きている)
+          await (voiceLatestRef.current.voiceTryCompleteAll || voiceTryCompleteAll)();
         }
         return;
 
@@ -8790,8 +8796,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
         await speakAsyncWithLog('全作業を完了しますか？');
         const confirm = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
         if (matchYes(confirm) || confirm === null) {
-          handleCompleteTrigger();
-          return;
+          // 弾かれたら return せず、この工程の待受ループを続ける
+          if (await (voiceLatestRef.current.voiceTryCompleteAll || voiceTryCompleteAll)()) return;
         }
       }
       // 認識できないコマンド → 再度待機
@@ -8824,16 +8830,21 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
           if (matchAllComplete(cmd)) {
             await speakAsyncWithLog('全作業を完了しますか？');
             const c = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
-            if (matchYes(c) || c === null) { handleCompleteTrigger(); return; }
+            // 弾かれたら return せず待受を続ける(通常モードもここで抜けると音声が死ぬ)
+            if (matchYes(c) || c === null) { if (await (voiceLatestRef.current.voiceTryCompleteAll || voiceTryCompleteAll)()) return; }
           } else if (matchNextStep(cmd) || matchComplete(cmd) || matchNext(cmd)) {
             // 通常モードは「完了/次/次工程」いずれも次へ進める
             handleNext(); return;
           } else if (matchInterrupt(cmd)) {
+            // 止まっている時に「中断」と言っても 二重に止めない(製品 fb4a1bc)
+            if (isOnBreakRef.current || !isTimerRunning) { await speakAsyncWithLog('もう止まっています。「再開」で続けます'); continue; }
             await speakAsyncWithLog('中断します');
             handlePause(); return;
           } else if (isCancelCmd && isCancelCmd(cmd)) {
             // 取り消し (直近操作のundo窓内のみ実効)
-            if (pendingUndo) { handleUndo(); await speakAsyncWithLog('取り消しました'); }
+            // 🖐 音声の輪は始めた時の写しを持ち続けるので、とうに消えた取り消しの控えで tasks を巻き戻していた → 最新を読む(製品 fb4a1bc)
+            const lu = voiceLatestRef.current;
+            if (lu.pendingUndo ?? pendingUndo) { (lu.handleUndo || handleUndo)(); await speakAsyncWithLog('取り消しました'); }
             else await speakAsyncWithLog('取り消せる操作がありません');
           }
         }
@@ -8987,7 +8998,12 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
     return incomplete;
   };
 
+  // 🎤 返り値: 画面を「完了の確認」へ進めたら true、弾いたら false(理由は completeBlockReasonRef)。
+  //   音声の「全作業完了」はこれを見て、弾かれた時は聞き取りを続ける(前は無条件に return して音声が死んでいた)。
+  const completeBlockReasonRef = useRef('');
   const handleCompleteTrigger = (skipTimeCheck = false) => {
+      const latestMeasurementResults = measurementResultsRef.current || measurementResults;
+      completeBlockReasonRef.current = '';
       // 確認チェック未完了をブロック
       const incompleteChks = findIncompleteChecklists();
       if (incompleteChks.length > 0) {
@@ -8995,7 +9011,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
               `・${c.stepTitle}${executionType !== 'sequential' ? ` (#${c.unitIdx + 1})` : ''}: ${c.missingItems.slice(0, 3).join(', ')}${c.missingItems.length > 3 ? '...' : ''}`
           ).join('\n');
           alert(`⚠ 確認チェック未完了の工程があります。先にチェックを完了してください:\n\n${summary}${incompleteChks.length > 5 ? `\n他 ${incompleteChks.length - 5} 件` : ''}`);
-          return;
+          completeBlockReasonRef.current = 'checklist';
+          return false;
       }
       // 測定時間に異常(0秒/5秒未満/4時間超/時刻逆転)があれば、まず測定時間表を見せて確認/修正を促す
       if (!skipTimeCheck) {
@@ -9006,7 +9023,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
             const n = steps[si].lotOnce ? lotOnceCountOf(tk, steps[si]) : qty; // ロット1回工程は回数分
             for (let u = 0; u < n; u++) { if (isAnom(tk[getTaskKey(si, u)])) { hasAnom = true; break; } }
           }
-          if (hasAnom) { setShowTimeTable('precomplete'); return; }
+          if (hasAnom) { setShowTimeTable('precomplete'); completeBlockReasonRef.current = 'timecheck'; return false; }
       }
       // 🚨 2026-09-23: 一時停止(handlePause)と同じく、いまの工程×台の経過秒を退避する。
       //   退避しないと「← 作業に戻る」で handleStart が起点を今に戻し、確認の前の作業時間が丸ごと消えていた。
@@ -9020,10 +9037,29 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
         firstWorkStartTime: lot.firstWorkStartTime || lot.workStartTime || startTime || null,
         lastPausedAt: Date.now(),
         stepTimes,
-        measurementResults,
+        measurementResults: latestMeasurementResults, // 音声の輪から呼ばれても 最新の測定で閉じる(製品と同じ)
       });
       setIsConfirming(true);
+      return true;
   };
+
+  // 🎤 音声から「全作業完了」を実行する共通入口(製品検査と同じ)。
+  //   弾かれた理由を読み上げて false を返す ＝ **呼び出し側は必ずループを継続すること**。
+  //   (以前は handleCompleteTrigger() を呼んで無条件に return していたため、確認チェック未完了などで弾かれると
+  //    音声ループが終了し、以後どのコマンドにも反応しなくなっていた。)
+  const VOICE_COMPLETE_BLOCKED_SPEECH = {
+    checklist: '確認チェックが終わっていない工程があります。画面で確認してください',
+    timecheck: '測定時間に確認が必要な工程があります。画面の時間表で確認してください',
+  };
+  const voiceTryCompleteAll = async () => {
+      if (handleCompleteTrigger()) return true;
+      await speakAsyncWithLog(VOICE_COMPLETE_BLOCKED_SPEECH[completeBlockReasonRef.current] || '完了できませんでした。画面を確認してください');
+      return false;
+  };
+  // 🖐 音声の輪は始めた時の写しを持ち続けるので、「全作業完了」は古い経過時間で保存し、
+  //   「取り消し」は とうに消えた取り消しの控えで tasks を巻き戻していた → 音声からは いつも最新を呼ぶ(製品 fb4a1bc)
+  const voiceLatestRef = useRef({});
+  useEffect(() => { voiceLatestRef.current = { voiceTryCompleteAll, handleUndo, pendingUndo }; });
 
   // 完了確定: 未完了がある場合は理由・責任者を必須化、completedAt も必ず立てる
   const [showIncompleteGuard, setShowIncompleteGuard] = useState(false);
@@ -12704,7 +12740,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                {!isTimerRunning ? ( <button onClick={handleStart} className="w-full py-6 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xl shadow-lg flex items-center justify-center gap-2 transition-all hover:scale-105"><Play className="w-6 h-6 fill-current"/> 作業開始</button> ) : ( <>
                 {totalUnits > 1 && <div className="text-center text-sm font-bold text-blue-600 mb-2">{currentUnitIdx + 1} / {totalUnits} 台目</div>}
                 <button onClick={handleNext} className="w-full py-6 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xl shadow-lg flex items-center justify-center gap-2 transition-all hover:scale-105"><CheckCircle2 className="w-6 h-6"/> {currentUnitIdx < totalUnits - 1 ? `次の台 (${currentUnitIdx + 2}台目)` : currentStepIdx < localSteps.length - 1 ? '次工程へ' : '作業完了'}</button>
-                <button onClick={handleCompleteTrigger} className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex items-center justify-center gap-2"><Check className="w-5 h-5"/> 全作業完了</button></> )}
+                <button onClick={() => handleCompleteTrigger()} className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex items-center justify-center gap-2"><Check className="w-5 h-5"/> 全作業完了</button></> )}
              </div>
              <div className="mt-8 border-t pt-6 space-y-2">
                <button onClick={()=>setShowDefectModal(true)} className="w-full py-3 border-2 border-rose-100 text-rose-500 hover:bg-rose-50 rounded-xl font-bold flex items-center justify-center gap-2"><AlertTriangle className="w-5 h-5"/> 不具合報告</button>

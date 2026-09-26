@@ -70,3 +70,20 @@ test('PP6 完了前の確認チェック: ロット1回は画面が書く鍵(id-
   assert.match(h, /mrNow\[chkKey\] \|\| \(step\.lotOnce \? mrNow\[`\$\{step\.id\}-\$\{u\}-checklist`\] : null\)/, 'ロット1回のチェックを画面が書く鍵で読んでいない(完了がいつまでも止まる)');
   assert.match(h, /step\.lotOnce && step\.id \? `\$\{step\.id\}-lot-\$\{u\}`/, 'ロット1回の記録の鍵を見ていない');
 });
+
+test('PP7 音声: 「全作業完了」が弾かれても聞き取りを止めない・取り消しは最新の控え・止まっている時の「中断」は二重に止めない', () => {
+  // 音声から handleCompleteTrigger を直に呼んで return する所が残っていない
+  const voiceArea = app.slice(app.indexOf('const runMicTest = async () => {'), app.indexOf('const handleCompleteTrigger = (skipTimeCheck = false) => {'));
+  assert.ok(voiceArea.length > 1000, '音声の範囲が見つからない');
+  assert.doesNotMatch(voiceArea, /handleCompleteTrigger\(\)/, '音声から handleCompleteTrigger を直に呼んでいる(弾かれると音声が死ぬ)');
+  assert.ok((voiceArea.match(/\(voiceLatestRef\.current\.voiceTryCompleteAll \|\| voiceTryCompleteAll\)\(\)/g) || []).length >= 7, '音声の「全作業完了」が voiceTryCompleteAll の最新を通っていない');
+  assert.match(voiceArea, /if \(lu\.pendingUndo \?\? pendingUndo\) \{ \(lu\.handleUndo \|\| handleUndo\)\(\);/, '音声の取り消しが古い控えを読んでいる');
+  const hc = bodyOf('const handleCompleteTrigger = (skipTimeCheck = false) => {', 3500);
+  assert.match(hc, /completeBlockReasonRef\.current = 'checklist';\s*return false;/, '確認チェックで弾いた時に false を返していない');
+  assert.match(hc, /completeBlockReasonRef\.current = 'timecheck'; return false;/, '時間の確認で弾いた時に false を返していない');
+  assert.match(hc, /setIsConfirming\(true\);\s*return true;/, '進めた時に true を返していない');
+  assert.match(app, /voiceLatestRef\.current = \{ voiceTryCompleteAll, handleUndo, pendingUndo \};/, '最新の控えを ref に写していない');
+  const hp = bodyOf('const handlePause = () => {', 300);
+  assert.match(hp, /if \(!isTimerRunning\) return false;/, '止まっている時の中断で二重に止める');
+  assert.doesNotMatch(app, /onClick=\{handleCompleteTrigger\}/, 'クリックイベントが skipTimeCheck に入って時間の確認を素通りする');
+});
