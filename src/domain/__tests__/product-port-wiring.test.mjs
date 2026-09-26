@@ -125,3 +125,16 @@ test('PP10 開始の見張り: 全ての開始の道が startGuard(全ロット�
   assert.doesNotMatch(app, /isManualTaskRunning && !isAnyAutoRunning;/, '古い「自動中なら2件目OK」が残っている');
   assert.doesNotMatch(app, /isAutoStepFn = \(s\) =>/, '作業画面に名前で自動を決める古い判定が残っている');
 });
+
+test('PP11 掛け持ち案内: 候補は juggleCandidates・移る/戻るは保存を見届けてから・親は key で作り直す', () => {
+  assert.match(app, /import \{ JuggleGuide \} from '\.\/workscreen\/JuggleGuide\.jsx';/, '掛け持ち案内の枠を読んでいない');
+  assert.match(app, /const cands = juggleCandidates\(\{ lots: lots \|\| \[\], currentLot: \{ id: lot\.id, mapZoneId: lot\.mapZoneId \}, me: \{ workerId: meId \}, remainingSec, zones: mapZones \|\| \[\], travel: travelCfg, isAuto: isAutoStep, maxItems: 3 \}\);/, '候補を juggleCandidates で出していない');
+  const sw = bodyOf('const switchToLot = async (targetId) => {', 2000);
+  assert.match(sw, /if \(isManualTaskRunning\)/, '手作業が動いているのに移れる');
+  assert.match(sw, /await settleSaveBriefly\(onSave\(/, '保存を見届けずに移る');
+  assert.match(sw, /if \(result === 'error'\)/, '保存が拒否されても移る');
+  assert.match(app, /<JuggleGuide cands=\{juggle\.cands\}/, '作業画面に掛け持ち案内を出していない');
+  assert.match(app, /key=\{executionLotId\}/, '別のロットへ移った時に作業画面を作り直していない(前のロットの状態が残る)');
+  assert.match(app, /onSwitchLot=\{\(id\) => setExecutionLotId\(id\)\}/, '親が移る口を渡していない');
+  assert.match(app, /travelCfg=\{null\}/, '部品に無い区画の表を渡している');
+});

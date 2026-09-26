@@ -110,7 +110,9 @@ import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from 
 // 🤖 自動工程の判定・開始ガードの唯一の正(製品検査 src/domain/workExecution.js と md5 一致の写し)
 import { isAutoStep } from './domain/workExecution.js';
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
-import { autoCatchUp } from './domain/juggleGuide.js';
+import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGuide.js';
+// 🚶 掛け持ち案内の枠(製品検査 src/workscreen/JuggleGuide.jsx と md5 一致の写し。描くだけ)
+import { JuggleGuide } from './workscreen/JuggleGuide.jsx';
 // ⏱ 終わっていない工程を「該当なし」で閉じる時、時間・NG・写真を落とさない(製品検査 src/domain/skipKeepingRecord.js と md5 一致の写し)
 import { skipTaskKeepingRecord } from './domain/skipKeepingRecord.js';
 // 🖐 順序実行の「済・動いている・次の一手」(製品検査 src/domain/seqScreen.js と md5 一致の写し)
@@ -7151,7 +7153,7 @@ const ModelQualityInfoPanel = ({ model, stepTitle, info, open, onToggle }) => {
   );
 };
 
-const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [] }) => {
+const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [] }) => {
   // 親側で `lots.find(l => l.id === executionLotId)` が undefined を返すケースに備える。
   // ※ React Hooks ルール準拠: hooks を条件分岐の上に置くと「hooks 呼び出し回数の不一致」エラーになるため、
   //   lot 自体は空 object でフォールバックして hooks を常に同じ回数呼ぶ。実際の render は最後に guard する。
@@ -9593,6 +9595,47 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
     };
   }, [tasks, localSteps, lot.quantity, otherAutoTick]);
 
+  // 🚶 掛け持ち案内(製品検査 2026-09-26 と同じ): この自動測定の残りの間に、別のロットへ行って何ができるか。計算は domain/juggleGuide.js。
+  //   残りは 自動終了の秒(テンプレも見る) → 目標時間 の順。
+  //   me: 端末で選んだ名前の作業者。フリー・管理者は担当で絞らない(見るだけ)。
+  //   ⚠部品には操業シミュの「区画どうしの表」が無いので travelCfg は null。片道は区画の名前の目安(中間・完品 10秒 等)だけ・無ければ「不明」。
+  const juggle = useMemo(() => {
+    const ra = liveParallelGuide && liveParallelGuide.runningAuto;
+    if (!ra) return null;
+    const tplSteps = (templates.find(t => t.id === lot.templateId)?.steps) || [];
+    const limit = autoLimitSecOf(ra.step, tplSteps);
+    const remainingSec = limit != null ? Math.max(0, limit - ra.elapsedSec) : null;
+    const meId = (workers.find(w => w && w.name === String(currentUserName || '').trim())?.id) || null;
+    const cands = juggleCandidates({ lots: lots || [], currentLot: { id: lot.id, mapZoneId: lot.mapZoneId }, me: { workerId: meId }, remainingSec, zones: mapZones || [], travel: travelCfg, isAuto: isAutoStep, maxItems: 3 });
+    return { runningAuto: ra, remainingSec, cands };
+  }, [liveParallelGuide, lots, lot.id, lot.mapZoneId, lot.templateId, templates, workers, currentUserName, mapZones, travelCfg]);
+  const juggleBlocked = !onSwitchLot ? 'この画面からは移れません' : isManualTaskRunning ? '手作業が動いています。完了か停止してから移ってください' : null;
+  // 🚶 別のロットへ移る(掛け持ち)。閉じる(✕)と同じ保存をしてから 親に切り替えを頼む(製品と同じ)。
+  //   ⚠手作業が動いている時は移らない。
+  //   担当なしのロットへ移る時は 自分を担当にする。他の人の担当は候補に出ない。
+  const switchToLot = async (targetId) => {
+    if (!onSwitchLot || !targetId || isClosing) return;
+    if (isManualTaskRunning) { setOrderHint('手作業が動いています。完了か停止してから移ってください'); return; }
+    let result = 'ok';
+    try {
+      setIsClosing(true);
+      if (isTimerRunning) {
+        setIsTimerRunning(false);
+        result = await settleSaveBriefly(onSave({ status: 'paused', totalWorkTime: elapsed, workStartTime: null, firstWorkStartTime: lot.firstWorkStartTime || lot.workStartTime || startTime || null, lastPausedAt: Date.now(), stepTimes, measurementResults: measurementResultsRef.current || measurementResults }));
+      } else {
+        result = await settleSaveBriefly(onSave({ measurementResults: measurementResultsRef.current || measurementResults }));
+      }
+    } finally { setIsClosing(false); }
+    if (result === 'error') { alert('🚨 保存ができませんでした。移りません。\n\n通信を確かめて、もう一度「移る」を押してください。'); return; }
+    const target = (lots || []).find(l => l && l.id === targetId);
+    const mine = workers.find(w => w && w.name === String(currentUserName || '').trim());
+    if (target && !target.workerId && mine && mine.id && saveData) {
+      // 担当なしのロットへ移る時は自分を担当にする。⚠投げっぱなしにしない(失敗は saveData が画面へ出す)
+      try { await saveData('lots', targetId, { workerId: mine.id }); } catch { /* saveData が画面へ出す */ }
+    }
+    onSwitchLot(targetId);
+  };
+
   // 自動測定 (別エリア or このロット) がある間 1秒毎に更新
   useEffect(() => {
     const hasLocalAuto = !!liveParallelGuide;
@@ -11493,7 +11536,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
           {otherActiveAutos.length > 0 && (
             <div className="bg-indigo-900 text-white px-4 py-2 flex items-center gap-3 shrink-0 overflow-x-auto">
               <Bot className="w-6 h-6 text-indigo-200 shrink-0 animate-pulse"/>
-              <span className="text-sm font-black text-indigo-200 shrink-0 whitespace-nowrap">別エリア自動測定:</span>
+              <span className="text-sm font-black text-indigo-200 shrink-0 whitespace-nowrap">{onSwitchLot ? '測定中の元のロット:' : '別エリア自動測定:'}</span>
               <div className="flex gap-2 flex-wrap">
                 {otherActiveAutos.map((a, ai) => {
                   const elapsedSec = Math.floor(a.elapsedMs / 1000);
@@ -11505,7 +11548,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
                   return (
                     <button
                       key={`${a.lotId}-${ai}`}
-                      onClick={() => setShowOtherAutoWidget(true)}
+                      onClick={() => (onSwitchLot ? switchToLot(a.lotId) : setShowOtherAutoWidget(true))}
+                      data-juggle-back={a.lotId}
                       className={`text-sm px-3 py-1.5 rounded-lg inline-flex items-center gap-2 border-2 whitespace-nowrap min-h-[36px] ${isOverdue ? 'bg-rose-600 border-rose-300 animate-pulse shadow-lg' : isNearDone ? 'bg-amber-500 border-amber-300 animate-pulse shadow-lg' : 'bg-indigo-700 border-indigo-500 hover:bg-indigo-600 shadow'}`}
                       title={`${a.lotOrderNo} ${a.lotModel} / ${a.stepTitle}${a.zoneName ? ` @ ${a.zoneName}` : ''}${a.workerName ? ` (${a.workerName})` : ''}`}
                     >
@@ -11516,6 +11560,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
                           {isOverdue ? `⚠+${formatTime(elapsedSec - targetSec)}` : `残${formatTime(remainingSec)}`}
                         </span>
                       )}
+                      {onSwitchLot ? <span className={`ml-1 rounded-lg px-3 py-1 text-base font-black ${isOverdue ? 'bg-white text-rose-700' : isNearDone ? 'bg-white text-amber-800' : 'bg-white text-indigo-900'}`}>↩ 戻る</span> : null}
                       {targetSec > 0 && (
                         <span className="h-2 w-16 bg-indigo-900/50 rounded-full overflow-hidden ml-0.5">
                           <span className={`block h-full ${isOverdue ? 'bg-rose-200' : isNearDone ? 'bg-amber-200' : 'bg-indigo-200'}`} style={{ width: `${pct}%` }}/>
@@ -11584,6 +11629,10 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
                        </button>
                      ))
                    : <LiveParallelGuide guide={liveParallelGuide} fmtTime={formatTime} onHide={toggleParallelGuide} />
+               )}
+               {/* 🚶 掛け持ち案内: 厳密モードでも出す(ロットの中の順番の話ではない)。並行ガイドを隠した時は一緒に隠れる */}
+               {juggle && juggle.cands.length > 0 && !parallelGuideHidden && (
+                 <JuggleGuide cands={juggle.cands} remainingSec={juggle.remainingSec} runningTitle={juggle.runningAuto.step.title || ''} unitIdx={juggle.runningAuto.unitIdx} onGo={switchToLot} blocked={juggleBlocked} compact={false} />
                )}
                {/* じっと見る観測パネル: 観測プランのある工程を計測中だけ表示。要素を順に区切る(連続ラップ方式)。 */}
                {activeObs && (() => {
@@ -32024,8 +32073,13 @@ const QuotaStoppedPanel = ({ until }) => (
        {/* Execution Modal */}
        {executionLotId && (
          <WorkExecutionModal
+           key={executionLotId}
            lot={lots.find(l => l.id === executionLotId)}
            itemMaster={settings?.itemMaster || null}
+           // 🚶 掛け持ち案内の「移る」「↩ 戻る」: 作業画面が保存を見届けてから、開くロットを替える(key で画面を作り直す)
+           onSwitchLot={(id) => setExecutionLotId(id)}
+           // 部品には操業シミュの区画どうしの表が無い → 片道は区画の名前の目安だけ(無ければ「不明」)
+           travelCfg={null}
            onClose={() => setExecutionLotId(null)}
            // 🚨🚨 作業画面の onSave は **投げっぱなし(await も catch も無い)が61箇所**ある。
            //   61箇所を書き換えるのではなく、**入口を1つにして**そこで面倒を見る
