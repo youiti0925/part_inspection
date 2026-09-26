@@ -27,6 +27,7 @@ const PAIRS = [
   // juggleGuide.js: 製品 ea16d6a で 2分の決まり(MIN_TRIP_WORK_MIN)を lotPair.js から移し、import 無しにしてから写した
   { file: 'domain/juggleGuide.js', product: 'product-inspection-app/src/domain/juggleGuide.js', md5: '8429300b801f9ed5fd663f18e874fbe8' },
   { file: 'domain/skipKeepingRecord.js', product: 'product-inspection-app/src/domain/skipKeepingRecord.js', md5: 'f80de283e4253445aede8de510a04506' },
+  { file: 'domain/seqScreen.js', product: 'product-inspection-app/src/domain/seqScreen.js', md5: '6934e5bdb509b3f41dcd24e395a8ef14' },
 ];
 
 for (const p of PAIRS) {

@@ -94,3 +94,13 @@ test('PP8 作業画面に品名を出す(品目コード｜品名・名簿から
   assert.match(app, /itemMaster=\{settings\?\.itemMaster \|\| null\}/, '親が品目名簿を渡していない');
   assert.ok((app.match(/data-exec-item-label>\{itemLabel\}/g) || []).length >= 2, 'カスタム・順序実行の見出しに品名が出ていない');
 });
+
+test('PP9 順序実行の「次へ」: 済(完了・該当なし・NG・修正済み)を上書きしない・動いている物/まとめて開始の台を終えない・次は頭から', () => {
+  const h = bodyOf('const handleNext = () => {', 6000);
+  assert.match(h, /if \(seqIsRunning\(prevTask\)\) \{/, '動いている記録(自動運転・修正作業中)を完了にしてしまう');
+  assert.match(h, /prevTask\.batchOwner != null && !seqIsSettled\(prevTask\)/, 'まとめて開始の台を1台ずつ終えてしまう');
+  assert.match(h, /const settled = seqIsSettled\(prevTask\);/, '済の判定が seqIsSettled でない');
+  assert.match(h, /if \(!settled\) \{/, '済の記録を上書きしている');
+  assert.match(h, /const nxSeq = seqNextOf\(localSteps,/, '次の一手を seqNextOf で探していない');
+  assert.doesNotMatch(app, /const isTaskCompleted = /, 'completed だけを済と数える古い判定が残っている');
+});

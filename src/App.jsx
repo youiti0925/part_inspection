@@ -113,6 +113,8 @@ import { isAutoStep } from './domain/workExecution.js';
 import { autoCatchUp } from './domain/juggleGuide.js';
 // ⏱ 終わっていない工程を「該当なし」で閉じる時、時間・NG・写真を落とさない(製品検査 src/domain/skipKeepingRecord.js と md5 一致の写し)
 import { skipTaskKeepingRecord } from './domain/skipKeepingRecord.js';
+// 🖐 順序実行の「済・動いている・次の一手」(製品検査 src/domain/seqScreen.js と md5 一致の写し)
+import { seqNextOf, seqIsSettled, seqIsRunning } from './domain/seqScreen.js';
 // 工場の暦(祝日・全社休業・休日出勤)。4アプリで同じ物(md5 一致)。
 //   🚨 登録が空なら 月〜金 = 今までと1ミリも同じ挙動。
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
@@ -8097,40 +8099,22 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
   //   休憩前の作業時間がここに退避されるので「次へ」での per-unit 時間が欠落しない。
   const stepUnitAccumRef = useRef(0);
 
-  // カスタムで完了済みかチェック (id ベース・index 両対応)
-  const isTaskCompleted = (sIdx, uIdx) => {
-    const step = localSteps[sIdx];
-    // 🚨 2026-09-23 ロット1回の工程は 台ではなく回(`${id}-lot-${k}`)。順序実行では 1回目だけを見る
-    if (step?.lotOnce && step.id) { const t1 = tasks[`${step.id}-lot-0`]; return !!t1 && t1.status === 'completed'; }
-    const t = (step?.id && tasks[`${step.id}-${uIdx}`]) || tasks[`${sIdx}-${uIdx}`];
-    return t && t.status === 'completed';
-  };
-
-  // 次の未完了タスクを探す（現在位置の次から）
-  const findNextIncomplete = (fromStep, fromUnit) => {
-    let sIdx = fromStep, uIdx = fromUnit;
-    // 次の位置から探す
-    uIdx++;
-    while (sIdx < localSteps.length) {
-      // 🚨 2026-09-23 ロット1回の工程は1回だけ(台0)。台数ぶん回さない
-      const unitsHere = localSteps[sIdx]?.lotOnce ? 1 : totalUnits;
-      while (uIdx < unitsHere) {
-        if (!isTaskCompleted(sIdx, uIdx)) return { step: sIdx, unit: uIdx };
-        uIdx++;
-      }
-      sIdx++;
-      uIdx = 0;
-    }
-    return null; // 全部完了
-  };
+  // 🖐 isTaskCompleted / findNextIncomplete(今いる所の後ろだけを探す・completed だけを済と数えた)は
+  //   seqNextOf(domain/seqScreen.js・製品検査と md5 一致の写し・頭から探す)へ置き換えた(製品 2026-09-24 と同じ)。
+  //   ⚠済 = completed / skipped(該当なし) / ng / rework-done。前は completed だけを済にしていたので、
+  //     該当なし・NG の所で順序実行が止まり、「完了して次へ」で その記録を completed に上書きしていた。
+  //   ⚠部品の順序実行には「自動運転を開始」の画面が無いので、自動かどうかは見ない(isAuto を渡さない=前の並び方)。
 
   const handleNext = () => {
+    // 音声の輪の中から呼ばれても 最新(ref)を読む(製品と同じ)
+    const curTasks = tasksRef.current || tasks;
+    const curMR = measurementResultsRef.current || measurementResults;
     // 確認チェック未完了ブロック (sequential モードの現在工程のみ)
     if (currentStep && Array.isArray(currentStep.checklistItems) && currentStep.checklistItems.length > 0) {
       const requiredItems = currentStep.checklistItems.filter(it => it.required !== false);
       if (requiredItems.length > 0) {
         const chkKey = `${currentStep.id}-${currentUnitIdx}-checklist`;
-        const checked = measurementResults[chkKey] || {};
+        const checked = curMR[chkKey] || {};
         const missing = requiredItems.filter(it => !checked[it.id]);
         if (missing.length > 0) {
           alert(`⚠ 確認チェックを完了してください:\n\n${missing.map(m => `・${m.label || '(無題)'}`).join('\n')}`);
@@ -8138,25 +8122,43 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
         }
       }
     }
-    // 現在の工程×台の作業時間を記録 (退避済みの休憩前経過 + 現セッション経過)
-    const now = Date.now();
-    const unitDuration = stepUnitAccumRef.current + Math.floor((now - stepUnitStartRef.current) / 1000);
-    const unitKey = `${currentStep.id}-${currentUnitIdx}`;
-    const newStepUnitTimes = { ...stepUnitTimes, [unitKey]: unitDuration };
-    setStepUnitTimes(newStepUnitTimes);
-    stepUnitStartRef.current = now;
-    stepUnitAccumRef.current = 0; // 次の工程×台に向けてリセット
-
     // カスタムモードのtasksにも完了を記録（モード切替時に整合性を保つ）
     // step.id ベースのキーを正準とする (テンプレ並び替え時の不整合防止)
     // 🚨 2026-09-23 ロット1回の工程はカスタムと同じ鍵(`${id}-lot-0`)へ。台の鍵へ書くと 完了確認で永久に未完了になっていた
     const taskKey = currentStep?.lotOnce && currentStep.id ? `${currentStep.id}-lot-0` : (currentStep?.id ? `${currentStep.id}-${currentUnitIdx}` : `${currentStepIdx}-${currentUnitIdx}`);
+    const prevTask = curTasks[taskKey] || (currentStep?.lotOnce ? null : curTasks[`${currentStepIdx}-${currentUnitIdx}`]) || null;
+    // 🚨 動いている物(自動運転・修正作業中)は ここでは終えない(製品 2026-09-24)。
+    //   音声の「完了」や 画面の「次へ」で、機械に載っている台を 測った時間ごと完了にしていた。
+    if (seqIsRunning(prevTask)) {
+      setOrderHint(prevTask.status === 'reworking' ? '修正作業中です。修正の完了はカスタム画面で押します' : 'カスタム画面で作業中の記録があります。カスタム画面で終えてください');
+      return;
+    }
+    // まとめて開始の台は カスタムの「まとめて完了」で(1台ずつ終えると まとめた時間を台数ぶん付ける)
+    if (prevTask && prevTask.batchOwner != null && !seqIsSettled(prevTask)) {
+      setOrderHint('まとめて開始の作業です。カスタム画面で「まとめて完了」してください');
+      return;
+    }
+    // 🚨 済・該当なし・NG・修正済みの記録は 上書きしない(前は completed と作った時間で上書きし、該当なしの印や NG の理由を消していた)
+    const settled = seqIsSettled(prevTask);
+    // 現在の工程×台の作業時間を記録 (退避済みの休憩前経過 + 現セッション経過)
+    const now = Date.now();
+    const unitDuration = stepUnitAccumRef.current + Math.floor((now - stepUnitStartRef.current) / 1000);
+    const unitKey = `${currentStep.id}-${currentUnitIdx}`;
+    const newStepUnitTimes = settled ? stepUnitTimes : { ...stepUnitTimes, [unitKey]: unitDuration };
+    if (!settled) setStepUnitTimes(newStepUnitTimes);
+    stepUnitStartRef.current = now;
+    stepUnitAccumRef.current = 0; // 次の工程×台に向けてリセット
+
     const legacyKey = `${currentStepIdx}-${currentUnitIdx}`;
     const removedKeys = [];
-    if (!tasks[taskKey] || tasks[taskKey].status !== 'completed') {
+    if (!settled) {
       // 開始時刻 = stepUnitStartRef.current の以前値 (= now - unitDuration*1000)、終了 = now
       const firstStart = now - unitDuration * 1000;
-      const newTasks = { ...tasks, [taskKey]: { status: 'completed', duration: unitDuration, startTime: null, firstStartTime: firstStart, endTime: now, workerName: inspectorName } };
+      // 一時停止(カスタムで途中まで)の続きは それまでの時間に足す。記録の他の欄(担当・要素の区切り等)は残す(製品と同じ)
+      const base = prevTask || {};
+      // まとめて開始の台が一時停止していた時は 停止までの壁時計も足す(liveSecOf・表示と同じ式)。所属の印は完了で外す
+      const done = { ...base, status: 'completed', duration: (base.status === 'paused' ? liveSecOf(base, now) : 0) + unitDuration, startTime: null, pausedAt: null, batchOwner: null, batchStartedAt: null, firstStartTime: base.firstStartTime || firstStart, endTime: now, workerName: inspectorName };
+      const newTasks = { ...curTasks, [taskKey]: done };
       // 旧 numeric キーが残っていたら削除（重複防止）
       // ⚠消したキーは __deleteMapKeys で明示しないとFirestoreに残り続ける(二重計上の元)
       // ⚠名指しで消すのは、旧い数値キーが **記録を1秒も持っていない** 時だけ。
@@ -8182,15 +8184,16 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
     const newStepTimes = { ...stepTimes, [currentStep.id]: stepTotal };
     setStepTimes(newStepTimes);
 
-    // 次の未完了タスクを探す（カスタムで完了済みはスキップ）
-    const next = findNextIncomplete(currentStepIdx, currentUnitIdx);
+    // 次は 頭から「済でも 動いてもいない」最初の物(先の台へ移った後も 前の台の残りを飛ばさない・動いている物は飛ばす)。
+    const nxSeq = seqNextOf(localSteps, tasksRef.current || curTasks, totalUnits);
+    const next = nxSeq ? { step: nxSeq.s, unit: nxSeq.u } : null;
     if (next) {
       setCurrentStepIdx(next.step);
       setCurrentUnitIdx(next.unit);
-      onSave({ currentStepIndex: next.step, currentUnitIndex: next.unit, totalWorkTime: elapsed, stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes, measurementResults, tasks: tasksRef.current, ...delKeys });
+      onSave({ currentStepIndex: next.step, currentUnitIndex: next.unit, totalWorkTime: elapsed, stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes, measurementResults: curMR, tasks: tasksRef.current, ...delKeys });
     } else {
       // 全工程×全台完了
-      onSave({ totalWorkTime: elapsed, stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes, measurementResults, tasks: tasksRef.current, ...delKeys });
+      onSave({ totalWorkTime: elapsed, stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes, measurementResults: curMR, tasks: tasksRef.current, ...delKeys });
       handleCompleteTrigger();
     }
   };
