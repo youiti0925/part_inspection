@@ -111,6 +111,8 @@ import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from 
 import { isAutoStep } from './domain/workExecution.js';
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
 import { autoCatchUp } from './domain/juggleGuide.js';
+// ⏱ 終わっていない工程を「該当なし」で閉じる時、時間・NG・写真を落とさない(製品検査 src/domain/skipKeepingRecord.js と md5 一致の写し)
+import { skipTaskKeepingRecord } from './domain/skipKeepingRecord.js';
 // 工場の暦(祝日・全社休業・休日出勤)。4アプリで同じ物(md5 一致)。
 //   🚨 登録が空なら 月〜金 = 今までと1ミリも同じ挙動。
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
@@ -9049,6 +9051,11 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
           // 未完了タスクを 'skipped' として明示記録
           // ※ 旧データ ({sIdx}-{u} 数値キー) のみ存在する場合は、新キーに skipped を書きつつ
           //   旧キーも削除して、両方が tasks 集計で重複カウントされないようにする
+          // 🚨⏱ 「未完了のまま完了」で **かけた時間と NG の判定を落とさない**(製品検査 2026-09-19 と同じ)。
+          //   直す前は {status:'skipped', duration:0} で丸ごと差し替えていたので、最後の1台の完了を押し忘れた人の
+          //   時間が消え、NG も該当なしに化けていた(ロットは完了扱いなので後から直せない)。
+          //   🚨 決め方は純関数 skipTaskKeepingRecord ただ1本(現場マップの「ロット完了時の自動整理」と同じ物)。
+          const skipKeepingRecord = (t) => skipTaskKeepingRecord(t, { nowMs: completedAt, reason: overrideMeta.reason, by: overrideMeta.responsibleBy });
           localSteps.forEach((step, sIdx) => {
               // ロット1回工程: 台キーを作らず、回数キー(lot-k)単位で未完了を skipped 化
               if (step?.lotOnce) {
@@ -9057,7 +9064,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                       const key = `${step.id}-lot-${k}`;
                       const t = skippedTasks[key];
                       if (!t || (t.status !== 'completed' && t.status !== 'skipped')) {
-                          skippedTasks[key] = { status: 'skipped', duration: 0, skipReason: overrideMeta.reason, skipBy: overrideMeta.responsibleBy, skipAt: completedAt, firstStartTime: completedAt, endTime: completedAt };
+                          skippedTasks[key] = skipKeepingRecord(t);
                       }
                   }
                   return;
@@ -9067,8 +9074,8 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   const numKey = `${sIdx}-${u}`;
                   const t = skippedTasks[key] || tasksRef.current[numKey];
                   if (!t || (t.status !== 'completed' && t.status !== 'skipped')) {
-                      // skipped でも firstStartTime/endTime を記録 (時刻 = スキップ確定時刻)
-                      skippedTasks[key] = { status: 'skipped', duration: 0, skipReason: overrideMeta.reason, skipBy: overrideMeta.responsibleBy, skipAt: completedAt, firstStartTime: completedAt, endTime: completedAt };
+                      // skipped でも firstStartTime/endTime を記録 (時刻 = スキップ確定時刻)。記録(時間・判定)は落とさない。
+                      skippedTasks[key] = skipKeepingRecord(t);
                       // ⚠名指しで消すのは、旧い数値キーが **記録を1秒も持っていない** 時だけ。
                       //   秒数や時刻を持つ物まで消すと、保存の関所が完了確定そのものを止める
                       //   (時間が消える保存だから)。止まったら作業者は完了できない。
@@ -31116,7 +31123,11 @@ const QuotaStoppedPanel = ({ until }) => (
         Object.entries(srcTasks).forEach(([k, t]) => {
           if (t && (t.status === 'paused' || t.status === 'waiting' || t.status === 'processing')) {
             leftover++;
-            cleanTasks[k] = { ...t, status: 'skipped', skipReason: '該当なし (ロット完了時の自動整理)', skipAt: completeNow, firstStartTime: t.firstStartTime || t.startTime || completeNow, endTime: t.endTime || completeNow, startTime: null };
+            // ⚠⚠ **計測中だった項目の時間を落とさない。**(製品検査と同じ)
+            //   前は計測中の経過を足さずに閉じていたので、最後の項目の完了を押し忘れたまま「完了」にすると
+            //   その項目にかけた時間が消えていた。起点はバッチ台なら batchStartedAt(休憩分シフト済み)。
+            // 🚨 決め方は純関数 skipTaskKeepingRecord ただ1本(「未完了のまま完了」と同じ物)。
+            cleanTasks[k] = skipTaskKeepingRecord(t, { nowMs: completeNow, reason: '該当なし (ロット完了時の自動整理)' });
           } else {
             cleanTasks[k] = t;
           }
