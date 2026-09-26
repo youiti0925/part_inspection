@@ -115,6 +115,8 @@ import { autoCatchUp } from './domain/juggleGuide.js';
 import { skipTaskKeepingRecord } from './domain/skipKeepingRecord.js';
 // 🖐 順序実行の「済・動いている・次の一手」(製品検査 src/domain/seqScreen.js と md5 一致の写し)
 import { seqNextOf, seqIsSettled, seqIsRunning } from './domain/seqScreen.js';
+// 🚦 全ロットを見る開始ガード(1人の手作業は同時に1つ・自動測定は別。製品検査 src/domain/lotStartGuard.js と md5 一致の写し)
+import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStartGuard.js';
 // 工場の暦(祝日・全社休業・休日出勤)。4アプリで同じ物(md5 一致)。
 //   🚨 登録が空なら 月〜金 = 今までと1ミリも同じ挙動。
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
@@ -2783,7 +2785,7 @@ const sameGroupModels = (model, settings) => {
 };
 
 const analyzeWorkOrder = (steps = [], completedLots = [], opts = {}) => {
-  const isAutoStep = (s) => s?.executionMode === 'batch' || (s?.title || '').includes('自動');
+  // 共通判定(workExecution.js・製品と同じ)。作業画面の開始の見張りと同じ物で数える(最適順・厳密モードと食い違わない)
   const stepKeyOf = (s, idx) => s?.id || `idx-${idx}`;
   const fallback = opts.fallbackTargetTime ?? 60;
   const quantity = opts.quantity || 1;
@@ -3033,7 +3035,7 @@ const analyzeWorkOrder = (steps = [], completedLots = [], opts = {}) => {
 //   ⑤ それ以外は 台順 × テンプレ順(台内の工程順は維持。並べ替えはしない=2026-05-30方針)
 // move: { type:'batch', stepIdx, units:[], stepKey } | { type:'auto-start'|'task', stepIdx, unitIdx, stepKey } | null
 const nextOptimalMove = (steps, tasks, quantity, analysis, opts = {}) => {
-  const isAutoStep = (s) => s?.executionMode === 'batch' || (s?.title || '').includes('自動');
+  // 共通判定(workExecution.js・製品と同じ)。作業画面の開始の見張りと同じ物で数える(最適順・厳密モードと食い違わない)
   const stepKeyOf = (s, idx) => s?.id || `idx-${idx}`;
   const statusOf = (si, u) => {
     const s = steps[si];
@@ -3116,7 +3118,7 @@ const nextOptimalMove = (steps, tasks, quantity, analysis, opts = {}) => {
 // 主に管理画面のエビデンス表示(「この順番で強制します」プレビュー)と検証用。
 // 時間は analysis.stepStats の実測 median/avg を使う近似。makespan は概算。
 const computeEnforcedSchedule = (steps, quantity, analysis, opts = {}) => {
-  const isAutoStep = (s) => s?.executionMode === 'batch' || (s?.title || '').includes('自動');
+  // 共通判定(workExecution.js・製品と同じ)。作業画面の開始の見張りと同じ物で数える(最適順・厳密モードと食い違わない)
   const stepKeyOf = (s, idx) => s?.id || `idx-${idx}`;
   const keyOf = (si, u) => { const s = steps[si]; return s?.id ? `${s.id}-${u}` : `${si}-${u}`; };
   const durOf = (si) => {
@@ -3179,7 +3181,7 @@ const computeEnforcedSchedule = (steps, quantity, analysis, opts = {}) => {
 // 目的: 各ロットが実際どう動いたかを並べて、揃い具合・逸脱・改善シグナルを“見えるように”する。
 // 何も書き換えない。判断材料を出すだけ。
 const analyzeLotsForReview = (steps = [], completedLots = []) => {
-  const isAuto = (s) => s?.executionMode === 'batch' || (s?.title || '').includes('自動');
+  const isAuto = isAutoStep; // 共通判定(workExecution.js・製品と同じ)
   const lotMaps = completedLots.map(lot => {
     const idByTitle = {}, idxByTitle = {}; (lot.steps || []).forEach((s, i) => { const t = (s?.title || '').trim(); if (t && !(t in idByTitle)) { idByTitle[t] = s?.id || null; idxByTitle[t] = i; } });
     return { lot, idByTitle, idxByTitle, qty: lot.quantity || 1 };
@@ -6842,7 +6844,7 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
     unitTh: 'p-2 min-w-[68px]', unitSub: '', cellBtn: 'py-1.5 px-0.5', cellMinH: '52px', cellMark: 'text-sm font-black', cellTime: 'text-xs font-mono',
     batchTd: 'p-1 w-16', batchBtn: 'text-xs px-2 py-1.5',
   };
-  const isAutoStepFn = (s) => s?.executionMode === 'batch' || (s?.title || '').includes('自動');
+  const isAutoStepFn = isAutoStep; // 共通判定(workExecution.js・製品と同じ)
   const getTask = (step, sIdx, u) => {
     // ロット1回工程: u は回数k、キーは lot-k
     const k = step?.lotOnce ? `${step.id}-lot-${u}` : (step?.id ? `${step.id}-${u}` : `${sIdx}-${u}`);
@@ -7920,6 +7922,13 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
       onSave({ tasks: newTasks });
       setCustomPaused(true);
     } else {
+      // 🚦 再開対象を先に全件確認する。途中まで復帰させてから拒否しない(製品と同じ)。
+      for (const [key, task] of Object.entries(tasksRef.current || {})) {
+        const rework = task?.status === 'reworking' && task.reworkPausedAt;
+        if (!(task?.status === 'paused' && task.pausedAt) && !rework) continue;
+        const gate = startGuard({ targetStep: rework ? REWORK_STEP : findStepByTaskKey(key), excludeKey: key });
+        if (!gate.ok) { setOrderHint(gate.message); return; }
+      }
       // 再開: pausedAt があったタスクを processing に戻し、startTime を Date.now() に
       // ※ firstStartTime は維持 (再開しても「最初の着手時刻」は変わらない)
       const now = Date.now();
@@ -7974,35 +7983,64 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
     if (!isTimerRunning) handleStart();
   };
   const switchToSequential = () => {
+    // 🖐 修正作業中・まとめて開始の台(作業中/一時停止)が在る時は 切り替えない(製品 2026-09-24 と同じ)。
+    //   修正の時計は順序実行では止まらず二重に数え、まとめて開始の台は1台ずつ完了すると まとめた時間を台数ぶん付けていた。
+    //   断る時は 何も書かない・音声も止めない。
+    const blockSw = Object.values(tasks).find((t) => t && (t.status === 'reworking' || (t.batchOwner != null && (t.status === 'processing' || t.status === 'paused'))));
+    if (blockSw) { setOrderHint(blockSw.status === 'reworking' ? '修正作業中です。カスタム画面で修正を終えてから 順序実行に切り替えてください' : 'まとめて開始の作業中です。カスタム画面で「まとめて完了」してから 順序実行に切り替えてください'); return; }
     stopVoiceFlow();
     onSave({ executionType: 'sequential' });
-    // カスタムで完了済みのタスクをスキップして、最初の未完了工程×台に飛ぶ
-    let foundIncomplete = false;
-    for (let sIdx = 0; sIdx < localSteps.length; sIdx++) {
-      for (let uIdx = 0; uIdx < totalUnits; uIdx++) {
-        const step = localSteps[sIdx];
-        const t = (step?.id && tasks[`${step.id}-${uIdx}`]) || tasks[`${sIdx}-${uIdx}`];
-        if (!t || t.status !== 'completed') {
-          setCurrentStepIdx(sIdx);
-          setCurrentUnitIdx(uIdx);
-          foundIncomplete = true;
-          break;
-        }
-      }
-      if (foundIncomplete) break;
+    // 🖐 カスタムで開始したままの手作業(processing)は 順序実行では終えられず 時計が回り続けた(二重計上)。
+    //   切り替える時に 一時停止にする(カスタムの【中断】と同じ確定の仕方)。自動運転は機械の上なので そのまま(製品と同じ)。
+    //   ⚠これをしないと 開始の見張りが「手作業が作業中」と読み、順序実行の時計を始められない。
+    const nowSw = Date.now();
+    let tasksSw = tasks; let pausedSw = 0;
+    for (const [k, t] of Object.entries(tasks)) {
+      if (!t || t.status !== 'processing' || !t.startTime) continue;
+      const stepK = findStepByTaskKey(k);
+      if (stepK && isAutoStep(stepK)) continue;
+      if (tasksSw === tasks) tasksSw = { ...tasks };
+      tasksSw[k] = { ...t, status: 'paused', duration: (t.duration || 0) + Math.floor((nowSw - t.startTime) / 1000), startTime: null, pausedAt: nowSw, firstStartTime: t.firstStartTime || t.startTime };
+      pausedSw += 1;
     }
-    if (!foundIncomplete) {
-      // 全部完了済み → 最終工程の最終台に設定
-      setCurrentStepIdx(localSteps.length - 1);
-      setCurrentUnitIdx(totalUnits - 1);
-    }
+    if (pausedSw) { setTasks(tasksSw); tasksRef.current = tasksSw; onSave({ tasks: tasksSw }); }
+    // 最初の「済でも動いてもいない」工程×台に飛ぶ(ロット1回は `-lot-0` を見る。全部済なら最後)。
+    //   前は completed だけを済と数え、該当なし・NG の所に止まっていた。
+    const nxSw = seqNextOf(localSteps, tasksSw, totalUnits);
+    const posSw = nxSw ? { s: nxSw.s, u: nxSw.u } : { s: Math.max(0, localSteps.length - 1), u: localSteps[localSteps.length - 1]?.lotOnce ? 0 : totalUnits - 1 };
+    setCurrentStepIdx(posSw.s);
+    setCurrentUnitIdx(posSw.u);
+    onSave({ currentStepIndex: posSw.s, currentUnitIndex: posSw.u });
     setExecutionType('sequential');
-    if (!isTimerRunning) handleStart();
+    if (!isTimerRunning) handleStart({ targetStep: localSteps[posSw.s] });
     stepUnitStartRef.current = Date.now();
   };
 
   // --- Sequential Handlers ---
   const currentStep = localSteps[currentStepIdx];
+  // 🚦 開始の見張り(製品検査と同じ): 画面タップ/音声/まとめて開始/ロット1回/作業の続き/修正/順序実行/再開 は必ずここを通す。
+  //   決まり(清水さん): 1人の手作業は同時に1つ。自動測定は数えない。自動が動いていても手作業2件は不可。
+  //   この端末に届いている全ロット(lots)を見る(別のロットで手作業中なら止める)。追加の読み取り・保存はしない。
+  const workGuardContextRef = useRef(null);
+  useEffect(() => {
+    workGuardContextRef.current = { lots, lot, localSteps, workers, currentUserName,
+      executionType, isTimerRunning, currentStepIdx };
+  });
+  const startGuard = ({ targetStep, excludeKey = null, currentTasks = tasksRef.current }) => {
+    const ctx = workGuardContextRef.current || { lots, lot, localSteps, workers, currentUserName, executionType, isTimerRunning, currentStepIdx };
+    const workerId = ctx.lot.workerId
+      || (ctx.workers || []).find(w => w.name === ctx.currentUserName)?.id || null;
+    return guardLotTaskStart({ lots: ctx.lots || [], workerId, targetStep, excludeKey,
+      workers: ctx.workers || [],
+      currentLot: { ...ctx.lot, steps: ctx.localSteps, tasks: currentTasks,
+        executionType: ctx.executionType, currentStepIndex: ctx.currentStepIdx,
+        ...(ctx.executionType === 'sequential' ? {
+          status: ctx.isTimerRunning ? 'processing' : 'paused',
+          workStartTime: ctx.isTimerRunning ? (ctx.lot.workStartTime || 1) : null,
+        } : {}),
+      },
+    });
+  };
 
   // === 同品目コード・同工程の直近気づき/不良情報 (品質情報の現場共有) ===
   // 作業中の作業者が「この品目コードでよくある問題」を即座に把握できるようにする
@@ -8062,7 +8100,11 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
   const qpClosedKey = useMemo(() => { const d = new Date(); const ymd = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; return `qpClosed_${lot.orderNo || lot.serialNo || lot.id || ''}_${ymd}`; }, [lot.orderNo, lot.serialNo, lot.id]);
   const [showQualityInfoPanel, setShowQualityInfoPanel] = useState(() => { try { return localStorage.getItem(qpClosedKey) !== '1'; } catch { return true; } });
   const toggleQualityInfoPanel = () => setShowQualityInfoPanel(v => { const nv = !v; try { if (!nv) localStorage.setItem(qpClosedKey, '1'); else localStorage.removeItem(qpClosedKey); } catch {} return nv; });
-  const handleStart = () => {
+  const handleStart = ({ targetStep = currentStep } = {}) => {
+    if (isTimerRunning) return true;
+    // 🚦 順序実行の開始も 開始の見張りを通す(別のロットで手作業中なら始めない)
+    const gate = startGuard({ targetStep, excludeKey: SEQUENTIAL_KEY });
+    if (!gate.ok) { setOrderHint(gate.message); return false; }
     const nowTs = Date.now();
     setIsTimerRunning(true);
     setStartTime(nowTs);
@@ -8074,6 +8116,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
       firstWorkStartTime: lot.firstWorkStartTime || nowTs,
       measurementResults,
     });
+    return true;
   };
   const handlePause = () => {
     // 🖐 画面の【中断】の後に 音声で「中断」と言うと もう一度走り、止める前の作業分と休憩の時間を二重に足していた(製品 fb4a1bc)
@@ -8188,6 +8231,18 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
     const nxSeq = seqNextOf(localSteps, tasksRef.current || curTasks, totalUnits);
     const next = nxSeq ? { step: nxSeq.s, unit: nxSeq.u } : null;
     if (next) {
+      // 🚦 今の完了は残し、次の手作業が別ロットの手作業と重なる時は時計を止める(製品と同じ)
+      const gate = startGuard({ targetStep: localSteps[next.step], excludeKey: SEQUENTIAL_KEY });
+      if (!gate.ok) {
+        setIsTimerRunning(false);
+        setCurrentStepIdx(next.step); setCurrentUnitIdx(next.unit);
+        onSave({ currentStepIndex: next.step, currentUnitIndex: next.unit,
+          status: 'paused', workStartTime: null, totalWorkTime: elapsed,
+          stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes,
+          measurementResults: curMR, tasks: tasksRef.current, ...delKeys });
+        setOrderHint(gate.message);
+        return;
+      }
       setCurrentStepIdx(next.step);
       setCurrentUnitIdx(next.unit);
       onSave({ currentStepIndex: next.step, currentUnitIndex: next.unit, totalWorkTime: elapsed, stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes, measurementResults: curMR, tasks: tasksRef.current, ...delKeys });
@@ -8474,6 +8529,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
     const curNow = tasksRef.current[key] || { status: 'waiting' };
     if (curNow.status === 'waiting' || curNow.status === 'paused') {
       const stepObj = (localSteps || [])[sIdx];
+      // 🚦開始可否ガード: 画面と同じ共通判定。音声だけが手動2件同時開始の抜け道にならないようにする。
+      const vGate = startGuard({ targetStep: stepObj, excludeKey: key });
+      if (!vGate.ok) return { ok: false, reason: 'parallel', hint: vGate.message };
       // 分割測定の連動工程: ステーション選択+指令送信が必要(素通りすると指令も自動停止も無言で不発)
       if (rotaryConfig?.enabled && stepObj?.rotaryLink && !stepObj?.lotOnce && db) {
         return { ok: false, reason: 'rotary', hint: `${sIdx + 1}工程は分割測定アプリと連動しています。画面からステーションを選んで開始してください` };
@@ -8538,6 +8596,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
   };
   const voiceStartRework = (sIdx, uIdx) => {
     const key = getTaskKey(sIdx, uIdx);
+    const gate = startGuard({ targetStep: REWORK_STEP, excludeKey: key });
+    if (!gate.ok) { setOrderHint(gate.message); return false; }
     let ok = false;
     setTasks(prev => {
       const cur = prev[key];
@@ -8575,6 +8635,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
   //   tasksRef.current(最新)を基点 + functional setBatchStartTimes で stale 回避。
   const voiceBatchStart = (sIdx, fromU, toU) => {
     if (!localSteps[sIdx] || localSteps[sIdx].lotOnce) return { ok: false, reason: 'lotOnce' };
+    const gate = startGuard({ targetStep: localSteps[sIdx] });
+    if (!gate.ok) return { ok: false, reason: 'parallel', hint: gate.message };
     // 画面の「まとめて開始」と同じゲート(handleBatchClick相当): 連動工程は台ごとに指令が要る/厳密モードは推奨バッチのみ
     if (rotaryConfig?.enabled && localSteps[sIdx]?.rotaryLink && db) return { ok: false, reason: 'rotary' };
     if (optimalNextMove && strictOrderMode) {
@@ -9245,7 +9307,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
     return Object.keys(tasks).some(key => {
       if (tasks[key]?.status !== 'processing') return false;
       const step = findStepByTaskKey(key);
-      return step && !step.title.includes('自動');
+      return step && !isAutoStep(step); // 共通判定(workExecution.js)。名称だけで見ると executionMode='batch' の工程を取りこぼす
     });
   }, [tasks, localSteps]);
 
@@ -9257,7 +9319,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
     const autoTaskRunning = Object.keys(tasks).some(key => {
       if (tasks[key]?.status !== 'processing') return false;
       const step = findStepByTaskKey(key);
-      return step && step.title.includes('自動');
+      return step && isAutoStep(step); // 共通判定(workExecution.js)
     });
     const monitoringActive = (interruptions || []).some(i => i.type === 'monitoring' && i.status === 'active');
     return autoTaskRunning || monitoringActive;
@@ -9285,7 +9347,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
 
       // ① 自動工程の task が processing 状態
       otherSteps.forEach((step, sIdx) => {
-        if (!step?.title?.includes('自動')) return;
+        if (!isAutoStep(step)) return; // 共通判定(workExecution.js)
         for (let u = 0; u < (otherLot.quantity || 1); u++) {
           const key = `${step.id}-${u}`;
           const numKey = `${sIdx}-${u}`;
@@ -9375,7 +9437,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
   //   2) ある台で自動測定が進行中 → その台は機械占有 → 作業者は他の台へ → 次の台の先頭未着手を指す
   //   3) それ以外 → 台順 (1→2→3) × テンプレ順で最初の未着手タスクを指す
   const globalNextTask = useMemo(() => {
-    const isAutoStepFn = (s) => s?.executionMode === 'batch' || (s?.title || '').includes('自動');
+    const isAutoStepFn = isAutoStep; // 共通判定(workExecution.js・製品と同じ)
     const qty = lot.quantity || 1;
     const getKey = (step, sIdx, u) => (step?.id ? `${step.id}-${u}` : `${sIdx}-${u}`);
     const statusOf = (step, sIdx, u) => {
@@ -9461,7 +9523,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
   // 「他の台で今やれる作業」をリアルタイム表示する。
   // 自動測定が予定より延びたら (アクシデント等)、空いた時間ぶん追加候補を出す。
   const liveParallelGuide = useMemo(() => {
-    const isAutoStepFn = (s) => s?.executionMode === 'batch' || (s?.title || '').includes('自動');
+    const isAutoStepFn = isAutoStep; // 共通判定(workExecution.js・製品と同じ)
     // このロットで processing 中の自動タスクを探す (最も経過の長いもの)
     let runningAuto = null; // { step, sIdx, unitIdx, startTime, elapsedSec, targetSec }
     localSteps.forEach((step, sIdx) => {
@@ -9675,6 +9737,10 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
     }
 
     if (currentTask.status === 'waiting' || currentTask.status === 'paused') {
+      // 🚦開始可否ガード: 同じ作業者の手動+手動を禁止する。自動が動いているかは無関係(製品と同じ)。
+      //   ⚠UIのdisabledだけに頼らず「書込み直前」でも必ず通す。カード/コンパクト/ロット1回など toggleTask を呼ぶ全経路がここを通る。
+      const startGate = startGuard({ targetStep: (localSteps || [])[stepIdx], excludeKey: key });
+      if (!startGate.ok) { alert('🚫 ' + startGate.message); return; }
       // 分割測定アプリ連携: 連動工程の開始はステーション選択を挟む (マスタON時のみ)。選択後にこの開始処理を skipRotary で再実行する。
       const stepObj = (localSteps || [])[stepIdx];
       // 連動は手動・台ごとの工程専用 (lotOnce だと unitIdx が回数kになり workId が台と噛み合わないため除外: 監査確定)
@@ -9950,6 +10016,11 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
     };
 
     if (action === 'continue') {
+      // 🚦「作業の続き」も開始なので、画面タップと同じ開始ガードを通す(前は素通りで手作業2件を同時に始められた)。
+      const contGate = startGuard({
+        targetStep: localSteps[completedTaskMenu?.stepIdx] || findStepByTaskKey(key), excludeKey: key,
+      });
+      if (!contGate.ok) { alert('🚫 ' + contGate.message); return; }
       const nowTs = Date.now();
       // 自動測定(batch+autoEnd)工程を「作業の続き」する場合は『追加測定』:
       //   duration は保持し、新しいセッションで再び autoEndSec ぶん測って既存に加算する(6分→続き→12分)。
@@ -9996,6 +10067,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
         ...(ngReason ? { ngReason } : (captured.ngReason ? {} : {})),
       };
     } else if (action === 'rework') {
+      // 🚦 修正作業も手作業(製品と同じ)
+      const gate = startGuard({ targetStep: REWORK_STEP, excludeKey: key });
+      if (!gate.ok) { alert('🚫 ' + gate.message); return; }
       const captured = captureSessionIfProcessing(currentTask);
       // ngReason 引数を「この修正回の理由」として記録する (2回目以降は同異確認 picker から渡る)。
       const reworks = [...(captured.reworks || []), { startTime: Date.now(), duration: 0, round: (captured.reworks?.length || 0) + 1, ...(ngReason ? { reason: ngReason } : {}) }];
@@ -10148,6 +10222,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
     const now = Date.now();
 
     if (!isBatchStarted) {
+        // 🚦開始可否ガード: まとめて開始も同じ規則を通す(手動工程のバッチを、別の手動が走っている最中に始めない)
+        const bGate = startGuard({ targetStep: (localSteps || [])[stepIdx] });
+        if (!bGate.ok) { alert('🚫 ' + bGate.message); return; }
         const previousTasks = { ...tasks };
         const previousBatchStartTimes = { ...batchStartTimes };
         // 対象 unit インデックスのリストを構築 (個別選択優先・なければ範囲)
@@ -11623,7 +11700,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
                        toggleTask(sIdx, uIdx);
                        return;
                      }
-                     const isAutoStepFn = (s) => s?.executionMode === 'batch' || (s?.title || '').includes('自動');
+                     const isAutoStepFn = isAutoStep; // 共通判定(workExecution.js・製品と同じ)
                      const key = step?.id ? `${step.id}-${uIdx}` : `${sIdx}-${uIdx}`;
                      const task = tasks[key] || tasks[`${sIdx}-${uIdx}`] || { status: 'waiting' };
                      if (task.status === 'ng' || task.status === 'reworking') { setCompletedTaskMenu({ key, stepIdx: sIdx, unitIdx: uIdx }); return; }
@@ -11653,7 +11730,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
                )}
                <div className="grid gap-6" style={{ display: customViewMode === 'compact' ? 'none' : 'grid' }}>
                  {localSteps.map((step, sIdx) => {
-                   const isAuto = step.title.includes('自動');
+                   const isAuto = isAutoStep(step); // 共通判定(workExecution.js)
                    const isBatch = !!batchStartTimes[sIdx];
                    const isMonitoring = interruptions.some(i => i.type === 'monitoring' && i.status === 'active' && i.label === step.title);
                    const stepSpecificNotes = getStepNotes(step.title).filter(n => n.stepTitle);
@@ -11833,9 +11910,12 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
                                    //   この台が手動工程 (= !isAuto) で、未着手で、まとめて開始モードでもなく、
                                    //   既に別の手動作業が走っていて、かつ 自動測定が走っていない → BLOCK
                                    //   自動測定中なら並行作業 OK (本来の目的)
-                                   const blockParallel = !isAuto && task.status === 'waiting' && !isBatch && isManualTaskRunning && !isAnyAutoRunning;
+                                   // 🚦 2026-09-26 製品の決まり(清水さん)に揃えた: 自動が動いていても 同じ人の手作業2件は不可。
+                                   //   (前は「&& !isAnyAutoRunning」が付いていて、自動測定中は手動2件の同時開始が通っていた)
+                                   //   ※実際のブロックは toggleTask 内の startGuard(書込み直前・全ロット)が最終防衛線。ここは見た目の無効化。
+                                   const blockParallel = !isAuto && task.status === 'waiting' && !isBatch && isManualTaskRunning;
                                    // 自動測定中で並行可能な状態 → 視覚的に許可されている事を強調
-                                   const parallelAllowedHint = !isAuto && task.status === 'waiting' && !isBatch && isManualTaskRunning && isAnyAutoRunning;
+                                   const parallelAllowedHint = !isAuto && task.status === 'waiting' && !isBatch && !isManualTaskRunning && isAnyAutoRunning;
                                    const blockReason = blockParallel
                                      ? '他の手動作業を実行中です。並行作業は自動測定中のみ可能です。\n先に作業を完了するか、自動工程の「監視」を開始してください。'
                                      : '';
@@ -11874,7 +11954,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
                                    <button
                                      disabled={blockParallel || isNG}
                                      onClick={handleClick}
-                                     title={blockParallel ? blockReason : parallelAllowedHint ? '✓ 自動測定中: 並行作業 OK' : isRecommendedNext ? '👉 推奨次タスク (1台目から順番)' : isOutOfOrder ? '⚠ 順序外: 先に手前の台をやるのが推奨' : ''}
+                                     title={blockParallel ? blockReason : parallelAllowedHint ? '✓ 自動測定中: 手作業を1つ始められます' : isRecommendedNext ? '👉 推奨次タスク (1台目から順番)' : isOutOfOrder ? '⚠ 順序外: 先に手前の台をやるのが推奨' : ''}
                                      className={`w-full h-20 rounded-lg flex flex-col items-center justify-center border transition-all relative ${isNG ? 'bg-red-600 text-white' : cellOver ? `text-white ${oaBlinkCls(oaCfg.overBlink)}` : getTaskStatusColor(task.status)} ${cellWarn ? oaBlinkCls(oaCfg.warnBlink) : ''} ${blockParallel ? 'opacity-30 cursor-not-allowed grayscale' : ''} ${parallelAllowedHint && !cellOver && !cellWarn ? 'ring-2 ring-emerald-300' : ''} ${isRecommendedNext && !cellOver && !cellWarn ? 'ring-4 ring-emerald-400 shadow-emerald-200 shadow-lg' : ''} ${isOutOfOrder ? 'opacity-60' : ''}`}
                                      style={cellOver ? { backgroundColor: oaCfg.overColor, borderColor: oaCfg.overColor, boxShadow: `0 0 0 4px ${oaCfg.overColor}55` } : cellWarn ? { boxShadow: `0 0 0 4px ${oaCfg.warnColor}` } : undefined}
                                    >
@@ -12744,7 +12824,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave,
           <div className="w-80 bg-white border-l border-slate-200 flex flex-col p-6 shrink-0">
              <div className="text-center mb-8"><div className="text-sm text-slate-500 mb-1">経過時間</div><div className={`text-4xl font-mono font-black ${currentStep.targetTime && elapsed/1000 > currentStep.targetTime ? 'text-rose-500' : 'text-slate-800'}`}>{formatTime(Math.floor(elapsed / 1000))}</div>{currentStep.targetTime > 0 && (<div className="text-xs text-slate-400 mt-1">目標: {formatTime(currentStep.targetTime)}</div>)}</div>
              <div className="flex-1 flex flex-col gap-4 justify-center">
-               {!isTimerRunning ? ( <button onClick={handleStart} className="w-full py-6 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xl shadow-lg flex items-center justify-center gap-2 transition-all hover:scale-105"><Play className="w-6 h-6 fill-current"/> 作業開始</button> ) : ( <>
+               {!isTimerRunning ? ( <button onClick={() => handleStart()} className="w-full py-6 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xl shadow-lg flex items-center justify-center gap-2 transition-all hover:scale-105"><Play className="w-6 h-6 fill-current"/> 作業開始</button> ) : ( <>
                 {totalUnits > 1 && <div className="text-center text-sm font-bold text-blue-600 mb-2">{currentUnitIdx + 1} / {totalUnits} 台目</div>}
                 <button onClick={handleNext} className="w-full py-6 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xl shadow-lg flex items-center justify-center gap-2 transition-all hover:scale-105"><CheckCircle2 className="w-6 h-6"/> {currentUnitIdx < totalUnits - 1 ? `次の台 (${currentUnitIdx + 2}台目)` : currentStepIdx < localSteps.length - 1 ? '次工程へ' : '作業完了'}</button>
                 <button onClick={() => handleCompleteTrigger()} className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex items-center justify-center gap-2"><Check className="w-5 h-5"/> 全作業完了</button></> )}

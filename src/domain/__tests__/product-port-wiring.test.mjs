@@ -104,3 +104,24 @@ test('PP9 順序実行の「次へ」: 済(完了・該当なし・NG・修正�
   assert.match(h, /const nxSeq = seqNextOf\(localSteps,/, '次の一手を seqNextOf で探していない');
   assert.doesNotMatch(app, /const isTaskCompleted = /, 'completed だけを済と数える古い判定が残っている');
 });
+
+test('PP10 開始の見張り: 全ての開始の道が startGuard(全ロット・1人の手作業は1つ)を通る・自動中でも手作業2件は不可', () => {
+  const g = bodyOf('const startGuard = ({ targetStep, excludeKey = null, currentTasks = tasksRef.current }) => {', 1500);
+  assert.match(g, /return guardLotTaskStart\(\{ lots: ctx\.lots \|\| \[\], workerId, targetStep, excludeKey,/, '全ロットを見る開始ガードを通していない');
+  const need = [
+    ['toggleTask', /const startGate = startGuard\(\{ targetStep: \(localSteps \|\| \[\]\)\[stepIdx\], excludeKey: key \}\);/],
+    ['作業の続き', /const contGate = startGuard\(\{/],
+    ['修正(画面)', /const gate = startGuard\(\{ targetStep: REWORK_STEP, excludeKey: key \}\);\s*if \(!gate\.ok\) \{ alert/],
+    ['修正(音声)', /const gate = startGuard\(\{ targetStep: REWORK_STEP, excludeKey: key \}\);\s*if \(!gate\.ok\) \{ setOrderHint\(gate\.message\); return false; \}/],
+    ['まとめて開始', /const bGate = startGuard\(\{ targetStep: \(localSteps \|\| \[\]\)\[stepIdx\] \}\);/],
+    ['音声の開始', /const vGate = startGuard\(\{ targetStep: stepObj, excludeKey: key \}\);/],
+    ['音声のまとめて開始', /const gate = startGuard\(\{ targetStep: localSteps\[sIdx\] \}\);/],
+    ['順序実行の開始', /const gate = startGuard\(\{ targetStep, excludeKey: SEQUENTIAL_KEY \}\);/],
+    ['順序実行の次へ', /const gate = startGuard\(\{ targetStep: localSteps\[next\.step\], excludeKey: SEQUENTIAL_KEY \}\);/],
+    ['ヘッダーの再開', /const gate = startGuard\(\{ targetStep: rework \? REWORK_STEP : findStepByTaskKey\(key\), excludeKey: key \}\);/],
+  ];
+  for (const [name, re] of need) assert.match(app, re, `${name} が開始の見張りを通っていない`);
+  assert.match(app, /const blockParallel = !isAuto && task\.status === 'waiting' && !isBatch && isManualTaskRunning;/, '自動測定中に手作業2件目を許している(清水さんの決まりは1件)');
+  assert.doesNotMatch(app, /isManualTaskRunning && !isAnyAutoRunning;/, '古い「自動中なら2件目OK」が残っている');
+  assert.doesNotMatch(app, /isAutoStepFn = \(s\) =>/, '作業画面に名前で自動を決める古い判定が残っている');
+});
