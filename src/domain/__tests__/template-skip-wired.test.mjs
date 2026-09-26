@@ -26,7 +26,8 @@ test('K2 ロット登録の4つの道(手入力・進捗取込・Excel上書き�
   // 各所で 該当なし(buildProfileSkippedTasks)の直後に広げている
   for (const m of sites) {
     const before = app.slice(Math.max(0, m.index - 400), m.index);
-    assert.ok(before.includes('buildProfileSkippedTasks('), '該当なしの後ろに広げていない所がある(スキップが該当なしに上書きされる)');
+    // 2026-09-26: 該当なしは profileSkippedPatch(空なら tasks のキーごと送らない)を通して広げる形に変えた(製品と同じ)
+    assert.ok(before.includes('...profileSkippedPatch('), '該当なしの後ろに広げていない所がある(スキップが該当なしに上書きされる)');
   }
 });
 

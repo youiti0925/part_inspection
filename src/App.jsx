@@ -1296,6 +1296,21 @@ const buildProfileSkippedTasks = (steps, naStepIds, qty) => {
   return tasks;
 };
 
+// 🚨🚨 上の結果を **保存payload に入れる時は必ずこれを通す**(製品検査 src/App.jsx profileSkippedPatch と同じ)。
+//
+// なぜ: buildProfileSkippedTasks は「該当なし工程が0件」なら **空のマップ {} を返す**
+//   (＝ふつうの品目はほぼ全部これ)。それを `tasks: {}` として merge:true で送ると、
+//   Firestore は「明示的に書き換えるキー」として扱い、サーバのそのロットの検査記録が **丸ごと空になる**。
+//   2026-08-17 に最終検査の本番で5ロットの時間取りが消えたのは、この形。
+//   部品側でも Excel取込の「上書き」とテンプレ再焼付が、未着手判定を1回外すだけで同じ事をする
+//   (今は保存の関所 assertSafeLotSave が拒否するが、拒否されたまま「✅反映しました」と出ていた)。
+//
+// ⚠だから **空なら tasks のキーごと送らない**。
+const profileSkippedPatch = (steps, naStepIds, qty) => {
+  const tasks = buildProfileSkippedTasks(steps, naStepIds, qty);
+  return Object.keys(tasks).length ? { tasks } : {};
+};
+
 // 🧾 品目×テンプレの抜取判定(2026-09-06)。スキップなら全工程を『システム(抜取判定)』の skipped で作り、根拠をロットに残す。
 //   ⚠ ロットは消さない(検査リストに『スキップ』の札で残る)。負荷計算は残り工程0として数える。
 //   ⚠ 該当なし(buildProfileSkippedTasks)の **後ろ** に広げる(スキップが該当なしを上書きする)。
@@ -29800,7 +29815,7 @@ const QuotaStoppedPanel = ({ until }) => (
             steps: steps,
             totalWorkTime: 0,
             workStartTime: null,
-            tasks: buildProfileSkippedTasks(steps, naStepIds, qty), // 品目別プロファイルの該当なし工程を事前スキップ
+            ...profileSkippedPatch(steps, naStepIds, qty), // 品目別プロファイルの該当なし工程を事前スキップ(🚨空なら tasks のキーごと送らない)
             ...templateSkipPatch({ model, templateId, steps, qty, lots, settings, at: timestamp }),
             // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。merge:true でも空マップは
             //   その項目を丸ごと空に置き換える。読む側は全て lot.stepTimes || {} で見ている。
@@ -30384,7 +30399,7 @@ const QuotaStoppedPanel = ({ until }) => (
            steps,
            totalWorkTime: 0,
            workStartTime: null,
-           tasks: buildProfileSkippedTasks(steps, naStepIds, c.quantity), // 品目別プロファイルの該当なし工程を事前スキップ
+           ...profileSkippedPatch(steps, naStepIds, c.quantity), // 品目別プロファイルの該当なし工程を事前スキップ(🚨空なら tasks のキーごと送らない)
            ...templateSkipPatch({ model: c.model, templateId: c.templateId, steps, qty: c.quantity, lots, settings, at: timestamp }),
            // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。読む側は lot.stepTimes || {}。
            interruptions: [],
@@ -30596,7 +30611,7 @@ const QuotaStoppedPanel = ({ until }) => (
                  unitSerialNumbers: row.serials,
                  templateId: row.templateId, priority: row.priority,
                  dueDate: row.dueDate, entryAt: row.entryAt,
-                 steps, appliedStandard: appliedStandard ?? null, tasks: buildProfileSkippedTasks(steps, naStepIds, row.qty),
+                 steps, appliedStandard: appliedStandard ?? null, ...profileSkippedPatch(steps, naStepIds, row.qty), // 🚨🚨 既存ロットへ merge で書く。空の tasks:{} は検査記录を丸ごと消す
                  ...templateSkipPatch({ model: row.model, templateId: row.templateId, steps, qty: row.qty, lots, settings, at: Date.now() }),
                }
              : { priority: row.priority, dueDate: row.dueDate, modelText: row.modelText }; // 着手済みは実測に関わる項目を書き換えない(監査確定)
@@ -30625,7 +30640,7 @@ const QuotaStoppedPanel = ({ until }) => (
              mapZoneId: null, x: 0, y: 0, workerId: null, createdAt: Date.now(),
              currentStepIndex: 0, steps, totalWorkTime: 0, workStartTime: null,
              // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。読む側は lot.stepTimes || {}。
-             tasks: buildProfileSkippedTasks(steps, naStepIds, row.qty), interruptions: [], // 品目別プロファイルの該当なし工程を事前スキップ
+             ...profileSkippedPatch(steps, naStepIds, row.qty), interruptions: [], // 品目別プロファイルの該当なし工程を事前スキップ
              ...templateSkipPatch({ model: row.model, templateId: row.templateId, steps, qty: row.qty, lots, settings, at: Date.now() }),
              appliedStandard, // 適用された品質規格のスナップショット
            };
@@ -31055,9 +31070,17 @@ const QuotaStoppedPanel = ({ until }) => (
    };
  
    // --- Template Management ---
-   const handleSaveTemplate = (templateData) => {
+   const handleSaveTemplate = async (templateData) => {
      const id = templateData.id || generateId();
-     saveData('templates', id, { ...templateData, id });
+     // 🚨 テンプレ本体の保存を **見届けてから** 先へ進む(製品検査 2026-09-04 と同じ)。
+     //   投げっぱなしだと、拒否されても人には「✅反映しました」だけが見える(済みの嘘)。
+     //   ⚠ 拒否されたら 編集画面を閉じない・ロットへ焼き直さない(書いた内容を人の手元に残す)。
+     try {
+       await saveData('templates', id, { ...templateData, id });
+     } catch (e) {
+       alert(`🚨 テンプレートを保存できませんでした。\n${e?.message || e}\n\n通信を確かめて、もう一度「保存」を押してください。\n（編集中の内容はこの画面に残しています。検査ロットへの反映も行っていません）`);
+       return;
+     }
      setEditingTemplate(null);
      // テンプレ変更を「未着手」の既存ロットに反映する(任意・確認制)。作業中/完了は実測データを守るため触らない。
      //   未着手 = まだ一度も着手していない(workStartTime無し かつ どのタスクも firstStartTime 無し。規格の該当なしタスクは着手扱いにしない)。
@@ -31065,11 +31088,15 @@ const QuotaStoppedPanel = ({ until }) => (
        const isUntouched = (l) => !l.workStartTime && l.status !== 'completed' && l.location !== 'completed' && !Object.values(l.tasks || {}).some(t => t && t.firstStartTime);
        const targets = (lots || []).filter(l => l.templateId === id && isUntouched(l));
        if (targets.length > 0 && confirm(`このテンプレを使う「未着手」の検査ロット ${targets.length}件 にも、変更した工程を反映しますか？\n\n・反映する＝各ロットの工程が最新テンプレに更新されます\n・作業中／完了のロットは実測データを守るため反映しません`)) {
-         targets.forEach(l => {
+         // 🚨「✅反映しました」は保存を見届けてから言う(製品検査 2026-08-31 と同じ)。
+         //   ⚠発行は全件続けて行い(awaitを挟まない)、そのあと settleSaveBriefly でまとめて見届ける。
+         const saves = targets.map(l => {
            const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(l.model, templateData.steps, settings, id);
            const naSet = new Set(naStepIds || []);
            // appliedStandard は常に書く(?? null)。規格が外れた時に古い規格スナップショットが残って証明書へ誤印字されるのを防ぐ(正規編集パスと同じ)。
-           saveData('lots', l.id, { steps, appliedStandard: appliedStandard ?? null, tasks: buildProfileSkippedTasks(steps, naStepIds, l.quantity || 1) });
+           // 🚨空なら tasks のキーごと送らない。該当なしが0件のふつうの品目で `tasks: {}` を送ると、
+           //   未着手のロットでも merge で **検査記録が丸ごと消える**(2026-08-17 の事故と同じ形)。
+           const p = saveData('lots', l.id, { steps, appliedStandard: appliedStandard ?? null, ...profileSkippedPatch(steps, naStepIds, l.quantity || 1) });
            // 規格変更で「該当なし」でなくなった工程の古い profileSkipped タスクを除去(保存(merge)は sub-key を消さないため消す印が要る)。
            //   放置すると検査すべき工程が「該当なし」のまま残り、進捗も完了済みに誤計上される。
            const removals = {};
@@ -31081,7 +31108,10 @@ const QuotaStoppedPanel = ({ until }) => (
              }
            });
            if (Object.keys(removals).length) DATA(db).setFields(APP_DATA_ID, 'lots', l.id, removals).catch(() => {});
+           return p;
          });
+         const r = await settleSaveBriefly(Promise.all(saves));
+         if (!mayCloseAfterSave(r)) { alert('🚨 反映の保存が拒否されました。一部または全部のロットに反映できていません。\n通信を確かめて、テンプレートをもう一度保存し「反映」をやり直してください。'); return; }
          alert(`✅ 未着手の ${targets.length}件 に最新テンプレを反映しました。`);
        }
      }
