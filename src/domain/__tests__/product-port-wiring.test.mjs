@@ -87,3 +87,10 @@ test('PP7 音声: 「全作業完了」が弾かれても聞き取りを止め�
   assert.match(hp, /if \(!isTimerRunning\) return false;/, '止まっている時の中断で二重に止める');
   assert.doesNotMatch(app, /onClick=\{handleCompleteTrigger\}/, 'クリックイベントが skipTimeCheck に入って時間の確認を素通りする');
 });
+
+test('PP8 作業画面に品名を出す(品目コード｜品名・名簿からも引く)', () => {
+  assert.match(app, /const WorkExecutionModal = \(\{ lot: _lotProp, itemMaster = null,/, '作業画面が品目名簿を受け取っていない');
+  assert.match(app, /const itemName = resolveItemName\(lot\.model, lot\.modelText, itemMaster\);/, '品名を resolveItemName で引いていない');
+  assert.match(app, /itemMaster=\{settings\?\.itemMaster \|\| null\}/, '親が品目名簿を渡していない');
+  assert.ok((app.match(/data-exec-item-label>\{itemLabel\}/g) || []).length >= 2, 'カスタム・順序実行の見出しに品名が出ていない');
+});

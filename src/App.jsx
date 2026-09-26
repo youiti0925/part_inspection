@@ -7147,11 +7147,15 @@ const ModelQualityInfoPanel = ({ model, stepTitle, info, open, onToggle }) => {
   );
 };
 
-const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [] }) => {
+const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onClose, onSave, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [] }) => {
   // 親側で `lots.find(l => l.id === executionLotId)` が undefined を返すケースに備える。
   // ※ React Hooks ルール準拠: hooks を条件分岐の上に置くと「hooks 呼び出し回数の不一致」エラーになるため、
   //   lot 自体は空 object でフォールバックして hooks を常に同じ回数呼ぶ。実際の render は最後に guard する。
   const lot = _lotProp || {};
+  // 🏷 品名を作業画面に出す(部品は model=品目コード・modelText=品名)。製品が型式を出している所は「品目コード｜品名」。
+  //   品名はロットが名乗る名前 → 無ければ設定の品目名簿(settings.itemMaster)。どちらも無ければ品目コードだけ。
+  const itemName = resolveItemName(lot.model, lot.modelText, itemMaster);
+  const itemLabel = itemName ? `${lot.model || ''}｜${itemName}` : (lot.model || '');
   // この検査を実施している作業者名 = ロットの担当者(lot.workerId)。担当を切替えると以降の完了が新担当で記録される。
   // これを各タスクの workerName に焼き付けることで、台ごとに別の人が作業しても集計が正しくなる。
   const inspectorName = (lot.workerId && workers.find(w => w.id === lot.workerId)?.name) || currentUserName || '';
@@ -10431,7 +10435,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
       <div className="fixed inset-0 z-[315] bg-black/60 flex items-center justify-center p-3" onClick={() => setShowTimeTable(false)}>
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
           <div className="bg-slate-800 text-white px-4 py-3 flex items-center justify-between gap-2">
-            <div className="font-bold flex items-center gap-2 text-sm truncate"><Timer className="w-5 h-5 shrink-0" /> 測定時間表 — {lot.model} <span className="font-mono opacity-70">#{lot.serialNo}</span> ({qty}台)</div>
+            <div className="font-bold flex items-center gap-2 text-sm truncate"><Timer className="w-5 h-5 shrink-0" /> 測定時間表 — {itemLabel} <span className="font-mono opacity-70">#{lot.serialNo}</span> ({qty}台)</div>
             {anomCount > 0 ? <span className="bg-rose-600 px-2 py-0.5 rounded font-bold text-xs shrink-0">要確認 {anomCount}件</span> : <span className="bg-emerald-600 px-2 py-0.5 rounded font-bold text-xs shrink-0">異常なし</span>}
           </div>
           <div className="px-4 py-2 text-xs text-slate-500 border-b bg-slate-50">赤=0秒/4時間超/時刻矛盾、黄=5秒未満。セルをタップ →「目標で埋める」or「実時間を手入力」で直せます。</div>
@@ -11239,7 +11243,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
 
         <div className="bg-white w-full max-w-6xl h-full max-h-full rounded-2xl shadow-2xl flex flex-col overflow-hidden relative">
           <div className="bg-slate-800 text-white px-3 py-1.5 flex justify-between items-center shrink-0 gap-2">
-             <div className="shrink-0"><h2 className="text-sm font-bold flex items-center gap-1.5"><button onClick={switchToSequential} className="bg-emerald-600 hover:bg-blue-600 px-2 py-0.5 rounded text-xs transition-colors" title="通常モードに切替">カスタム ⇄</button><span className="truncate max-w-[9rem]">{lot.model}</span> <span className="font-mono opacity-70 text-xs">#{lot.serialNo}</span> {lotTemplate?.name && <span className="text-xs bg-white/15 px-1.5 py-0.5 rounded font-bold truncate max-w-[10rem]" title={`テンプレート: ${lotTemplate.name}`}>📋 {lotTemplate.name}</span>} <span className="text-xs opacity-70 shrink-0">({lot.quantity}台)</span></h2></div>
+             <div className="shrink-0"><h2 className="text-sm font-bold flex items-center gap-1.5"><button onClick={switchToSequential} className="bg-emerald-600 hover:bg-blue-600 px-2 py-0.5 rounded text-xs transition-colors" title="通常モードに切替">カスタム ⇄</button><span className="truncate max-w-[16rem]" title={itemLabel} data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70 text-xs">#{lot.serialNo}</span> {lotTemplate?.name && <span className="text-xs bg-white/15 px-1.5 py-0.5 rounded font-bold truncate max-w-[10rem]" title={`テンプレート: ${lotTemplate.name}`}>📋 {lotTemplate.name}</span>} <span className="text-xs opacity-70 shrink-0">({lot.quantity}台)</span></h2></div>
              <div className="flex flex-wrap gap-1.5 items-center justify-end">
                  {voiceHelpModal}
                  <button onClick={toggleVoice} className={`p-2 rounded-full transition-all ${voiceEnabled ? 'bg-blue-500 text-white animate-pulse ring-2 ring-blue-300' : 'bg-white/10 text-white/60 hover:bg-white/20'}`} title={voiceEnabled ? '音声OFF' : '音声ON'}>
@@ -12234,7 +12238,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   </div>
                   <div className="p-4 space-y-3">
                     <div className="text-xs text-slate-500 text-center">
-                      {lot.model || '品目コード?'} ／ 機番 {machine}{p.stepTitle ? ` ／ ${p.stepTitle}` : ''}
+                      {itemLabel || '品目コード?'} ／ 機番 {machine}{p.stepTitle ? ` ／ ${p.stepTitle}` : ''}
                     </div>
                     {p.role === 'prepare' && p.rotaryMode && (
                       <div className="text-center"><span className="inline-block text-xs font-bold text-cyan-700 bg-cyan-50 border border-cyan-200 rounded px-2 py-0.5">測定モード: {p.rotaryMode}</span></div>
@@ -12277,7 +12281,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   <Ruler className="w-5 h-5 text-teal-400"/>
                   <div>
                     <div className="text-base font-bold">{activeStep.title}</div>
-                    <div className="text-xs text-slate-300 mt-0.5">測定画面 最大化表示 — {lot.model} #{lot.serialNo} ・{displayUnitIdx + 1}台目</div>
+                    <div className="text-xs text-slate-300 mt-0.5">測定画面 最大化表示 — {itemLabel} #{lot.serialNo} ・{displayUnitIdx + 1}台目</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -12364,7 +12368,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   <ListChecks className="w-5 h-5 text-purple-200"/>
                   <div>
                     <div className="text-base font-bold">{activeStep.title} — 確認チェック</div>
-                    <div className="text-xs text-purple-200 mt-0.5">{lot.model} #{lot.serialNo} ・{displayUnitIdx + 1}台目 ・必須 {requiredOkCount}/{requiredItems.length}</div>
+                    <div className="text-xs text-purple-200 mt-0.5">{itemLabel} #{lot.serialNo} ・{displayUnitIdx + 1}台目 ・必須 {requiredOkCount}/{requiredItems.length}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -12416,7 +12420,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                   <FileText className="w-5 h-5 text-orange-200"/>
                   <div>
                     <div className="text-base font-bold">{activeStep.title} — 注意事項・参考画像</div>
-                    <div className="text-xs text-orange-200 mt-0.5">{lot.model} #{lot.serialNo} ・{displayUnitIdx + 1}台目</div>
+                    <div className="text-xs text-orange-200 mt-0.5">{itemLabel} #{lot.serialNo} ・{displayUnitIdx + 1}台目</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -12551,7 +12555,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
 
       <div className="bg-white w-full max-w-4xl h-[85vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         <div className="bg-slate-800 text-white p-4 flex justify-between items-center shrink-0">
-          <div><h2 className="text-lg font-bold flex items-center gap-2"><button onClick={switchToCustom} className="bg-blue-600 hover:bg-emerald-600 px-2 py-0.5 rounded text-xs transition-colors" title="カスタムモードに切替">順序実行 ⇄</button>{lot.model} <span className="font-mono opacity-70">#{lot.serialNo}</span></h2><p className="text-xs text-slate-400 mt-1">工程 {currentStepIdx + 1} / {localSteps.length}: {currentStep.title}{totalUnits > 1 ? ` — ${currentUnitIdx + 1}/${totalUnits}台目` : ''}</p></div>
+          <div><h2 className="text-lg font-bold flex items-center gap-2"><button onClick={switchToCustom} className="bg-blue-600 hover:bg-emerald-600 px-2 py-0.5 rounded text-xs transition-colors" title="カスタムモードに切替">順序実行 ⇄</button><span data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70">#{lot.serialNo}</span></h2><p className="text-xs text-slate-400 mt-1">工程 {currentStepIdx + 1} / {localSteps.length}: {currentStep.title}{totalUnits > 1 ? ` — ${currentUnitIdx + 1}/${totalUnits}台目` : ''}</p></div>
           <div className="flex items-center gap-2">
             {voiceEnabled && voiceStatus && <div className="bg-blue-500/30 text-blue-100 text-xs px-3 py-1 rounded-full max-w-xs truncate animate-pulse">{voiceStatus}</div>}
             <button onClick={toggleVoice} className={`p-2 rounded-full transition-all ${voiceEnabled ? 'bg-blue-500 text-white animate-pulse ring-2 ring-blue-300' : 'bg-white/10 text-white/60 hover:bg-white/20'}`} title={voiceEnabled ? '音声OFF' : '音声ON'}>
@@ -12809,7 +12813,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
                 <Ruler className="w-5 h-5 text-teal-400"/>
                 <div>
                   <div className="text-base font-bold">{activeStep.title}</div>
-                  <div className="text-xs text-slate-300 mt-0.5">測定画面 最大化表示 — {lot.model} #{lot.serialNo}{executionType === 'custom' && ` ・${displayUnitIdx + 1}台目`}</div>
+                  <div className="text-xs text-slate-300 mt-0.5">測定画面 最大化表示 — {itemLabel} #{lot.serialNo}{executionType === 'custom' && ` ・${displayUnitIdx + 1}台目`}</div>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -12870,7 +12874,7 @@ const WorkExecutionModal = ({ lot: _lotProp, onClose, onSave, onFinish, defectPr
       {/* テンプレ全体の総合資料ビューア (作業中に参照、読み取り専用) */}
       {showDriveDocs && (
         <DriveDocsModal
-          title={`${lot.model || ''}${lotTemplate?.name ? ` / ${lotTemplate.name}` : ''}`}
+          title={`${itemLabel}${lotTemplate?.name ? ` / ${lotTemplate.name}` : ''}`}
           sections={[
             ...(lot.model ? [{ label: `品目の資料（${lot.model}）`, path: ['部品', '品目', lot.model] }] : []),
             ...(lotTemplate?.name ? [{ label: `テンプレの資料（${lotTemplate.name}）`, path: ['部品', 'テンプレ', lotTemplate.name] }] : []),
@@ -31938,6 +31942,7 @@ const QuotaStoppedPanel = ({ until }) => (
        {executionLotId && (
          <WorkExecutionModal
            lot={lots.find(l => l.id === executionLotId)}
+           itemMaster={settings?.itemMaster || null}
            onClose={() => setExecutionLotId(null)}
            // 🚨🚨 作業画面の onSave は **投げっぱなし(await も catch も無い)が61箇所**ある。
            //   61箇所を書き換えるのではなく、**入口を1つにして**そこで面倒を見る
