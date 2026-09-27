@@ -51,6 +51,10 @@ export const KNOWN_NAMESPACES = Object.freeze(Object.values(NS));
 export const COLLECTION_AREA = Object.freeze({
   // --- 検査本体 -------------------------------------------------------------
   lots: 'inspection',
+  // 📉 消したロットの墓標 {lotId, deletedAt}(書類ID = ロットID)。「前回の続きだけ読む」端末が、
+  //   閉じている間に消されたロットを控えから外すために読む(2026-09-28・部品=domain/lotsDeltaSync.js)。
+  //   ⚠製品・最終も同じ名前・同じ形(それぞれの claude/delta-sync-20260927)。置き場所は名前空間ごと(部品は parts-inspection-v1 の中)。
+  lots_deleted: 'inspection',
   settings: 'inspection',
   workers: 'inspection',
   worker_settings: 'inspection',
@@ -142,6 +146,7 @@ export const APP_KEYS = Object.freeze(['final', 'product', 'parts', 'overview'])
 //   網羅を保証できないので、実行時のルート監査(provider の routeAudit)と併用する。
 export const COLLECTION_APPS = Object.freeze({
   lots: ['final', 'product', 'parts', 'overview'],
+  lots_deleted: ['final', 'product', 'parts'],
   settings: ['final', 'product', 'parts', 'overview'],
   workers: ['final', 'product', 'parts', 'overview'],
   worker_settings: ['final'],

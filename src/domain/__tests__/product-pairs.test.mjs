@@ -272,6 +272,10 @@ const PAIRS = [
   //   (読むのは readBudget の quotaWindowKey だけ=部品の readBudget にも製品と同じ中身で在る)
   { file: 'domain/readEstimate.js', product: 'product-inspection-app/src/domain/readEstimate.js', md5: '7aba927b9ffa88d9e93dd2ec512c202e' },
   { file: 'domain/__tests__/readEstimate.test.mjs', product: 'product-inspection-app/src/domain/__tests__/readEstimate.test.mjs', md5: '4948bcb98251deeb9617e7de75bb03d2' },
+  // ⚠ 2026-09-28 ロットの「前回の続きだけ読む」(domain/lotsDeltaSync.js)は対に **入れない**。
+  //   製品(bb9933d)の窓は「作った日の30日の窓」、部品の窓は「新しい順120件+未完了400件」で、
+  //   どのロットが窓に入るか(範囲・見張り・件数の確かめ)の決まりが違うため1バイト同じにできない(最終 b73f22f も別の形)。
+  //   揃えてあるのは 墓標の置き場所と中身・差分/墓標の指定・時刻の読み方・余裕/上限の数(lotsDeltaSync.test.mjs DS01〜DS03 が見る)。
 ];
 
 for (const p of PAIRS) {

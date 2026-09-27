@@ -314,7 +314,9 @@ export const STARTUP = {
     why: 'src/App.jsx の unsubs 配列。lots は limit:500 + 未完了だけの2本立て(=同じ doc を2回読む)',
   },
   parts: {
-    always: ['lots', 'templates', 'workers', 'notes', 'announcements', 'observationPlans'],
+    always: ['lots', 'templates', 'workers', 'notes', 'announcements', 'observationPlans',
+             // 📉🪦 消したロットの墓標(2026-09-28)。「前回の続きだけ読む」時に、前回より後の物だけ購読する(App 側は tombLotsSpec = limit 200)
+             'lots_deleted'],
     docs: [['parts-inspection-v1', 'settings']],
     shared: [],
     // 🚨 2026-08-30 直した: logs / indirectWork / improvements は起動時ではなく

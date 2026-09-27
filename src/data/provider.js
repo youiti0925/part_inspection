@@ -137,6 +137,12 @@ export const createFirebaseBackend = (db, fs) => {
     if (snapOpts) return onErr ? fs.onSnapshot(ref, snapOpts, next, onErr) : fs.onSnapshot(ref, snapOpts, next);
     return onErr ? fs.onSnapshot(ref, next, onErr) : fs.onSnapshot(ref, next);
   };
+  // 📉 2026-09-28 opts.source === 'cache' の時だけ **端末の控えに張る**(サーバへは読みに行かない・課金0)。
+  //   部品の「前回の続きだけ読む」(domain/lotsDeltaSync.js)が使う。控えを最新にするのは別の差分の購読。
+  //   ⚠渡さなければ今までと1バイトも変わらない(Firestore に渡す第2引数も今までどおり)。
+  const snapOptsOf = (opts) => (opts.source === 'cache'
+    ? { ...(opts.includeMetadataChanges ? { includeMetadataChanges: true } : {}), source: 'cache' }
+    : (opts.includeMetadataChanges ? { includeMetadataChanges: true } : null));
 
   return {
     kind: 'firebase',
@@ -146,7 +152,7 @@ export const createFirebaseBackend = (db, fs) => {
 
     watchCollection: (ns, col, cb, opts = {}) =>
       listen(queryRef(ns, col, opts), (snap) => cb(snap.docs.map(opts.map || ROW_DOCID_WINS), snap), opts.onError,
-        opts.includeMetadataChanges ? { includeMetadataChanges: true } : null),
+        snapOptsOf(opts)),
     watchDoc: (ns, col, id, cb, opts = {}) =>
       listen(docRef(ns, col, id), (snap) => cb(snap.exists() ? snap.data() : null, snap), opts.onError,
         opts.includeMetadataChanges ? { includeMetadataChanges: true } : null),
@@ -159,7 +165,33 @@ export const createFirebaseBackend = (db, fs) => {
     //   窓口の外へ出てしまい、保管庫を差し替えられなくなる。
     watchQuery: (ns, col, spec = {}, cb, opts = {}) =>
       listen(queryRef(ns, col, { ...opts, ...spec }), (snap) => cb(snap.docs.map(opts.map || ROW_DOCID_WINS), snap), opts.onError,
-        opts.includeMetadataChanges ? { includeMetadataChanges: true } : null),
+        snapOptsOf(opts)),
+    /**
+     * 📉 2026-09-28 端末の控えにある分だけを読む(サーバへは行かない・課金0)。
+     *   ⚠使うアプリだけが fs.getDocsFromCache を渡す(渡し忘れたら、その場で名指しで落ちる)。
+     * @param opts.map 行の作り方(既定は書類ID優先)。重い本文を作らずに済ませたい時は d.get で要る項目だけ取る。
+     */
+    getCachedDocs: async (ns, col, spec = {}, opts = {}) => {
+      const snap = await needLazy('getDocsFromCache', '控えだけ読む(getCachedDocs)')(queryRef(ns, col, spec));
+      return snap.docs.map(opts.map || ROW_DOCID_WINS);
+    },
+    /**
+     * 📉 2026-09-28 1件をサーバから読み直す(1件課金)。SDK は答えを端末の控えにも書く
+     *   = 消えた書類は控えからも消え、控えに張った購読から外れる。在れば最新の版が控えに入る。
+     * @returns 在れば true
+     */
+    refreshDocFromServer: async (ns, col, id) => {
+      const snap = await needLazy('getDocFromServer', 'サーバから1件読み直す(refreshDocFromServer)')(docRef(ns, col, id));
+      return !!(snap && snap.exists());
+    },
+    /**
+     * 📉 2026-09-28 件数だけをサーバに聞く(集計)。**書類を運ばない**。課金は 1000件ごとに1読み(0件でも1)。
+     *   ⚠使うアプリだけが fs.getCountFromServer を渡す(渡し忘れたら、その場で名指しで落ちる)。
+     */
+    countQuery: async (ns, col, spec = {}) => {
+      const snap = await needLazy('getCountFromServer', '件数だけ読む(countQuery)')(queryRef(ns, col, spec));
+      return Number(snap && typeof snap.data === 'function' ? snap.data().count : NaN);
+    },
     /** 1ページ分。戻りの cursor を次の spec.after に渡すと続きが取れる。 */
     getPage: async (ns, col, spec = {}, opts = {}) => {
       // 🛡 P052 opts.source === 'server': サーバの答えだけを受け取る(取込の在る／無いの確かめ用・製品 productOps.js と同じ)。
@@ -411,6 +443,10 @@ export const createProvider = ({ backends, providers = DEFAULT_PROVIDERS, onUnkn
     getPage: callAsync('getPage'),
     // 📉項目を選んで読む(重い項目を運ばない)。⚠読み取り件数は減らない。減るのは通信量と待ち時間。
     getPageFields: callAsync('getPageFields'),
+    // 📉 2026-09-28 前回の続きだけ読む(控えだけ読む・1件読み直す・件数だけ)。対応しない保管庫では「対応していません」で落ちる。
+    getCachedDocs: callAsync('getCachedDocs'),
+    refreshDocFromServer: callAsync('refreshDocFromServer'),
+    countQuery: callAsync('countQuery'),
 
     // --- 書く ---------------------------------------------------------------
     save: callAsync('save'),

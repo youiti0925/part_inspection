@@ -49,7 +49,7 @@ import {
 import { initializeApp } from "firebase/app";
 import {
   getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot,
-  serverTimestamp, query, orderBy, limit, where, getDocs, getDocsFromServer, getDoc, updateDoc,
+  serverTimestamp, query, orderBy, limit, where, getDocs, getDocsFromServer, getDocsFromCache, getDoc, getDocFromServer, getCountFromServer, updateDoc,
   deleteField, runTransaction,
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   connectFirestoreEmulator
@@ -120,6 +120,14 @@ import {
   READ_TALLY_STORAGE_KEY, FREE_TIER_DAILY_READS, LOTS_LIVE_LIMIT, LOTS_HISTORY_LIMIT, OPEN_LOTS_LIMIT,
   archiveLotsSpec, oldestCreatedAt, lotsOverflowOf, ARCHIVE_LIMIT,
 } from './domain/readBudget.js';
+// 📉 2026-09-28 ロットは「前回の続きだけ読む」(製品 bb9933d・最終 b73f22f と同じ考えを部品の窓の形に合わせた)。
+//   決まりは純関数(domain/lotsDeltaSync.js)、順番は係(domain/lotsDeltaController.js)。試験: src/domain/__tests__/lotsDeltaSync.test.mjs
+import {
+  LOTS_TOMB_COL, DELTA_WAKE_GAP_MS, deltaLotsSpec, tombLotsSpec, tombDocOf, tsMs, isServerStamp,
+} from './domain/lotsDeltaSync.js';
+import { createLotsDeltaSync } from './domain/lotsDeltaController.js';
+/** 📉 端末の控え(persistentLocalCache)を作れたか。作れない端末は毎回ぜんぶ読む(今までどおり)。 */
+const LOTS_CACHE = { persistent: false };
 // P062/P114 上限に届いた時の札と、過去の取り寄せの帯
 import LotsReadNotice from './LotsReadNotice.jsx';
 // 📄 P061 資料PDFを設定の箱から外へ(製品 src/domain/fileOffload.js を1バイト同じで写した)
@@ -220,7 +228,9 @@ import {
   pausePatch, resumePatch, remainingWorkOf, pauseConfirmText, resumeConfirmText,
   pausedSummaryLabel, pausedSinceLabel,
 } from './domain/workerPause.js';
-const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDocsFromServer, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
+// 📉 2026-09-28 ロットの「前回の続きだけ読む」: getDocsFromCache(控えだけ読む・課金0)・getDocFromServer(墓標のロットを1件読み直す)・
+//   getCountFromServer(件数だけ・1000件ごとに1読み)を足した(窓口 provider.js の getCachedDocs / refreshDocFromServer / countQuery が使う)。
+const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDocsFromServer, getDocsFromCache, getDoc, getDocFromServer, getCountFromServer, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
 
 // ============================================================================
 // 🧮 P-L1・P-L2(2026-09-27 製品 App.jsx の EST と同じ直し): 課金の見込みの帳面(**画面には出さない**)
@@ -400,7 +410,10 @@ const estMeter = (api) => {
     const hasOpts = rest.length > 0 && typeof rest[0] === 'object' && rest[0] !== null && typeof rest[0] !== 'function';
     const next = hasOpts ? rest[1] : rest[0];
     const onErr = hasOpts ? rest[2] : rest[1];
-    const estSub = estSubStart(estPathOf(ref), !!(hasOpts && rest[0] && rest[0].includeMetadataChanges));
+    // 📉 2026-09-28: 端末の控えだけに張る購読(source:'cache')はサーバへ行かない = 課金0。見込みの帳面にも載せない
+    //   (載せると 30分以上の空白の時に「全件読み直した」と数えてしまう)。画面の帳面は fromCache を数えないので元から0。
+    const cacheOnly = !!(hasOpts && rest[0] && rest[0].source === 'cache');
+    const estSub = cacheOnly ? null : estSubStart(estPathOf(ref), !!(hasOpts && rest[0] && rest[0].includeMetadataChanges));
     const counted = (snap) => { estOnSnapshot(estSub, snap); return next(snap); };
     // ⚠エラー用の関数は **渡された時だけ** 着ける(渡されていない時の Firestore の動きを変えない)。
     const errArgs = typeof onErr === 'function' ? [(e) => { estSubEnd(estSub); return onErr(e); }] : [];
@@ -423,6 +436,21 @@ const estMeter = (api) => {
     out.getDocsFromServer = async (q) => {
       const s = await api.getDocsFromServer(q);
       try { if (!(s && s.metadata && s.metadata.fromCache)) estRead(estPathOf(q), oneShotEstimate(sizeOf(s))); } catch { /* noop */ }
+      return s;
+    };
+  }
+  // 📉 2026-09-28: 墓標のロットの読み直し(1件)と件数だけの集計(1000件ごとに1読み・0件でも1)。getDocsFromCache は課金0なので覆わない。
+  if (typeof api.getDocFromServer === 'function') {
+    out.getDocFromServer = async (ref) => {
+      const s = await api.getDocFromServer(ref);
+      try { estRead(estPathOf(ref), 1); } catch { /* noop */ }
+      return s;
+    };
+  }
+  if (typeof api.getCountFromServer === 'function') {
+    out.getCountFromServer = async (q) => {
+      const s = await api.getCountFromServer(q);
+      try { const n = Number(s && typeof s.data === 'function' ? s.data().count : 0) || 0; estRead(estPathOf(q), Math.max(1, Math.ceil(n / 1000))); } catch { /* noop */ }
       return s;
     };
   }
@@ -32890,6 +32918,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        firestore = initializeFirestore(app, {
          localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
        });
+       LOTS_CACHE.persistent = true;   // 📉 端末の控えが残る時だけ「前回の続きだけ読む」を使う
      } catch (e) {
        // 既に initialize 済み or IndexedDB 不可 (シークレットモード等) の場合は通常 fallback
        console.warn('Firestore persistence unavailable, falling back', e?.message);
@@ -33125,6 +33154,111 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      return () => { stopped = true; unsubs.forEach(u => { try { u(); } catch { /* 既に止まっていても構わない */ } }); };
    }, [user, db, countReads, noteReadError]);
 
+   // ==========================================================================
+   // 📉 2026-09-28 ロットは「前回の続きだけ読む」(製品 bb9933d・最終 b73f22f と同じ考え・部品の窓の形に合わせた)
+   // --------------------------------------------------------------------------
+   // なぜ: 購読は張った時と 30分より長く切れて戻った時に、答えを全部読み直す(全部課金)。
+   // 形:
+   //   ・①普段の窓(新しい順120件)と ②未完了(400件まで)の **指定・受け取り方・合体は今までと同じ**。
+   //     差分読みの時だけ、その2本を **端末の控え** に張る(source:'cache' = サーバへ行かない・課金0)。
+   //     ③過去(500件)と過去の取り寄せは今までどおりサーバ(要る画面を開いた時だけ)。
+   //   ・控えを最新にするのは 差分の購読(updatedAt > 前回の時刻−5分・上限300)と
+   //     墓標の購読(lots_deleted の deletedAt > …・上限200)。墓標を見たらそのロットをサーバから1件読み直す(控えから消える)。
+   //   ・開く前に 控え帳(localStorage)と端末の控えを突き合わせる(通信なし)。差分と墓標が届いたら件数だけをサーバに聞いて確かめる。
+   //   ・全部読みに戻す: 控え帳が無い・前回から7日以上・時計が戻った・控えが前回と合わない・件数が合わない・
+   //     差分/墓標が上限・購読が壊れた・①の控えの答えが前回の範囲の下へ伸びた(消されて窓が下がった)。
+   //   ・差分の答えが150件まで育った時・25分以上 眠っていた/隠れていた/切れていた時は、新しい時刻で張り直す。
+   //   決まりと試験: domain/lotsDeltaSync.js・domain/lotsDeltaController.js・src/domain/__tests__/lotsDeltaSync.test.mjs
+   //   (全部読みの端末と差分読みの端末を同じ写しの上で動かし、画面のロットが同じ id・並び・版になる事を確かめる)。
+   // 🚨 画面に出るロットの集合・並び・送信待ちの数は変えない。変えるのは「どこから読むか」だけ。
+   // ==========================================================================
+   const [lotsSrc, setLotsSrc] = useState(null);   // ①②をどこに張るか: null(決めている途中) | 'server' | 'cache' | 'stopped'(429)
+   const lotsDeltaRef = useRef(null);
+   useEffect(() => {
+     if (!user || !db || quotaBlockRef.current) return;
+     const P = DATA(db);
+     const backendOf = (c) => { try { return P.routeOf(APP_DATA_ID, c).backend; } catch { return ''; } };
+     // ⚠ 控えが残る端末(persistentLocalCache)で、ロットも墓標も Firebase の保管庫の時だけ。他は今までどおり全部読む。
+     const enabled = !!(LOTS_CACHE.persistent && backendOf('lots') === 'firebase' && backendOf(LOTS_TOMB_COL) === 'firebase');
+     const storage = {
+       get: (k) => { try { return window.localStorage.getItem(k); } catch { return null; } },
+       set: (k, v) => { try { window.localStorage.setItem(k, v); } catch { /* 書けない端末は次も全部読むだけ */ } },
+       remove: (k) => { try { window.localStorage.removeItem(k); } catch { /* noop */ } },
+     };
+     // 控えの突き合わせと件数に要る項目だけ(重い本文は作らない)
+     const cachedRowOf = (d) => {
+       const up = d.get('updatedAt');
+       return { id: d.id, createdAt: d.get('createdAt'), status: d.get('status'), u: tsMs(up), stamp: isServerStamp(up), pending: !!(d.metadata && d.metadata.hasPendingWrites) };
+     };
+     const deltaRowOf = (d) => ({ id: d.id, u: tsMs(d.get('updatedAt')), pending: !!(d.metadata && d.metadata.hasPendingWrites) });
+     // 画面の読みメーター(📖)にも名前を分けて載せる(最初はサーバの答え全部・以後は変わった分・控えからは0)
+     const metered = (name, next) => {
+       let first = true;
+       countReads(name, 0, { attach: true });
+       return (rows, snap) => {
+         let changes = 0;
+         try { changes = snap && snap.docChanges ? snap.docChanges().length : 0; } catch { changes = 0; }
+         const cached = !!(snap && snap.metadata && snap.metadata.fromCache);
+         countReads(name, snapshotReads(first, changes, cached));
+         if (!cached) first = false;
+         next(rows, snap);
+       };
+     };
+     const ctl = createLotsDeltaSync({
+       ns: APP_DATA_ID, enabled, storage,
+       getCachedLots: () => P.getCachedDocs(APP_DATA_ID, 'lots', {}, { map: cachedRowOf }),
+       // ⚠ includeMetadataChanges: 切れて戻った合図を課金の見込みの帳面(P-L1)が受け取れるように(①が控えに移ったので、その役をこちらが持つ)
+       openDelta: (sinceMs, next, onErr) => P.watchQuery(APP_DATA_ID, 'lots', deltaLotsSpec(sinceMs), metered('lots(差分)', next),
+         { map: deltaRowOf, includeMetadataChanges: true, onError: onErr }),
+       openTombs: (sinceMs, next, onErr) => P.watchQuery(APP_DATA_ID, LOTS_TOMB_COL, tombLotsSpec(sinceMs), metered('lots_deleted(墓標)', next),
+         { onError: onErr }),
+       refetch: (id) => P.refreshDocFromServer(APP_DATA_ID, 'lots', id).then((r) => { countReads('lots(消えたロットの読み直し)', 1); return r; }),
+       count: (spec) => P.countQuery(APP_DATA_ID, 'lots', spec).then((n) => { countReads('lots(件数だけ)', Math.max(1, Math.ceil((Number(n) || 0) / 1000))); return n; }),
+       setSource: (src) => setLotsSrc(src),
+       isQuota: isQuotaError,
+       // 🚨 上限(429): 今までの ①が落ちた時と同じ(赤帯・保存を止める)。控えの窓も外す(外さないと控えが動くたびに「読めた」に戻る)
+       onQuota: (e) => { noteReadError('lots', e); lotsLoadedRef.current = false; setLotsLoaded(false); },
+       log: (...a) => console.info(...a),
+     });
+     lotsDeltaRef.current = ctl;
+     ctl.start();
+     // 眠っていた・隠れていた・切れていた(25分以上)を見つけたら差分を張り直す。⚠ 通信はしない(時計を見るだけ)。
+     let tickAt = Date.now();
+     let hiddenAt = null;
+     let offlineAt = null;
+     let recheckAt = Date.now();
+     const alive = () => {
+       const t = Date.now(); const gap = t - tickAt; tickAt = t;
+       if (gap >= DELTA_WAKE_GAP_MS) ctl.wake(gap);
+       // 30分ごとに件数だけ確かめ直す(1〜2読み)。墓標を残さない古い版の端末が開いている間に消した物を拾う(最終と同じ)
+       if (t - recheckAt >= 30 * 60000) { recheckAt = t; ctl.recheck(); }
+     };
+     const onVis = () => {
+       if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); ctl.flush(); return; }
+       const was = hiddenAt; hiddenAt = null;
+       if (was != null) ctl.wake(Date.now() - was);
+       alive();
+     };
+     const onOffline = () => { if (offlineAt == null) offlineAt = Date.now(); };
+     const onOnline = () => { const was = offlineAt; offlineAt = null; if (was != null) ctl.wake(Date.now() - was); };
+     const onPageHide = () => ctl.flush();
+     const iv = setInterval(alive, 60000);
+     document.addEventListener('visibilitychange', onVis);
+     window.addEventListener('offline', onOffline);
+     window.addEventListener('online', onOnline);
+     window.addEventListener('pagehide', onPageHide);
+     return () => {
+       clearInterval(iv);
+       document.removeEventListener('visibilitychange', onVis);
+       window.removeEventListener('offline', onOffline);
+       window.removeEventListener('online', onOnline);
+       window.removeEventListener('pagehide', onPageHide);
+       ctl.stop();   // 閉じる前に「前回」を残す(答えが揃っていなければ何もしない)
+       if (lotsDeltaRef.current === ctl) lotsDeltaRef.current = null;
+       setLotsSrc(null);
+     };
+   }, [user, db, countReads, noteReadError]);
+
    // ① 普段の窓(いつも購読する分)。⚠並び順・件数・メタデータ変更は「ただの配列/数/真偽」で窓口へ渡す。
    //   行の作り方も今までと同じ {...d.data(), id: d.id}(窓口の既定 = ROW_DOCID_WINS)。
    //   🚨上限まで埋まらなかったら **それがコレクションの全部**(②③は要らない = 今までと1件も違わない)。
@@ -33136,8 +33270,11 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    //     判定は planLotSubscriptions に置いてある。⚠ここで条件を書き直さない事。
    useEffect(() => {
      if (!user || !db || quotaBlockRef.current) return;
+     // 📉 2026-09-28: どこに張るか(サーバ/端末の控え)が決まるまで張らない。429 で止めた後も張らない(今までの ①が落ちた時と同じ)
+     if (!lotsSrc || lotsSrc === 'stopped') return;
      if (!lotSubPlan.live) return; // 過去が引き継いだ = 窓はもう要らない
      const P = DATA(db);
+     const src = lotsSrc;
      let first = true;
      const unsub = P.watchCollection(APP_DATA_ID, 'lots', (rows, snap) => {
        let changes = 0;
@@ -33156,10 +33293,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        // 🚨 まだサーバへ届いていない書き込みが在るか。Firestore 自身の申告をそのまま人へ渡す。
        const pend = !!(snap && snap.metadata && snap.metadata.hasPendingWrites);
        if (pendingWritesRef.current !== pend) { pendingWritesRef.current = pend; setPendingWrites(pend); }
-     }, { orderBy: [['createdAt', 'desc']], limit: LOTS_LIVE_LIMIT, includeMetadataChanges: true, onError: (e) => { noteReadError('lots', e); lotsLoadedRef.current = false; setLotsLoaded(false); } });
+       // 📉 前回の続きだけ読む係へ(控え帳の材料・差分読みの間は窓が前回の範囲に収まっているかの見張り)
+       if (lotsDeltaRef.current) lotsDeltaRef.current.onWindow('live', rows, snap, src);
+     }, { orderBy: [['createdAt', 'desc']], limit: LOTS_LIVE_LIMIT, includeMetadataChanges: true, ...(src === 'cache' ? { source: 'cache' } : {}), onError: (e) => { noteReadError('lots', e); lotsLoadedRef.current = false; setLotsLoaded(false); } });
      countReads('lots(普段の窓)', 0, { attach: true }); // 張った事は0件でも残す
-     return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } };
-   }, [user, db, lotSubPlan.live, countReads, noteReadError]);
+     return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } if (lotsDeltaRef.current) lotsDeltaRef.current.windowOff('live', src); };
+   }, [user, db, lotSubPlan.live, lotsSrc, countReads, noteReadError]);
 
    // 🚨🚨🚨 突き合わせ(直す前 ⇔ 直した後)を **本番のデータで動かしたまま** にする。
    //   historyLots は **今までの購読そのもの**({orderBy createdAt desc, limit 500})。
@@ -33214,17 +33353,22 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        if (!lotsLoadedRef.current) { lotsLoadedRef.current = true; setLotsLoaded(true); }
        const pend = !!(snap && snap.metadata && snap.metadata.hasPendingWrites);
        if (pendingWritesRef.current !== pend) { pendingWritesRef.current = pend; setPendingWrites(pend); }
+       // 📉 前回の続きだけ読む係へ(③はいつもサーバ。①を外している間も、③の答えで控え帳を書ける)
+       if (lotsDeltaRef.current) lotsDeltaRef.current.onWindow('history', rows, snap, 'server');
      }, { orderBy: [['createdAt', 'desc']], limit: LOTS_HISTORY_LIMIT, includeMetadataChanges: true, onError: (e) => { noteReadError('lots(過去)', e); lotsLoadedRef.current = false; setLotsLoaded(false); } });
      countReads('lots(過去)', 0, { attach: true }); // 張った事は0件でも残す
-     return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } };
+     return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } if (lotsDeltaRef.current) lotsDeltaRef.current.windowOff('history', 'server'); };
    }, [lotSubPlan.history, user, db, countReads, noteReadError]);
 
    // ② 窓に入らないが **まだ終わっていない** ロット。窓が上限まで埋まった時だけ張る。
    //   ⚠これが無いと、古いまま作業中のロットが作業画面から消える(現場が止まる)。
    //   ⚠過去(500件)が上限に届かなかった = それがコレクションの全部 → この拾い直しも要らない。
    useEffect(() => {
-     if (!lotSubPlan.open || !user || !db || quotaBlockRef.current) { openLotsRef.current = []; recomputeRawLots(); setOpenLots([]); return; }
+     // 📉 2026-09-28: 429 で止めた後は張らない(行は残す = 今までの購読が落ちた時と同じ)
+     if (lotsSrc === 'stopped') return;
+     if (!lotSubPlan.open || !user || !db || quotaBlockRef.current || !lotsSrc) { openLotsRef.current = []; recomputeRawLots(); setOpenLots([]); return; }
      const P = DATA(db);
+     const src = lotsSrc;
      let first = true;
      const unsub = P.watchCollection(APP_DATA_ID, 'lots', (rows, snap) => {
        let changes = 0;
@@ -33237,10 +33381,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        setOpenLots(rows);
        // 🚨 上限に届いた = 拾い切れていない。**黙って切らない**。
        //   P062: console だけでなく画面の札(LotsReadNotice)に出す。判定は lotsOverflowOf。
-     }, { where: [['status', '!=', 'completed']], limit: OPEN_LOTS_LIMIT, onError: (e) => noteReadError('lots(未完了)', e) });
+       // 📉 前回の続きだけ読む係へ(控え帳の材料)
+       if (lotsDeltaRef.current) lotsDeltaRef.current.onWindow('open', rows, snap, src);
+     }, { where: [['status', '!=', 'completed']], limit: OPEN_LOTS_LIMIT, ...(src === 'cache' ? { source: 'cache' } : {}), onError: (e) => noteReadError('lots(未完了)', e) });
      countReads('lots(未完了)', 0, { attach: true }); // 張った事は0件でも残す
-     return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } };
-   }, [lotSubPlan.open, user, db, countReads, noteReadError]);
+     return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } if (lotsDeltaRef.current) lotsDeltaRef.current.windowOff('open', src); };
+   }, [lotSubPlan.open, lotsSrc, user, db, countReads, noteReadError]);
 
    // ==========================================================================
    // 🗄 P114 過去の取り寄せ(製品 App.jsx の ③ と同じ考え)。
@@ -33897,6 +34043,17 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      bumpInflight(+1);
      try {
        setSyncStatus('syncing');
+       // 📉 2026-09-28(製品・最終と同じ): ロットを消す時は **先に** 墓標(lots_deleted/{id} = {lotId, deletedAt})を置く。
+       //   「前回の続きだけ読む」端末は updatedAt が新しいロットしか読み直さないので、消えた事は墓標でしか知れない。
+       //   ⚠ 書く順番は 墓標 → 削除(同じ端末の書き込みは順番どおりサーバへ届く)。墓標だけ残っても害は無い
+       //     (読む側はそのロットをサーバから1件読み直して、在れば残す)。
+       //   ⚠ 墓標の失敗で削除は止めない(今までどおり消す)。失敗は必ず console に出す(件数の確かめが拾って全部読みに戻す)。
+       if (col === 'lots') {
+         bumpInflight(+1);
+         DATA(db).save(APP_DATA_ID, LOTS_TOMB_COL, id, tombDocOf(id, DATA_SERVER_NOW), { merge: false })
+           .catch((e) => console.error('[ロット] 墓標を書けませんでした(前回の続きだけ読む端末は、件数の確かめで全部読みに戻ります)', id, e))
+           .finally(() => bumpInflight(-1));
+       }
        await DATA(db).remove(APP_DATA_ID, col, id);
        setSyncStatus('idle');
        forgetFailed(rec);
@@ -35433,7 +35590,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                  if (!naSet.has(sid)) removals[`tasks.${k}`] = DATA_DELETE;
                }
              });
-             if (Object.keys(removals).length) await DATA(db).setFields(APP_DATA_ID, 'lots', existing.id, removals).catch(() => {});
+             // 📉 2026-09-28: updatedAt も必ず付ける(前回の続きだけ読む端末は updatedAt が新しい物しか読み直さない。付けないと掃除が届かない)
+             if (Object.keys(removals).length) await DATA(db).setFields(APP_DATA_ID, 'lots', existing.id, { ...removals, updatedAt: DATA_SERVER_NOW }).catch(() => {});
            }
          } else {
            const { row, steps, appliedStandard, naStepIds } = p;
@@ -36018,7 +36176,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                if (!naSet.has(sid)) removals[`tasks.${k}`] = DATA_DELETE;
              }
            });
-           if (Object.keys(removals).length) DATA(db).setFields(APP_DATA_ID, 'lots', l.id, removals).catch(() => {});
+           // 📉 2026-09-28: updatedAt も必ず付ける(前回の続きだけ読む端末は updatedAt が新しい物しか読み直さない。付けないと掃除が届かない)
+           if (Object.keys(removals).length) DATA(db).setFields(APP_DATA_ID, 'lots', l.id, { ...removals, updatedAt: DATA_SERVER_NOW }).catch(() => {});
            return p;
          });
          const r = await settleSaveBriefly(Promise.all(saves));
@@ -36064,7 +36223,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                if (!naSet.has(sid)) removals[`tasks.${k}`] = DATA_DELETE;
              }
            });
-           if (Object.keys(removals).length) DATA(db).setFields(APP_DATA_ID, 'lots', l.id, removals).catch(() => {});
+           // 📉 2026-09-28: updatedAt も必ず付ける(前回の続きだけ読む端末は updatedAt が新しい物しか読み直さない。付けないと掃除が届かない)
+           if (Object.keys(removals).length) DATA(db).setFields(APP_DATA_ID, 'lots', l.id, { ...removals, updatedAt: DATA_SERVER_NOW }).catch(() => {});
            return p;
          });
          const r = await settleSaveBriefly(Promise.all(saves));
