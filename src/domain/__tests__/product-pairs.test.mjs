@@ -31,6 +31,9 @@ const PAIRS = [
   { file: 'domain/lotStartGuard.js', product: 'product-inspection-app/src/domain/lotStartGuard.js', md5: '2b9f3cd0a88768187d443ab3cd6439ee' },
   { file: 'workscreen/JuggleGuide.jsx', product: 'product-inspection-app/src/workscreen/JuggleGuide.jsx', md5: 'cb31c826b0e678527c8343bdab167e0a' },
   // 2026-09-27 土台: 他の区画が使う製品の純関数を先にまとめて写した(src/opsim は除く・usageRollup は部品の readBudget が別物なので P101 で)
+  // P028/P099: 画面の部品も1バイト同じで写した(製品・最終と同じ md5)
+  { file: 'AppFeedback.jsx', product: 'product-inspection-app/src/AppFeedback.jsx', md5: '036ca1aa1cfebf2b6c0d9459df0408f3' },
+  { file: 'AppNotice.jsx', product: 'product-inspection-app/src/AppNotice.jsx', md5: 'bfbd309c21ecfc561606cd69944931a1' },
   { file: 'domain/appFeedback.js', product: 'product-inspection-app/src/domain/appFeedback.js', md5: 'b571e66b4d2b45d2da493dd8d06db336' },
   { file: 'domain/appNotices.js', product: 'product-inspection-app/src/domain/appNotices.js', md5: '7d902fa95bfa54afda2fbb6d6cfe00d5' },
   { file: 'domain/arrivalActual.js', product: 'product-inspection-app/src/domain/arrivalActual.js', md5: '21a3bdfa635f8a4090bddab4273c0561' },

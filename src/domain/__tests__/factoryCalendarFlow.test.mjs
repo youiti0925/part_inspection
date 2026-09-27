@@ -191,7 +191,9 @@ test('P5 [P2] 共通の棚から読む道が生きている(暦が一生 null �
 
   // 🚨 このアプリは登録しない(共通の棚へ書く道を作らない)
   const 書く道 = SRC.split('\n').map((l, i) => [i + 1, l])
-    .filter(([, l]) => l.includes('CONTACT_SHARED_NS') && /\.save\(|\.setFields\(|\.remove\(|setDoc\(|updateDoc\(|deleteDoc\(/.test(l))
+    .filter(([, l]) => l.includes('CONTACT_SHARED_NS')
+      // P028(2026-09-27): 要望箱(app_feedback)へ1件ずつ書くのだけは許す。暦の在る settings/config へは今も書かせない
+      && !/FEEDBACK_COL/.test(l) && /\.save\(|\.setFields\(|\.remove\(|setDoc\(|updateDoc\(|deleteDoc\(/.test(l))
     .map(([n, l]) => `${n}: ${l.trim()}`);
   assert.deepEqual(書く道, [], '部品検査アプリから共通の棚へ書く道ができている(登録は製品検査/最終検査だけ)');
 });

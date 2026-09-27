@@ -104,6 +104,24 @@
    "who": "清水",
    "why": "分析タブ・日次集計を開いた時だけ張る遅延購読(indirectWork/improvements/logs)。3つとも合計や中央値を全件から出す画面なので、件数で切ると過去の集計が黙って減る。実測0件(製品側 logs 179件が最大)。",
    "maxDocs": 600
+  },
+  {
+   "app": "parts",
+   "file": "src/App.jsx",
+   "col": "app_feedback",
+   "kind": "watchCollection",
+   "who": "清水",
+   "why": "要望箱(検査アプリ共通の棚)。未対応の数を全件から数えてタブの数字に出すので、絞るとその数字が変わる。製品と同じ。",
+   "maxDocs": 200
+  },
+  {
+   "app": "parts",
+   "file": "src/App.jsx",
+   "col": "app_notices",
+   "kind": "watchCollection",
+   "who": "清水",
+   "why": "更新のお知らせ(検査アプリ共通の棚)。未読の判定を全件で行うので絞ると既読扱いになる物が出る。製品と同じ。",
+   "maxDocs": 100
   }
  ]
 }
