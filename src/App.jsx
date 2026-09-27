@@ -212,6 +212,7 @@ import { normalizeRequiredSkills, requiredSkillIdsForStep, toggleSkillOnStep, at
 import { FeedbackButton, FeedbackModal, FeedbackList, feedbackDeviceId } from './AppFeedback.jsx';
 import { FEEDBACK_COL, openFeedbackCount, feedbackConfigOf, toggleAgreePatch } from './domain/appFeedback.js';
 import { NoticePopup } from './AppNotice.jsx';
+import { LotImportOptionsPanel, LotImportPreviewModal } from './LotImportPanels.jsx'; // 📥 P034/P035
 import { NOTICE_COL, noticeConfigOf } from './domain/appNotices.js';
 
 // --- 一度だけ実行: 管理者未承認の厳密モード(localStorageの古い残骸)を全消去して既定OFFに戻す ---
@@ -30559,7 +30560,16 @@ const QuotaStoppedPanel = ({ until }) => (
    const allTplInputRef = useRef(null);
    const backupInputRef = useRef(null);
    const progressMgmtInputRef = useRef(null);
-   const [progressImportPreview, setProgressImportPreview] = useState(null);  // 工機進捗管理表 取込プレビュー結果
+   // 📥 P035 入荷登録Excel取込の自動化スイッチ(既定は importPlan.js の DEFAULT_IMPORT_OPTIONS がただ1つの持ち主)
+  const [lotImportOpts, setLotImportOpts] = useState(() => ({
+    useModelTemplates: DEFAULT_IMPORT_OPTIONS.useModelTemplates,
+    useDueOffset: DEFAULT_IMPORT_OPTIONS.useDueOffset,
+    useEntryOffset: DEFAULT_IMPORT_OPTIONS.useEntryOffset,
+    defaultEntryDaysBefore: DEFAULT_IMPORT_OPTIONS.defaultEntryDaysBefore,
+  }));
+  const [lotImportPreview, setLotImportPreview] = useState(null); // 📥 P034 入荷登録Excel 取込プレビュー(押す前に必ず見せる)
+  const [lotImportBusy, setLotImportBusy] = useState(false);
+  const [progressImportPreview, setProgressImportPreview] = useState(null);  // 工機進捗管理表 取込プレビュー結果
    const [progressImportBusy, setProgressImportBusy] = useState(false);       // ⏳ P097 進捗管理表を読んでいる最中(大きい表は20秒ほどかかる。黙って待たせない)
    const [progressImportSaving, setProgressImportSaving] = useState('');      // ⏳ P097 確定の書き込み中「N/M」
  
@@ -32958,11 +32968,13 @@ const QuotaStoppedPanel = ({ until }) => (
        const msToYmdHm = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad2x(d.getMonth() + 1)}-${pad2x(d.getDate())} ${pad2x(d.getHours())}:${pad2x(d.getMinutes())}`; };
        const rows = [];
        const expandSkipped = [];
+       let weekendCount = 0;
        for (const r of rawRows) {
          const res = planRowLots(
            { model: String(r.model), orderNo: String(r.orderNo), qty: r.qty, dueYMD: r.dueDate, entryRaw: r.entryGiven ? msToYmdHm(r.entryAt) : '', templateIdFromExcel: r.templateIdRaw },
-           { modelMasters: {}, qualityStandards: settings.qualityStandards || {}, modelStandardMap: settings.modelStandardMap || {}, templates, options: { calendar: factoryCalendar || null } },
+           { modelMasters: {}, qualityStandards: settings.qualityStandards || {}, modelStandardMap: settings.modelStandardMap || {}, templates, options: { ...lotImportOpts, entryHHMM: DEFAULT_IMPORT_OPTIONS.entryHHMM, calendar: factoryCalendar || null } },
          );
+         weekendCount += Number(res.entryOnWeekendCount) || 0;
          for (const sk of res.skipped) expandSkipped.push(`⏭ ${r.orderNo} ${r.model} — ${sk.reason === '型式マスタにこの型式の登録がありません' ? '品質規格マスタに品目コードの紐付けがありません' : sk.reason === '型式マスタにテンプレートが割り当てられていません' ? '品質規格にテンプレートが割り当てられていません' : sk.reason}`);
          for (const l of res.lots) {
            rows.push({ model: r.model, modelText: r.modelText, orderNo: r.orderNo, qty: r.qty, templateId: l.templateId, priority: r.priority,
@@ -33032,9 +33044,21 @@ const QuotaStoppedPanel = ({ until }) => (
        }
 
        // ===== 確認(この時点ではまだ何も書き込んでいない) =====
-       const msg = [`取込内容の確認:`, `  新規: ${newCount}件`, `  上書き: ${updateCount}件`, `  無視: ${skipCount}件`, '', ...details].join('\n');
-       if (!confirm(msg + '\n\nOKで書き込みます（キャンセルすると何も変更しません）')) return;
+       // 📥 P034 confirm() の文字ではなく表の窓で見せる。「取込み確定」を押すまで何も書かない(confirmLotImport)。
+       setLotImportPreview({ plan, newCount, updateCount, skipCount, skipRows: details.filter(d => d.startsWith('⏭')), weekendCount,
+         dataRowCount: rawRows.length, fileName: file.name || '', options: { ...lotImportOpts } });
+     } catch (err) {
+       console.error(err);
+       alert('Excelファイルの読み込みに失敗しました: ' + err.message);
+     }
+   };
 
+   // 📥 P034 窓の「取込み確定」で初めて書く(中身は旧 handleLotExcelUpload のパス2そのまま)
+   const confirmLotImport = async () => {
+     if (!lotImportPreview || lotImportBusy) return;
+     const { plan, newCount, updateCount, skipCount } = lotImportPreview;
+     setLotImportBusy(true);
+     try {
        // ===== パス2: 書き込み =====
        for (const p of plan) {
          if (p.type === 'update') {
@@ -33071,6 +33095,7 @@ const QuotaStoppedPanel = ({ until }) => (
              serialNo: row.orderNo, quantity: row.qty, unitSerialNumbers: row.serials,
              templateId: row.templateId, priority: row.priority, dueDate: row.dueDate,
              entryAt: row.entryAt, status: 'waiting', location: 'arrival',
+             importedFromExcel: true, importSource: 'arrival-excel', // 📥 P034 取込の印(P124 と揃える)
              mapZoneId: null, x: 0, y: 0, workerId: null, createdAt: Date.now(),
              currentStepIndex: 0, steps, totalWorkTime: 0, workStartTime: null,
              // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。読む側は lot.stepTimes || {}。
@@ -33082,9 +33107,12 @@ const QuotaStoppedPanel = ({ until }) => (
          }
        }
        alert(`✅ 完了 — 新規${newCount}件 / 上書き${updateCount}件 / 無視${skipCount}件`);
+       setLotImportPreview(null);
      } catch (err) {
        console.error(err);
-       alert('Excelファイルの読み込みに失敗しました: ' + err.message);
+       alert('取込の書き込みに失敗しました（途中まで書けている事があります）: ' + err.message);
+     } finally {
+       setLotImportBusy(false);
      }
    };
 
@@ -34330,6 +34358,7 @@ const QuotaStoppedPanel = ({ until }) => (
                  </label>
                </div>
              </div>
+             {!editingLot && <LotImportOptionsPanel opts={lotImportOpts} setOpts={setLotImportOpts} />}
              <form onSubmit={(e) => {
                e.preventDefault();
                handleAddLot(Object.fromEntries(new FormData(e.target)));
@@ -34476,7 +34505,8 @@ const QuotaStoppedPanel = ({ until }) => (
          <div data-progress-import-busy="1" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] bg-indigo-700 text-white px-4 py-3 rounded-xl shadow-xl text-sm font-bold flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin"/> {progressImportSaving || '進捗管理表を読んでいます…（大きい表だと20秒ほどかかります）'}</div>
        )}
        {/* 工機進捗管理表 取込プレビュー モーダル */}
-       {progressImportPreview && (
+       <LotImportPreviewModal preview={lotImportPreview} templates={templates} busy={lotImportBusy} onCancel={() => { if (!lotImportBusy) setLotImportPreview(null); }} onConfirm={confirmLotImport} />
+      {progressImportPreview && (
          <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
            <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden">
              <div className="bg-indigo-600 text-white p-4 flex justify-between items-center shrink-0">
