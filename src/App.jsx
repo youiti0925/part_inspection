@@ -30,6 +30,8 @@ import {
 // 🧾 品目×テンプレ単位の抜取／スキップ(2026-09-06 清水さん「部品検査にもこの機能が要る」)。製品検査と同じ純関数・同じ画面。
 import TemplateSkipPanel from './TemplateSkipPanel.jsx';
 import DuplicateLotsPanel from './DuplicateLotsPanel.jsx';
+import ProgressImportExtras from './ProgressImportExtras.jsx';
+import { auditProgressRows } from './domain/progressSheetAudit.js';
 import { judgeTemplateSkip, buildTemplateSkippedTasks, isTemplateSkippedLot } from './domain/templateSkip.js';
 // 🏷 品目名簿 (品目コード → 品名)。2026-09-21 清水さん「品目テキストという枠が必要なぐらい」。
 //   直す前は読む所が3箇所あるのに書く所が0で、名簿は「在るのに永久に空」だった。
@@ -2369,6 +2371,9 @@ const LotActionSheet = ({ lot, templateName, onEdit, onDelete, onClose }) => {
 /**
  * 🚩 優先度の小さな札(緊急=赤 / 特注=橙)。通常は何も描かない(製品 PriorityBadge と同じ)。旧 'high'(急ぎ)は「緊急」として出る。
  */
+// 🗑 P095 表では終わっている物を消す既定の安全弁: 検査リストの未完了ロットの3割を超えたら既定を OFF(製品と同じ数)
+const STALE_DELETE_MAX_RATIO = 0.3;
+
 // 今日の 0:00(domain に Date.now を入れない決まり。時刻は呼ぶ側が渡す)
 const todayStartMsNow = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 
@@ -30833,6 +30838,17 @@ const QuotaStoppedPanel = ({ until }) => (
        tick('作っています');
      }
    };
+   // プレビューの選び口を変えたら、同じ行から計画を作り直す(Excel を読み直さない)
+   const setProgressImportOpt = (patch) => {
+     setProgressImportPreview(prev => {
+       if (!prev) return prev;
+       const opts = { ...prev.opts, ...patch };
+       return { ...prev, ...replanProgress(prev.rows, opts, prev.sheetMap), opts };
+     });
+   };
+   // 🏁 確定した時に本当に作る行(既定ではアプリで検査済みの指図×テンプレは作らない)
+   const progressCreateList = (pv) => (!pv ? []
+     : [...(pv.createLots || []), ...((pv.opts && pv.opts.createDone) ? (pv.alreadyDone || []) : [])]);
    const handleProgressMgmtUpload = async (e) => {
      const file = e.target.files[0];
      if (!file) return;
@@ -30903,10 +30919,21 @@ const QuotaStoppedPanel = ({ until }) => (
            isGray: smap.grayIsShipped ? isShippedGray(row) : false,
          });
        }
-       // 既定: 日付の無い行は仮で作らない・納期は直す・表では終わっている物は消さない(P095 で入れる)・アプリで検査済みの指図は作らない(製品と同じ)
-       const opts = { includeProvisional: false, updateDue: true, deleteStale: false, createDone: false };
+       // 既定: 日付の無い行は仮で作らない・納期は直す・アプリで検査済みの指図は作らない(製品と同じ)
+       // 🗑 P095 表では終わっている物を消すは既定 ON(製品と同じ)。消すのは作業記録の無い物だけ・確定の前に一覧を見せてもう一度聞く
+       const opts = { includeProvisional: false, updateDue: true, deleteStale: true, createDone: false };
        const plan = replanProgress(rows, opts, smap);
-       setProgressImportPreview({ ...plan, rows, opts, fileName: file.name, reader: wb.reader, sheetMap: smap });
+       // 🚨 安全弁: 消す対象が検査リストの未完了ロットの3割を超えたら、既定を OFF に落とす(列やシートが合っていない時にごっそり消さない)
+       const openLotCount = (lots || []).filter(l => !(l.status === 'completed' || l.location === 'completed')).length;
+       const deletable = plan.counts?.staleDeletable || 0;
+       const guardLimit = Math.floor(openLotCount * STALE_DELETE_MAX_RATIO);
+       const staleGuard = (deletable > 0 && deletable > guardLimit)
+         ? { deletable, deletableOrders: plan.counts?.staleDeletableOrders || 0, openLotCount, limit: guardLimit, pct: Math.round(STALE_DELETE_MAX_RATIO * 100) }
+         : null;
+       if (staleGuard) opts.deleteStale = false;
+       // 🔎 P152 元表の食い違い。数えるだけ(取込は止めない)
+       const audit = auditProgressRows(rows, { today: new Date(), labels: smap.cols, k33Means: smap.k33Means, startHeader: strAt(sheet.getRow(1), 'start'), sourceEndHeader: '' });
+       setProgressImportPreview({ ...plan, rows, opts, staleGuard, audit, fileName: file.name, reader: wb.reader, sheetMap: smap });
      } catch (err) {
        console.error('Progress Mgmt parse error:', err);
        alert('取込み中にエラーが発生しました: ' + (err.message || err));
@@ -30918,10 +30945,18 @@ const QuotaStoppedPanel = ({ until }) => (
    // 取込プレビューの確定 (Firebase 一括保存)
    const confirmProgressImport = async () => {
      if (!progressImportPreview) return;
-     const { createLots, updateLots, opts = {} } = progressImportPreview;
+     const { updateLots, stale = [], opts = {} } = progressImportPreview;
+     const createLots = progressCreateList(progressImportPreview);
      const applyUpdates = opts.updateDue === false ? [] : updateLots;
+     // 🗑 P095 表では終わっているのに検査リストに残っている物のうち 作業記録の無い物だけ。消す前に一覧を見せて確認する
+     const toDelete = opts.deleteStale ? stale.filter(x => !x.hasTasks) : [];
+     if (toDelete.length) {
+       const list = toDelete.slice(0, 12).map(x => `・${x.orderNo} ${x.model}`).join('\n') + (toDelete.length > 12 ? `\n…ほか ${toDelete.length - 12}件` : '');
+       const delOrders = new Set(toDelete.map(x => String(x.orderNo || '').trim())).size;
+       if (!window.confirm(`進捗管理表では終わっている ${toDelete.length}件（${delOrders}指図）を検査リストから消します（作業記録の無い物だけ）。\n${list}\n\n※ この操作は取り消せません。よろしいですか？`)) return;
+     }
      setProgressImportPreview(null);
-     const totalWrites = createLots.length + applyUpdates.length;
+     const totalWrites = createLots.length + applyUpdates.length + toDelete.length;
      let doneWrites = 0;
      const tick = (what) => { doneWrites++; setProgressImportSaving(`${what}… ${doneWrites}/${totalWrites}`); };
      setProgressImportSaving(`書き込んでいます… 0/${totalWrites}`);
@@ -30948,10 +30983,12 @@ const QuotaStoppedPanel = ({ until }) => (
          await saveData('lots', u.existingId, updates);
          tick('直しています');
        }
+       let deleted = 0;
+       for (const x of toDelete) { await deleteData('lots', x.lotId); deleted++; tick('消しています'); }
        const entryMoved = applyUpdates.filter(u => u.entryChange && u.entryAt).length;
        const notMade = opts.createDone ? 0 : (progressImportPreview.alreadyDone || []).length;
        setProgressImportSaving('');
-       alert(`✓ 取込み完了\n新規作成: ${createLots.length}件\n更新: ${applyUpdates.length}件（うち入庫を直した: ${entryMoved}件）${notMade ? `\nアプリではもう検査が終わっていたので作らなかった: ${notMade}件` : ''}`);
+       alert(`✓ 取込み完了\n新規作成: ${createLots.length}件\n更新: ${applyUpdates.length}件（うち入庫を直した: ${entryMoved}件）${deleted ? `\n検査リストから消した: ${deleted}件` : ''}${notMade ? `\nアプリではもう検査が終わっていたので作らなかった: ${notMade}件` : ''}`);
      } catch (err) {
        setProgressImportSaving('');
        console.error(err);
@@ -32561,6 +32598,8 @@ const QuotaStoppedPanel = ({ until }) => (
                    </div>
                  </div>
                )}
+               {/* 📊 P095/P152 元表の食い違い・安全弁・選び口・検査済みの指図・表では終わっている物(新ファイル ProgressImportExtras.jsx) */}
+               <ProgressImportExtras preview={progressImportPreview} templates={templates} onSetOpt={setProgressImportOpt} />
 
                {/* 新規作成 */}
                {progressImportPreview.createLots.length > 0 && (
@@ -32677,13 +32716,13 @@ const QuotaStoppedPanel = ({ until }) => (
 
              <div className="border-t bg-slate-50 p-3 flex justify-between items-center shrink-0">
                <div className="text-xs text-slate-500">
-                 確定すると、新規 {progressImportPreview.createLots.length}件 を作成、更新 {progressImportPreview.updateLots.length}件 を反映します
+                 確定すると、新規 {progressCreateList(progressImportPreview).length}件 を作成、更新 {progressImportPreview.opts?.updateDue === false ? 0 : progressImportPreview.updateLots.length}件 を反映します{progressImportPreview.opts?.deleteStale && (progressImportPreview.counts?.staleDeletable || 0) > 0 ? `、検査リストから ${progressImportPreview.counts.staleDeletable}件 を消します` : ''}
                </div>
                <div className="flex gap-2">
                  <button onClick={() => setProgressImportPreview(null)} className="px-4 py-2 border rounded font-bold text-slate-600 hover:bg-white">キャンセル</button>
                  <button
                    onClick={confirmProgressImport}
-                   disabled={progressImportPreview.createLots.length === 0 && progressImportPreview.updateLots.length === 0}
+                   disabled={progressCreateList(progressImportPreview).length === 0 && (progressImportPreview.opts?.updateDue === false || progressImportPreview.updateLots.length === 0) && !(progressImportPreview.opts?.deleteStale && (progressImportPreview.counts?.staleDeletable || 0) > 0)}
                    className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded font-bold shadow flex items-center gap-2"
                  >
                    <Check className="w-4 h-4"/> 取込み確定
