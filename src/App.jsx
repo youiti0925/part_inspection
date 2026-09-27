@@ -65,6 +65,10 @@ import {
 //   原理的に作れない ② JSON にすると中身が消えて、送信待ちを人が確認できない。
 //   同じ理由で docRef()/colRef() の逃げ道も使わない(窓口に意図の名前で置く)。
 import { providerFor, ROW_DATA_WINS } from './data/provider.js';
+// P153: 名前空間と保管庫の行き先を routes.js の1か所から引く(製品 App.jsx:49・52 と同じ)。
+//   PocketBase は読み込んでも切り替わらない。切り替わるのは保存された行き先が enabled:true の時だけ。
+import { DEFAULT_PROVIDERS, providersFromSettings } from './data/routes.js';
+import './data/connectPocketbase.js';
 import { DATA_DELETE, DATA_SERVER_NOW, withDeletions } from './data/sentinels.js';
 // 🚨🚨 作業時間が「保存で消える」のを止める見張り(2026-08-17 最終検査の事故と同じ形を部品でも塞ぐ)。
 //   ⚠このファイルは最終検査/製品検査と **1バイトも同じ**。片方だけ直すと静かに巻き戻る。
@@ -113,6 +117,13 @@ import {
   NOTE_IMAGE_COLLECTION, isNoteImageRef, noteImageIdOf, newNoteImageId,
   noteImageDoc, imageRefPart, hasNoteImage, displaySrcOf, noteImageRefIdsOf,
 } from './domain/noteImages.js';
+// P101: この端末が今日どれだけ読んだかを集める先(usage_daily)へ 1日1回だけ置く(製品 App.jsx:388-400 と同じ)。
+import {
+  USAGE_COL, USAGE_LAST_SENT_KEY,
+  usageDayKey, ensureDeviceId, shouldSend as shouldSendUsage, buildUsageDoc,
+} from './domain/usageRollup.js';
+import { quotaWindowKey } from './domain/readBudget.js';
+const USAGE_SEND_DELAY_MS = 90000;
 // 💾 「保存してから画面を閉じてよいか」(2026-08-17 の是正。製品検査と同一ファイル)
 import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './domain/settleSave.js';
 // 改善カルテの効果判定(製品と同じ純関数・不具合率の分母=検査機会(台数))
@@ -182,7 +193,36 @@ import {
   pausedSummaryLabel, pausedSinceLabel,
 } from './domain/workerPause.js';
 const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDocsFromServer, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
-const DATA = (db) => providerFor(db, FS_API);
+// ---- どの保管庫へ書くか(切替の入口・製品 App.jsx:222-261 と同じ形) ----
+// ⚠ 既定は必ず Firebase。保存された行き先に enabled === true と接続先がはっきり入っている時だけ切り替わる。
+let _routeProviders = DEFAULT_PROVIDERS;
+let _routePbConfig = null;
+const applyDataRoute = (pbSettings, extra = {}) => {
+  const next = providersFromSettings(pbSettings);
+  if (JSON.stringify(next) !== JSON.stringify(_routeProviders)) _routeProviders = next;
+  const usesPb = Object.values(next).includes('pocketbase');
+  const nextPb = usesPb ? {
+    url: String(pbSettings.url || '').replace(/\/+$/, ''),
+    email: pbSettings.email || '', password: pbSettings.password || '',
+    authCollection: pbSettings.authCollection || 'device_users',
+    owner: extra.owner || '', onPendingChange: extra.onPendingChange, onConflict: extra.onConflict,
+  } : null;
+  if ((nextPb?.url || '') !== (_routePbConfig?.url || '')) _routePbConfig = nextPb;
+  else if (nextPb) _routePbConfig = { ..._routePbConfig, ...nextPb };
+  return { providers: _routeProviders, pbConfig: _routePbConfig };
+};
+const DATA_ROUTE_KEY = 'data.route.v1';
+// ⚠ 読み込みは最初に使う時に行う(モジュールを読んだ瞬間に副作用を走らせない)。
+let _routeInit = false;
+const ensureDataRoute = () => {
+  if (_routeInit) return;
+  _routeInit = true;
+  try {
+    const saved = JSON.parse(localStorage.getItem(DATA_ROUTE_KEY) || 'null');
+    if (saved && saved.enabled === true && saved.url) applyDataRoute(saved);
+  } catch { /* 読めなければ Firebase のまま(安全側) */ }
+};
+const DATA = (db) => { ensureDataRoute(); return providerFor(db, FS_API, _routeProviders, _routePbConfig); };
 import {
   getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject
 } from "firebase/storage";
@@ -30162,7 +30202,38 @@ const QuotaStoppedPanel = ({ until }) => (
      return () => clearInterval(id);
    }, []);
 
-   // 🚨 枠切れ(429)。**自動で何度も読みに行かない**(枠を更に食う)。人が押すまで止めたままにする。
+   // 📤 P101: きょうの読み取り件数を usage_daily へ 1端末1日1件だけ置く(製品 App.jsx:44440-44517 と同じ決まり)。
+  //   ⚠ 部品の帳面の day は「枠が戻る日」(quotaDayKeyOf)で、米国西部の今日(quotaWindowKey)とは名乗りが違う。
+  //     day をそのまま渡さず、今日の帳面の時だけ key=quotaWindowKey(now) にして渡す。
+  //   ⚠ 書き込み・開いた回数は数えていないので渡さない(null のまま・0 と書かない)。
+  //   ⚠ 失敗しても現場の作業を止めない。書きに行く前に「送った」と覚える(枠切れで返らない時に書き増やさない)。
+  useEffect(() => {
+    if (!user || !db) return;
+    let dead = false;
+    const timer = setTimeout(() => {
+      if (dead) return;
+      try {
+        const now = Date.now();
+        const ls = window.localStorage;
+        const deviceId = ensureDeviceId((k) => ls.getItem(k), (k, v) => ls.setItem(k, v));
+        if (!deviceId) return;
+        const t = readTallyRef.current;
+        if (!t || t.day !== quotaDayKeyOf(now)) return;
+        const snap = { key: quotaWindowKey(now), total: t.total, byCol: { ...(t.byCol || {}) } };
+        let lastSentKey = null;
+        try { lastSentKey = ls.getItem(USAGE_LAST_SENT_KEY); } catch { lastSentKey = null; }
+        if (!shouldSendUsage({ readLog: snap, lastSentKey, todayKey: usageDayKey(now) })) return;
+        const built = buildUsageDoc({ appId: APP_DATA_ID, deviceId, readLog: snap, writeLog: null, nowMs: now });
+        if (!built) return;
+        try { ls.setItem(USAGE_LAST_SENT_KEY, built.data.dayKey); } catch { return; }
+        DATA(db).save(APP_DATA_ID, USAGE_COL, built.docId, built.data, { merge: false })
+          .catch(() => { try { ls.removeItem(USAGE_LAST_SENT_KEY); } catch { /* noop */ } });
+      } catch { /* 黙って諦める。現場の作業を止めない */ }
+    }, USAGE_SEND_DELAY_MS);
+    return () => { dead = true; clearTimeout(timer); };
+  }, [user, db]);
+
+  // 🚨 枠切れ(429)。**自動で何度も読みに行かない**(枠を更に食う)。人が押すまで止めたままにする。
    const [quotaBlock, setQuotaBlock] = useState(null); // { at, until, cols: string[] }
    const quotaBlockRef = useRef(null);
    const [showReadBudget, setShowReadBudget] = useState(false);
@@ -33709,7 +33780,7 @@ const QuotaStoppedPanel = ({ until }) => (
                </div>
                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900 leading-relaxed">
                  ⚠ ここに出るのは <b>この端末の分だけ</b> です。他の人の端末や、製品検査・最終検査・司令塔が読んだ分は
-                 このアプリからは分かりません。<b>全部の合計はもっと多い</b>と思ってください（正確な合計は Firebase コンソールの使用量）。
+                 このアプリだけでは分かりません。全部の端末・4アプリの合計は <b>③司令塔の使用量</b>で見られます（この端末は1日1回・書き込み1件だけ、きょうの件数を集める先 usage_daily へ置きます）。
                </div>
                <div className="mt-4">
                  <div className="font-black text-slate-700 mb-1 text-xs">内訳（何をいくつ読んだか）</div>

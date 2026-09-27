@@ -46,7 +46,8 @@ function ShotSlot({ slotKey, cap, images, canEdit, onUpload, onDelete }) {
             src={img}
             alt={cap || '画面写真'}
             onClick={() => setZoom(true)}
-            className="w-full max-h-[460px] object-contain rounded-xl border-2 border-slate-200 bg-slate-50 cursor-zoom-in shadow-sm"
+            title="押すと画面いっぱいで読めます"
+            className="w-full h-[70vh] object-contain rounded-xl border-2 border-slate-200 bg-slate-50 cursor-zoom-in shadow-sm"
           />
           {canEdit && (
             <div className="absolute top-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -68,14 +69,14 @@ function ShotSlot({ slotKey, cap, images, canEdit, onUpload, onDelete }) {
           <div className="text-sm font-bold text-slate-500">{cap || '画面写真'}</div>
           {canEdit
             ? <div className="text-xs text-blue-600 font-bold flex items-center gap-1"><Upload className="w-3.5 h-3.5" /> タップして写真を追加</div>
-            : <div className="text-xs text-slate-400">写真は準備中です</div>}
+            : <div className="fi-tap-text text-slate-400">写真は準備中です</div>}
         </div>
       )}
       {cap && <figcaption className="text-center text-xs text-slate-500 mt-1.5">{img ? '▲ ' : ''}{cap}</figcaption>}
 
       {zoom && img && (
         <div className="fixed inset-0 z-[120] bg-black/90 flex items-center justify-center p-4" onClick={() => setZoom(false)}>
-          <img src={img} alt={cap || ''} className="max-w-full max-h-full object-contain" />
+          <img src={img} alt={cap || ''} className="w-full h-full object-contain" />
           <button className="absolute top-4 right-4 bg-white/15 hover:bg-white/30 text-white rounded-full p-2"><X className="w-6 h-6" /></button>
         </div>
       )}
@@ -190,9 +191,9 @@ function HelpManualModalBody({ appLabel = 'アプリ', sections, images = {}, ca
           <BookOpen className="w-6 h-6" />
           <div className="flex-1 min-w-0">
             <div className="font-black text-lg leading-tight">{appLabel} 使い方ガイド</div>
-            <div className="text-xs text-blue-100">画面の写真つきで操作を説明します。わからない言葉は上の検索からも探せます。</div>
+            <div className="fi-tap-text text-blue-100">画面の写真つきで操作を説明します。わからない言葉は上の検索からも探せます。</div>
           </div>
-          {canEdit && <span className="hidden sm:inline text-xs bg-white/15 px-2 py-1 rounded-full font-bold">管理者: 写真を追加・差し替えできます</span>}
+          {canEdit && <span className="hidden sm:inline fi-tap-text bg-white/15 px-2 py-1 rounded-full font-bold">管理者: 写真を追加・差し替えできます</span>}
           <button onClick={onClose} className="bg-white/15 hover:bg-white/30 rounded-full p-2"><X className="w-5 h-5" /></button>
         </div>
 
@@ -218,7 +219,7 @@ function HelpManualModalBody({ appLabel = 'アプリ', sections, images = {}, ca
               })}
               {filtered.length === 0 && <div className="text-xs text-slate-400 text-center py-6">該当する項目がありません</div>}
             </nav>
-            <div className="p-2.5 border-t border-slate-200 text-xs text-slate-400 text-center">全 {sections.length} 章</div>
+            <div className="p-2.5 border-t border-slate-200 fi-tap-text text-slate-400 text-center">全 {sections.length} 章</div>
           </aside>
 
           {/* 右: 本文 */}
@@ -230,7 +231,7 @@ function HelpManualModalBody({ appLabel = 'アプリ', sections, images = {}, ca
               </select>
             </div>
 
-            <article className="p-5 md:p-7 max-w-3xl">
+            <article className="p-5 md:p-7 max-w-4xl">
               <div className="flex items-center gap-2.5 mb-1">
                 {active.icon && React.createElement(active.icon, { className: 'w-7 h-7 text-blue-600' })}
                 <h3 className="text-2xl font-black text-slate-900">{active.title}</h3>

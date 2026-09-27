@@ -22,3 +22,13 @@
    ⚠ @tailwind utilities より後ろに置く事で min-h-11 / text-xs に勝つ。 */
 .min-h-11 { min-height: max(2.75rem, 44px); }
 .fi-tap-text { font-size: max(0.75rem, 12px); }
+
+/* 文字の床 12px の段(製品 src/index.css:58-77 と同じ値・tailwind.config.js の SMALL_STEPS と組)。
+   100% の時は 0.75rem=12px なので1pxも変わらない。文字サイズ95%でも text-xs が 11.4px に縮まない。 */
+:root {
+  --text-2xs: max(0.75rem, 12px);
+  --text-3xs: max(0.75rem, 12px);
+  --text-4xs: max(0.75rem, 12px);
+  --text-5xs: max(0.75rem, 12px);
+  --text-xs:  max(0.75rem, 12px);
+}
