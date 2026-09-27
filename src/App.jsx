@@ -113,9 +113,14 @@ import { restoreFailedRefs, describeWriteOrder } from './domain/saveOrder.js';
 import {
   mergeLotsById, windowIsWholeCollection, needsLotHistory, planLotSubscriptions,
   isQuotaError, nextQuotaResetAt, quotaDayKeyOf, formatRemaining, formatClock,
-  snapshotReads, emptyTally, tallyAdd, quotaPercent,
+  snapshotReads, queryReads, emptyTally, tallyAdd, quotaPercent,
   READ_TALLY_STORAGE_KEY, FREE_TIER_DAILY_READS, LOTS_LIVE_LIMIT, LOTS_HISTORY_LIMIT, OPEN_LOTS_LIMIT,
+  archiveLotsSpec, oldestCreatedAt, lotsOverflowOf, ARCHIVE_LIMIT,
 } from './domain/readBudget.js';
+// P062/P114 上限に届いた時の札と、過去の取り寄せの帯
+import LotsReadNotice from './LotsReadNotice.jsx';
+// 📄 P061 資料PDFを設定の箱から外へ(製品 src/domain/fileOffload.js を1バイト同じで写した)
+import { WS_FILE_COLLECTION, hydrateWorkStandards, dehydrateWorkStandards, referencedWsFileIds } from './domain/fileOffload.js';
 // 📝🖼 メモ・お知らせの写真の別置き(2026-08-31 SS-701)。写真は note_images(1件=1枚)へ、
 //   本体には札(imageRef)だけ。古い doc の inline 写真は displaySrcOf がそのまま出す。
 import {
@@ -18505,12 +18510,19 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
     // 🚨写真を読んでから書き出す(読めなくても控えは作る。件数は必ず meta に残す)。
     const imgIds = noteImageRefIds(notes, announcements);
     const imgs = await fetchNoteImages(imgIds);
-    const cnts = { ...counts, 'メモ/お知らせの写真': imgs.rows.length };
-    const data = { meta: { app: 'parts-inspection', exportedAt: new Date().toISOString(), by: currentUserName || '', counts: cnts, noteImagesExpected: imgIds.length, noteImagesMissing: imgs.missing }, settings, templates, workers, indirectWork, improvements, observationPlans, lots, notes, announcements, logs, note_images: imgs.rows };
+    // 📄 P061 資料PDFの実体(work_standard_files)。札が指している分だけ1件ずつ読む(全件読みを増やさない)。
+    const wsIds = [...referencedWsFileIds((settings && settings.workStandards) || [])];
+    const wsRows = [], wsMissing = [];
+    for (const id of wsIds) {
+      try { const d = await DATA(db).getOne(APP_DATA_ID, WS_FILE_COLLECTION, id); if (d && d.data) wsRows.push({ id, ...d }); else wsMissing.push(id); } catch { wsMissing.push(id); }
+    }
+    const cnts = { ...counts, 'メモ/お知らせの写真': imgs.rows.length, '資料PDF': wsRows.length };
+    const data = { meta: { app: 'parts-inspection', exportedAt: new Date().toISOString(), by: currentUserName || '', counts: cnts, noteImagesExpected: imgIds.length, noteImagesMissing: imgs.missing, workStandardFilesMissing: wsMissing }, settings, templates, workers, indirectWork, improvements, observationPlans, lots, notes, announcements, logs, note_images: imgs.rows, work_standard_files: wsRows };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url;
     a.download = `バックアップ_部品検査_${new Date().toISOString().slice(0, 10)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     // 🚨欠けたまま「取れました」と言わない。
+    if (wsMissing.length) alert(`🚨 資料PDF ${wsMissing.length}件が読めませんでした。この控えから戻すと、その資料は開けません。`);
     if (imgs.missing.length) alert(`🚨 メモ/お知らせの写真 ${imgs.missing.length}枚が読めませんでした。\nこの控えから戻すと、その ${imgs.missing.length}件は写真が出ません。\n（控えのファイル自体は保存しています）`);
     return { noteImages: imgs.rows.length, noteImagesMissing: imgs.missing.length };
   };
@@ -30878,6 +30890,10 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    const [liveLots, setLiveLots] = useState([]);
    const [openLots, setOpenLots] = useState([]);
    const [historyLots, setHistoryLots] = useState(null); // null = まだ読んでいない
+   // 🗄 P114 過去(500件)より古いロットの取り寄せ(要る画面を開いた時に1回だけ・生きた購読にしない)
+   const [archiveLots, setArchiveLots] = useState([]);
+   const [lotsArchive, setLotsArchive] = useState('idle'); // idle | loading | loaded | failed | blocked | skipped
+   const [archiveRetry, setArchiveRetry] = useState(0);
    // ①が上限まで埋まらなかった = コレクションを全部読めた。②③は一切要らない。
    const [lotsWindowWhole, setLotsWindowWhole] = useState(false);
    // ⚠過去(historyLots)は **今までの購読そのもの**(新しい方から500件)なので、
@@ -30886,9 +30902,10 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    // 📐 P040 lotsRaw = 保管庫にあるままの姿(測定図は札のまま)。見張り・容量の関所・巡回はこちらを見る。
    const lotsRaw = useMemo(() => {
      if (lotsWindowWhole) return liveLots;                       // 全部読めている = 今までと同一
-     if (historyLots !== null) return mergeLotsById(historyLots, openLots);
+     // ⚠ P114 取り寄せは過去の後ろ・未完了の前(未完了=生きた方が勝つ)
+     if (historyLots !== null) return mergeLotsById(historyLots, archiveLots, openLots);
      return mergeLotsById(liveLots, openLots);
-   }, [lotsWindowWhole, historyLots, openLots, liveLots]);
+   }, [lotsWindowWhole, historyLots, archiveLots, openLots, liveLots]);
    // 画面用だけ札を絵に戻す(届いていない札は札のまま=保存で消えない)
    // 🧾 中断の記録(interruptionsMap)を配列へ合流させるのは ここ1回だけ(製品の購読の出口と同じ)
    const lots = useMemo(() => (Object.keys(stepDiagrams).length ? lotsRaw.map(l => hydrateLot(l, stepDiagrams)) : lotsRaw).map(withInterruptionLog), [lotsRaw, stepDiagrams]);
@@ -30916,12 +30933,13 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    const liveLotsRef = useRef([]);
    const openLotsRef = useRef([]);
    const historyLotsRef = useRef(null);
+   const archiveLotsRef = useRef([]);
    const windowWholeRef = useRef(false);
    const recomputeRawLots = () => {
      rawLotsRef.current = windowWholeRef.current
        ? liveLotsRef.current
        : (historyLotsRef.current !== null
-         ? mergeLotsById(historyLotsRef.current, openLotsRef.current)
+         ? mergeLotsById(historyLotsRef.current, archiveLotsRef.current, openLotsRef.current)
          : mergeLotsById(liveLotsRef.current, openLotsRef.current));
    };
    // === マイグレーション: ロットに残存している optimizedStepOrder フィールドを掃除 ===
@@ -31300,6 +31318,23 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
    const [showWorkStandardsLib, setShowWorkStandardsLib] = useState(false);
    const [editingWorkStandard, setEditingWorkStandard] = useState(null); // null = 編集モーダル非表示, 'NEW' = 新規, object = 既存編集
+   // 📄 P061 資料PDFの中身(work_standard_files)。設定には札しか入っていないので、
+   //   資料を開く時にだけ読む(製品 App.jsx と同じ形)。
+   const [wsFiles, setWsFiles] = useState({});
+   const wsFilesLoading = useRef(false);
+   const ensureWorkStandardFiles = useCallback(async () => {
+     if (!user || !db || wsFilesLoading.current) return;
+     wsFilesLoading.current = true;
+     try {
+       const rows = await DATA(db).getAll(APP_DATA_ID, WS_FILE_COLLECTION);
+       const m = {};
+       rows.forEach(r => { if (r && r.data) m[r.id] = r.data; });
+       setWsFiles(m);
+     } catch (e) { console.warn('資料の読み込みに失敗', e); wsFilesLoading.current = false; }
+   }, [user, db]);
+   // 画面へ渡すのは必ず中身に戻した配列。⚠まだ読めていない札は札のまま残る(空にすると資料が永久に消える)
+   const workStandards = useMemo(() => hydrateWorkStandards(settings.workStandards || [], wsFiles), [settings, wsFiles]);
+   useEffect(() => { if (showWorkStandardsLib || editingWorkStandard) ensureWorkStandardFiles(); }, [showWorkStandardsLib, editingWorkStandard, ensureWorkStandardFiles]);
    // 作業標準の保存・削除ヘルパー (settings.workStandards 配列を更新)
    const saveWorkStandard = async (item) => {
      const list = [...(settings.workStandards || [])];
@@ -31317,8 +31352,16 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      setEditingWorkStandard(null);
    };
    const deleteWorkStandard = async (id) => {
-     const list = (settings.workStandards || []).filter(s => s.id !== id);
+     const before = settings.workStandards || [];
+     const list = before.filter(s => s.id !== id);
+     // ⚠設定を先に更新する。中身を先に消してこちらが失敗すると「一覧に残っているのに開けない資料」になる。
      await saveSettings({ workStandards: list });
+     // 📄 P061 要らなくなった資料の中身を掃除(製品と同じ)
+     try {
+       const stillUsed = referencedWsFileIds(list);
+       const gone = [...referencedWsFileIds(before)].filter(f => !stillUsed.has(f));
+       for (const fid of gone) await deleteData(WS_FILE_COLLECTION, fid);
+     } catch (e) { console.warn('資料の中身の掃除に失敗', e); }
    };
  
    // State: Template Editor
@@ -31614,11 +31657,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      const hist = new Set(historyLots.map(l => l && l.id).filter(x => x != null));
      const now = new Set(lots.map(l => l && l.id).filter(x => x != null));
      let missing = 0; hist.forEach(id => { if (!now.has(id)) missing++; });
-     let extra = 0; now.forEach(id => { if (!hist.has(id)) extra++; });
+     const arch = new Set(archiveLots.map(l => l && l.id).filter(x => x != null));
+     let extra = 0; let archived = 0; now.forEach(id => { if (!hist.has(id)) { if (arch.has(id)) archived++; else extra++; } });
      if (missing > 0) console.error(`🚨 合体後のロットが今までより ${missing}件 少ない。画面の数字が減っている。`);
      if (extra > 0) console.warn(`⚠ 合体後のロットが今までより ${extra}件 多い(500件の窓の外に居た未完了ロット)。`);
-     setLotsMergeDiff({ missing, extra, checkedAt: Date.now(), base: hist.size, merged: now.size });
-   }, [historyLots, lots, lotsWindowWhole]);
+     setLotsMergeDiff({ missing, extra, archived, checkedAt: Date.now(), base: hist.size, merged: now.size });
+   }, [historyLots, archiveLots, lots, lotsWindowWhole]);
 
    // 念のための後追い(購読の中の同期更新が本体。ここは取りこぼしの保険)。
    useEffect(() => { rawLotsRef.current = lotsRaw; }, [lotsRaw]);
@@ -31672,11 +31716,58 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        recomputeRawLots(); // 🚨見張り用の姿は同期で更新
        setOpenLots(rows);
        // 🚨 上限に届いた = 拾い切れていない。**黙って切らない**。
-       if (rows.length >= OPEN_LOTS_LIMIT) console.warn(`⚠ 未完了ロットが ${OPEN_LOTS_LIMIT}件の上限に届きました。拾い切れていない可能性があります。`);
+       //   P062: console だけでなく画面の札(LotsReadNotice)に出す。判定は lotsOverflowOf。
      }, { where: [['status', '!=', 'completed']], limit: OPEN_LOTS_LIMIT, onError: (e) => noteReadError('lots(未完了)', e) });
      countReads('lots(未完了)', 0, { attach: true }); // 張った事は0件でも残す
      return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } };
    }, [lotSubPlan.open, user, db, countReads, noteReadError]);
+
+   // ==========================================================================
+   // 🗄 P114 過去の取り寄せ(製品 App.jsx の ③ と同じ考え)。
+   //   過去の購読(新しい順500件)が上限に届いた時だけ、それより古いロットを **1回だけ** 読む。
+   //   ⚠ 過去が上限に届いていない = それが全部 → 読まない(読み取りを増やさない)。
+   //   ⚠ 429 中は読みに行かない(quotaBlockRef)。一度読んだら読み直さない(failed の「もう一度」だけ)。
+   //   ⚠ 境目は取り寄せた時の「過去の一番古い createdAt」。開いたまま新しいロットが増えると
+   //     境目の少し上が過去の窓から落ちる事がある(開き直すと戻る)。
+   // ==========================================================================
+   const lotsArchiveRef = useRef('idle');
+   const setArchive = (st) => { lotsArchiveRef.current = st; setLotsArchive(st); };
+   const lotsOverflow = useMemo(() => lotsOverflowOf({
+     windowWhole: lotsWindowWhole,
+     historyLoaded,
+     historyLen: historyLots ? historyLots.length : 0,
+     openLen: openLots.length,
+     archiveState: lotsArchive,
+     archiveLen: archiveLots.length,
+   }), [lotsWindowWhole, historyLoaded, historyLots, openLots, lotsArchive, archiveLots]);
+   const needArchive = lotHistoryNeededNow && lotsOverflow.historyCapped;
+   useEffect(() => {
+     if (!needArchive || !user || !db) return;
+     if (lotsArchiveRef.current !== 'idle') return;
+     if (quotaBlockRef.current) { setArchive('blocked'); return; }
+     const before = oldestCreatedAt(historyLotsRef.current);
+     if (before == null) { setArchive('skipped'); return; }
+     let dead = false;
+     setArchive('loading');
+     (async () => {
+       try {
+         const page = await DATA(db).getPage(APP_DATA_ID, 'lots', archiveLotsSpec(before), {});
+         const rows = (page && page.rows) || [];
+         countReads('lots(過去の取り寄せ)', queryReads(rows.length));
+         if (dead) return;
+         archiveLotsRef.current = rows;
+         recomputeRawLots(); // 🚨見張り用の姿は同期で更新
+         setArchiveLots(rows);
+         setArchive('loaded');
+       } catch (e) {
+         if (dead) return;
+         console.error('[lots] 過去の取り寄せに失敗', e);
+         if (isQuotaError(e)) { noteReadError('lots(過去の取り寄せ)', e); setArchive('blocked'); }
+         else setArchive('failed');
+       }
+     })();
+     return () => { dead = true; if (lotsArchiveRef.current === 'loading') lotsArchiveRef.current = 'idle'; };
+   }, [needArchive, archiveRetry, user, db, countReads, noteReadError]);
 
 
    // --- Font Size Application ---
@@ -32082,6 +32173,20 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        setErrorMsg(msg);
        throw new Error(msg);
      }
+     // 📄 P061 資料PDFは設定の箱に入れない。中身は work_standard_files へ逃がし、設定には札だけ置く(製品と同じ)。
+     //   ⚠ここは「実体が先・札が後」(製品の注記どおり。設定はやり直せるが、PDFの中身はこの瞬間ブラウザにしか無い)。
+     //   ⚠ P030 の関所より前(PDFを抱えたまま測ると溢れて止まる)。
+     if (newSettings && newSettings.workStandards !== undefined) {
+       try {
+         newSettings = { ...newSettings, workStandards: await dehydrateWorkStandards(newSettings.workStandards, async (fid, body) => {
+           await DATA(db).save(APP_DATA_ID, WS_FILE_COLLECTION, fid, { ...body, updatedAt: DATA_SERVER_NOW }, { merge: false });
+         }) };
+       } catch (e) {
+         console.error('資料の別置き保存に失敗', e);
+         setErrorMsg('資料の保存に失敗しました: ' + (e.message || e));
+         throw e; // ⚠握り潰すと「保存できたように見える」
+       }
+     }
      // 📏 P030 設定の箱も1MB上限(製品 saveSettings の関所と同じ3段)。溢れると 品質規格マスタ・目標時間・宛先・文字サイズ・品目名簿 がどれも保存できなくなる。
      //   ⚠測る時は withDeletions を通す(通さないと __deleteMapKeys が一番大きいと出る)。保存へは今のまま生の newSettings を渡す(窓口が解く)。
      try {
@@ -32132,6 +32237,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        //     在るので、止まってももう一度押せば同じ所からやり直せる。
        //   ⚠古い控え(note_images の鍵が無い)は Array.isArray で今までどおり素通りする。
        ['note_images', parsed.note_images],
+       // 📄 P061 資料PDFの実体。札を持つ設定より先(設定は一番最後に書く)。古い控えは素通り。
+       ['work_standard_files', parsed.work_standard_files],
        ['lots', parsed.lots],
        ['templates', parsed.templates],
        ['workers', parsed.workers],
@@ -32177,7 +32284,14 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          done++; if (onProgress) onProgress(done, total);
        }
      }
-     await DATA(db).save(APP_DATA_ID, 'settings', 'config', cleanUndefined(parsed.settings || {}));
+     // 📄 P061 古い控えは資料PDFの中身が設定に直接入っている。そのまま戻すと設定が膨らむので、復元時も外へ出す(製品と同じ)。
+     const settingsBody = { ...(parsed.settings || {}) };
+     if (settingsBody.workStandards !== undefined) {
+       settingsBody.workStandards = await dehydrateWorkStandards(settingsBody.workStandards, async (fid, body) => {
+         await DATA(db).save(APP_DATA_ID, WS_FILE_COLLECTION, fid, { ...body, updatedAt: DATA_SERVER_NOW }, { merge: false });
+       });
+     }
+     await DATA(db).save(APP_DATA_ID, 'settings', 'config', cleanUndefined(settingsBody));
      done++; if (onProgress) onProgress(done, total);
      // 🚨🖼「取っている≠戻せる」(2026-07-26)。**戻した後に読み直して**、
      //   メモ/お知らせの札(imageRef)の先に写真の実体が在るかを1枚ずつ確かめる。
@@ -34727,6 +34841,14 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                      {lotsMergeDiff.missing > 0 ? <>🚨 <b>{lotsMergeDiff.missing}件 少ない = 欠陥です。</b>この数字は信じないでください。</>
                        : lotsMergeDiff.extra > 0 ? <>⚠ {lotsMergeDiff.extra}件 多い（{LOTS_HISTORY_LIMIT}件の窓の外に居た<b>未完了ロット</b>を拾いました。今までは作業画面にも出ていなかった分です）。</>
                        : <>✅ 1件も違いません（画面の数字は今までと同じです）。</>}
+                     {lotsMergeDiff.archived > 0 && <><br />🗄 過去の取り寄せ（{LOTS_HISTORY_LIMIT}件より古い分）= <b>{lotsMergeDiff.archived}件</b> を足しています。</>}
+                   </div>
+                 )}
+                 {/* P062 上限に届いた事をここにも出す */}
+                 {(lotsOverflow.openCapped || lotsOverflow.historyCapped) && (
+                   <div className="mt-1 text-xs bg-amber-50 border border-amber-300 rounded px-3 py-2 text-amber-800">
+                     {lotsOverflow.openCapped && <div>⚠ 未完了ロットが上限（{OPEN_LOTS_LIMIT}件）に届いています（{openLots.length}件）。拾い切れていない未完了が在るかもしれません。</div>}
+                     {lotsOverflow.historyCapped && <div>⚠ 過去のロットが上限（{LOTS_HISTORY_LIMIT}件）に届いています。取り寄せ: {lotsArchive === 'loaded' ? `${archiveLots.length}件${lotsOverflow.archiveCapped ? `（上限${ARCHIVE_LIMIT}件に届いた）` : '（全部）'}` : lotsArchive}</div>}
                    </div>
                  )}
                </div>
@@ -34959,6 +35081,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
              </div>
            );
          })()}
+         <LotsReadNotice overflow={lotsOverflow} archiveState={lotsArchive} historyScreen={lotHistoryNeededNow && lotsHistoryReady && !quotaBlock} openScreen={activeTab === 'inspection' || activeTab === 'main'} historyLimit={LOTS_HISTORY_LIMIT} openLimit={OPEN_LOTS_LIMIT} archiveLimit={ARCHIVE_LIMIT} onRetry={() => { setArchive('idle'); setArchiveRetry(n => n + 1); }} />
          <div className="flex-1 min-h-0 overflow-hidden p-4 relative">
          {activeTab === 'main' && (
            <div className="h-full">
@@ -35301,7 +35424,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        {/* 作業標準ライブラリ */}
        {showWorkStandardsLib && (
          <WorkStandardsLibraryModal
-           standards={settings.workStandards || []}
+           standards={workStandards}
            onClose={() => setShowWorkStandardsLib(false)}
            onEdit={(item) => setEditingWorkStandard(item || 'NEW')}
            allowManage={true}

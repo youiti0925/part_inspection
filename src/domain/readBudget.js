@@ -59,7 +59,10 @@ export const mergeLotsById = (base, ...overlays) => {
     for (const r of arr) {
       if (!r || r.id == null) continue;
       const i = at.get(r.id);
+      // ⚠ P114: 重ねが2つ以上の時、末尾に足した行を後の重ねが差し替える事がある。
+      //   その時は out ではなく extra の方を差し替える(前は out[範囲外] へ書いて穴が開いていた)。
       if (i === undefined) { at.set(r.id, out.length + extra.length); extra.push(r); }
+      else if (i >= out.length) extra[i - out.length] = r;
       else out[i] = r;
     }
   }
@@ -371,4 +374,59 @@ const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 export const quotaWindowKey = (nowMs) => {
   const p = zonedParts(num(nowMs, 0), LA_TZ);
   return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
+};
+
+// ---------------------------------------------------------------------------
+// P062 上限に届いたか(=拾い切れていないか)を画面へ出すための、ただの計算。
+//   ⚠ 製品 readBudget.js とは名前も形も違う(製品は30日の窓)。丸写ししない。
+// P114 過去(新しい順500件)より古いロットを1回だけ取り寄せる指定。
+// ---------------------------------------------------------------------------
+
+/** 過去の取り寄せ(1回だけ・生きた購読にしない)の上限。製品の ARCHIVE_LIMIT と同じ数。 */
+export const ARCHIVE_LIMIT = 2000;
+
+/** 行の中で一番古い createdAt(数で持つ物だけ)。無ければ null。 */
+export const oldestCreatedAt = (rows) => {
+  let oldest = null;
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    const c = r && r.createdAt != null && Number.isFinite(Number(r.createdAt)) ? Number(r.createdAt) : null;
+    if (c == null) continue;
+    if (oldest == null || c < oldest) oldest = c;
+  }
+  return oldest;
+};
+
+/**
+ * 過去の購読(新しい順500件)より **古い** ロットの取り寄せ指定。
+ * ⚠ beforeMs は「過去の購読の一番古い createdAt」。渡されなければ止める(1970年を境目にして黙って0件になるため)。
+ * ⚠ `<` で切る(境目の行は過去の購読の方に在る)。
+ */
+export const archiveLotsSpec = (beforeMs, opts = {}) => {
+  if (!Number.isFinite(Number(beforeMs)) || Number(beforeMs) <= 0) throw new Error('archiveLotsSpec: 境目(beforeMs)が渡されていません');
+  const limit = Number.isFinite(Number(opts.limit)) && Number(opts.limit) > 0 ? Number(opts.limit) : ARCHIVE_LIMIT;
+  return {
+    where: [['createdAt', '<', Number(beforeMs)]],
+    orderBy: [['createdAt', 'desc']],
+    limit,
+  };
+};
+
+/**
+ * 上限に届いたか。
+ * @param s {{ windowWhole, historyLoaded, historyLen, openLen, archiveState, archiveLen }}
+ *   archiveState: 'idle' | 'loading' | 'loaded' | 'failed' | 'blocked' | 'skipped'
+ * @returns {{ openCapped, historyCapped, olderMissing, archiveCapped }}
+ *   openCapped    未完了の拾い直しが上限(400)に届いた = 作業画面に出ていない未完了が在るかもしれない
+ *   historyCapped 過去の購読が上限(500)に届いた = それより古いロットが在るかもしれない
+ *   olderMissing  いま画面の集計に「古い完了が入っていない」かもしれない(取り寄せで全部揃ったら false)
+ *   archiveCapped 取り寄せも上限(2000)に届いた
+ */
+export const lotsOverflowOf = (s = {}) => {
+  const windowWhole = !!s.windowWhole;
+  const openCapped = !windowWhole && (Number(s.openLen) || 0) >= OPEN_LOTS_LIMIT;
+  const historyCapped = !windowWhole && !!s.historyLoaded && !windowIsWholeCollection(s.historyLen, LOTS_HISTORY_LIMIT);
+  const archiveLoaded = s.archiveState === 'loaded';
+  const archiveCapped = historyCapped && archiveLoaded && !windowIsWholeCollection(s.archiveLen, ARCHIVE_LIMIT);
+  const olderMissing = historyCapped && (!archiveLoaded || archiveCapped);
+  return { openCapped, historyCapped, olderMissing, archiveCapped };
 };
