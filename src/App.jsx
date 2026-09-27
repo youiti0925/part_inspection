@@ -109,7 +109,8 @@ import {
   PDCA_KPIS, PDCA_MIN_N, PDCA_THRESHOLD_PCT, PDCA_STALE_DAYS,
   pdcaWindowDays, pdcaKpiValue, computeVerdict
 } from './domain/goal/verdictEngine.js';
-import { SjhGuide, sjhInsert } from './SjhGuide.jsx';
+import { SjhGuide } from './SjhGuide.jsx';
+import { sjhInsert } from './sjhText.js';
 // ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
