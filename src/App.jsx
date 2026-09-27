@@ -33,7 +33,7 @@ import { judgeTemplateSkip, buildTemplateSkippedTasks, isTemplateSkippedLot } fr
 // 🏷 品目名簿 (品目コード → 品名)。2026-09-21 清水さん「品目テキストという枠が必要なぐらい」。
 //   直す前は読む所が3箇所あるのに書く所が0で、名簿は「在るのに永久に空」だった。
 import {
-  normalizeItemCode, normalizeItemName, resolveItemName,
+  normalizeItemCode, normalizeItemName, resolveItemName, normalizeItemMaster,
   itemMasterRows, unregisteredItems, itemNameConflicts, withItem, withoutItem,
 } from './domain/itemMaster.js';
 
@@ -57,7 +57,7 @@ import {
 //   原理的に作れない ② JSON にすると中身が消えて、送信待ちを人が確認できない。
 //   同じ理由で docRef()/colRef() の逃げ道も使わない(窓口に意図の名前で置く)。
 import { providerFor, ROW_DATA_WINS } from './data/provider.js';
-import { DATA_DELETE, DATA_SERVER_NOW } from './data/sentinels.js';
+import { DATA_DELETE, DATA_SERVER_NOW, withDeletions } from './data/sentinels.js';
 // 🚨🚨 作業時間が「保存で消える」のを止める見張り(2026-08-17 最終検査の事故と同じ形を部品でも塞ぐ)。
 //   ⚠このファイルは最終検査/製品検査と **1バイトも同じ**。片方だけ直すと静かに巻き戻る。
 import { assertSafeLotSave, assertLotsLoaded, wouldLoseWorkTime } from './domain/workTimeGuard.js';
@@ -71,7 +71,7 @@ import { decideCapacity, capacityBlockMessage } from './domain/lotCapacityGate.j
 // 📦 ロット1件の容量。Firestore は1ドキュメント1MB。溢れると **そのロットは何も保存できなくなる**
 //   (不具合写真だけでなく検査記録の保存も落ちる = 凍結)。⚠バイトで数える(日本語は1文字≒3バイト)。
 //   ⚠このファイルも最終検査/製品検査と1バイトも同じ。
-import { approxBytes as capBytes, mergeEstimate as capMerge, DANGER_BYTES as CAP_DANGER, DOC_LIMIT as CAP_LIMIT } from './domain/lotCapacity.js';
+import { approxBytes as capBytes, mergeEstimate as capMerge, DANGER_BYTES as CAP_DANGER, DOC_LIMIT as CAP_LIMIT, SAFE_BYTES as CAP_SAFE, capacityLabel } from './domain/lotCapacity.js';
 // 💾🚨 保存の「順番」の関所。2026-08-17 の事故(作業時間が5ロット分まるごと消えた)の中心。
 //   決まりは1つ: **記録が先・写真(別置き)が後・その間に await を1つも挟まない。**
 //   ⚠このファイルも最終検査/製品検査と1バイトも同じ(md5一致)。片方だけ直すと片方だけ記録が消える。
@@ -14849,6 +14849,59 @@ const ItemMasterPanel = ({ lots = [], itemMaster = {}, saveSettings }) => {
     } finally { setBusy(''); }
   };
 
+  // 📥📤 P029 既定: 名簿は Excel(2列: 品目コード・品名)で書き出し/読み込みもできる。
+  //   読み込みは「足す◯件/書き換え◯件」を見せて確かめてから保存。Excel に無いコードは消さない(足すだけ)。
+  const exportExcel = async () => {
+    setErr(''); setBusy('__xlsx');
+    try {
+      const ExcelJS = await loadExcelJS();
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('品目名簿');
+      ws.addRow(['品目コード', '品名']);
+      Object.entries(normalizeItemMaster(itemMaster)).sort((a, b) => a[0].localeCompare(b[0], 'ja'))
+        .forEach(([c, n]) => ws.addRow([c, n]));
+      ws.getColumn(1).width = 24; ws.getColumn(2).width = 40;
+      const buf = await wb.xlsx.writeBuffer();
+      const url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      const a = document.createElement('a'); a.href = url; a.download = `品目名簿_${new Date().toISOString().slice(0, 10)}.xlsx`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      setErr(e?.message || '書き出しに失敗しました');
+    } finally { setBusy(''); }
+  };
+  const importExcel = async (file) => {
+    if (!file) return;
+    setErr(''); setBusy('__xlsx');
+    try {
+      const ExcelJS = await loadExcelJS();
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(await file.arrayBuffer());
+      const ws = wb.worksheets[0];
+      if (!ws) throw new Error('シートが見つかりません');
+      const cellText = (v) => (v && typeof v === 'object') ? (v.text ?? v.result ?? (Array.isArray(v.richText) ? v.richText.map(r => r.text).join('') : '')) : (v ?? '');
+      const cur = normalizeItemMaster(itemMaster);
+      let next = { ...(itemMaster || {}) }; let add = 0; let upd = 0;
+      ws.eachRow((row, i) => {
+        const code = normalizeItemCode(String(cellText(row.getCell(1).value)));
+        const name = normalizeItemName(String(cellText(row.getCell(2).value)));
+        if (i === 1 && /品目コード/.test(code)) return;
+        if (!code || !name) return;
+        if (!Object.prototype.hasOwnProperty.call(cur, code)) add++;
+        else if (cur[code] !== name) upd++;
+        else return;
+        next = withItem(next, code, name) || next;
+      });
+      if (add + upd === 0) { window.alert('名簿と違う行はありませんでした(何も変えません)。'); return; }
+      if (!window.confirm(`品目名簿を読み込みます。
+足す: ${add}件 / 書き換え: ${upd}件
+(Excel に無い品目コードは消しません)
+保存しますか？`)) return;
+      await saveSettings({ itemMaster: next });
+    } catch (e) {
+      setErr(e?.message || '読み込みに失敗しました');
+    } finally { setBusy(''); }
+  };
+
   const BTN = 'min-h-11 px-3 rounded-lg text-sm font-bold flex items-center gap-1.5 shadow-sm disabled:opacity-40';
 
   return (
@@ -14866,6 +14919,17 @@ const ItemMasterPanel = ({ lots = [], itemMaster = {}, saveSettings }) => {
       {err ? (
         <div className="mb-3 text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{err}</div>
       ) : null}
+
+      <div className="flex flex-wrap gap-2 mb-3" data-item-master-excel>
+        <button type="button" onClick={exportExcel} disabled={busy === '__xlsx'} className={`${BTN} bg-white border border-slate-300 text-slate-700`}>
+          <Download className="w-4 h-4" /> Excel に書き出す
+        </button>
+        <label className={`${BTN} bg-white border border-slate-300 text-slate-700 cursor-pointer`}>
+          <Upload className="w-4 h-4" /> Excel から読み込む(2列: 品目コード・品名)
+          <input type="file" accept=".xlsx" className="hidden min-h-11" disabled={busy === '__xlsx'}
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; importExcel(f); }} />
+        </label>
+      </div>
 
       {/* 追加 */}
       <div className="flex flex-wrap items-end gap-2 mb-4 border rounded-lg p-2.5 bg-slate-50">
@@ -29516,6 +29580,22 @@ const QuotaStoppedPanel = ({ until }) => (
        setErrorMsg(msg);
        throw new Error(msg);
      }
+     // 📏 P030 設定の箱も1MB上限(製品 saveSettings の関所と同じ3段)。溢れると 品質規格マスタ・目標時間・宛先・文字サイズ・品目名簿 がどれも保存できなくなる。
+     //   ⚠測る時は withDeletions を通す(通さないと __deleteMapKeys が一番大きいと出る)。保存へは今のまま生の newSettings を渡す(窓口が解く)。
+     try {
+       const merged = capMerge(settings || {}, withDeletions(newSettings || {}));
+       const size = capBytes(merged);
+       if (size > CAP_SAFE) {
+         const big = Object.entries(merged).map(([k, v]) => [k, capBytes(v)]).sort((a, b) => b[1] - a[1])[0];
+         const cap = capacityLabel(size);
+         const msg = `⚠ 設定の保存データが ${cap.text} まで大きくなっています。\n`
+           + `いちばん大きいのは「${big[0]}」で ${Math.round(big[1] / 1024)}KB です。\n`
+           + `上限(1MB)を超えると、品質規格マスタ・目標時間・宛先・文字サイズ・品目名簿が保存できなくなります。\n\n`
+           + (cap.level === 'danger' ? 'このまま保存しますか？（資料PDFや規格のPDFを減らすことをおすすめします）' : '保存は続けます。大きなPDFを足すのは控えてください。');
+         if (cap.level === 'danger' && !confirm(msg)) throw new Error('保存を中止しました（入力はそのまま残っています）。');
+         if (cap.level !== 'danger') console.warn(msg);
+       }
+     } catch (e) { if (e && /保存を中止/.test(e.message || '')) throw e; }
      const rec = { kind: 'settings', data: newSettings };
      bumpInflight(+1);
      try {
@@ -32157,18 +32237,26 @@ const QuotaStoppedPanel = ({ until }) => (
              }} className="space-y-4">
                {/* 品目コード/品目テキストのオートコンプリート候補 (既存ロット + 品目名簿 itemMaster から生成) */}
                <datalist id="itemCodeOptions">
-                 {[...new Set((lots || []).map(l => l.model).filter(Boolean))].map(code => {
+                 {/* P029: ロットのコード ∪ 品目名簿のコード(名簿だけのコードも候補に出す) */}
+                 {[...new Set([...(lots || []).map(l => l.model).filter(Boolean), ...Object.keys(normalizeItemMaster(settings?.itemMaster))])].map(code => {
                    const nm = resolveItemName(code, ((lots || []).find(l => l.model === code && l.modelText)?.modelText), settings?.itemMaster);
                    return <option key={code} value={code}>{nm}</option>;
                  })}
                </datalist>
                <datalist id="itemTextOptions">
-                 {[...new Set((lots || []).map(l => l.modelText).filter(Boolean))].map(nm => <option key={nm} value={nm} />)}
+                 {[...new Set([...(lots || []).map(l => l.modelText).filter(Boolean), ...Object.values(normalizeItemMaster(settings?.itemMaster))])].map(nm => <option key={nm} value={nm} />)}
                </datalist>
                <div className="grid grid-cols-2 gap-4">
                  <div>
                     <label className="block text-sm font-bold text-slate-700 mb-1">品目コード</label>
-                    <input name="model" list="itemCodeOptions" defaultValue={editingLot?.model} required className="w-full border rounded p-2 bg-slate-50" placeholder="例: 12345-678" />
+                    <input name="model" list="itemCodeOptions" defaultValue={editingLot?.model} required
+                      onInput={(e) => {
+                        // P029: 名簿に在る品目コードなら、品名欄の薄字に名簿の品名を出す(空のまま保存すれば名簿の品名で埋まる)
+                        const f = e.currentTarget.form; const el = f && f.elements && f.elements.namedItem('modelText');
+                        if (!el) return;
+                        const nm = normalizeItemMaster(settings?.itemMaster)[normalizeItemCode(e.currentTarget.value)];
+                        el.placeholder = nm ? `名簿の品名: ${nm}(空のまま保存すると これが入ります)` : '例: ベアリングハウジング Ｌ';
+                      }} className="w-full border rounded p-2 bg-slate-50" placeholder="例: 12345-678" />
                  </div>
                  <div>
                     <label className="block text-sm font-bold text-slate-700 mb-1">指図番号</label>

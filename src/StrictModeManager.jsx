@@ -11,6 +11,7 @@
 //  ・決定は settings.strictModeRules[combo]、監査は strict_mode_history に追記。
 // =============================================================================
 import React, { useState, useMemo } from 'react';
+import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { ShieldCheck, X, Search, History, Lock, Unlock, Info, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Minus, Cpu, Hand } from 'lucide-react';
 
 export const STRICT_COMBO_SEP = '␟'; // 区切り(通常文字と衝突しない記号)
@@ -218,7 +219,7 @@ function EvidenceDetail({ row }) {
   );
 }
 
-export function StrictModeManagerModal({ lots, templates, rules = {}, history = [], currentUserName = '', maturityUnits = 5, onSetMaturity, onDecide, onClose, embedded = false, optimalByCombo = {}, onDecideOptimal = null, onOpenAnalysis = null }) {
+function StrictModeManagerModalBody({ lots, templates, rules = {}, history = [], currentUserName = '', maturityUnits = 5, onSetMaturity, onDecide, onClose, embedded = false, optimalByCombo = {}, onDecideOptimal = null, onOpenAnalysis = null }) {
   const [view, setView] = useState('table');
   const [q, setQ] = useState('');
   const [onlyUndecided, setOnlyUndecided] = useState(false);
@@ -400,4 +401,9 @@ export function StrictModeManagerModal({ lots, templates, rules = {}, history = 
       </div>
     </div>
   );
+}
+
+// 🛟 P103: この画面が例外を投げても、この枠だけ「この部分だけ表示できませんでした」にして周りを生かす(製品と同じ包み方)。
+export function StrictModeManagerModal(props) {
+  return <ErrorBoundary compact where="厳格モードの管理"><StrictModeManagerModalBody {...props} /></ErrorBoundary>;
 }
