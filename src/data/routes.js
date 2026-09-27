@@ -183,7 +183,7 @@ export const COLLECTION_APPS = Object.freeze({
   push_tokens: ['final', 'product', 'parts'],
   app_feedback: ['final', 'product', 'parts'],
   app_notices: ['final', 'product', 'parts'],
-  weekly_briefs: ['final', 'product'],
+  weekly_briefs: ['final', 'product', 'parts'], // P166 部品は読むだけ
   daily_load: ['final', 'product', 'parts'],
   placement_rules: ['final', 'product', 'parts'],
   plan_control: ['final', 'product', 'parts'],
