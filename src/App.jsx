@@ -32784,7 +32784,14 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        watch('notes', (rows) => setNotes(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
        watch('announcements', (rows) => setAnnouncements(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
        // ⚠observationPlans は作業画面(じっと見るモード)が使う。外すと現場が使えない。
+       // 🗺 P-L7/F2①(2026-09-27 製品と同じ直し): ③の🔎工場別・モニターの埋め込み(?embed=map)は **地図だけ** を見せる読むだけの画面
+       //   (MapOnlyView の上に操作を遮る幕・ヘッダー無し・③の iframe は `?embed=map` だけで `?lot=` を付けない=作業画面は開かない)。
+       //   観測プランが届く先は 作業画面・分析・監査/バックアップだけで、地図にも埋め込みで動く自動の処理にも入らない → 埋め込みでは張らない。
+       //   ⚠ 製品が外した他の棚は、部品では 無い(制御装置の4つ)か、もう開いた時だけ読む(minor_reports・skill_marks)。
+       //   ⚠ 地図(MapOnlyView)に渡す物を増やす時は、ここで外した物が要らないかを必ず見直す(見張り: embedMapSubs.test.mjs)。
+       ...(EMBED_MAP ? [] : [
        watch('observationPlans', (rows) => setObservationPlans(rows)),
+       ]),
        // 📋 P130 品目コード専用テンプレ(品目マスタの「編集」で作る)。ロットを作る時に共通テンプレより先に使う。
        watch('model_templates', (rows) => setModelTemplates(rows)),
        // 📐 P040 測定図の保管庫(ロットより前に届く保証は無い。届いたら画面用の合流をやり直す)
@@ -32837,7 +32844,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        P.watchCollection(CONTACT_SHARED_NS, NOTICE_COL, (rows) => setAppNotices(rows || []), { onError: readFailed(NOTICE_COL) })
      ];
      // 張った事は0件でも残す(「読んでいない」と「そもそも購読していない」を人が見分けられるように)。
-     ['templates', 'workers', 'notes', 'announcements', 'observationPlans', 'model_templates', DIAGRAM_COLLECTION, 'settings/config', 'contact_shared/settings'].forEach(c => countReads(c, 0, { attach: true }));
+     // 🗺 P-L7: 埋め込み(?embed=map)では観測プランを張らないので「張った」とも残さない(0件の行は usage_daily に載らない)。
+     ['templates', 'workers', 'notes', 'announcements', ...(EMBED_MAP ? [] : ['observationPlans']), 'model_templates', DIAGRAM_COLLECTION, 'settings/config', 'contact_shared/settings'].forEach(c => countReads(c, 0, { attach: true }));
      if (stopped) stopAll(); // 張っている最中に枠切れが来た時の取りこぼし防止
      return () => { stopped = true; unsubs.forEach(u => { try { u(); } catch { /* 既に止まっていても構わない */ } }); };
    }, [user, db, countReads, noteReadError]);
