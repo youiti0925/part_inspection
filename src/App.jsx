@@ -67,7 +67,10 @@ import {
 import { providerFor, ROW_DATA_WINS } from './data/provider.js';
 // P153: 名前空間と保管庫の行き先を routes.js の1か所から引く(製品 App.jsx:49・52 と同じ)。
 //   PocketBase は読み込んでも切り替わらない。切り替わるのは保存された行き先が enabled:true の時だけ。
-import { DEFAULT_PROVIDERS, providersFromSettings } from './data/routes.js';
+import { NS as DATA_NS, DEFAULT_PROVIDERS, providersFromSettings } from './data/routes.js';
+import { fetchAllPaged } from './domain/goal/pager.js';
+import { goalGapOf, candidateOf, planPortfolio } from './domain/goal/portfolioPlanner.js';
+import { sendPushViaWorker } from './push.js';
 import './data/connectPocketbase.js';
 // 🏭 2026-09-27 製品→部品 移植: 操業シミュレーションの画面と共有棚の書類を作る純関数(製品と同じ)
 import { OperationsSimulationPanel } from './OperationsSimulationPanel.jsx';
@@ -1399,6 +1402,377 @@ const enumerateModelSteps = (lots) => {
   });
   return [...map.values()];
 };
+// ===== 📬 P136 製品 App.jsx の 🎯年間目標の部品(週次ブリーフが使う分だけ)を1文字同じで写した(2026-09-27) =====
+const GOAL_SHARED_NS = 'goal-shared-v1';
+const GOAL_DEFAULT_YEAR = { reductionPct: 10, moneyTargetYen: 1000000, chargePerHour: 2800 };
+// 年度: 既定は12月開始〜11月終わり(設定で変更可)。年度キーは「終わる年」(例: 2025/12/1〜2026/11/30 → "2026")。
+const fiscalYearOf = (nowMs, startMonth = 12) => {
+  const d = new Date(nowMs);
+  const y = d.getFullYear();
+  const m = d.getMonth() + 1;
+  const sm = Math.min(12, Math.max(1, Number(startMonth) || 12));
+  const startYear = (m >= sm) ? y : y - 1;
+  const startMs = new Date(startYear, sm - 1, 1).getTime();
+  const endMs = new Date(startYear + 1, sm - 1, 1).getTime() - 1;
+  const key = String(sm === 1 ? startYear : startYear + 1);
+  const endMonth = sm === 1 ? 12 : sm - 1;
+  return { key, startMs, endMs, label: `${key}年度（${startYear}/${sm}〜${sm === 1 ? startYear : startYear + 1}/${endMonth}）` };
+};
+// 記録データの開始時刻: 完了タスクの最古 endTime (無ければロット完了時刻)。年間換算の窓決めに使う。
+const dataStartMsOf = (lots) => {
+  let min = Infinity;
+  (lots || []).forEach(l => {
+    const lotMs = toMsAny(l.completedAt) || toMsAny(l.updatedAt);
+    Object.values(l.tasks || {}).forEach(t => {
+      if (!t || (t.status !== 'completed' && t.status !== 'ng')) return;
+      if (!isStatTask(t)) return; // 🎓ものさしに使う記録の開始時刻なので、教育中/抜取スキップは数えない
+      if ((t.duration || 0) <= 0) return;
+      const ms = toMsAny(t.endTime) || lotMs;
+      if (ms != null && ms > 0 && ms < min) min = ms;
+    });
+  });
+  return isFinite(min) ? min : null;
+};
+// ⚠年間換算の要: 365日窓だと、データがまだ浅い時期(実測: 2026年は5月開始)に「年間◯円」が1/4等に過小化する。
+//   → 直近90日(データがそれより浅ければ有る分だけ)の実測ペース×365で年換算する。登録年間台数(経営分析)があれば最優先(profitRanking側で処理)。
+const goalMeasureWindow = (lots, nowMs) => {
+  const dataStartMs = dataStartMsOf(lots);
+  const start90 = nowMs - 90 * 86400000;
+  const startMs = dataStartMs != null ? Math.max(dataStartMs, start90) : start90;
+  return { startMs, endMs: nowMs, days: Math.max(7, (nowMs - startMs) / 86400000), dataStartMs };
+};
+// 1アプリ分の目標視点サマリ: 既存 profitRanking を「実ペース窓」で呼ぶだけ(数式は重点工程ランキングと同一・検証済み)。
+// excessRatio = 原資÷年間コスト。大きすぎる(>0.3)時は目標時間の未較正を疑う(最終検査で実測57%)。
+const goalAppSummary = (lots, settings, { nowMs, chargePerHour, annualUnitsByModel = null, templates = null, autoLaborPct = 100 }) => {
+  const win = goalMeasureWindow(lots, nowMs);
+  // byTemplate: 型式×テンプレ×工程 単位で集計 (テンプレ概念の無いアプリ=最終検査はtemplateId空で従来と同じ束になる)
+  const ranking = profitRanking(lots, settings, { startMs: win.startMs, endMs: win.endMs, ratePerHour: chargePerHour, lowFreq: 0, annualUnitsByModel, byTemplate: true, templates, autoLaborPct });
+  const excessRatio = ranking.totalCostSec > 0 ? ranking.totalSaveSec / ranking.totalCostSec : 0;
+  return { win, ranking, excessRatio };
+};
+// 改善カルテの金額換算: 1台あたり短縮秒 × 年間台数 × チャージ。
+//   確定(effective) = 凍結before/afterの実測差。実施中 = 目標まで詰めた場合の見込み(原資と同じ式)。時間KPI以外のカルテは金額換算しない(捏造しない)。
+const goalCardYen = (card, rows, annualUnitsByModel, chargePerHour) => {
+  if (card.kpi && card.kpi !== 'time') return { kind: 'nonTime', yen: 0, perUnitSec: 0, units: 0 };
+  // rows は 型式×テンプレ×工程 単位。カルテにテンプレがあればその行だけ、無ければ(旧カルテ)全テンプレ行の合算。
+  const all = rows.filter(r => r.model === card.model && r.stepKey === card.stepKey);
+  const tplRows = card.templateId ? all.filter(r => (r.templateId || '') === card.templateId) : all;
+  const rowsM = tplRows.length ? tplRows : all;
+  const sumUnits = rowsM.reduce((s, r) => s + r.annualUnits, 0);
+  const reg = annualUnitsByModel && Number(annualUnitsByModel[card.model]);
+  // 行の annualUnits は登録台数を按分済み。行が無い時だけ登録台数を直接使う(旧挙動の温存)。
+  const units = sumUnits > 0 ? sumUnits : ((reg > 0) ? reg : 0);
+  if (card.status === 'effective' && card.verdictFrozen && card.baseline) {
+    const b = Number(card.verdictFrozen.beforeVal ?? card.baseline.median) || 0;
+    const a = Number(card.verdictFrozen.afterVal) || 0;
+    const per = Math.max(0, b - a);
+    return { kind: 'fixed', yen: Math.round(units * per / 3600 * chargePerHour), perUnitSec: per, units };
+  }
+  const per = sumUnits > 0 ? rowsM.reduce((s, r) => s + r.annualSaveSec, 0) / sumUnits : 0;
+  return { kind: 'running', yen: Math.round(units * per / 3600 * chargePerHour), perUnitSec: per, units };
+};
+// 貯金箱の集計 (🎯タブと週次ブリーフの両方がこの1関数を使う=数字が食い違わない)。
+const goalBankOf = ({ improvements, prodRows, goldenTotalSaveYen = 0, includeGolden = true, annualUnitsByModel, charge, goldenFixedYen = 0, goldenProvisionalYen = 0, partsTotalSaveYen = 0 }) => {
+  // 確定(verified)=効果あり判定+30日定着確認済みだけ。効果あり直後は暫定(provisional)。定着崩れ(broken)はどちらにも入れない。
+  const fixed = [], provisional = [], broken = [], running = [];
+  (improvements || []).forEach(c => {
+    if (!c || !c.model || !c.stepKey) return;
+    if (c.status === 'effective') {
+      const m = goalCardYen(c, prodRows, annualUnitsByModel, charge);
+      if (m.kind !== 'fixed') return;
+      const stage = cardStageOf(c);
+      if (stage === 'verified') fixed.push({ c, m });
+      else if (stage === 'broken') broken.push({ c, m });
+      else provisional.push({ c, m });
+    }
+    else if (['plan', 'doing', 'measuring'].includes(c.status)) { const m = goalCardYen(c, prodRows, annualUnitsByModel, charge); if (m.kind === 'running') running.push({ c, m }); }
+  });
+  // 進行中カルテと同じ場所の在庫は二重計上しない。テンプレ付きカルテはそのテンプレ行だけ、旧カルテ(テンプレ無し)は全テンプレ行を塞ぐ。
+  const openKeys = new Set(running.map(x => x.c.templateId ? `${x.c.model}||${x.c.templateId}||${x.c.stepKey}` : `${x.c.model}||${x.c.stepKey}`));
+  const rowBlocked = (r) => openKeys.has(`${r.model}||${r.stepKey}`) || openKeys.has(`${r.model}||${r.templateId || ''}||${r.stepKey}`);
+  const stockProdYen = prodRows.filter(r => !rowBlocked(r)).reduce((s, r) => s + r.annualSaveYen, 0);
+  const stockGoldenYen = includeGolden ? goldenTotalSaveYen : 0;
+  // 確定 = 製品のverifiedカルテ + 最終検査のverifiedカルテ。暫定は別バケツ(混ぜて「達成」と呼ばない)。
+  const fixedProdYen = fixed.reduce((s, x) => s + x.m.yen, 0);
+  const provisionalProdYen = provisional.reduce((s, x) => s + x.m.yen, 0);
+  return {
+    fixed, provisional, broken, running, openKeys, rowBlocked,
+    fixedProdYen, fixedGoldenYen: goldenFixedYen,
+    fixedYen: fixedProdYen + (goldenFixedYen || 0),
+    provisionalProdYen, provisionalGoldenYen: goldenProvisionalYen,
+    provisionalYen: provisionalProdYen + (goldenProvisionalYen || 0),
+    runningYen: running.reduce((s, x) => s + x.m.yen, 0),
+    stockProdYen, stockGoldenYen, stockPartsYen: partsTotalSaveYen || 0,
+    stockYen: stockProdYen + stockGoldenYen + (partsTotalSaveYen || 0),
+  };
+};
+// ===== 🔔 改善エンジン: 週次ブリーフ (自動巡回 → 発見 → 催促 → プッシュ) =====
+// 週1回、その週最初にアプリを開いた端末が1回だけ生成する。docId=週の月曜日付で決め打ち
+//   (多端末の二重生成/二重送信を物理的に防ぐ・完了連絡の教訓と同方式)。生成物は共有docなので全端末で同じ物が見える。
+// カルテ化/却下の「人の判断」も brief doc の decisions(map) に共有保存する(端末ローカルに置かない・配列にしない)。
+const goalWeekKey = (nowMs) => {
+  const d = new Date(nowMs);
+  const dow = (d.getDay() + 6) % 7; // 月曜=0
+  const mon = new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow);
+  return `${mon.getFullYear()}-${String(mon.getMonth() + 1).padStart(2, '0')}-${String(mon.getDate()).padStart(2, '0')}`;
+};
+// エンジンの細かい設定(3アプリ共有 goal-shared-v1 の engine map・⚙目標の設定から変更可)。ここは既定値。
+const GOAL_ENGINE_DEFAULTS = {
+  stallDays: 10,        // ⏰催促: カルテがこの日数動かなければ催促
+  mineMinYen: 20000,    // ⛰価値下限: 年この金額未満の原資は出さない(目標に効かないカードで埋めない)
+  mineCount: 3,         // ⛰山の件数: 1回のブリーフに出す原資カードの数
+  breakTolPct: 5,       // 🧱崩れ: 定着後の中央値が+この%を超えて悪化したら警告
+  trendPct: 15,         // 📈兆し: 直近4週が前4週より+この%以上遅くなったら警告
+  commonMinModels: 3,   // 🔗共通ポイント: 何型式以上に共通する工程を対象にするか
+  commonPct: 10,        // 🔗共通ポイント: 「◯%削ったら」の仮定%
+  autoLaborPct: 100,    // 🤖自動運転中の人拘束率%: 100=全額人件費(従来・上限値)。現場実態に合わせて下げると純自動時間が人件費から外れる
+  successRatePct: 70,   // 🧮改善の成功率%: 必要計画在庫=残り÷成功率 (全候補は成功しない前提の割増・仕様2)
+  maxActive: 3,         // 🚦同時進行カルテの上限: 超えたら新規より停滞解消を優先(仕様5.2)
+  briefEnabled: true,   // 📬週次ブリーフの自動生成
+  pushEnabled: true,    // 🔔管理者へのプッシュ
+};
+const goalEngineOf = (goalCfg) => ({ ...GOAL_ENGINE_DEFAULTS, ...((goalCfg && goalCfg.engine) || {}) });
+const goalCardLastMs = (c) => {
+  const logs = Array.isArray(c?.log) ? c.log : [];
+  const lastLog = logs.length ? (logs[logs.length - 1]?.ts || 0) : 0;
+  return Math.max(toMsAny(c?.updatedAt) || 0, lastLog || 0, c?.createdAt || 0);
+};
+// 「何をもって減らすか」の手段ヒント(決定論)。決め手が無い時も「なぜ良いポイントか」を必ず言う(清水の指示:
+//   減らし方が無いなら無いで良いが、"ここは全部に効く良いポイントだから工夫を考えて"と伝わる形にする)。
+const goalMethodHint = ({ stepTitle = '', cv = null }) => {
+  const t = stepTitle || '';
+  if (/測定|自動|分割/.test(t)) return '💡 減らし方: この時間の多くは機械が回っている時間＋待ちの疑いです。作業を急ぐのではなく、待っている間に他の台・他の工程を進める(並行作業)のが本命です。';
+  if (cv != null && cv >= 0.4) return '💡 減らし方: 回によって時間がバラバラ＝やり方が揃っていません。一番速い回のやり方をエース動画に撮って標準にするのが近道です。';
+  if (cv != null && cv > 0) return '💡 減らし方: 毎回同じだけ時間がかかる＝やり方そのものか目標の問題。じっと見る(要素分割)で中身を測るか、治具・置き場・手順の見直しを。';
+  return '💡 決まった手はまだありません。ただし年間の時間が大きい山なので、ここに効く工夫は何でもそのまま利益になります。まず現場で「なぜ時間がかかるか」を1回観察するところから。';
+};
+// ブリーフ本体を組み立てる純関数。findings は fid キーの map。
+const buildWeeklyBrief = ({ nowMs, fy, yearCfg, lots, settings, improvements, golden, parts = null, annualUnitsByModel, templates = null, engine = GOAL_ENGINE_DEFAULTS }) => {
+  const charge = Number(yearCfg.chargePerHour) || GOAL_DEFAULT_YEAR.chargePerHour;
+  const moneyTarget = Number(yearCfg.moneyTargetYen) || 0;
+  const ctt = settings?.customTargetTimes || {};
+  const groups = modelGroupsOf(settings);
+  const sumProd = goalAppSummary(lots, settings, { nowMs, chargePerHour: charge, annualUnitsByModel, templates, autoLaborPct: engine.autoLaborPct });
+  const sumGolden = golden ? goalAppSummary(golden.lots, golden.settings, { nowMs, chargePerHour: charge, autoLaborPct: engine.autoLaborPct }) : null;
+  const goldenSuspect = !!(sumGolden && sumGolden.excessRatio > 0.3);
+  // 最終検査カルテ: verified(30日定着済)だけが確定。効果あり直後は暫定。
+  const gEff = golden ? (golden.improvements || []).filter(c => c && c.status === 'effective' && c.verdictFrozen?.yenPerYear > 0) : [];
+  const goldenFixedYen = gEff.filter(c => (c.verifiedStage || 'provisional') === 'verified').reduce((s, c) => s + c.verdictFrozen.yenPerYear, 0);
+  const goldenProvisionalYen = gEff.filter(c => (c.verifiedStage || 'provisional') === 'provisional').reduce((s, c) => s + c.verdictFrozen.yenPerYear, 0);
+  // 部品検査も実合算(仕様4.6): 表示だけでなく候補在庫に入れる(稼働前=0のまま自動追従)
+  const sumParts = parts ? goalAppSummary(parts.lots, parts.settings, { nowMs, chargePerHour: charge, autoLaborPct: engine.autoLaborPct }) : null;
+  const bank = goalBankOf({ improvements, prodRows: sumProd.ranking.rows, goldenTotalSaveYen: sumGolden ? sumGolden.ranking.totalSaveYen : 0, includeGolden: true, annualUnitsByModel, charge, goldenFixedYen, goldenProvisionalYen, partsTotalSaveYen: sumParts ? sumParts.ranking.totalSaveYen : 0 });
+  const findings = {};
+  // ⏰ 停滞カルテ(催促)
+  (improvements || []).forEach(c => {
+    if (!c || !['plan', 'doing', 'measuring'].includes(c.status)) return;
+    const days = Math.floor((nowMs - goalCardLastMs(c)) / 86400000);
+    if (days < (engine.stallDays || 10)) return;
+    findings[`stall-${c.id}`] = {
+      type: 'stall', model: c.model || '', stepKey: c.stepKey || '', yen: 0,
+      title: `⏰ カルテ「${c.model || ''}${c.templateName ? `〔${c.templateName}〕` : ''} ${c.stepTitle || ''}」が ${days}日 止まっています`,
+      detail: `状態: ${c.status === 'plan' ? '計画のまま' : c.status === 'doing' ? '実施中' : '効果測定中'} / 担当: ${c.owner || '未定'} / 起票: ${new Date(c.createdAt || 0).toLocaleDateString('ja-JP')}。改善PDCAタブで進めるか、やらないなら「効果なし→完了」で閉じてください(放置が一番もったいない)。`,
+    };
+  });
+  // 🧱 維持の見張り(効果あり定着後の悪化=崩れ)
+  (improvements || []).forEach(c => {
+    if (!c || c.status !== 'effective' || !c.verdictFrozen || (c.kpi && c.kpi !== 'time')) return;
+    const after = Number(c.verdictFrozen.afterVal) || 0;
+    if (after <= 0) return;
+    const recent = measureWindow(lots, { model: c.model, stepKey: c.stepKey, templateId: c.templateId || undefined, customTargetTimes: ctt, modelGroups: groups, startMs: nowMs - 28 * 86400000, endMs: nowMs });
+    if (recent.n < 3 || recent.median <= after * (1 + (engine.breakTolPct || 5) / 100)) return;
+    const m = goalCardYen({ ...c, status: 'running' }, sumProd.ranking.rows, annualUnitsByModel, charge);
+    const lossYen = Math.round((m.units || 0) * Math.max(0, recent.median - after) / 3600 * charge);
+    findings[`break-${c.id}`] = {
+      type: 'break', model: c.model || '', stepKey: c.stepKey || '', yen: lossYen,
+      title: `🧱 定着したはずの「${c.model || ''}${c.templateName ? `〔${c.templateName}〕` : ''} ${c.stepTitle || ''}」が崩れています`,
+      detail: `定着時 ${pdcaFmtSec(after)} → 直近4週 ${pdcaFmtSec(recent.median)}（${recent.n}台）。戻りっぱなしだと年 約¥${lossYen.toLocaleString()} を失います。現場で標準が守られているか確認を。`,
+    };
+  });
+  // ⛰ 山(まだカルテ化していない原資の上位・価値下限つき・製品のみ=goldenは目標未較正のため出さない)
+  sumProd.ranking.rows
+    .filter(r => r.annualSaveYen >= (engine.mineMinYen ?? 20000) && !bank.rowBlocked(r))
+    .slice(0, Math.max(1, engine.mineCount || 3))
+    .forEach(r => {
+      findings[`mine-${r.model}||${r.templateId || ''}||${r.stepKey}`] = {
+        type: 'mine', model: r.model, stepKey: r.stepKey, stepTitle: r.stepTitle, yen: r.annualSaveYen,
+        templateId: r.templateId || '', templateName: r.templateName || '',
+        median: r.median, target: r.target, cv: r.cv ?? null,
+        title: `⛰ ${r.model}${r.templateName ? `〔${r.templateName}〕` : ''} ${r.stepTitle}: 効けば 年 約¥${r.annualSaveYen.toLocaleString()}`,
+        detail: `実績中央値 ${pdcaFmtSec(r.median)} / 目標 ${pdcaFmtSec(r.target)}（1台${pdcaFmtSec(r.reductionPerUnit)}の詰め代）× 年${r.annualUnits}台${r.annualUnitsSource === 'estimated' ? '(実測ペース推定)' : '(登録値)'}。`,
+        hint: goalMethodHint({ stepTitle: r.stepTitle, cv: r.cv }),
+      };
+    });
+  // 🔗 全部に効く共通ポイント(工程横断: 3型式以上に共通で年間コストが大きい工程の先頭1件)
+  try {
+    const cross = crossStepRanking(lots, settings, { startMs: sumProd.win.startMs, endMs: nowMs, ratePerHour: charge, reductionPct: (engine.commonPct || 10) / 100, annualUnitsByModel, byTemplate: true, templates, autoLaborPct: engine.autoLaborPct });
+    const g0 = (cross.groups || []).filter(g => g.modelCount >= (engine.commonMinModels || 3))[0];
+    if (g0 && g0.annualCostYen >= (engine.mineMinYen ?? 20000)) {
+      findings[`common-${g0.title}`] = {
+        type: 'common', model: '', stepKey: '', stepTitle: g0.title, yen: g0.saveByPctYen,
+        title: `🔗 「${g0.title}」は${g0.modelCount}型式に共通 — 1つの改善が全部に効く良いポイント`,
+        detail: `全型式合計で年 約${Math.round(g0.annualCostSec / 3600)}時間（¥${g0.annualCostYen.toLocaleString()}）かかっています。ここを${engine.commonPct || 10}%削るだけで年 約¥${g0.saveByPctYen.toLocaleString()}。`,
+        hint: '💡 型式ごとではなく「この工程そのもの」への改善(共通の治具・置き場・手順書・段取りの工夫)を1つ考えれば、全部の型式で時間を稼げます。お金と時間を稼ぐ良いポイントです。',
+      };
+    }
+  } catch { /* 横断計算が落ちてもブリーフ自体は出す */ }
+  // 📈 兆し(コスト上位工程で直近4週が前4週より15%以上悪化)
+  sumProd.ranking.rows
+    .slice()
+    .sort((a, b) => b.annualCostYen - a.annualCostYen)
+    .slice(0, 15)
+    .forEach(r => {
+      const prev = measureWindow(lots, { model: r.model, stepKey: r.stepKey, templateId: r.templateId || undefined, customTargetTimes: ctt, modelGroups: groups, startMs: nowMs - 56 * 86400000, endMs: nowMs - 28 * 86400000 });
+      const cur = measureWindow(lots, { model: r.model, stepKey: r.stepKey, templateId: r.templateId || undefined, customTargetTimes: ctt, modelGroups: groups, startMs: nowMs - 28 * 86400000, endMs: nowMs });
+      if (prev.n < 3 || cur.n < 3 || cur.median <= prev.median * (1 + (engine.trendPct || 15) / 100)) return;
+      if (Object.values(findings).filter(f => f.type === 'trend').length >= 3) return;
+      findings[`trend-${r.model}||${r.templateId || ''}||${r.stepKey}`] = {
+        type: 'trend', model: r.model, stepKey: r.stepKey, templateId: r.templateId || '', templateName: r.templateName || '', yen: 0,
+        title: `📈 ${r.model}${r.templateName ? `〔${r.templateName}〕` : ''} ${r.stepTitle} がじわじわ遅くなっています`,
+        detail: `前4週 ${pdcaFmtSec(prev.median)}（${prev.n}台）→ 直近4週 ${pdcaFmtSec(cur.median)}（${cur.n}台）= +${Math.round((cur.median / Math.max(1, prev.median) - 1) * 100)}%。原因が分かる人に一声かけてください。`,
+      };
+    });
+  // 🥇 今週の最優先(原則1件) + 🧮逆算サマリ (Phase 2: 候補の大量表示でなく、目標不足から今週やる1件を決める)
+  const gap = goalGapOf({
+    moneyTargetYen: moneyTarget, chargePerHour: charge,
+    baselineAnnualLaborSec: (sumProd.ranking.totalCostSec || 0) + (sumGolden ? sumGolden.ranking.totalCostSec : 0) + (sumParts ? sumParts.ranking.totalCostSec : 0),
+    reductionPct: Number(yearCfg.reductionPct) || 10, verifiedFixedYen: bank.fixedYen,
+  });
+  const pfCands = [
+    ...sumProd.ranking.rows.map(r => candidateOf(r, { appId: 'product' })),
+    ...(sumGolden ? sumGolden.ranking.rows.map(r => candidateOf(r, { appId: 'golden', targetSuspect: goldenSuspect })) : []),
+    ...(sumParts ? sumParts.ranking.rows.map(r => candidateOf(r, { appId: 'parts' })) : []),
+  ];
+  const pfOpen = new Set((improvements || []).filter(c => c && ['plan', 'doing', 'measuring'].includes(c.status)).map(c => `product||${c.model}||${c.templateId || ''}||${c.stepKey}`));
+  const pf = planPortfolio({ candidates: pfCands, remainingHours: gap.remainingHours, successRatePct: engine.successRatePct, openKeys: pfOpen });
+  const pick = pf.picked[0] || null;
+  if (pick && pick.appId === 'product') {
+    const row = sumProd.ranking.rows.find(r => r.model === pick.model && (r.templateId || '') === pick.templateId && r.stepKey === pick.stepKey) || null;
+    findings[`pick-${pick.key}`] = {
+      type: 'pick', model: pick.model, stepKey: pick.stepKey, templateId: pick.templateId, templateName: pick.templateName, stepTitle: pick.stepTitle,
+      yen: pick.saveYen, grade: pick.grade, expectedHours: Math.round(pick.expectedHours), median: row?.median || 0, target: row?.target || 0, cv: row?.cv ?? null,
+      title: `🥇 今週の最優先: ${pick.model}${pick.templateName ? `〔${pick.templateName}〕` : ''} ${pick.stepTitle}`,
+      detail: `選定理由: 信頼度${pick.grade}の候補で期待効果が最大（年${Math.round(pick.saveHours)}h＝¥${pick.saveYen.toLocaleString()}・期待値${Math.round(pick.expectedHours)}h）。まだ不明: 遅い原因は未特定・目標時間が現場で妥当かは未確認。次の行動: 担当と期限を決めてカルテ化 → まず現場観察を1回。`,
+      hint: goalMethodHint({ stepTitle: pick.stepTitle, cv: row?.cv }),
+    };
+  }
+  // 🔁 定着崩れ(broken)は「要再計画」として催促に出す (Phase 3: 崩れっぱなしを放置しない)
+  (improvements || []).forEach(c => {
+    if (!c || c.status !== 'effective' || c.verifiedStage !== 'broken') return;
+    findings[`replan-${c.id}`] = {
+      type: 'stall', model: c.model || '', stepKey: c.stepKey || '', yen: 0,
+      title: `🔁 要再計画: 「${c.model || ''}${c.templateName ? `〔${c.templateName}〕` : ''} ${c.stepTitle || ''}」の定着が崩れています`,
+      detail: '30日確認で崩れが確定し、貯金箱の「確定」から外れています。対策をやり直して再度定着確認するか、効果なしで閉じてください。',
+    };
+  });
+  // 🩺 データ品質の注意(捏造しないための正直な注記)
+  const notices = [];
+  const annualInputCount = Object.values(annualUnitsByModel || {}).filter(v => Number(v) > 0).length;
+  if (annualInputCount === 0) notices.push('年間生産台数が未登録(0型式)のため金額は実測ペース推定です。経営分析タブで登録すると精度が上がります。');
+  if (goldenSuspect) notices.push(`最終検査は実績が目標を${Math.round(sumGolden.excessRatio * 100)}%超過(目標未較正の疑い)のため、在庫金額は参考値・発見カードからは除外しています。`);
+  if (golden == null) notices.push('最終検査のデータが読めなかったため、今回は製品のみで集計しています。');
+  const stallN = Object.values(findings).filter(f => f.type === 'stall').length;
+  return {
+    fy: { key: fy.key, label: fy.label }, charge,
+    goal: {
+      moneyTargetYen: moneyTarget,
+      fixedYen: bank.fixedYen, provisionalYen: bank.provisionalYen, runningYen: bank.runningYen, stockYen: bank.stockYen,
+      byApp: {
+        product: { fixedYen: bank.fixedProdYen, provisionalYen: bank.provisionalProdYen, stockYen: bank.stockProdYen },
+        golden: { fixedYen: bank.fixedGoldenYen, provisionalYen: bank.provisionalGoldenYen, stockYen: bank.stockGoldenYen },
+        parts: { fixedYen: 0, provisionalYen: 0, stockYen: bank.stockPartsYen },
+      },
+      remainYen: Math.max(0, moneyTarget - bank.fixedYen),
+      elapsedPct: Math.max(0, Math.min(100, Math.round((nowMs - fy.startMs) / (fy.endMs - fy.startMs) * 100))),
+    },
+    findings, notices,
+    // 🧮 逆算サマリ(週次凍結): 必要削減→残り→必要計画在庫→在庫の充足。golden側の表示にも使う。
+    gap: {
+      requiredHours: Math.round(gap.requiredHours), fixedHours: Math.round(gap.fixedHours), remainingHours: Math.round(gap.remainingHours),
+      pipelineRequiredHours: Math.round(pf.pipelineRequiredHours), usableHours: Math.round(pf.totalUsableHours),
+      sufficient: pf.sufficient, shortfallHours: Math.round(pf.shortfallHours), needsObservationCount: pf.needsObservation.length,
+      successRatePct: Math.round(pf.successRatePct),
+    },
+    counts: { total: Object.keys(findings).length, stall: stallN },
+  };
+};
+// 📬 P136 週次ブリーフの生成(部品版)。組み立て(buildWeeklyBrief)は製品と1文字同じ。
+//   ⚠ブリーフは3アプリ共有の棚(goal-shared-v1/weekly_briefs/週の月曜)に1枚だけ。製品が作る物と同じ中身になるよう、
+//     部品では「製品」の枠に **製品のロット・設定・カルテ** を読み、部品の自分のロットを parts の枠に入れる。
+//   ⚠書き込み・プッシュをするので、部品の設定 weeklyBrief.enabled が true の時だけ動く(既定 OFF)。
+//   ⚠製品のロットを全件ページングで読むので読み取りは重い(週1回・1端末だけ)。
+const WEEKLY_BRIEF_PUSH_OF = (contactSettings) => {
+  const p = (contactSettings && contactSettings.push) || {};
+  return { vapidKey: String(p.vapidKey || '').trim(), workerUrl: String(p.workerUrl || '').trim() };
+};
+const generateWeeklyBrief = async (db, { lots, settings: partsSettings, contactSettings = null, currentUserName = '', force = false, push = false, pushTokens = [] }) => {
+  const nowMs = Date.now();
+  const wk = goalWeekKey(nowMs);
+  const claim = `${currentUserName || 'x'}-${Math.random().toString(36).slice(2, 10)}`;
+  const ex = await DATA(db).getOne(GOAL_SHARED_NS, 'weekly_briefs', wk);
+  if (!force) {
+    if (ex && ex.goal) return { ok: false, reason: 'exists' };
+    await DATA(db).save(GOAL_SHARED_NS, 'weekly_briefs', wk, { weekKey: wk, building: claim, createdAt: nowMs });
+    const chk = (await DATA(db).getOne(GOAL_SHARED_NS, 'weekly_briefs', wk)) || {};
+    if (chk.building !== claim) return { ok: false, reason: 'lost-claim' };
+  }
+  const goalCfg = (await DATA(db).getOne(GOAL_SHARED_NS, 'settings', 'config')) || {};
+  const engine = goalEngineOf(goalCfg);
+  if (!force && !engine.briefEnabled) return { ok: false, reason: 'disabled' };
+  const fy = fiscalYearOf(nowMs, Number(goalCfg.fiscalStartMonth) || 12);
+  // 製品の設定・カルテ・テンプレ(製品が作る時と同じ入力にする)
+  const [settings, improvements, templates] = await Promise.all([
+    DATA(db).getOne(DATA_NS.product, 'settings', 'config').then(s => s || {}),
+    DATA(db).getAll(DATA_NS.product, 'improvements', { map: ROW_DATA_WINS }).catch(() => []),
+    DATA(db).getAll(DATA_NS.product, 'templates', { map: ROW_DATA_WINS }).catch(() => null),
+  ]);
+  const yearCfg = { ...GOAL_DEFAULT_YEAR, chargePerHour: Number(settings?.laborCostPerHour) || GOAL_DEFAULT_YEAR.chargePerHour, ...((goalCfg.years || {})[fy.key] || {}) };
+  let golden = null;
+  try {
+    const [gs, gl, gi] = await Promise.all([
+      DATA(db).getOne(DATA_NS.final, 'settings', 'config'),
+      DATA(db).getAll(DATA_NS.final, 'lots', { map: ROW_DATA_WINS }),
+      DATA(db).getAll(DATA_NS.final, 'improvements', { map: ROW_DATA_WINS }),
+    ]);
+    golden = { settings: gs || {}, lots: gl, improvements: gi };
+  } catch { /* 最終が読めなくても作る */ }
+  const parts = { settings: partsSettings || {}, lots: lots || [] };
+  const annualUnitsByModel = (settings?.annualProduction && settings.annualProduction[fy.key]) || {};
+  const r = await fetchAllPaged(async ({ cursor, pageSize }) => {
+    const page = await DATA(db).getPage(DATA_NS.product, 'lots',
+      { orderBy: [['createdAt', 'desc']], ...(cursor ? { after: cursor } : {}), limit: pageSize },
+      { map: ROW_DATA_WINS });
+    return { items: page.rows, nextCursor: page.cursor };
+  });
+  const brief = buildWeeklyBrief({ nowMs, fy, yearCfg, lots: r.items, settings, improvements, golden, parts, annualUnitsByModel, templates, engine });
+  // ⚠merge では findings の旧キーが残る(部品の窓口に項目名指しの保存が無い)。前の findings の消えたキーを名指しで消す。
+  const staleFindings = {};
+  Object.keys((ex && ex.findings) || {}).forEach(k => { if (!(k in brief.findings)) staleFindings[k] = DATA_DELETE; });
+  await DATA(db).save(GOAL_SHARED_NS, 'weekly_briefs', wk,
+    { weekKey: wk, createdAt: nowMs, createdBy: currentUserName || '', building: DATA_DELETE, ...brief, findings: { ...staleFindings, ...brief.findings } });
+  if (push && !engine.pushEnabled) {
+    try { await DATA(db).save(GOAL_SHARED_NS, 'weekly_briefs', wk, { push: { sentAt: null, reason: '設定でプッシュOFF' } }); } catch { /* noop */ }
+  } else if (push) {
+    try {
+      const cfg = WEEKLY_BRIEF_PUSH_OF(contactSettings);
+      const targets = (pushTokens || []).filter(t => t && t.token && t.enabled !== false && t.admin === true);
+      if (cfg.vapidKey && cfg.workerUrl && targets.length) {
+        const man = (n) => `${Math.round(n / 10000)}万`;
+        await sendPushViaWorker(cfg.workerUrl, {
+          tokens: [...new Set(targets.map(t => t.token))],
+          title: `🎯 今週の工場: 目標まであと ¥${man(brief.goal.remainYen)}`,
+          body: `発見 ${brief.counts.total}件(うち催促 ${brief.counts.stall}件)。製品検査の 分析 → 🎯年間目標 で確認`,
+          link: undefined, tag: `weekly-brief-${wk}`,
+        });
+        await DATA(db).save(GOAL_SHARED_NS, 'weekly_briefs', wk, { push: { sentAt: Date.now(), to: targets.length } });
+      } else {
+        await DATA(db).save(GOAL_SHARED_NS, 'weekly_briefs', wk, { push: { sentAt: null, reason: !cfg.workerUrl ? 'push未設定' : '管理者端末の登録なし' } });
+      }
+    } catch (e) { console.warn('週次ブリーフのプッシュに失敗(ブリーフ自体は作成済み)', e); }
+  }
+  return { ok: true, weekKey: wk };
+};
+
 // 品目コード×テンプレ×工程 の列挙 (🎯目標レイヤー用)。実測: 68品目コード中23品目コードが複数テンプレで流れており、
 // 品目コード×工程だけで束ねると検査種類の違う作業が混ざる(混在の実害16件・中央値差 最大15.6倍)。
 const enumerateModelTplSteps = (lots) => {
@@ -32916,6 +33290,22 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    // 📨 工程連絡(P060/P070/P126/P140/P142/P162/P163)。状態・購読・見回りは src/contact/ContactHub.jsx の1か所。
    //   ⚠ 既定: 部品では連絡は OFF(マスタ設定→工程連絡で入れる)。相手(組立・機械加工)が部品の棚を読む画面がまだ無いため。
    const contactHub = useContactHub({ db, user, DATA, APP_DATA_ID, settings, saveSettings, saveData, deleteData, lots, lotsLoaded, currentUserName, activeTab, setActiveTab, contactShared, templates, setErrorMsg, calculateLotEstimatedTime, cleanUndefined });
+   // 📬 P136 週次ブリーフの自動生成(製品と同じ: 週の最初に開いた端末が1回だけ・起動8秒後)。
+   //   ⚠書き込み・プッシュをするので 設定 weeklyBrief.enabled が true の時だけ(既定 OFF・連絡設定タブで切替)。
+   const weeklyBriefTriedRef = useRef(false);
+   const weeklyBriefOn = settings?.weeklyBrief?.enabled === true;
+   useEffect(() => {
+     if (!weeklyBriefOn || weeklyBriefTriedRef.current) return;
+     if (!db || !lots.length || !settings || !Object.keys(settings).length) return;
+     const t = setTimeout(() => {
+       if (weeklyBriefTriedRef.current) return;
+       if (quotaBlockRef.current) return; // 🚨読み取りの上限に当たっている間は走らせない(製品 2026-08-18 と同じ)
+       weeklyBriefTriedRef.current = true;
+       generateWeeklyBrief(db, { lots, settings, contactSettings: contactHub.contactSettings, currentUserName, push: true, pushTokens: contactHub.pushTokens })
+         .catch(e => console.warn('週次ブリーフ自動生成に失敗', e));
+     }, 8000);
+     return () => clearTimeout(t);
+   }, [weeklyBriefOn, db, lots, settings, contactHub.pushTokens, currentUserName]); // eslint-disable-line react-hooks/exhaustive-deps
    const [showIncoming, setShowIncoming] = useState(false); // 🚚 これから来るもの(到着予定の一覧)
 
    // 📝🖼 メモ・お知らせの写真(note_images)を1枚だけ読む(2026-08-31 SS-701)。
@@ -35753,6 +36143,10 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                <label className="flex items-center gap-2 font-bold text-slate-700">
                  <input type="checkbox" className="w-5 h-5" disabled={settings?.contactFeature?.enabled !== true} checked={settings?.contactFeature?.repairOnNg === true} onChange={e => saveSettings({ contactFeature: { ...(settings?.contactFeature || {}), repairOnNg: e.target.checked } })} />
                  NG の理由を押した瞬間に「修正のお願い」の下書きを開く（既定: OFF）
+               </label>
+               <label className="flex items-center gap-2 font-bold text-slate-700">
+                 <input type="checkbox" className="w-5 h-5" checked={settings?.weeklyBrief?.enabled === true} onChange={e => saveSettings({ weeklyBrief: { ...(settings?.weeklyBrief || {}), enabled: e.target.checked } })} />
+                 📬 週次ブリーフ(年間目標の今週の発見)をこの部品検査でも作り、管理者へプッシュする（既定: OFF・製品のロットを全件読む）
                </label>
                <div className="text-xs text-slate-500">既定は OFF です。相手（組立・機械加工）が部品検査の連絡を受け取る画面は、連絡ポータル（この住所の後ろに <b>?renraku=1</b>）です。宛先の班は製品検査・最終検査と共通です。</div>
                <InstallAppButton />
