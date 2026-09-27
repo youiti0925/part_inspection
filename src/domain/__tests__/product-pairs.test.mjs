@@ -22,6 +22,29 @@ const md5Lf = (p) => crypto.createHash('md5')
 
 // { file: 部品の src/ からの道, product: 製品の写し元, md5: LF に揃えた md5 }
 const PAIRS = [
+  // E42/E43/P165: 手本動画・編集室・作業標準・スマホのカメラ を1バイト同じで写した
+  { file: 'VideoEditor.jsx', product: 'product-inspection-app/src/VideoEditor.jsx', md5: 'ad79605f8f12af48adbe9cf390cbb3fe' },
+  { file: 'VideoLibrary.jsx', product: 'product-inspection-app/src/VideoLibrary.jsx', md5: '4935929397441a3c035a9102972b607c' },
+  { file: 'LiveCamera.jsx', product: 'product-inspection-app/src/LiveCamera.jsx', md5: 'e8ab345d3093db282208e5223ba1095a' },
+  { file: 'videoEngine.js', product: 'product-inspection-app/src/videoEngine.js', md5: 'd23b6ffac3e4f807f6dbb76337ea8628' },
+  { file: 'videoExport.js', product: 'product-inspection-app/src/videoExport.js', md5: 'f90ab6d6e229a099be219d3de979d563' },
+  { file: 'videoTranscribe.js', product: 'product-inspection-app/src/videoTranscribe.js', md5: 'f7169c4971e8339e3b8ddfd3faca0c8b' },
+  { file: 'workStandardExport.js', product: 'product-inspection-app/src/workStandardExport.js', md5: 'bd70363b580bd2b446cbdf2ff5068f40' },
+  { file: 'domain/editHistory.js', product: 'product-inspection-app/src/domain/editHistory.js', md5: '343ff35d994d4e0606df0348e8697f09' },
+  { file: 'domain/subtitles.js', product: 'product-inspection-app/src/domain/subtitles.js', md5: 'e7292905aba019f0f369530fc8b0f774' },
+  { file: 'domain/voiceOver.js', product: 'product-inspection-app/src/domain/voiceOver.js', md5: 'dc14bcb4bcd6491d6fa210e5f2f16b17' },
+  { file: 'domain/videoOverlay.js', product: 'product-inspection-app/src/domain/videoOverlay.js', md5: '6c2bbc6a055f604e4003f1b40addc06e' },
+  { file: 'domain/videoPlan.js', product: 'product-inspection-app/src/domain/videoPlan.js', md5: '8c01a665b2b6d9afc2d44f0055502435' },
+  { file: 'domain/videoProject.js', product: 'product-inspection-app/src/domain/videoProject.js', md5: 'eb182a9c6b8011c33e6253c293d0bd43' },
+  { file: 'domain/videoRecipe.js', product: 'product-inspection-app/src/domain/videoRecipe.js', md5: '8d09e8b7065ab7e56339086788a2d010' },
+  { file: 'domain/videoRotation.js', product: 'product-inspection-app/src/domain/videoRotation.js', md5: '138c9b6ff64720ad552bed47ae4f1746' },
+  { file: 'domain/videoWatchLog.js', product: 'product-inspection-app/src/domain/videoWatchLog.js', md5: '36e9f838964c6be2f8a71efe65315e00' },
+  { file: 'domain/videoWords.js', product: 'product-inspection-app/src/domain/videoWords.js', md5: 'bc3c166f05508912f33905dbbb46b8fc' },
+  { file: 'domain/workStandardDoc.js', product: 'product-inspection-app/src/domain/workStandardDoc.js', md5: '7fd6052ef1cf6cfc0502eba621ee9b60' },
+  { file: 'domain/workStandardLibrary.js', product: 'product-inspection-app/src/domain/workStandardLibrary.js', md5: '27c01b616019ba9c881065ec11a340a5' },
+  { file: 'domain/workStandardPrint.js', product: 'product-inspection-app/src/domain/workStandardPrint.js', md5: '499ba6b25cd23754a474d56fb98d63a6' },
+  { file: 'trainingRecorder.js', product: 'product-inspection-app/src/trainingRecorder.js', md5: '6af8cf249edf4248bafe8f76127e3cd0' },
+  { file: 'domain/trainingChapters.js', product: 'product-inspection-app/src/domain/trainingChapters.js', md5: 'd9ce2b00ec529d9663011ce60604b3c7' },
   // P140/P142: 製品の push.js・到着の確かめ(封印中)・これから来るもの の画面を1バイト同じで写した
   { file: 'push.js', product: 'product-inspection-app/src/push.js', md5: 'b73aa4cbc194b25876cb50281b00ab54' },
   { file: 'ArrivalCheck.jsx', product: 'product-inspection-app/src/ArrivalCheck.jsx', md5: 'c8817e14ac017653545b7d3089857303' },

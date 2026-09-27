@@ -309,6 +309,12 @@ import { IncomingArrivalsPanel } from './IncomingArrivals.jsx';
 import { DriveFileViewer } from './DriveFileViewer.jsx';
 import RotaryMeasurementsPanel from './RotaryMeasurements.jsx';
 import { MessageCircle, Truck as TruckIcon } from 'lucide-react';
+// 🎬 E42/E43/P165(2026-09-27 製品から): 動画タブ・編集室・手本を見る・📱スマホのカメラ・動画から作った作業標準
+import { Film as FilmIcon } from 'lucide-react';
+import { PartsVideoHub, PartsLiveCameraPage } from './PartsVideoHub.jsx';
+import { WorkStandardsLibraryModal as WorkStandardsLibraryModalV, WorkStandardEditModal as WorkStandardEditModalV } from './WorkStandardModals.jsx';
+import { makeRoomApi } from './liveRooms.js';
+import { codeFromUrl } from './domain/liveSession.js';
 import { NOTICE_COL, noticeConfigOf } from './domain/appNotices.js';
 
 // --- 一度だけ実行: 管理者未承認の厳密モード(localStorageの古い残骸)を全消去して既定OFFに戻す ---
@@ -2602,6 +2608,8 @@ const DriveDocsModal = ({ title, sections, onClose }) => {
 // ヘッダーを隠すだけ(初期タブは元々 main=現場マップ)。画面の中身・見た目・動きは通常と完全に同一で、
 // 通常アクセス(パラメータ無し)には一切影響しない。
 const EMBED_MAP = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('embed') === 'map';
+// 📱 P165 撮影用(?live=合言葉): PCのQRを読んだスマホがここに来る。検査アプリ本体は描かず、何も購読しない(製品と同じ)。
+const LIVE_CODE = typeof window !== 'undefined' ? codeFromUrl(window.location.href) : '';
 
 // ロットカード表示項目のデフォルト (全てON)
 // settings.lotCardDisplay にユーザ設定を保存し、必要なら個別にOFFできる
@@ -31747,7 +31755,9 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    const [announcements, setAnnouncements] = useState([]);
 
    // State: Indirect Work (間接作業)
-   const [observationPlans, setObservationPlans] = useState([]); // じっと見るモード=要素作業分割の観測プラン (observationPlans コレクション)
+   // 🎬 E42 手本動画の見せ方(video_recipes コレクション, docId=DriveのfileId)。動画タブ・編集室が使う(製品と同じく常に購読)。
+  const [videoRecipes, setVideoRecipes] = useState([]);
+  const [observationPlans, setObservationPlans] = useState([]); // じっと見るモード=要素作業分割の観測プラン (observationPlans コレクション)
    const [showIndirectModal, setShowIndirectModal] = useState(false);
    const [showDailySummary, setShowDailySummary] = useState(false);
    const [showShiftHandover, setShowShiftHandover] = useState(false);
@@ -31873,6 +31883,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      } catch (e) { console.warn('資料の中身の掃除に失敗', e); }
    };
  
+   // 📱 P165 スマホのカメラをつなぐ「部屋」の窓口。⚠必ず useMemo で1個だけ(描き直すたびに作ると部屋を作り直し続ける)。
+   const liveRoomApi = useMemo(() => (db ? makeRoomApi(DATA(db), APP_DATA_ID) : null), [db]);
    // State: Template Editor
    const [editingTemplate, setEditingTemplate] = useState(null);
  
@@ -32010,6 +32022,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    useEffect(() => {
      if (!user || !db) return;
      // 保管庫の窓口(Phase M1)。中身は Firebase のままだが、置き場所の決定はここへ集約した。
+     if (LIVE_CODE) return;   // 📱 P165 撮影用の画面は何も購読しない(製品と同じ)
      const P = DATA(db);
      // 🚨 枠切れの後、この effect が張り直されても **もう読みに行かない**(枠を更に食う)。
      if (quotaBlockRef.current) return;
@@ -32050,6 +32063,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      const watch = (colName, cb) => P.watchCollection(APP_DATA_ID, colName, (rows, snap) => { meter(colName, snap); readOk(colName); cb(rows, snap); }, { onError: readFailed(colName) });
 
      unsubs = [
+       watch('video_recipes', (rows) => setVideoRecipes(rows)), // 🎬 E42
        P.watchCollection(APP_DATA_ID, 'templates', (rows, snap) => { meter('templates', snap); readOk('templates'); refreshStepMasterIndex(rows); setTemplates(rows); }, { includeMetadataChanges: true, onError: readFailed('templates') }),
        P.watchCollection(APP_DATA_ID, 'workers', (rows, snap) => { meter('workers', snap); readOk('workers'); setWorkers(rows); }, { includeMetadataChanges: true, onError: readFailed('workers') }),
        // ⚠notes / announcements はヘッダーのバッジ(未読件数)で **常に** 使う。外すと数字が黙って0になる。
@@ -35157,6 +35171,11 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      }
    };
  
+   // 📱 P165 撮影用(?live=合言葉)。⚠user(匿名ログイン)が揃うまで出さない(揃う前に部屋を読むと「権限がありません」)。
+   if (LIVE_CODE) {
+     if (!liveRoomApi || !user) return <div className="fixed inset-0 bg-black text-white flex items-center justify-center text-sm">つないでいます…</div>;
+     return <PartsLiveCameraPage roomApi={liveRoomApi} code={LIVE_CODE} onClose={() => { try { window.location.href = window.location.pathname; } catch { /* noop */ } }} />;
+   }
    // 📨 P141 連絡ポータル(?renraku=1): 前後工程(組立・機械加工)用の限定ビュー。検査の画面は一切出さない(製品と同じ)。
    //   ⚠ 既定: 部品の制御装置は無いので出さない。連絡の入切(マスタ設定)に関係なく、ポータルでは連絡を読む。
    if (RENRAKU_PORTAL) {
@@ -35475,6 +35494,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                 { id: 'progress', label: '全体進捗', icon: Activity },
                 { id: 'inspection', label: '検査リスト', icon: ListChecks },
                 { id: 'analysis', label: '分析', icon: BarChart3 },
+                { id: 'videos', label: '動画', icon: FilmIcon }, // 🎬 E42 動画タブ(棚・編集室・📱スマホで撮る)
                 // 📨 P070 工程連絡は最上位タブ(分析の横)。マスタ設定→工程連絡で入切
                 ...(contactHub.contactFeatureOn ? [{ id: 'contact', label: '連絡', icon: MessageCircle }] : []),
                 { id: 'templates', label: 'マスタ設定', icon: Settings },
@@ -35617,6 +35637,9 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
          {/* 📒 ヘッダーの☰から開く台帳(読み終わるまで出さない=0件と見分けが付かないため) */}
          {showQuickLedger && minorReportsReady && <MinorReportLedgerModal reports={minorReports} lots={lots} workers={workers} currentUserName={currentUserName} saveData={saveData} deleteData={deleteData} itemMaster={settings?.itemMaster || {}} onClose={() => setShowQuickLedger(false)} />}
+         {/* 🎬 E42/P165 動画タブ。⚠タブの外でも描いておく(📱の画面を小さくして検査へ戻れるように)。棚は動画タブの時だけ。 */}
+         <PartsVideoHub active={activeTab === 'videos'} roomApi={liveRoomApi} recipes={videoRecipes} templates={templates} lots={lots} executionLotId={executionLotId}
+           saveData={saveData} deleteData={deleteData} onSaveWorkStandard={saveWorkStandard} currentUserName={currentUserName} />
          {activeTab === 'analysis' && analysisDataReady && !quotaBlock && <AnalysisView lots={lots} logs={logs} workers={workers} saveData={saveData} deleteData={deleteData} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} minorReports={minorReports} indirectWork={indirectWork} improvements={improvementCards} observationPlans={observationPlans} templates={templates} notes={notes} announcements={announcements} strictModeHistory={strictModeHistory} onRestore={restoreAllFromBackup} db={db} anomalies={anomalies} onGoOptimize={(view) => { setOptimizeView(view); setActiveTab('optimize'); }} wide={wideNow} onToggleWide={toggleWideMode} parentTabs={renderTabGroupButtons(TAB_GROUPS.analysis)} />}
          {activeTab === 'optimize' && (
            <div className="h-full flex flex-col gap-3">
@@ -35955,8 +35978,9 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          />
        )}
        {showWorkStandardsLib && (
-         <WorkStandardsLibraryModal
-           standards={workStandards}
+         <WorkStandardsLibraryModalV /* 🎬 E43 動画から作った作業標準も並ぶ版(製品と同じ) */
+           standards={workStandards} /* 📄 P061: 外へ逃がした資料PDFを戻した一覧 */
+           onSave={saveWorkStandard}
            onClose={() => setShowWorkStandardsLib(false)}
            onEdit={(item) => setEditingWorkStandard(item || 'NEW')}
            allowManage={true}
@@ -35964,7 +35988,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          />
        )}
        {editingWorkStandard && (
-         <WorkStandardEditModal
+         <WorkStandardEditModalV
            editingItem={editingWorkStandard === 'NEW' ? null : editingWorkStandard}
            onClose={() => setEditingWorkStandard(null)}
            onSave={saveWorkStandard}
