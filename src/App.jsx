@@ -112,6 +112,7 @@ import { isAutoStep as isAutoStepShared, buildStepMasterIndex } from './domain/w
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
 import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGuide.js';
 import { setEstimatedSession } from './domain/workSessions.js';
+import { taskTimeQualityOf, hasUsableInterval } from './domain/taskTimeQuality.js';
 import { intKeyOf, withInterruptionLog, intWritePatch, intDeletePatch, stopIntEntry, mergePendingInts, dropSettledPending } from './domain/interruptionLog.js';
 // 🚶 掛け持ち案内の枠(製品検査 src/workscreen/JuggleGuide.jsx と md5 一致の写し。描くだけ)
 import { JuggleGuide } from './workscreen/JuggleGuide.jsx';
@@ -20256,6 +20257,22 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
              // 自動工程の判定: executionMode='batch' or title に '自動' を含む
              const isAutoStep = (step) => step?.executionMode === 'batch' || step?.title?.includes('自動');
 
+             // === 記録の質の件数(taskTimeQualityOf を画面へ・製品と同じ数え方) ===
+             //   確定=作業区間あり / 推定=開始〜終了だけ(時間の手入力もここ) / 低信頼=記録が矛盾 / 記録不足=時刻なし
+             //   ⚠件数を数えるだけ。並列作業率の式は変えない。
+             const timeQualityStats = (() => {
+               const c = { confirmed: 0, estimated: 0, unreliable: 0, missing: 0, usable: 0, total: 0 };
+               completedLots.forEach(lot => {
+                 Object.values(lot.tasks || {}).forEach(t => {
+                   if (!t || (t.status !== 'completed' && t.status !== 'ng')) return;
+                   c.total++;
+                   c[taskTimeQualityOf(t).quality]++;
+                   if (hasUsableInterval(t)) c.usable++;
+                 });
+               });
+               return c;
+             })();
+
              // === 1) 工程別の全社ベースタイム (平均) と最速タイムを事前算出 ===
              const stepGlobalTimes = {}; // stepKey → { times: [], targetTime }
              completedLots.forEach(lot => {
@@ -20451,6 +20468,20 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
 
              return (
                <div className="space-y-6">
+                 {/* 📋 記録の質 — 実測(作業区間)と推定を混ぜないための件数(製品と同じ帯) */}
+                 <div className="bg-indigo-50 border border-indigo-300 rounded-xl p-3 text-xs" data-time-quality-band>
+                   <div className="font-bold text-indigo-800 mb-1">📋 この期間の記録の質（完了タスク {timeQualityStats.total.toLocaleString()} 件）</div>
+                   <div className="flex flex-wrap gap-1.5">
+                     <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold">確定 {timeQualityStats.confirmed.toLocaleString()}</span>
+                     <span className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 font-bold">推定 {timeQualityStats.estimated.toLocaleString()}</span>
+                     <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 font-bold">低信頼 {timeQualityStats.unreliable.toLocaleString()}</span>
+                     <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 font-bold">記録不足 {timeQualityStats.missing.toLocaleString()}</span>
+                   </div>
+                   <div className="text-slate-600 mt-1 leading-relaxed">
+                     部品検査は まだ作業の打刻の区間を残していないので、<b>確定は当面 0件</b>です。下の数字は<b>推定</b>（開始〜終了からの再構成・時間の手入力を含む）です。
+                     <b>実測と推定は精度が違うので合計しません。</b>
+                   </div>
+                 </div>
                  {/* 概要 (ベンチマーク) */}
                  <div className="bg-gradient-to-br from-slate-50 to-slate-100 border-2 border-slate-200 rounded-xl p-4">
                    <div className="text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><Users className="w-4 h-4"/> 全体ベンチマーク (期間内・完了ロット {completedLots.length}件)</div>
