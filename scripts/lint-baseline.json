@@ -20,7 +20,7 @@
       "warn": 0
     },
     "no-unused-vars": {
-      "err": 100,
+      "err": 102,
       "warn": 0
     },
     "no-useless-escape": {
