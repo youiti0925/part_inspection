@@ -571,6 +571,8 @@ const toMsAny = (raw) => {
 // CSVセルのエスケープ。カンマ/引用符/改行を含む値(品名・指図名のユーザー入力や toLocaleString のカンマ)を
 // 正しく引用し、列ずれ・破損を防ぐ。RFC4180準拠(" は "" にエスケープ)。
 const csvCell = (v) => { const s = String(v ?? ''); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+// P083: 印刷窓へ document.write する時の文字の逃がし(製品 App.jsx:1454 と同じ)
+const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const PDCA_MIN_N = 5;            // 効果判定に必要な片側の最小標本数
 const PDCA_THRESHOLD_PCT = 5;    // 改善/悪化と判定する変化率しきい値(%)
 const PDCA_STALE_DAYS = 14;      // 対策実施から効果が出ない/悪化を「放置」と見なす日数
@@ -21098,22 +21100,22 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
         }
         const target = step.targetTime || 0;
         const rate = target > 0 ? Math.round((target / Math.max(duration, 1)) * 100) : '-';
-        return `<tr><td style="padding:4px 8px;border:1px solid #ddd;text-align:center;font-size:11px">${idx+1}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${step.title}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${target > 0 ? formatSec(target) : '-'}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${formatSec(duration)}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:center;font-size:11px;${typeof rate === 'number' && rate < 80 ? 'color:red;font-weight:bold' : ''}">${typeof rate === 'number' ? rate + '%' : rate}</td></tr>`;
+        return `<tr><td style="padding:4px 8px;border:1px solid #ddd;text-align:center;font-size:11px">${idx+1}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${escapeHtml(step.title)}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${target > 0 ? formatSec(target) : '-'}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${formatSec(duration)}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:center;font-size:11px;${typeof rate === 'number' && rate < 80 ? 'color:red;font-weight:bold' : ''}">${typeof rate === 'number' ? rate + '%' : rate}</td></tr>`;
       }).join('');
 
       const defects = (lot.interruptions || []).filter(i => i.type === 'defect');
-      const defectRows = defects.length > 0 ? defects.map(d => `<tr><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${d.label || '-'}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${d.causeProcess || '-'}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${d.stepInfo?.title || '-'}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${d.duration || 0}s</td></tr>`).join('') : '<tr><td colspan="4" style="padding:8px;text-align:center;color:#999;font-size:11px">なし</td></tr>';
+      const defectRows = defects.length > 0 ? defects.map(d => `<tr><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${escapeHtml(d.label || '-')}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${escapeHtml(d.causeProcess || '-')}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${escapeHtml(d.stepInfo?.title || '-')}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${d.duration || 0}s</td></tr>`).join('') : '<tr><td colspan="4" style="padding:8px;text-align:center;color:#999;font-size:11px">なし</td></tr>';
 
       return `
         <div style="page-break-inside:avoid;margin-bottom:24px;border:1px solid #ccc;border-radius:8px;padding:16px">
           <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-            <div><strong style="font-size:16px">${lot.workNumber || lot.id}</strong> <span style="color:#666">${lot.model || ''}</span></div>
+            <div><strong style="font-size:16px">${escapeHtml(lot.workNumber || lot.id)}</strong> <span style="color:#666">${escapeHtml(lot.model || '')}</span></div>
             <div style="color:#666;font-size:12px">${lot.completedAt ? new Date(lot.completedAt).toLocaleString('ja-JP') : ''}</div>
           </div>
           <div style="display:flex;gap:24px;margin-bottom:12px;font-size:12px;color:#555">
-            <div>品目コード: <strong>${lot.model || '-'}</strong></div>
+            <div>品目コード: <strong>${escapeHtml(lot.model || '-')}</strong></div>
             <div>台数: <strong>${lot.quantity || 1}</strong></div>
-            <div>作業者: <strong>${worker?.name || '未割当'}</strong></div>
+            <div>作業者: <strong>${escapeHtml(worker?.name || '未割当')}</strong></div>
             <div>合計: <strong>${formatSec(totalTime)}</strong></div>
           </div>
           <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
@@ -25023,7 +25025,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
     if (!pw) { alert("ポップアップがブロックされました。"); return; }
     const content = document.getElementById('report-preview-content');
     if (!content) { pw.close(); return; }
-    const title = `${lot.orderNo || '不明'}_${lot.model || '不明'}`;
+    const title = escapeHtml(`${lot.orderNo || '不明'}_${lot.model || '不明'}`);
     const appStyles = collectAppStyles();
     pw.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><title>${title}</title>${appStyles}<style>${PRINT_STYLES} body { font-family: sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .border, .border-b, .border-t, .border-l, .border-r { border-color: black !important; }</style></head><body>${content.outerHTML}</body></html>`);
     pw.document.close();
