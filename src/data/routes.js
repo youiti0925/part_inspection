@@ -171,7 +171,7 @@ export const COLLECTION_APPS = Object.freeze({
   help_images: ['final', 'product', 'parts', 'overview'],
   // 📝🖼 メモ・お知らせの写真の別置き(2026-08-31)。今は部品検査だけ(他アプリは写真の入力が無い/未移行)。
   note_images: ['parts'],
-  work_standard_files: ['final', 'product'],
+  work_standard_files: ['final', 'product', 'parts'],
   accessory_scan_images: ['final'],
   video_recipes: ['final', 'product'],
   improvements: ['final', 'product', 'parts', 'overview'],

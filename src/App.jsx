@@ -119,6 +119,8 @@ import {
 } from './domain/readBudget.js';
 // P062/P114 上限に届いた時の札と、過去の取り寄せの帯
 import LotsReadNotice from './LotsReadNotice.jsx';
+// 📄 P061 資料PDFを設定の箱から外へ(製品 src/domain/fileOffload.js を1バイト同じで写した)
+import { WS_FILE_COLLECTION, hydrateWorkStandards, dehydrateWorkStandards, referencedWsFileIds } from './domain/fileOffload.js';
 // 📝🖼 メモ・お知らせの写真の別置き(2026-08-31 SS-701)。写真は note_images(1件=1枚)へ、
 //   本体には札(imageRef)だけ。古い doc の inline 写真は displaySrcOf がそのまま出す。
 import {
@@ -18508,12 +18510,19 @@ const AuditBackupPanel = ({ lots = [], templates = [], workers = [], settings = 
     // 🚨写真を読んでから書き出す(読めなくても控えは作る。件数は必ず meta に残す)。
     const imgIds = noteImageRefIds(notes, announcements);
     const imgs = await fetchNoteImages(imgIds);
-    const cnts = { ...counts, 'メモ/お知らせの写真': imgs.rows.length };
-    const data = { meta: { app: 'parts-inspection', exportedAt: new Date().toISOString(), by: currentUserName || '', counts: cnts, noteImagesExpected: imgIds.length, noteImagesMissing: imgs.missing }, settings, templates, workers, indirectWork, improvements, observationPlans, lots, notes, announcements, logs, note_images: imgs.rows };
+    // 📄 P061 資料PDFの実体(work_standard_files)。札が指している分だけ1件ずつ読む(全件読みを増やさない)。
+    const wsIds = [...referencedWsFileIds((settings && settings.workStandards) || [])];
+    const wsRows = [], wsMissing = [];
+    for (const id of wsIds) {
+      try { const d = await DATA(db).getOne(APP_DATA_ID, WS_FILE_COLLECTION, id); if (d && d.data) wsRows.push({ id, ...d }); else wsMissing.push(id); } catch { wsMissing.push(id); }
+    }
+    const cnts = { ...counts, 'メモ/お知らせの写真': imgs.rows.length, '資料PDF': wsRows.length };
+    const data = { meta: { app: 'parts-inspection', exportedAt: new Date().toISOString(), by: currentUserName || '', counts: cnts, noteImagesExpected: imgIds.length, noteImagesMissing: imgs.missing, workStandardFilesMissing: wsMissing }, settings, templates, workers, indirectWork, improvements, observationPlans, lots, notes, announcements, logs, note_images: imgs.rows, work_standard_files: wsRows };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url;
     a.download = `バックアップ_部品検査_${new Date().toISOString().slice(0, 10)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     // 🚨欠けたまま「取れました」と言わない。
+    if (wsMissing.length) alert(`🚨 資料PDF ${wsMissing.length}件が読めませんでした。この控えから戻すと、その資料は開けません。`);
     if (imgs.missing.length) alert(`🚨 メモ/お知らせの写真 ${imgs.missing.length}枚が読めませんでした。\nこの控えから戻すと、その ${imgs.missing.length}件は写真が出ません。\n（控えのファイル自体は保存しています）`);
     return { noteImages: imgs.rows.length, noteImagesMissing: imgs.missing.length };
   };
@@ -31309,6 +31318,23 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
    const [showWorkStandardsLib, setShowWorkStandardsLib] = useState(false);
    const [editingWorkStandard, setEditingWorkStandard] = useState(null); // null = 編集モーダル非表示, 'NEW' = 新規, object = 既存編集
+   // 📄 P061 資料PDFの中身(work_standard_files)。設定には札しか入っていないので、
+   //   資料を開く時にだけ読む(製品 App.jsx と同じ形)。
+   const [wsFiles, setWsFiles] = useState({});
+   const wsFilesLoading = useRef(false);
+   const ensureWorkStandardFiles = useCallback(async () => {
+     if (!user || !db || wsFilesLoading.current) return;
+     wsFilesLoading.current = true;
+     try {
+       const rows = await DATA(db).getAll(APP_DATA_ID, WS_FILE_COLLECTION);
+       const m = {};
+       rows.forEach(r => { if (r && r.data) m[r.id] = r.data; });
+       setWsFiles(m);
+     } catch (e) { console.warn('資料の読み込みに失敗', e); wsFilesLoading.current = false; }
+   }, [user, db]);
+   // 画面へ渡すのは必ず中身に戻した配列。⚠まだ読めていない札は札のまま残る(空にすると資料が永久に消える)
+   const workStandards = useMemo(() => hydrateWorkStandards(settings.workStandards || [], wsFiles), [settings, wsFiles]);
+   useEffect(() => { if (showWorkStandardsLib || editingWorkStandard) ensureWorkStandardFiles(); }, [showWorkStandardsLib, editingWorkStandard, ensureWorkStandardFiles]);
    // 作業標準の保存・削除ヘルパー (settings.workStandards 配列を更新)
    const saveWorkStandard = async (item) => {
      const list = [...(settings.workStandards || [])];
@@ -31326,8 +31352,16 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      setEditingWorkStandard(null);
    };
    const deleteWorkStandard = async (id) => {
-     const list = (settings.workStandards || []).filter(s => s.id !== id);
+     const before = settings.workStandards || [];
+     const list = before.filter(s => s.id !== id);
+     // ⚠設定を先に更新する。中身を先に消してこちらが失敗すると「一覧に残っているのに開けない資料」になる。
      await saveSettings({ workStandards: list });
+     // 📄 P061 要らなくなった資料の中身を掃除(製品と同じ)
+     try {
+       const stillUsed = referencedWsFileIds(list);
+       const gone = [...referencedWsFileIds(before)].filter(f => !stillUsed.has(f));
+       for (const fid of gone) await deleteData(WS_FILE_COLLECTION, fid);
+     } catch (e) { console.warn('資料の中身の掃除に失敗', e); }
    };
  
    // State: Template Editor
@@ -32139,6 +32173,20 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        setErrorMsg(msg);
        throw new Error(msg);
      }
+     // 📄 P061 資料PDFは設定の箱に入れない。中身は work_standard_files へ逃がし、設定には札だけ置く(製品と同じ)。
+     //   ⚠ここは「実体が先・札が後」(製品の注記どおり。設定はやり直せるが、PDFの中身はこの瞬間ブラウザにしか無い)。
+     //   ⚠ P030 の関所より前(PDFを抱えたまま測ると溢れて止まる)。
+     if (newSettings && newSettings.workStandards !== undefined) {
+       try {
+         newSettings = { ...newSettings, workStandards: await dehydrateWorkStandards(newSettings.workStandards, async (fid, body) => {
+           await DATA(db).save(APP_DATA_ID, WS_FILE_COLLECTION, fid, { ...body, updatedAt: DATA_SERVER_NOW }, { merge: false });
+         }) };
+       } catch (e) {
+         console.error('資料の別置き保存に失敗', e);
+         setErrorMsg('資料の保存に失敗しました: ' + (e.message || e));
+         throw e; // ⚠握り潰すと「保存できたように見える」
+       }
+     }
      // 📏 P030 設定の箱も1MB上限(製品 saveSettings の関所と同じ3段)。溢れると 品質規格マスタ・目標時間・宛先・文字サイズ・品目名簿 がどれも保存できなくなる。
      //   ⚠測る時は withDeletions を通す(通さないと __deleteMapKeys が一番大きいと出る)。保存へは今のまま生の newSettings を渡す(窓口が解く)。
      try {
@@ -32189,6 +32237,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        //     在るので、止まってももう一度押せば同じ所からやり直せる。
        //   ⚠古い控え(note_images の鍵が無い)は Array.isArray で今までどおり素通りする。
        ['note_images', parsed.note_images],
+       // 📄 P061 資料PDFの実体。札を持つ設定より先(設定は一番最後に書く)。古い控えは素通り。
+       ['work_standard_files', parsed.work_standard_files],
        ['lots', parsed.lots],
        ['templates', parsed.templates],
        ['workers', parsed.workers],
@@ -32234,7 +32284,14 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          done++; if (onProgress) onProgress(done, total);
        }
      }
-     await DATA(db).save(APP_DATA_ID, 'settings', 'config', cleanUndefined(parsed.settings || {}));
+     // 📄 P061 古い控えは資料PDFの中身が設定に直接入っている。そのまま戻すと設定が膨らむので、復元時も外へ出す(製品と同じ)。
+     const settingsBody = { ...(parsed.settings || {}) };
+     if (settingsBody.workStandards !== undefined) {
+       settingsBody.workStandards = await dehydrateWorkStandards(settingsBody.workStandards, async (fid, body) => {
+         await DATA(db).save(APP_DATA_ID, WS_FILE_COLLECTION, fid, { ...body, updatedAt: DATA_SERVER_NOW }, { merge: false });
+       });
+     }
+     await DATA(db).save(APP_DATA_ID, 'settings', 'config', cleanUndefined(settingsBody));
      done++; if (onProgress) onProgress(done, total);
      // 🚨🖼「取っている≠戻せる」(2026-07-26)。**戻した後に読み直して**、
      //   メモ/お知らせの札(imageRef)の先に写真の実体が在るかを1枚ずつ確かめる。
@@ -35367,7 +35424,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        {/* 作業標準ライブラリ */}
        {showWorkStandardsLib && (
          <WorkStandardsLibraryModal
-           standards={settings.workStandards || []}
+           standards={workStandards}
            onClose={() => setShowWorkStandardsLib(false)}
            onEdit={(item) => setEditingWorkStandard(item || 'NEW')}
            allowManage={true}
