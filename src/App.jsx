@@ -8200,7 +8200,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     if (currentStep && Array.isArray(currentStep.checklistItems) && currentStep.checklistItems.length > 0) {
       const requiredItems = currentStep.checklistItems.filter(it => it.required !== false);
       if (requiredItems.length > 0) {
-        const chkKey = `${currentStep.id}-${currentUnitIdx}-checklist`;
+        const chkKey = `${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}-checklist`;
         const checked = curMR[chkKey] || {};
         const missing = requiredItems.filter(it => !checked[it.id]);
         if (missing.length > 0) {
