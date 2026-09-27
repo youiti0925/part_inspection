@@ -119,6 +119,7 @@ import { intKeyOf, withInterruptionLog, intWritePatch, intDeletePatch, stopIntEn
 import { sjhInsert } from './sjhText.js';
 import ReworkKindEditor from './ReworkKindEditor.jsx';
 import ReworkAnalysisPanel from './ReworkAnalysisPanel.jsx';
+import MinorReportLedgerModal from './MinorReportLedgerModal.jsx';
 // 不良・軽微不良・気づきを「どこから数えるか」の1本化(製品と同じ純関数・検査中/NG判定/台帳)
 import { collectQualityRows, filterQuality, sourceNote } from './domain/qualitySources.js';
 import { UNKNOWN_KIND, UNKNOWN_CAUSE } from './domain/reworkAnalysis.js';
@@ -18827,8 +18828,9 @@ const ANALYSIS_GROUPS = [
     { k: 'export', l: 'データ書き出し', color: 'text-blue-600' },
   ] },
 ];
-const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settings, saveSettings, currentUserName = '', indirectWork = [], improvements = [], observationPlans = [], templates = [], notes = [], announcements = [], strictModeHistory = [], onRestore = null, db = null, anomalies = [], onGoOptimize = null, parentTabs = null }) => {
+const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settings, saveSettings, currentUserName = '', minorReports = [], indirectWork = [], improvements = [], observationPlans = [], templates = [], notes = [], announcements = [], strictModeHistory = [], onRestore = null, db = null, anomalies = [], onGoOptimize = null, parentTabs = null }) => {
   // デフォルトは process (工程改善分析)。旧 'daily' は全体進捗タブと重複していたため削除済み
+  const [showLedger, setShowLedger] = useState(false); // 📒 軽微不良・改善 台帳の窓
   const [activeMode, setActiveMode] = useState('process-analysis'); // 既定=工程分析(データを見る土台)。グループは activeMode から導出
   const activeGroup = ANALYSIS_GROUPS.find(g => g.tabs.some(t => t.k === activeMode)) || ANALYSIS_GROUPS[0];
   const [selectedModel, setSelectedModel] = useState('all');
@@ -19134,6 +19136,25 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
       });
     });
 
+    // 台帳(minor_reports)の軽微不良も合流(ロット非依存の単独記録・いつでも登録した分)。
+    (minorReports || []).filter(r => r && r.type === 'complaint').forEach(r => {
+      const lot = { id: r.id, model: r.model || '不明', modelText: r.modelText || '', orderNo: r.orderNo || '' };
+      const c = { id: r.id, _src: 'minor', type: 'complaint', label: r.content || '', timestamp: toMsAny(r.timestamp), stepInfo: r.stepTitle ? { title: r.stepTitle } : null, workerName: r.workerName || '', source: '台帳', sample: !!r.sample };
+      if (c.timestamp) { const d0 = new Date(c.timestamp); const ym0 = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}`; monthlyCountsAll[ym0] = (monthlyCountsAll[ym0] || 0) + 1; }
+      if (isInDefectPeriod(c.timestamp)) {
+        const wname = (workers.find(x => x.id === c.workerName)?.name) || c.workerName || '不明';
+        complaints.push({ ...c, lot, workerName: wname });
+        const mainLabel = ((c.label || '').split(' : ')[0] || 'その他');
+        labelCounts[mainLabel] = (labelCounts[mainLabel] || 0) + 1;
+        const st = (c.stepInfo ? c.stepInfo.title : '全体');
+        stepCounts[st] = (stepCounts[st] || 0) + 1;
+        workerCounts[wname] = (workerCounts[wname] || 0) + 1;
+        const m = (lot.model || '不明');
+        modelCounts[m] = (modelCounts[m] || 0) + 1;
+        if (c.timestamp) { const d = new Date(c.timestamp); const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; const ymd = `${ym}-${String(d.getDate()).padStart(2, '0')}`; monthlyCounts[ym] = (monthlyCounts[ym] || 0) + 1; dayCounts[ymd] = (dayCounts[ymd] || 0) + 1; if (c.timestamp < minTs) minTs = c.timestamp; if (c.timestamp > maxTs) maxTs = c.timestamp; }
+      } else if (isInPrev(c.timestamp)) { prevCount++; }
+    });
+
     const sortObj = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
     // 月別推移: 直近 12ヶ月分を出す (データが少なくても枠は作る)
     const trendMonths = [];
@@ -19167,7 +19188,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
       diff,
       diffRate,
     };
-  }, [lots, workers, defectFilterMonth, defectFilterMode, defectFilterStart, defectFilterEnd]);
+  }, [lots, workers, defectFilterMonth, defectFilterMode, defectFilterStart, defectFilterEnd, minorReports]);
 
   // 気づき・改善(type='improvement') の集計。タブ名「軽微不良・改善提案」の“改善”側。
   //   軽微不良(complaint)とは別概念(工程の提案)なので complaintStats とは分けて集計し、同タブ内に別セクションで出す。
@@ -19840,6 +19861,13 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
            })()}
 
            {/* Complaints / Observations Tab — KPI + 横棒チャート + 月別推移 + 詳細 */}
+           {/* 📒 台帳(ロットに紐づかない記録を いつでも登録・後から直す) */}
+           {showLedger && <MinorReportLedgerModal reports={minorReports} lots={lots} workers={workers} currentUserName={currentUserName} saveData={saveData} deleteData={deleteData} itemMaster={settings?.itemMaster || {}} onClose={() => setShowLedger(false)} />}
+           {activeMode === 'complaints' && (
+             <div className="flex justify-end mb-2">
+               <button onClick={() => setShowLedger(true)} className="px-3 py-1.5 rounded-lg text-xs font-black text-white bg-purple-600 hover:bg-purple-700 flex items-center gap-1.5"><Megaphone className="w-4 h-4"/> いつでも登録・台帳（全{minorReports.length}件）</button>
+             </div>
+           )}
            {activeMode === 'complaints' && (() => {
              const cs = complaintStats;
              const maxLabel = Math.max(1, ...cs.labels.map(x => x.count));
@@ -20041,7 +20069,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <td className="p-3 text-center">
                              <div className="flex items-center justify-center gap-1">
                                {/* NG判定から合流した行は中断の記録ではない(作業画面の NG 理由)ので、ここでは直さない・消さない */}
-                               {d._src === 'ng' ? <span className="fi-tap-text text-rose-600 font-bold" title="作業画面の NG判定の理由から数えています">NG判定</span> : (<>
+                               {d._src === 'ng' ? <span className="fi-tap-text text-rose-600 font-bold" title="作業画面の NG判定の理由から数えています">NG判定</span> : d._src === 'minor' ? <button onClick={() => setShowLedger(true)} className="fi-tap-text text-purple-700 font-bold underline" title="台帳の記録は台帳の窓で直します">台帳</button> : (<>
                                <button onClick={() => triggerEditInterruption(d, d.lot.id, 'complaint')} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded" title="編集"><Pencil className="w-4 h-4" /></button>
                                <button onClick={() => triggerDeleteInterruption(d.id, d.lot.id, '軽微不良')} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded" title="削除"><Trash2 className="w-4 h-4" /></button>
                                </>)}
@@ -20909,9 +20937,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
              );
            })()}
 
-           {activeMode === 'monthly' && <MonthlyReportView lots={lots} workers={workers} settings={settings} customTargetTimes={settings.customTargetTimes || {}} targetTimeHistory={settings.targetTimeHistory || []} improvements={improvements} currentUserName={currentUserName} templates={templates} indirectWork={indirectWork} onSaveSettings={saveSettings} />}
-           {activeMode === 'export' && <DataExportCenter lots={lots} workers={workers} indirectWork={indirectWork} settings={settings} currentUserName={currentUserName} saveSettings={saveSettings} />}
-           {activeMode === 'dashboard' && <ManagerDashboard lots={lots} settings={settings} />}
+           {activeMode === 'monthly' && <MonthlyReportView lots={lots} workers={workers} settings={settings} customTargetTimes={settings.customTargetTimes || {}} targetTimeHistory={settings.targetTimeHistory || []} improvements={improvements} currentUserName={currentUserName} templates={templates} indirectWork={indirectWork} onSaveSettings={saveSettings} minorReports={minorReports} />}
+           {activeMode === 'export' && <DataExportCenter lots={lots} workers={workers} indirectWork={indirectWork} settings={settings} currentUserName={currentUserName} saveSettings={saveSettings} minorReports={minorReports} />}
+           {activeMode === 'dashboard' && <ManagerDashboard lots={lots} settings={settings} minorReports={minorReports} />}
            {activeMode === 'kpi' && <KpiDetailView lots={lots} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} />}
            {activeMode === 'achievement' && <AchievementRateView lots={lots} customTargetTimes={settings.customTargetTimes || {}} settings={settings} templates={templates} />}
            {activeMode === 'process-analysis' && <ProcessAnalysisView lots={lots} settings={settings} workers={workers} templates={templates} customTargetTimes={settings.customTargetTimes || {}} modelGroups={modelGroupsOf(settings)} observationPlans={observationPlans} improvements={improvements} saveData={saveData} deleteData={deleteData} currentUserName={currentUserName} onGoToPdca={() => setActiveMode('pdca')} />}
@@ -29005,12 +29033,18 @@ const QuotaStoppedPanel = ({ until }) => (
      lazyCtx, 'improvements',
      activeTab === 'analysis' || activeTab === 'optimize',
      (rows) => rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+   // 📒 軽微不良・改善 台帳(minor_reports)。分析タブか台帳の窓を開いた時だけ読む。
+   const [showQuickLedger, setShowQuickLedger] = useState(false);
+   const [minorReports, minorReportsReady] = useLazyCollection(
+     lazyCtx, 'minor_reports',
+     activeTab === 'analysis' || showQuickLedger,
+     (rows) => rows.slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
    const [logs, logsReady] = useLazyCollection(
      lazyCtx, 'logs',
      activeTab === 'analysis',
      (rows) => rows.slice().sort((a, b) => b.timestamp - a.timestamp));
    // 分析タブが要る物が全部揃ったか。⚠揃うまで画面を出さない(途中の数字を見せない)。
-   const analysisDataReady = lotsHistoryReady && indirectWorkReady && improvementsReady && logsReady;
+   const analysisDataReady = lotsHistoryReady && indirectWorkReady && improvementsReady && logsReady && minorReportsReady;
    const progressDataReady = lotsHistoryReady && indirectWorkReady;
 
    // お知らせ通知タイマー
@@ -29723,6 +29757,7 @@ const QuotaStoppedPanel = ({ until }) => (
        ['notes', parsed.notes],
        ['announcements', parsed.announcements],
        ['logs', parsed.logs],
+       ['minor_reports', parsed.minor_reports],
      ];
      const total = cols.reduce((n, [, a]) => n + (Array.isArray(a) ? a.length : 0), 0) + 1; // +1: settings/config
      let done = 0;
@@ -31959,6 +31994,7 @@ const QuotaStoppedPanel = ({ until }) => (
              {hdrMenu.type === 'more' && (<>
                <button onClick={() => { setHdrMenu(null); setShowHelp(true); }} className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><HelpCircle className="w-4 h-4 text-blue-600" /> 使い方</button>
                <button onClick={() => { setHdrMenu(null); setShowReadBudget(true); }} className="w-full text-left px-3 py-2 hover:bg-emerald-50 flex items-center gap-2 text-slate-700 text-sm font-bold" title="この端末が今日読んだ件数と、無料枠に対する割合"><Activity className="w-4 h-4 text-emerald-600" /> 通信量（この端末）{readTally.total > 0 && <span className={`ml-auto text-xs text-white rounded px-1 font-black ${quotaPercent(readTally.total) >= 20 ? 'bg-rose-500' : 'bg-emerald-500'}`}>{quotaPercent(readTally.total)}%</span>}</button>
+               <button onClick={() => { setHdrMenu(null); setShowQuickLedger(true); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><Megaphone className="w-4 h-4 text-purple-600" /> 軽微不良・改善 台帳（いつでも登録）</button>
                <button onClick={() => { setHdrMenu(null); setShowAnnouncementModal(true); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><Megaphone className="w-4 h-4 text-purple-600" /> お知らせ{(() => { const unread = announcements.filter(a => (a.mode || 'confirm') === 'confirm' && !(a.confirmedBy || []).includes(currentUserName)).length; return unread > 0 ? <span className="ml-auto bg-red-500 text-xs text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{unread}</span> : null; })()}</button>
              </>)}
            </div>
@@ -32011,7 +32047,9 @@ const QuotaStoppedPanel = ({ until }) => (
          )}
          {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)} />}
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
-         {activeTab === 'analysis' && analysisDataReady && !quotaBlock && <AnalysisView lots={lots} logs={logs} workers={workers} saveData={saveData} deleteData={deleteData} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} indirectWork={indirectWork} improvements={improvementCards} observationPlans={observationPlans} templates={templates} notes={notes} announcements={announcements} strictModeHistory={strictModeHistory} onRestore={restoreAllFromBackup} db={db} anomalies={anomalies} onGoOptimize={(view) => { setOptimizeView(view); setActiveTab('optimize'); }} parentTabs={renderTabGroupButtons(TAB_GROUPS.analysis)} />}
+         {/* 📒 ヘッダーの☰から開く台帳(読み終わるまで出さない=0件と見分けが付かないため) */}
+         {showQuickLedger && minorReportsReady && <MinorReportLedgerModal reports={minorReports} lots={lots} workers={workers} currentUserName={currentUserName} saveData={saveData} deleteData={deleteData} itemMaster={settings?.itemMaster || {}} onClose={() => setShowQuickLedger(false)} />}
+         {activeTab === 'analysis' && analysisDataReady && !quotaBlock && <AnalysisView lots={lots} logs={logs} workers={workers} saveData={saveData} deleteData={deleteData} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} minorReports={minorReports} indirectWork={indirectWork} improvements={improvementCards} observationPlans={observationPlans} templates={templates} notes={notes} announcements={announcements} strictModeHistory={strictModeHistory} onRestore={restoreAllFromBackup} db={db} anomalies={anomalies} onGoOptimize={(view) => { setOptimizeView(view); setActiveTab('optimize'); }} parentTabs={renderTabGroupButtons(TAB_GROUPS.analysis)} />}
          {activeTab === 'optimize' && (
            <div className="h-full flex flex-col gap-3">
              {/* 🚨 2026-09-07: 親タブ(分析 | 作業最適化)をこの帯へ合流させて1本減らした。札の名前・順番・行き先はそのまま。
