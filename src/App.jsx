@@ -6976,7 +6976,7 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
                   const bN = (task.status === 'processing' && task.startTime) ? Math.max(1, Array.from({ length: qty }).reduce((n, _, uu) => { const t2 = getTask(step, sIdx, uu); return n + (t2.status === 'processing' && t2.startTime === task.startTime ? 1 : 0); }, 0)) : 1;
                   const c = cellContent(task, (effTargets[sIdx] || 0) * bN);
                   const isNext = globalNextTask && !globalNextTask.isLot && globalNextTask.sIdx === sIdx && globalNextTask.unitIdx === u && (task.status === 'waiting' || task.status === 'paused');
-                  const isActive = activeCustomTaskKey === `${sIdx}-${u}`;
+                  const isActive = activeCustomTaskKey === `${sIdx}-${u}` || (!!step?.id && activeCustomTaskKey === `${step.id}-${u}`);
                   const reworks = task.reworks || [];
                   const reworkTotal = reworks.reduce((s, r) => s + (r.duration || 0), 0);
                   return (
@@ -7679,6 +7679,10 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
   const [showPdf, setShowPdf] = useState(false);
   const [activeCustomTaskKey, setActiveCustomTaskKey] = useState(null);
+  // 🔎右の「工程詳細」が映している作業の写し(製品 2026-09-24「左を押したのに右が切り替わらない」)。
+  //   ⚠音声の待受ループは音声ONの時に1回だけ始まる長生きの関数なので、state を直接読むと始めた時の値のまま。音声の経路はこの ref を読む。
+  const activeCustomTaskKeyRef = useRef(null);
+  activeCustomTaskKeyRef.current = activeCustomTaskKey;
 
   // じっと見るモード: 進行中タスクの「要素ラップ」を記録 (連続ラップ方式)。
   //   { taskKey: [{ elementId, atMs }] }。Firestore には完了時にまとめて書く (タップ毎の書込はしない)。
@@ -7706,6 +7710,27 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     const stepIdxFromId = localSteps.findIndex(s => s.id === prefix);
     if (stepIdxFromId >= 0) return { stepIdx: stepIdxFromId, unitIdx };
     return { stepIdx: 0, unitIdx };
+  };
+
+  // 🔎右の「工程詳細」を、いま押した作業に合わせる(custom のときだけ・製品と同じ)。
+  //   ⚠「映す物が無い」(null)にはしない。null は描画側で Step1 #1 に落ちるので、別の作業へ跳んで見える。
+  const focusCustomTask = (key) => {
+    if (executionType !== 'custom' || !key) return;
+    activeCustomTaskKeyRef.current = key;
+    setActiveCustomTaskKey(key);
+  };
+  // まとめて開始の時用。いま右に映っているのが「手で進めている最中の作業」なら奪わない。
+  const focusCustomTaskUnlessBusy = (key, afterTasks) => {
+    if (executionType !== 'custom' || !key) return;
+    const cur = activeCustomTaskKeyRef.current;
+    if (cur && cur !== key) {
+      const all = afterTasks || {};
+      const { stepIdx: cs, unitIdx: cu } = parseActiveTaskKey(cur);
+      const cStep = localSteps[cs];
+      const curTask = all[cur] || (cStep?.id ? all[`${cStep.id}-${cu}`] : null) || all[`${cs}-${cu}`] || null;
+      if (curTask?.status === 'processing' && cStep && !isAutoStep(cStep)) return;
+    }
+    focusCustomTask(key);
   };
 
   // Voice Assistant
@@ -8489,9 +8514,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         }
 
         // --- 次工程コマンド（同じ台数で次の工程へ）---
-        if ((matchNextStep(cmd) || matchNextStep(rawCmd)) && activeCustomTaskKey) {
+        if ((matchNextStep(cmd) || matchNextStep(rawCmd)) && activeCustomTaskKeyRef.current) {
           // activeCustomTaskKey は step.id ベースの場合があるので parseActiveTaskKey で正規化
-          const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKey);
+          const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
           voiceToggleTask(sI, uI); // 現在を完了
           let nextS = sI + 1;
           // ロット1回(段取り)工程は音声「次工程」の着地点にしない (台indexを回数と取り違えるため。準備/片付けは画面タップで)
@@ -8499,7 +8524,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           if (nextS < localSteps.length) {
             const rNext = voiceToggleTask(nextS, uI); // 次工程の同じ台数を開始(連動/厳密ゲートあり)
             if (!rNext.ok) { await speakAsyncWithLog(rNext.hint || 'この工程は画面から開始してください'); continue; }
-            setActiveCustomTaskKey(`${nextS}-${uI}`);
+            focusCustomTask(`${nextS}-${uI}`);
             await speakAsyncWithLog(`${nextS+1}工程、${uI+1}台目を開始しました`);
             await runVoiceCustomTaskFlow(nextS, uI);
           } else {
@@ -8555,7 +8580,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                 await speakAsyncWithLog(rStart.hint || 'この工程は画面から開始してください');
               } else {
                 await speakAsyncWithLog(`${stepNum}工程、${unitNum}台目を開始しました`);
-                setActiveCustomTaskKey(taskKey);
+                focusCustomTask(taskKey);
                 await runVoiceCustomTaskFlow(sIdx, uIdx);
               }
             } else if (curTask.status === 'processing') {
@@ -8572,14 +8597,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             await speakAsyncWithLog('その工程または台数は存在しません');
           }
         } else if (matchComplete(cmd)) {
-          if (activeCustomTaskKey) {
-            const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKey);
+          if (activeCustomTaskKeyRef.current) {
+            const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
             voiceToggleTask(sI, uI);
             await speakAsyncWithLog(`${sI+1}工程${uI+1}台目を完了しました。次はどうしますか？`);
           }
         } else if (matchMeasurement(cmd)) {
-          if (activeCustomTaskKey) {
-            const { stepIdx: sI } = parseActiveTaskKey(activeCustomTaskKey);
+          if (activeCustomTaskKeyRef.current) {
+            const { stepIdx: sI } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
             const step = localSteps[sI];
             if (step?.type === 'measurement' && step.measurementConfig) {
               await runVoiceMeasurementFlow(step, sI);
@@ -8592,8 +8617,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         } else if (matchInterrupt(cmd)) {
           toggleBreak();
           await speakAsyncWithLog('中断しました');
-        } else if (matchNext(cmd) && activeCustomTaskKey) {
-          const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKey);
+        } else if (matchNext(cmd) && activeCustomTaskKeyRef.current) {
+          const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
           voiceToggleTask(sI, uI); // 現在を完了
           let nextS = sI, nextU = uI + 1;
           if (nextU >= lot.quantity) { nextS++; nextU = 0; }
@@ -8602,7 +8627,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           if (nextS < localSteps.length) {
             const rNx = voiceToggleTask(nextS, nextU); // 次を開始(連動/厳密ゲートあり)
             if (!rNx.ok) { await speakAsyncWithLog(rNx.hint || 'この工程は画面から開始してください'); continue; }
-            setActiveCustomTaskKey(`${nextS}-${nextU}`);
+            focusCustomTask(`${nextS}-${nextU}`);
             await speakAsyncWithLog(`${nextS+1}工程、${nextU+1}台目を開始しました`);
             await runVoiceCustomTaskFlow(nextS, nextU);
           } else {
@@ -8794,8 +8819,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   //   custom で対象未確定なら null(誤った台に作用しないよう案内する)。
   const voiceCurrentTarget = () => {
     if (executionType === 'custom') {
-      if (!activeCustomTaskKey) return null;
-      const { stepIdx, unitIdx } = parseActiveTaskKey(activeCustomTaskKey);
+      if (!activeCustomTaskKeyRef.current) return null;
+      const { stepIdx, unitIdx } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
       if (stepIdx == null || unitIdx == null || Number.isNaN(stepIdx) || Number.isNaN(unitIdx)) return null;
       return { sIdx: stepIdx, uIdx: unitIdx };
     }
@@ -8834,7 +8859,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         const fromU = rng ? parseInt(rng[1]) - 1 : undefined;
         const toU = rng ? parseInt(rng[2]) - 1 : undefined;
         const r = voiceBatchStart(sIdx, fromU, toU);
-        if (r.ok) { setActiveCustomTaskKey(`${sIdx}-${r.firstUnit}`); await speakAsyncWithLog(`${sIdx + 1}工程を${r.started}台、まとめて開始しました。終わったら「まとめて完了」と言ってください`); }
+        if (r.ok) { focusCustomTaskUnlessBusy(`${sIdx}-${r.firstUnit}`, tasksRef.current); await speakAsyncWithLog(`${sIdx + 1}工程を${r.started}台、まとめて開始しました。終わったら「まとめて完了」と言ってください`); }
         else if (r.reason === 'rotary') await speakAsyncWithLog('この工程は分割測定アプリと連動しているため、まとめて開始できません。画面から台ごとに開始してください');
         else if (r.reason === 'strict') await speakAsyncWithLog(`厳密モードです。${r.hint || 'その工程のまとめて開始はまだできません'}`);
         else await speakAsyncWithLog('まとめて開始できる台がありません(全台、作業済みか進行中です)');
@@ -8927,7 +8952,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           const rNs = voiceToggleTask(nextS, uIdx); // 次工程の同じ台数(連動/厳密ゲートあり)
           if (!rNs.ok) { await speakAsyncWithLog(rNs.hint || 'この工程は画面から開始してください'); return; }
           // activeCustomTaskKey は数値index 形式で統一 (他の voice ハンドラと一致させる、parse 時 NaN を避ける)
-          setActiveCustomTaskKey(`${nextS}-${uIdx}`);
+          focusCustomTask(`${nextS}-${uIdx}`);
           await speakAsyncWithLog(`${nextS+1}工程、${uIdx+1}台目を開始しました`);
           await runVoiceCustomTaskFlow(nextS, uIdx);
         } else {
@@ -8947,7 +8972,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         if (nextS < localSteps.length) {
           const rNu = voiceToggleTask(nextS, nextU); // 次を開始(連動/厳密ゲートあり)
           if (!rNu.ok) { await speakAsyncWithLog(rNu.hint || 'この工程は画面から開始してください'); return; }
-          setActiveCustomTaskKey(`${nextS}-${nextU}`);
+          focusCustomTask(`${nextS}-${nextU}`);
           await speakAsyncWithLog(`${nextS+1}工程、${nextU+1}台目を開始しました`);
           await runVoiceCustomTaskFlow(nextS, nextU);
         } else {
@@ -9609,6 +9634,16 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     }
     return null;
   }, [tasks, localSteps, lot.quantity, otherAutoTick, optimalNextMove]);
+  // 🔧 開いた直後の右の「工程詳細」が Step1 #1 のままで「次」と食い違っていた(製品 2026-09-26)
+  //   → まだ何も押していない時だけ、「次」の作業を右に映す(押した後は押した物を尊重する)。
+  const initialFocusDoneRef = useRef(false);
+  useEffect(() => {
+    if (initialFocusDoneRef.current || executionType !== 'custom' || !globalNextTask || activeCustomTaskKeyRef.current) return;
+    const step = localSteps[globalNextTask.sIdx]; if (!step) return;
+    initialFocusDoneRef.current = true;
+    const u = globalNextTask.unitIdx || 0;
+    focusCustomTask(step.lotOnce && step.id ? `${step.id}-lot-${u}` : (step.id ? `${step.id}-${u}` : `${globalNextTask.sIdx}-${u}`));
+  }, [globalNextTask, executionType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // データ最適順モードの「タップ可否ゲート」。承認コンボ＋厳密ON時のみ作用。
   //   返り値: null=タップOK / {hint}=ブロック(理由ヒント)。
@@ -9871,6 +9906,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     const key = getTaskKey(stepIdx, unitIdx);
     const newTasks = { ...tasks };
     const currentTask = tasks[key] || { status: 'waiting', duration: 0, startTime: null };
+    // 🔎 開始以外(メニュー・修正など)は押した時に右へ映す。開始は見張りを通ってから映す(製品と同じ)
+    const isStartTap = currentTask.status === 'waiting' || currentTask.status === 'paused';
+    if (!isStartTap) focusCustomTask(key);
 
     if (currentTask.status === 'completed' || currentTask.status === 'ng') {
       // 完了済み/NG → ポップアップメニュー表示
@@ -9902,6 +9940,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       //   ⚠UIのdisabledだけに頼らず「書込み直前」でも必ず通す。カード/コンパクト/ロット1回など toggleTask を呼ぶ全経路がここを通る。
       const startGate = startGuard({ targetStep: (localSteps || [])[stepIdx], excludeKey: key });
       if (!startGate.ok) { alert('🚫 ' + startGate.message); return; }
+      focusCustomTask(key); // 🔎開始できる事が決まったので、この作業を右に映す
       // 分割測定アプリ連携: 連動工程の開始はステーション選択を挟む (マスタON時のみ)。選択後にこの開始処理を skipRotary で再実行する。
       const stepObj = (localSteps || [])[stepIdx];
       // 連動は手動・台ごとの工程専用 (lotOnce だと unitIdx が回数kになり workId が台と噛み合わないため除外: 監査確定)
@@ -9932,7 +9971,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           ? { pausedAt: null, ...(currentTask.batchStartedAt != null ? { batchStartedAt: currentTask.batchStartedAt + Math.max(0, nowTs - currentTask.pausedAt) } : {}) }
           : {}),
       };
-      setActiveCustomTaskKey(key);
+      focusCustomTask(key);
       setTasks(newTasks);
       onSave({ tasks: newTasks, status: 'processing' });
       // 🗣 2026-09-27 始めた時の帯は「開始しました」(前は始めただけでも「完了しました」と出て作業者が迷った)
@@ -10160,6 +10199,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     const ngReason = reasonOmitted ? null : ngReasonArg;
     const key = directKey || completedTaskMenu?.key;
     if (!key) return;
+    // 🔎 メニュー・NG・修正で触った作業を右に映す(続きは開始の所で映す・製品と同じ)
+    if (action !== 'continue') focusCustomTask(key);
     const previousTasks = { ...tasks };
     const newTasks = { ...tasks };
     const currentTask = tasks[key] || {};
@@ -10196,7 +10237,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       const contStep = localSteps[completedTaskMenu?.stepIdx];
       const isAutoCont = autoEndSecForStep(contStep) > 0;
       newTasks[key] = { ...currentTask, status: 'processing', startTime: nowTs, firstStartTime: currentTask.firstStartTime || nowTs, batchOwner: null, batchStartedAt: null, ...(isAutoCont ? { autoEnded: false } : {}) };
-      setActiveCustomTaskKey(key);
+      focusCustomTask(key);
       clearElementLaps(key); // じっと見る: 続きは別セッション。前回ラップを残さない(続きは壁時計ギャップで内訳対象外になる)
 
       // 分割測定 連動(測定開始)工程を「作業の続き」で延長する場合: done自動停止は完了時に追跡を外しているため、
@@ -10220,7 +10261,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       //   ⚠この印は保存の関所が「人が承知でやったやり直し」と読む鍵でもある(workTimeGuard の redoReset)。
       newTasks[key] = { status: 'waiting', duration: 0, startTime: null, firstStartTime: null, endTime: null, reworks: currentTask.reworks,
         redoReset: { at: Date.now(), why: 'restart', before: Number(currentTask.duration) || 0, firstStartTime: currentTask.firstStartTime || null } };
-      if (activeCustomTaskKey === key) setActiveCustomTaskKey(null);
+      // 右の詳細は null に戻さない(Step1 #1 に跳んで見える・製品と同じ)
     } else if (action === 'ng') {
       const captured = captureSessionIfProcessing(currentTask);
       const nowTs = Date.now();
@@ -10267,7 +10308,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       const captured = captureSessionIfProcessing(currentTask);
       const nowTs = Date.now();
       newTasks[key] = { ...captured, status: 'skipped', duration: captured.duration || 0, endTime: nowTs, firstStartTime: captured.firstStartTime || captured.startTime || null };
-      if (activeCustomTaskKey === key) setActiveCustomTaskKey(null);
+      // 右の詳細は null に戻さない(Step1 #1 に跳んで見える・製品と同じ)
     } else if (action === 'redo-unit-all' || action === 'redo-from-here') {
       // 一括やり直し: 指定台(unitIdx)の「全工程」または「参照工程から下」の実施済みタスクを一括NGに。
       // ・1回目の作業時間(duration)と修正履歴(reworks)は保持 → 適正時間(初回 duration)を汚さない。
@@ -11908,8 +11949,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                      } else if (isOOO && strictOrderMode) {
                        setOrderHint(`🔒 厳密モード: 先に「${localSteps[globalNextTask.sIdx]?.title}」#${globalNextTask.unitIdx + 1}台目 を完了してください`); return;
                      }
-                     setActiveCustomTaskKey(`${sIdx}-${uIdx}`);
-                     toggleTask(sIdx, uIdx);
+                     toggleTask(sIdx, uIdx); // 🔎右へ映すのは toggleTask(開始は見張りを通ってから)
                    }}
                    onBatchClick={(sIdx) => handleBatchClick(sIdx)}
                    onSkipRow={(sIdx) => handleSkipRow(sIdx)}
@@ -12012,7 +12052,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                                    </button>
                                  );
                                })()}
-                               {!step.lotOnce && <button onClick={() => setActiveCustomTaskKey(`${sIdx}-0`)} className="text-xs text-blue-600 underline">詳細を表示</button>}
+                               {!step.lotOnce && <button onClick={() => focusCustomTask(`${sIdx}-0`)} className="text-xs text-blue-600 underline">詳細を表示</button>}
                            </div>
                         </div>
                         {stepSpecificNotes.length > 0 && (
@@ -12132,8 +12172,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                                        setOrderHint(`🔒 厳密モード: 先に「${nextStepTitle}」#${globalNextTask.unitIdx + 1}台目 を完了してください`);
                                        return;
                                      }
-                                     setActiveCustomTaskKey(`${sIdx}-${uIdx}`);
-                                     toggleTask(sIdx, uIdx);
+                                     toggleTask(sIdx, uIdx); // 🔎右へ映すのは toggleTask(開始は見張りを通ってから)
                                    };
                                    return (
                                  <div className="relative">
@@ -12216,7 +12255,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                    <span className="text-xs font-normal text-slate-500">Step {displayStepIdx + 1}</span>
                  </h3>
                  {/* 機番切り替えボタン (台数が複数あるとき) */}
-                 {lot.quantity > 1 && (
+                 {lot.quantity > 1 && !displayStep?.lotOnce && (
                    <div className="mt-2">
                      <div className="text-xs font-bold text-slate-500 mb-1">表示中の機番 (クリックで切り替え)</div>
                      <div className="flex flex-wrap gap-1">
@@ -12238,8 +12277,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                          return (
                            <button
                              key={uIdx}
-                             onClick={() => setActiveCustomTaskKey(`${displayStepIdx}-${uIdx}`)}
-                             className={`px-2 py-1 border-2 rounded text-xs font-bold transition-all min-w-[40px] ${cls}`}
+                             onClick={() => focusCustomTask(`${displayStepIdx}-${uIdx}`)}
+                             className={`px-2 py-1 min-h-11 border-2 rounded text-xs font-bold transition-all min-w-[44px] ${cls}`}
                              title={lot.unitSerialNumbers?.[uIdx] ? `機番: ${lot.unitSerialNumbers[uIdx]}` : `${uIdx + 1}台目`}
                            >
                              #{uIdx + 1}
@@ -13250,16 +13289,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                 // 推奨のタスクに切り替えてスタート
                 const { nextSIdx, nextU } = outOfOrderConfirm;
                 setOutOfOrderConfirm(null);
-                setActiveCustomTaskKey(`${nextSIdx}-${nextU}`);
-                toggleTask(nextSIdx, nextU);
+                toggleTask(nextSIdx, nextU); // 🔎右へ映すのは toggleTask(開始は見張りを通ってから)
               }} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-sm flex items-center gap-1">
                 <CheckCircle2 className="w-4 h-4"/> 推奨の方をやる
               </button>
               <button onClick={() => {
                 const { sIdx, uIdx } = outOfOrderConfirm;
                 setOutOfOrderConfirm(null);
-                setActiveCustomTaskKey(`${sIdx}-${uIdx}`);
-                toggleTask(sIdx, uIdx);
+                toggleTask(sIdx, uIdx); // 🔎右へ映すのは toggleTask(開始は見張りを通ってから)
               }} className="px-4 py-2 bg-rose-100 hover:bg-rose-200 text-rose-700 border border-rose-300 rounded font-bold text-sm">それでも飛ばす</button>
             </div>
           </div>
