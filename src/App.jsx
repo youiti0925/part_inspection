@@ -31,6 +31,7 @@ import {
 import TemplateSkipPanel from './TemplateSkipPanel.jsx';
 import DuplicateLotsPanel from './DuplicateLotsPanel.jsx';
 import ProgressImportExtras from './ProgressImportExtras.jsx';
+import PendingImportPanel from './PendingImportPanel.jsx';
 import { auditProgressRows } from './domain/progressSheetAudit.js';
 import { orderNosOfRows, orderNoChunks, orderNoLotsSpec, mergeLotsForImport, dropAlreadyExisting } from './domain/importExistingCheck.js';
 import { judgeTemplateSkip, buildTemplateSkippedTasks, isTemplateSkippedLot } from './domain/templateSkip.js';
@@ -128,7 +129,7 @@ import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStar
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
 //   この部品検査アプリは **読むだけ**(登録する画面は製品検査/最終検査にある)。
 import { isWorkdayYmd, makeIsWorkday } from './domain/factoryCalendar.js';
-import { planProgressImport, normalizeSheetMap, DEFAULT_SHEET_MAP, isShippedGrayFills, colToIndex } from './domain/progressSheet.js';
+import { planProgressImport, normalizeSheetMap, DEFAULT_SHEET_MAP, isShippedGrayFills, colToIndex, PS_REASON, PENDING_MAX_ROWS, pendingRowsFromPlan, mergePendingRows } from './domain/progressSheet.js';
 import { DEFAULT_IMPORT_OPTIONS } from './domain/importPlan.js';
 import { dueConflict } from './domain/dueConflict.js';
 import { LOT_PRIORITY_CHOICES, LOT_PRIORITY_LABEL, normalizeLotPriority, priorityLabelOf, priorityFromImportText, priorityBadgeOf, priorityFilterStyleOf } from './domain/lotPriority.js';
@@ -22285,7 +22286,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
    saveData('workers', w.id, resumePatch(Date.now()));
  };
 
- const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null, parentTabs = null }) => {
+ const TemplatesView = ({ onRegisterPending = null, onRemovePending = null, editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null, parentTabs = null }) => {
   const [newProcessOpt, setNewProcessOpt] = useState('');
   const defectProcessOptions = settings?.defectProcessOptions || DEFAULT_DEFECT_PROCESS_OPTIONS;
   const [localZones, setLocalZones] = useState(mapZones || INITIAL_MAP_ZONES);
@@ -22922,6 +22923,9 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
 
          {/* 🧯 P098 同じ指図×品目コード×テンプレの未完了ロットの重複(無ければ何も出さない) */}
          <DuplicateLotsPanel lots={lots} templates={templates} deleteData={deleteData} />
+
+         {/* 🗂 P057 未登録リスト(進捗管理表の取込で品質規格マスタに紐付けが無く落ちた行。無ければ何も出さない) */}
+         <PendingImportPanel settings={settings} onRegisterPending={onRegisterPending} onRemovePending={onRemovePending} />
 
          {/* 品質規格マスタ (新方式: 品目コード → 品質規格 → 公差/測定条件) */}
          <div data-qs-panel>
@@ -31022,13 +31026,83 @@ const QuotaStoppedPanel = ({ until }) => (
        for (const x of toDelete) { await deleteData('lots', x.lotId); deleted++; tick('消しています'); }
        const entryMoved = applyUpdates.filter(u => u.entryChange && u.entryAt).length;
        const notMade = opts.createDone ? 0 : (progressImportPreview.alreadyDone || []).length;
+       // 🗂 P057 品質規格マスタに紐付けの無い品目コードの行は「未登録リスト」へ(表の値のまま)。失敗しても取込は終わっている
+       const pendingNow = pendingRowsFromPlan(progressImportPreview.rows, progressImportPreview);
+       let pendingSaved = false;
+       if (pendingNow.length) {
+         try {
+           const prev = (settings && settings.progressImportPending && Array.isArray(settings.progressImportPending.rows)) ? settings.progressImportPending.rows : [];
+           await saveSettings({ progressImportPending: {
+             at: timestamp, fileName: progressImportPreview.fileName || '',
+             sheetMap: progressImportPreview.sheetMap || null,
+             opts: { includeProvisional: !!opts.includeProvisional },
+             rows: mergePendingRows(prev, pendingNow, PENDING_MAX_ROWS),
+           } });
+           pendingSaved = true;
+         } catch (e) { console.warn('未登録リストの保存に失敗(取込そのものは終わっています)', e); }
+       }
        setProgressImportSaving('');
-       alert(`✓ 取込み完了\n新規作成: ${createLots.length}件\n更新: ${applyUpdates.length}件（うち入庫を直した: ${entryMoved}件）${deleted ? `\n検査リストから消した: ${deleted}件` : ''}${notMade ? `\nアプリではもう検査が終わっていたので作らなかった: ${notMade}件` : ''}`);
+       alert(`✓ 取込み完了\n新規作成: ${createLots.length}件\n更新: ${applyUpdates.length}件（うち入庫を直した: ${entryMoved}件）${deleted ? `\n検査リストから消した: ${deleted}件` : ''}${notMade ? `\nアプリではもう検査が終わっていたので作らなかった: ${notMade}件` : ''}${pendingSaved ? `\n品質規格マスタに紐付けの無い品目コード（マスタ設定の未登録リストへ）: ${new Set(pendingNow.map(r => r.model)).size}種 ${pendingNow.length}行` : ''}`);
      } catch (err) {
        setProgressImportSaving('');
        console.error(err);
        alert('保存中にエラーが発生しました: ' + (err.message || err));
      }
+   };
+
+   // 🗂 P057 未登録リスト → 品質規格マスタに紐付けたら、その品目コードの行を検査リストへ(判定は取込と同じ純関数・書き手も同じ writeProgressCreates)
+   const registerPendingForModel = async (model) => {
+     const pend = settings && settings.progressImportPending;
+     if (!pend || !Array.isArray(pend.rows)) return;
+     const m = String(model || '').trim();
+     const mine = pend.rows.filter(r => r && String(r.model || '').trim() === m);
+     if (!mine.length) return;
+     const smap = normalizeSheetMap(pend.sheetMap || null, DEFAULT_SHEET_MAP);
+     let knownPend = null;
+     try { knownPend = await fetchLotsForImport(mine); } catch (err) {
+       console.error('[未登録リスト] サーバへの問い合わせに失敗', err);
+       alert('サーバに在るロットを確かめられなかったので、登録を止めました（何も作っていません）。');
+       return;
+     }
+     const plan = replanProgress(mine, { includeProvisional: !!(pend.opts && pend.opts.includeProvisional) }, smap, { lots: knownPend.lots });
+     const createLots = plan.createLots || [];
+     const stillNoTpl = (plan.skipped || []).filter(x => x.reason === PS_REASON.NO_MASTER || String(x.reason || '').endsWith(PS_REASON.NO_TEMPLATE_ASSIGNED));
+     if (stillNoTpl.length) {
+       alert(`品目コード「${m}」には まだ品質規格(テンプレート)が割り当てられていません。\n品質規格マスタで割り当ててから、もう一度「検査リストへ登録」を押してください。`);
+       return;
+     }
+     const otherSkipped = (plan.skipped || []).length;
+     const exists = (plan.updateLots || []).length + (plan.unchangedLots || []).length + (plan.alreadyDone || []).length;
+     const list = createLots.slice(0, 12).map(c => `・${c.orderNo} ${c.model} ×${c.quantity} ${c.templateName || ''} 納期 ${c.dueDate || '—'}`).join('\n') + (createLots.length > 12 ? `\n…ほか ${createLots.length - 12}件` : '');
+     if (!window.confirm(`品目コード「${m}」の未登録 ${mine.length}行 → 検査リストへ ${createLots.length}件 を登録します。\n${list || '（作る物はありません）'}`
+       + (otherSkipped ? `\n\n取り込めない行 ${otherSkipped}件（未登録リストから外します）` : '')
+       + (exists ? `\n\n既に検査リストに在る指図 ${exists}件 は作りません（納期の更新は Excel の取込で）` : '')
+       + '\n\nよろしいですか？')) return;
+     setProgressImportSaving(`書き込んでいます… 0/${createLots.length}`);
+     try {
+       const timestamp = Date.now();
+       let doneWrites = 0;
+       const tick = (what) => { doneWrites++; setProgressImportSaving(`${what}… ${doneWrites}/${createLots.length}`); };
+       await writeProgressCreates(createLots, { timestamp, tick });
+       const rest = pend.rows.filter(r => !(r && String(r.model || '').trim() === m));
+       await saveSettings({ progressImportPending: { ...pend, at: timestamp, rows: rest } });
+       alert(`✓ 品目コード「${m}」の ${createLots.length}件 を検査リストへ登録しました。\n未登録リストから外しました（残り ${rest.length}行）。`);
+     } catch (err) {
+       console.error(err);
+       alert('保存中にエラーが発生しました: ' + (err.message || err));
+     } finally {
+       setProgressImportSaving('');
+     }
+   };
+   // 🗂 未登録リストから品目コードごとに外す(登録せずに消す)
+   const removePendingModel = async (model) => {
+     const pend = settings && settings.progressImportPending;
+     if (!pend || !Array.isArray(pend.rows)) return;
+     const m = String(model || '').trim();
+     const mine = pend.rows.filter(r => r && String(r.model || '').trim() === m);
+     if (!mine.length) return;
+     if (!window.confirm(`品目コード「${m}」の ${mine.length}行 を未登録リストから外します（検査リストには登録しません。次に Excel を取り込むと また入ります）。よろしいですか？`)) return;
+     await saveSettings({ progressImportPending: { ...pend, rows: pend.rows.filter(r => !(r && String(r.model || '').trim() === m)) } });
    };
 
    // === Excel一括登録: アップロード処理 ===
@@ -32243,7 +32317,7 @@ const QuotaStoppedPanel = ({ until }) => (
            )
          )}
          {activeTab === 'measurement-settings' && <MeasurementSettingsView settings={settings} saveSettings={saveSettings} comboPresets={settings?.comboPresets || []} templates={templates} />}
-         {activeTab === 'templates' && <TemplatesView editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
+         {activeTab === 'templates' && <TemplatesView onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel} editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
          </div>
        </main>
        
@@ -32733,7 +32807,8 @@ const QuotaStoppedPanel = ({ until }) => (
                              <td className="p-2 font-mono text-slate-400">{s.row}</td>
                              <td className="p-2 font-mono">{s.orderNo}</td>
                              <td className="p-2">{s.model}</td>
-                             <td className="p-2 text-slate-500">{s.reason}</td>
+                             {/* 部品の言葉に: 純関数の理由「型式マスタに型式の登録なし」= 品質規格マスタに品目コードの紐付けなし */}
+                             <td className="p-2 text-slate-500">{s.reason === PS_REASON.NO_MASTER ? '品質規格マスタに品目コードの紐付けなし（未登録リストへ）' : s.reason}</td>
                            </tr>
                          ))}
                        </tbody>
