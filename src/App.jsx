@@ -22240,7 +22240,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
    saveData('workers', w.id, resumePatch(Date.now()));
  };
 
- const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null, parentTabs = null, currentUserName = '' }) => {
+ const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null, currentUserName = '', parentTabs = null }) => {
   // 🏅 P117 卒業の直後に開く「独り立ちの記録」(SignoffModal)の相手。hooks は関数の先頭
   const [signoffFor, setSignoffFor] = useState(null);
   const [newProcessOpt, setNewProcessOpt] = useState('');
