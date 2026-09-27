@@ -375,6 +375,17 @@ const INITIAL_MAP_ZONES = [
   { id: 'zone_unassigned', name: '未該当エリア', x: 2, y: 92, w: 96, h: 7, color: 'bg-slate-100/80 border-slate-400', isUnassigned: true },
 ];
 
+// 🔁 修正(やり直し)を始めるとき「理由を記録せず開始」を押した、という合図。
+//   なぜ要るか:
+//     修正開始の処理は「理由の指定が無ければ、その作業の今のNG理由を焼き付ける」ようにしてある。
+//     ところが 2回目以降のピッカーの「理由を記録せず開始」も“指定なし(null)”で落ちていたため、
+//     作業者が「この回の原因は言えない」と分かって押したのに、今のNG理由が勝手に焼かれていた。
+//     しかもそれは分析画面で「回ごと＝確定」として数えられ、確定でない物を確定と言ってしまう。
+//   → 「指定なし(1回目など)」と「記録しないと人が決めた」を必ず別の値で区別する。
+//   ⚠Symbol にしてあるのは、理由が現場の自由入力(どんな文字でも入る)だからで、
+//     何を打ってもこの合図と絶対にぶつからないようにするため。
+const REWORK_REASON_OMITTED = Symbol('rework-reason-omitted');
+
 const DEFAULT_DEFECT_PROCESS_OPTIONS = ['前班', '設計', '調達', '機械'];
 const DEFAULT_COMPLAINT_OPTIONS = ['作業しづらい', '工具が不足', '手順が不明確', '品質に不安', 'その他'];
 const DEFAULT_INDIRECT_CATEGORIES = ['改善', '準備', '会議', '教育', '片付け', '5S', 'その他'];
@@ -8630,7 +8641,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       const cur = prev[key];
       if (!cur || cur.status === 'reworking') return prev;
       const now = Date.now();
-      const reworks = [...(cur.reworks || []), { startTime: now, duration: 0, round: (cur.reworks?.length || 0) + 1 }];
+      // 音声の修正も 今のNG理由をこの回に焼く(製品と同じ)
+      const reworks = [...(cur.reworks || []), { startTime: now, duration: 0, round: (cur.reworks?.length || 0) + 1, ...(cur.ngReason ? { reason: cur.ngReason } : {}) }];
       ok = true;
       const updated = { ...prev, [key]: { ...cur, status: 'reworking', reworkStartTime: now, reworkPausedAt: null, firstStartTime: cur.firstStartTime || cur.startTime || now, reworks, workerName: inspectorName || cur.workerName } };
       onSave({ tasks: updated, status: 'processing' });
@@ -10070,7 +10082,13 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
   // 完了タスクメニューのアクション（メニュー経由 or 直接呼び出し両対応）
   // ngReason: NG 理由 (action='ng' のときに task.ngReason に保存)
-  const handleTaskMenuAction = (action, directKey = null, ngReason = null, ctx = null) => {
+  // ngReason: NG 理由 (action='ng' のときに task.ngReason に保存)
+  //   ⚠特別な値 REWORK_REASON_OMITTED が来たときは「理由を記録せず開始を押した」という合図で、
+  //     理由そのものではない。ここで null に戻し、下の 'rework' では reasonOmitted を見て
+  //     NG理由へのフォールバックをしない(=この回には理由を焼かない)。
+  const handleTaskMenuAction = (action, directKey = null, ngReasonArg = null, ctx = null) => {
+    const reasonOmitted = ngReasonArg === REWORK_REASON_OMITTED;
+    const ngReason = reasonOmitted ? null : ngReasonArg;
     const key = directKey || completedTaskMenu?.key;
     if (!key) return;
     const previousTasks = { ...tasks };
@@ -10153,7 +10171,17 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       if (!gate.ok) { alert('🚫 ' + gate.message); return; }
       const captured = captureSessionIfProcessing(currentTask);
       // ngReason 引数を「この修正回の理由」として記録する (2回目以降は同異確認 picker から渡る)。
-      const reworks = [...(captured.reworks || []), { startTime: Date.now(), duration: 0, round: (captured.reworks?.length || 0) + 1, ...(ngReason ? { reason: ngReason } : {}) }];
+      // この修正回の理由を焼き付ける。
+      //   ・2回目以降は同異確認 picker から ngReason 引数が渡ってくる。
+      //   ・引数が無い(1回目)ときは、その時点の NG 理由をそのまま使う。
+      //     ⚠ngReason はタスクに1個しか無く、次のNGで上書きされる。回ごとに焼いておかないと1回目の原因が消える。
+      //     ⚠現場の操作は増やさない(ここで追加のpickerは出さない)。
+      //   ・ただし「理由を記録せず開始」を押した時(reasonOmitted)だけは何も焼かない。
+      //     ⚠ここでNG理由を代わりに入れると、作業者が「この回の原因は言えない」と言ったのに
+      //       分析画面では「回ごとの理由＝確定」として数えられ、確定でない物を確定と言うことになる。
+      //       理由が無い回は「原因不明」か「NG理由からの代用」として正直に出す(値を作らない)。
+      const rwReason = reasonOmitted ? '' : (ngReason || captured.ngReason || '');
+      const reworks = [...(captured.reworks || []), { startTime: Date.now(), duration: 0, round: (captured.reworks?.length || 0) + 1, ...(rwReason ? { reason: rwReason } : {}) }];
       newTasks[key] = { ...captured, status: 'reworking', reworkStartTime: Date.now(), reworks };
     } else if (action === 'rework-ok') {
       // 修正完了: firstStartTime は currentTask から維持される (spread で継承)
@@ -10714,7 +10742,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             </div>
             <div className="grid grid-cols-2 gap-1.5">
               <button onClick={() => { const c = prompt('違う内容の理由を入力してください', ''); if (c && c.trim()) start(c.trim()); }} className="py-2 px-3 bg-slate-50 hover:bg-slate-100 border border-dashed border-slate-300 rounded-lg text-slate-600 font-bold text-xs">✎ その他 (自由入力)</button>
-              <button onClick={() => start(null)} className="py-2 px-3 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-500 font-bold text-xs">理由を記録せず開始</button>
+              <button onClick={() => start(REWORK_REASON_OMITTED)} className="py-2 px-3 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-500 font-bold text-xs">理由を記録せず開始</button>
             </div>
           </div>
           <div className="p-2 border-t text-center">
