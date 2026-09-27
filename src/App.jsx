@@ -217,6 +217,8 @@ import { diffTemplate as tsDiff, syncPolicyOf as tsPolicy } from './domain/templ
 // 🧍 P135(一部) 一人しかできない工程(実績から数える・スキルの言葉に依らない)。製品 SoloDependencyPanel をそのまま写した
 import { SoloDependencyPanel } from './SoloDependencyPanel.jsx';
 import { ErrorBoundary as SoloErrorBoundary } from './ErrorBoundary.jsx';
+// 🔧 X8 直工(検査以外)を間接作業の窓から測る。保存先は今までと同じ indirectWork(kind で分ける)。純関数 directWork.js は写し済み
+import { WORK_KIND, isDirectOther, directCategoriesOf, inclusiveFactor, factorNote } from './domain/directWork.js';
 // ⭐ P116 星取表 / 👀 P161 独り立ち直後の見守り(製品の画面を写し・純関数は写し済み)
 import StarChartView from './StarChartView.jsx';
 import MimamoriCard from './MimamoriCard.jsx';
@@ -4375,26 +4377,50 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
 
 // --- Note Modal ---
 // --- Indirect Work Modal ---
-const IndirectWorkModal = ({ categories, activeIndirect, onStart, onStop, onClose }) => {
+// 🔧 X8 清水さん(製品 2026-08-10)「直工作業でも選択して時間取りする機能ほしいかな」→ 同じ窓に 間接 / 直工(検査以外) の切替。
+//   ⚠保存先は今までと同じ(indirectWork)。kind で分ける。別コレクションにすると既存の「間接の集計」が新しい記録を黙って無視する。
+const IndirectWorkModal = ({ categories, directCategories = [], activeIndirect, onStart, onStop, onClose }) => {
+  const [kind, setKind] = useState(WORK_KIND.INDIRECT);
+  const list = kind === WORK_KIND.DIRECT_OTHER ? directCategories : categories;
+  const isDir = kind === WORK_KIND.DIRECT_OTHER;
   return (
     <div className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="bg-amber-600 text-white p-4 flex justify-between items-center">
-          <h2 className="font-bold flex items-center gap-2"><Coffee className="w-5 h-5"/> 間接作業</h2>
+        <div className={`${isDir ? 'bg-blue-600' : 'bg-amber-600'} text-white p-4 flex justify-between items-center`}>
+          <h2 className="font-bold flex items-center gap-2"><Coffee className="w-5 h-5"/> {isDir ? '直工（検査以外）' : '間接作業'}</h2>
           <button onClick={onClose}><X className="w-5 h-5"/></button>
         </div>
+        {!activeIndirect && (
+          <div className="px-4 pt-3 grid grid-cols-2 gap-2">
+            {[[WORK_KIND.INDIRECT, '間接作業', '会議・5S・教育など'], [WORK_KIND.DIRECT_OTHER, '直工（検査以外）', '段取り・治具準備など']].map(([k, l, h]) => (
+              <button key={k} onClick={() => setKind(k)}
+                className={`px-2 py-2 min-h-11 rounded-xl border-2 text-left leading-tight ${kind === k ? (k === WORK_KIND.DIRECT_OTHER ? 'border-blue-600 bg-blue-50' : 'border-amber-600 bg-amber-50') : 'border-slate-200 hover:border-slate-300'}`}>
+                <div className="text-xs font-black text-slate-800">{l}</div>
+                <div className="fi-tap-text text-slate-500">{h}</div>
+              </button>
+            ))}
+          </div>
+        )}
+        {!activeIndirect && (
+          <div className="px-4 pt-2 fi-tap-text text-slate-500 leading-snug">
+            {isDir
+              ? <>ここで測った時間は<b>直接作業</b>として数えます（直間分析・実測の間接込み係数に入り、間接には混ぜません）。</>
+              : <>ここで測った時間は<b>間接作業</b>として数えます（今までどおり）。</>}
+          </div>
+        )}
         {activeIndirect ? (
           <div className="p-6 text-center">
-            <div className="text-sm text-slate-500 mb-1">実行中</div>
-            <div className="text-2xl font-black text-amber-700 mb-4">{activeIndirect.category}</div>
+            <div className="text-sm text-slate-500 mb-1">実行中{isDirectOther(activeIndirect) ? '（直工・検査以外）' : '（間接作業）'}</div>
+            <div className={`text-2xl font-black mb-4 ${isDirectOther(activeIndirect) ? 'text-blue-700' : 'text-amber-700'}`}>{activeIndirect.category}</div>
             <div className="text-4xl font-mono font-black text-amber-600 mb-6" id="indirect-timer">計測中...</div>
             <button onClick={onStop} className="w-full py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-lg">停止して記録</button>
           </div>
         ) : (
           <div className="p-4 grid grid-cols-2 gap-3">
-            {categories.map(cat => (
-              <button key={cat} onClick={() => onStart(cat)} className="py-4 bg-amber-50 hover:bg-amber-100 border-2 border-amber-200 rounded-xl font-bold text-amber-800 text-sm transition-all hover:scale-105">{cat}</button>
+            {list.map(cat => (
+              <button key={cat} onClick={() => onStart(cat, kind)} className={`py-4 rounded-xl font-bold text-sm border-2 transition-all hover:shadow ${isDir ? 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-800' : 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-800'}`}>{cat}</button>
             ))}
+            {list.length === 0 && <div className="col-span-2 text-center text-xs text-slate-400 py-6">分類がありません（⚙設定で追加できます）</div>}
           </div>
         )}
       </div>
@@ -21054,7 +21080,10 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                     let directTotal = 0, indirectTotal = 0;
                     const catBreak = {};
                     lots.forEach(lot => { if (!lot.tasks) return; Object.values(lot.tasks).forEach(t => { if (t.duration > 0) directTotal += t.duration; }); });
-                    indirectWork.forEach(w => { if (w.duration > 0) { indirectTotal += w.duration; catBreak[w.category] = (catBreak[w.category]||0) + w.duration; } });
+                    // 🔧 X8 直工その他(検査以外の直接作業)は直工側に足す。間接に混ぜない(製品と同じ)
+                    let directOtherTotal = 0;
+                    indirectWork.forEach(w => { if (w.duration > 0) { if (isDirectOther(w)) { directOtherTotal += w.duration; } else { indirectTotal += w.duration; catBreak[w.category] = (catBreak[w.category]||0) + w.duration; } } });
+                    directTotal += directOtherTotal;
                     const ws = wb.addWorksheet('直間分析');
                     ws.addRow(['区分','時間(秒)','時間(h)']);
                     ws.addRow(['直工', directTotal, Number((directTotal/3600).toFixed(2))]);
@@ -21117,7 +21146,10 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                     let directTotal = 0, indirectTotal = 0;
                     const catBreak = {};
                     lots.forEach(lot => { if (!lot.tasks) return; Object.values(lot.tasks).forEach(t => { if (t.duration > 0) directTotal += t.duration; }); });
-                    indirectWork.forEach(w => { if (w.duration > 0) { indirectTotal += w.duration; catBreak[w.category] = (catBreak[w.category]||0) + w.duration; } });
+                    // 🔧 X8 直工その他(検査以外の直接作業)は直工側に足す。間接に混ぜない(製品と同じ)
+                    let directOtherTotal = 0;
+                    indirectWork.forEach(w => { if (w.duration > 0) { if (isDirectOther(w)) { directOtherTotal += w.duration; } else { indirectTotal += w.duration; catBreak[w.category] = (catBreak[w.category]||0) + w.duration; } } });
+                    directTotal += directOtherTotal;
                     const totalSec = directTotal + indirectTotal;
                     const diRatio = totalSec > 0 ? ((directTotal/totalSec)*100).toFixed(1) : '0';
                     const catRows = Object.entries(catBreak).sort((a,b)=>b[1]-a[1]).map(([c,s]) => `<tr><td>${esc(c)}</td><td style="text-align:right">${formatTime(s)}</td><td style="text-align:right">${(s/3600).toFixed(1)}h</td></tr>`).join('');
@@ -21687,6 +21719,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
              indirectWork.forEach(w => {
                if (!w.workerName || !w.duration) return;
                if (w.startTime < fromTs.getTime() || w.startTime > toTs.getTime() + 86400000) return;
+               if (isDirectOther(w)) return; // 🔧 X8 直工その他は「間接」に混ぜない(製品と同じ)
                workerIndirect[w.workerName] = (workerIndirect[w.workerName] || 0) + w.duration;
                catTotals[w.category] = (catTotals[w.category] || 0) + w.duration;
              });
@@ -28365,13 +28398,17 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
       });
     });
     let indirectSec = 0;
+    // 🔧 X8 ⚠係数の分母は検査タスクの時間に固定(掛ける相手と同じ物差し)。直工その他は分子だけに足す(製品 inclusiveFactor)
+    let directOtherSec = 0;
     (indirectWork || []).forEach(w => {
       const ts = w.endTime || w.startTime || w.timestamp;
       if (ts != null && ts < since) return;
-      if (w.duration > 0) indirectSec += w.duration;
+      if (!(w.duration > 0)) return;
+      if (isDirectOther(w)) { directOtherSec += w.duration; return; }
+      indirectSec += w.duration;
     });
-    const hasData = directSec > 0 && indirectSec > 0;
-    return { hasData, directSec, indirectSec, factor: hasData ? (directSec + indirectSec) / directSec : 1 };
+    const hasData = directSec > 0 && (indirectSec > 0 || directOtherSec > 0);
+    return { hasData, directSec, indirectSec, directOtherSec, factor: hasData ? inclusiveFactor({ inspectionSec: directSec, directOtherExclusiveSec: directOtherSec, indirectSec }) : 1, factorNote: factorNote({ inspectionSec: directSec, directOtherExclusiveSec: directOtherSec, indirectSec, overlapSec: 0 }) };
   }, [lots, indirectWork]);
 
   // ヘルパー
@@ -28474,7 +28511,8 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
             <label className="text-xs font-bold text-slate-600">実測間接込み係数 <span className="font-normal text-slate-400">(直近90日)</span></label>
             <div className="flex items-center gap-2">
               {measuredFactor.hasData ? (
-                <span className="text-sm font-bold text-slate-800" title={`直工 ${fmtHours(measuredFactor.directSec)} / 間接 ${fmtHours(measuredFactor.indirectSec)}`}>
+                <span className="text-sm font-bold text-slate-800" title={`直工 ${fmtHours(measuredFactor.directSec)} / 間接 ${fmtHours(measuredFactor.indirectSec)}${measuredFactor.directOtherSec > 0 ? ` / 直工(検査以外) ${fmtHours(measuredFactor.directOtherSec)}` : ''}${measuredFactor.factorNote ? `
+${measuredFactor.factorNote}` : ''}`}>
                   {measuredFactor.factor.toFixed(2)}<span className="text-xs font-normal text-slate-500"> ×</span>
                 </span>
               ) : (
@@ -29208,6 +29246,7 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
       if (!inMonth(ts)) return;
       const dur = w.duration || 0;
       if (dur <= 0) return;
+      if (isDirectOther(w)) return; // 🔧 X8 直工その他は間接に混ぜない(製品と同じ)
       indirectSec += dur;
       const c = w.category || 'その他';
       catMap[c] = (catMap[c] || 0) + dur;
@@ -34394,10 +34433,12 @@ const QuotaStoppedPanel = ({ until }) => (
        {/* Indirect Work Modal */}
        {showIndirectModal && <IndirectWorkModal
          categories={settings.indirectCategories || DEFAULT_INDIRECT_CATEGORIES}
+         directCategories={directCategoriesOf(settings, 'parts')}
          activeIndirect={activeIndirect}
-         onStart={(cat) => {
+         onStart={(cat, kind) => {
            const id = `iw_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-           const entry = { id, category: cat, startTime: Date.now(), workerName: currentUserName };
+           // 🔧 X8 直工(検査以外)の時だけ kind を付ける(間接は今までと同じ形 = kind 無しは間接)
+           const entry = { id, category: cat, startTime: Date.now(), workerName: currentUserName, ...(kind === WORK_KIND.DIRECT_OTHER ? { kind: WORK_KIND.DIRECT_OTHER } : {}) };
            setActiveIndirect(entry);
            setShowIndirectModal(false);
          }}
