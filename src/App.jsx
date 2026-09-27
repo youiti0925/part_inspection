@@ -124,6 +124,7 @@ import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStar
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
 //   この部品検査アプリは **読むだけ**(登録する画面は製品検査/最終検査にある)。
 import { isWorkdayYmd } from './domain/factoryCalendar.js';
+import { dueMsOfLot, bucketOfDue } from './domain/dueDefense.js';
 import { LOT_PRIORITY_CHOICES, normalizeLotPriority, priorityLabelOf, priorityFromImportText, priorityBadgeOf, priorityFilterStyleOf } from './domain/lotPriority.js';
 // 🛌 作業者の休止/復帰(2026-08-31 清水さんの要望)。消すのではなく一旦しまう。復帰したら元どおり。
 //   🚨 使ってよいのは「これから割り当てる先」を絞る所だけ。
@@ -170,6 +171,72 @@ try {
 // ローカル日付文字列 (UTC変換しない。JST で 1 日ズレるのを防ぐ)。日付の絞り込み・集計・納期計算に使う。
 // ※ ダウンロードファイル名等は従来通り UTC でも実害がないため置換不要。
 const localYMD = (d) => { const x = (d instanceof Date) ? d : new Date(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; };
+// ── 納期など「日付だけ」の値を、あらゆる入力形式から1つの正規表現に統一する(最終検査 golden と同一) ──
+//  受理: YYYY-MM-DD / YYYY-M-D / YYYY/M/D / YY/M/D / M/D/YYYY / M/D(年なし) / YYYY年M月D日 / 全角数字 /
+//        括弧の曜日 "7/14 (火)" / Excelシリアル値(数値・5桁文字列) / ミリ秒タイムスタンプ / Date。返り {y,m,d} or null。
+//  ⚠表示(fmtDue)・比較(dueMs)・並び替えの唯一の入口。new Date(lot.dueDate) 直呼び/文字列比較は別形式で化けるので廃止。
+const DOW_JP = ['日', '月', '火', '水', '木', '金', '土'];
+// 📅 実在する日付か(2/30・4/31・平年の2/29 を弾く)。UTC で作るので端末の帯に依らない。
+//   ⚠ factoryCalendar.partsOfYmd と同じ書き方。片方だけ変えない。
+const isRealYmd = (y, m, d) => {
+  const t = new Date(Date.UTC(y, m - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
+};
+const parseDueParts = (raw) => {
+  if (raw == null || raw === '') return null;
+  if (raw instanceof Date) { return isNaN(raw.getTime()) ? null : { y: raw.getFullYear(), m: raw.getMonth() + 1, d: raw.getDate() }; }
+  if (typeof raw === 'number' && isFinite(raw)) {
+    if (raw > 10 && raw < 100000) { const dt = new Date(Math.round((raw - 25569) * 86400000)); return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() }; }
+    const dt = new Date(raw); return isNaN(dt.getTime()) ? null : { y: dt.getFullYear(), m: dt.getMonth() + 1, d: dt.getDate() };
+  }
+  let s = String(raw).trim();
+  if (!s) return null;
+  s = s.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  if (/^\d{5}$/.test(s)) return parseDueParts(Number(s));
+  s = s.replace(/[（(].*?[)）]/g, ' ').replace(/[（(].*$/, ' ');
+  s = s.replace(/[年月]/g, '/').replace(/日/g, '').replace(/[.-]/g, '/').trim();
+  s = s.replace(/\/+/g, '/').replace(/\/$/, '');
+  const parts = s.split('/').map(x => x.trim()).filter(x => x !== '');
+  const nums = parts.map(Number);
+  if (!nums.length || nums.some(n => !isFinite(n))) return null;
+  let y, m, d;
+  if (nums.length >= 3) {
+    if (String(parts[2]).length === 4) { y = nums[2]; m = nums[0]; d = nums[1]; }
+    else { y = nums[0] < 100 ? 2000 + nums[0] : nums[0]; m = nums[1]; d = nums[2]; }
+  } else if (nums.length === 2) { m = nums[0]; d = nums[1]; y = null; }
+  else return null;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  if (y == null) {
+    const now = new Date(); const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    let cand = new Date(now.getFullYear(), m - 1, d);
+    if ((today0.getTime() - cand.getTime()) > 90 * 86400000) cand = new Date(now.getFullYear() + 1, m - 1, d);
+    y = cand.getFullYear();
+  }
+  if (!isRealYmd(y, m, d)) return null;   // 2026/2/30 → 3/2 のような化けを止める(打ち間違いは「読めない」)
+  return { y, m, d };
+};
+const dueDateObj = (raw) => { const p = parseDueParts(raw); return p ? new Date(p.y, p.m - 1, p.d) : null; };
+const dueMsOf = (raw) => { const dt = dueDateObj(raw); return dt ? dt.getTime() : null; };
+// 表示: 2026/8/15（金）。パース不能値は元文字列をそのまま返す(データを隠さない)。
+const fmtDue = (raw, withDow = true) => {
+  const p = parseDueParts(raw);
+  if (!p) return raw == null ? '' : String(raw);
+  const dt = new Date(p.y, p.m - 1, p.d);
+  return `${p.y}/${p.m}/${p.d}${withDow ? `（${DOW_JP[dt.getDay()]}）` : ''}`;
+};
+
+// ── 納期の遠さ → 色(製品 App.jsx と同じ表)。数は作らない。bucketOfDue が返す5語を見た目へ写すだけ。
+//   部品には Glyph/Signal がまだ無いので、字と色と左端の縦レールだけ(P107 の vizKit が入ったら製品の形へ)。
+const todayStartMsNow = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const DUE_VIZ = {
+  overdue:  { tone: 'late',  level: 'danger',  rail: 'bg-rose-500',   text: 'text-rose-700', label: '納期を過ぎています' },
+  within7:  { tone: 'plain', level: 'ok',      rail: 'bg-sky-600',    text: 'text-blue-600', label: '納期まで7日以内' },
+  within30: { tone: 'quiet', level: 'ok',      rail: 'bg-slate-400',  text: 'text-blue-600', label: '納期まで30日以内' },
+  later:    { tone: 'quiet', level: 'ok',      rail: 'bg-slate-200',  text: 'text-blue-600', label: '納期はまだ先' },
+  noDue:    { tone: 'quiet', level: 'unknown', rail: 'bg-transparent border-l-2 border-dashed border-slate-400', text: 'text-slate-400', label: '納期が読めていません' },
+};
+// ⚠ 呼ぶ度に todayStartMsNow() を読む(domain に Date.now を入れない決まり通り、時刻は呼ぶ側が渡す)。
+const dueVizOf = (lot) => DUE_VIZ[bucketOfDue(dueMsOfLot(lot), todayStartMsNow())] || DUE_VIZ.noDue;
 const localYM = (d) => { const x = (d instanceof Date) ? d : new Date(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}`; };
 
 let _storageInstance = null;
@@ -23378,7 +23445,7 @@ const LotAssignmentModal = ({ lot, workers, mapZones, currentUserName, onClose, 
         <div className="border-b pb-3 mb-4">
           <div className="text-xs text-slate-500 font-bold">作業対象</div>
           <div className="text-xl font-bold text-slate-800">{lot.model} <span className="text-base font-normal text-slate-500">({lot.orderNo})</span></div>
-          <div className="text-xs text-slate-500">{lot.quantity}台 / 入荷: {lot.entryAt ? toDateShort(lot.entryAt) : '-'} / 納期: {lot.dueDate || '-'}</div>
+          <div className="text-xs text-slate-500">{lot.quantity}台 / 入荷: {lot.entryAt ? toDateShort(lot.entryAt) : '-'} / 納期: {fmtDue(lot.dueDate) || '-'}</div>
         </div>
 
         {/* Step 1a: 担当者本人モード - 自分で作業確認 */}
@@ -23488,7 +23555,6 @@ const LotAssignmentModal = ({ lot, workers, mapZones, currentUserName, onClose, 
 //   🚨 数字を作らない: 状態は checkLotProcessing / computeLotProgress と同じ読み方、担当は作業中タスクの workerName。
 //   🚨 同じ指図の **完了ロット** も並べる(「終わったか」が分かるように)。絞り込みは活きているロットにだけ掛かる。
 // ============================================================================
-const fmtDueShort = (raw) => String(raw == null ? '' : raw).replace(/（.*?）/g, '').trim();
 const lotStateForGroup = (lot, workers) => {
   if (!lot) return { key: 'waiting', label: '未着手', who: '' };
   if (lot.status === 'completed' || lot.location === 'completed') {
@@ -23551,7 +23617,7 @@ const OrderGroupCard = ({ group, workers, templates, onOpen, onEdit = null, onDe
               </span>
               <span className="text-xs text-slate-500">{lot.quantity}台</span>
               <span className="text-xs text-slate-600" title="入庫時間（検査へ来た日時）＝入荷（検査へ来た日）" data-order-group-entry={lot.id}>入庫 <b className="text-slate-800">{fmtMdHm(lot.entryAt) || fmtMd(lot.entryAt) || '—'}</b></span>
-              <span className="text-xs text-slate-600" title="納期">納期 <b className="text-slate-800">{fmtDueShort(lot.dueDate) || '—'}</b></span>
+              <span className="text-xs text-slate-600" title="納期">納期 <b className="text-slate-800">{fmtDue(lot.dueDate, false) || '—'}</b></span>
               {st.key === 'done' ? <span className="text-xs text-emerald-800" title="検査完了（完了した日時）" data-order-group-done={lot.id}>検査完了 <b>{fmtMdHm(st.at) || '—'}</b></span> : null}
               <span className={`ml-auto text-xs font-black border rounded px-2 py-0.5 ${GROUP_STATE_CLS[st.key]}`}>
                 {st.label}{/* 完了の日時は隣の「検査完了 M/D HH:MM」に出す(2026-09-09)。ここに日付を重ねて出さない */}
@@ -23724,8 +23790,8 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
       if (sortOrder === 'entry_asc') return (a.entryAt || 0) - (b.entryAt || 0);
       if (sortOrder === 'entry_desc') return (b.entryAt || 0) - (a.entryAt || 0);
       if (sortOrder === 'due_asc') {
-        const aDue = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
-        const bDue = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+        const aDue = dueMsOf(a.dueDate) ?? Infinity;
+        const bDue = dueMsOf(b.dueDate) ?? Infinity;
         return aDue - bDue;
       }
       return 0;
@@ -24084,6 +24150,12 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                       <button onClick={(e) => { e.stopPropagation(); onEditLot(lot); }} className="p-1 bg-white rounded border hover:bg-blue-50 text-slate-500"><Pencil className="w-3 h-3" /></button>
                       <button onClick={(e) => { e.stopPropagation(); onDeleteLot(lot.id); }} className="p-1 bg-white rounded border hover:bg-red-50 text-red-400"><Trash2 className="w-3 h-3" /></button>
                     </div>
+                    {/* 🚩 納期の帯(製品と同じ)。カードの左端に縦1本だけ。位置と色で「もう納期を過ぎている」が分かる。
+                        ⚠ 文字は消していない(下の「納期: 2026/8/20（木）」の行はそのまま)。数は作らず bucketOfDue の札を色へ写すだけ。 */}
+                    {(() => { const dv = dueVizOf(lot); return (
+                      <span data-lot-due-rail={lot.id} aria-hidden="true" title={dv.label}
+                            className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-xl ${dv.rail}`} />
+                    ); })()}
                     <div className="flex justify-between items-start">
                       <div className="min-w-0 flex-1">
                         <div className="text-xs text-slate-500 font-bold truncate">指図: {lot.orderNo}</div>
@@ -24122,7 +24194,13 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                     })()}
                     <div className="text-xs text-slate-500">
                       {lot.entryAt && <span>入庫: {toDateShort(lot.entryAt)}</span>}
-                      {lot.dueDate && <span className="ml-2 text-blue-600 font-bold">納期: {lot.dueDate}</span>}
+                      {lot.dueDate && (() => { const dv = dueVizOf(lot); return (
+                        <span className={`ml-2 font-bold inline-flex items-center gap-1 ${dv.text}`} title={dv.label}>
+                          納期: {fmtDue(lot.dueDate)}
+                          {/* 過ぎた納期は「何日過ぎたか」を札で(製品と同じ)。数は納期と今日の日付の差だけ */}
+                          {(() => { const dm = dueMsOfLot(lot); const d = Number.isFinite(dm) ? Math.floor((todayStartMsNow() - dm) / 86400000) : 0; return d >= 1 ? <span className="ml-1 rounded bg-rose-600 px-1.5 py-0.5 text-white font-black whitespace-nowrap" data-due-overdue-days={d}>{d}日過ぎ</span> : null; })()}
+                        </span>
+                      ); })()}
                     </div>
                     {(zoneName || workerName) && (
                       <div className="flex gap-2 text-xs items-center">
@@ -24229,7 +24307,8 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                         </td>
                         <td className="p-3 text-center">{lot.quantity}</td>
                         <td className="p-3 text-slate-500 text-xs">{lot.entryAt ? `${toDateShort(lot.entryAt)} ${new Date(lot.entryAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}` : '-'}</td>
-                        <td className="p-3 text-xs font-bold text-blue-600">{lot.dueDate || '-'}</td>
+                        {/* 🚩 表の納期もカードと同じ色(片方だけ赤くしない) */}
+                        <td className={`p-3 text-xs font-bold whitespace-nowrap ${dueVizOf(lot).text}`} title={dueVizOf(lot).label}>{fmtDue(lot.dueDate) || '-'}</td>
                         {/* 場所 (エリア) */}
                         <td className="p-3 text-xs">
                           {(() => {

@@ -30,7 +30,7 @@ test('G2 同じ指図で束ね、完了ロットも足す(「終わったか」�
 });
 
 test('G3 1枚の中身: テンプレ名・台数・入荷・納期・状態・誰が。台数は足さない(同じ台を別テンプレで見る)', () => {
-  for (const s of ['tplName(lot)', 'lot.quantity', 'fmtMd(lot.entryAt)', 'fmtDueShort(lot.dueDate)', 'data-order-group-state={st.key}', 'st.who']) {
+  for (const s of ['tplName(lot)', 'lot.quantity', 'fmtMd(lot.entryAt)', 'fmtDue(lot.dueDate, false)', 'data-order-group-state={st.key}', 'st.who']) {
     assert.ok(card.includes(s), `1枚に ${s} が無い`);
   }
   assert.match(card, /Math\.max\(a, Number\(l\.quantity\) \|\| 0\)/, '台数を足している');
