@@ -30,6 +30,13 @@ export const SKILL_LEVELS = [
 ];
 const lvl = (v) => SKILL_LEVELS.find(l => l.v === (v || 0)) || SKILL_LEVELS[0];
 
+// スキルの色（一覧・チップ・工程の●で同じ色）。id の並び順で決める。(製品 SkillMap.jsx と同じ)
+const SKILL_COLORS = ['#0ea5e9', '#8b5cf6', '#10b981', '#14b8a6', '#f59e0b', '#f43f5e', '#64748b', '#e11d48', '#0891b2', '#7c3aed', '#65a30d', '#ea580c'];
+export const skillColorOf = (skillList, skillId) => {
+  const i = (skillList || []).findIndex((s) => s.id === skillId);
+  return SKILL_COLORS[(i < 0 ? (skillList || []).length : i) % SKILL_COLORS.length];
+};
+
 // 完了ロットから「作業者 × スキル」の回数を集計。counts[workerName][skillId] = 回数(完了ロット数)
 export function computeSkillCounts(lots, templates, workers = []) {
   const wName = (id) => (workers.find(w => w.id === id)?.name) || null;

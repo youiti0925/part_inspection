@@ -152,7 +152,8 @@ import { HelpManualModal, PRODUCT_HELP_SECTIONS } from './HelpManual.jsx';
 // 厳密モードの一元管理（品目×テンプレ・エビデンス・変更履歴）
 import { StrictModeManagerModal, computeStrictEvidence, strictComboKey, MultiUnitGantt } from './StrictModeManager.jsx';
 // スキルマップ（作業者×スキル：レベル＋回数）
-import { SkillMapView, DEFAULT_SKILLS } from './SkillMap.jsx';
+import { SkillMapView, DEFAULT_SKILLS, skillColorOf } from './SkillMap.jsx';
+import { normalizeRequiredSkills, requiredSkillIdsForStep, toggleSkillOnStep, attachSkill, detachSkill, upsertSkill, newSkillId, SKILL_SCOPE } from './domain/skillRegistry.js';
 
 // --- 一度だけ実行: 管理者未承認の厳密モード(localStorageの古い残骸)を全消去して既定OFFに戻す ---
 // 厳密モードは「厳密モード一元管理(settings.strictModeRules)」での承認のみを正とする方針。
@@ -5227,9 +5228,15 @@ const StepSetupChips = ({ step, className = '' }) => {
   );
 };
 
-const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSaveLayouts, comboPresets = [], builtInOverrides = {}, hiddenBuiltIns = [] }) => {
+const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSaveLayouts, comboPresets = [], builtInOverrides = {}, hiddenBuiltIns = [], skills = [], onSaveSkills = null, currentUserName = '' }) => {
   const [name, setName] = useState(template?.name || '');
   const [steps, setSteps] = useState(template?.steps || []);
+  // 🎯 決まり17: このテンプレに要るスキル [{ skillId, stepIds:[] }](stepIds 空＝全工程)。保存は onSave の requiredSkills で一緒に。
+  //   🚨 新しい hooks はガード(return null)より上に置く(2026-08-27 の事故)。ここは関数の先頭。
+  const [reqSkills, setReqSkills] = useState(() => normalizeRequiredSkills(template?.requiredSkills));
+  const [skillPickOpen, setSkillPickOpen] = useState(false);
+  const [newSkillName, setNewSkillName] = useState('');
+  const [newSkillSpecial, setNewSkillSpecial] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [type, setType] = useState('normal');
@@ -5426,7 +5433,9 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
       }
     } catch {}
     // hasOverview が false のときは null を渡して既存の overview を消す (merge保存なので明示的にnull)
-    onSave({ id: template?.id, name, steps, overview: hasOverview ? overviewClean : null });
+    // 🎯 要るスキル: 触っていなければ送らない(旧スキルマップの {skillId, level} をそのまま残す)
+    const reqChanged = JSON.stringify(reqSkills) !== JSON.stringify(normalizeRequiredSkills(template?.requiredSkills));
+    onSave({ id: template?.id, name, steps, overview: hasOverview ? overviewClean : null, ...(reqChanged ? { requiredSkills: reqSkills } : {}) });
   };
 
   return (
@@ -5457,13 +5466,58 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
           const initName = template?.name || '';
           const initSteps = JSON.stringify(template?.steps || []);
           const curSteps = JSON.stringify(steps);
-          const isDirty = (name !== initName) || (curSteps !== initSteps);
+          const initReq = JSON.stringify(normalizeRequiredSkills(template?.requiredSkills));
+          const isDirty = (name !== initName) || (curSteps !== initSteps) || (JSON.stringify(reqSkills) !== initReq);
           if (isDirty && !confirm('保存していない変更があります。破棄して戻りますか？')) return;
           onCancel();
         }} className="p-2 hover:bg-slate-100 rounded-full" title="戻る"><ArrowRight className="w-5 h-5 rotate-180"/></button><input value={name} onChange={e => setName(e.target.value)} placeholder="テンプレート名" className="text-lg font-bold border-none focus:ring-0 w-full"/></div>
         {/* Fixed: button type explicitly set to button */}
         <button type="button" onClick={handleSave} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 z-50 relative"><Save className="w-4 h-4"/> 保存</button>
       </div>
+      {/* 🎯 決まり17: このテンプレに要るスキル(名前の下の1行)。チップ＝付いているスキル(全工程／◯工程)。「＋スキルを足す」で既存から選ぶか、名前だけで新しく作る。
+          🚨 型式専用の編集(scopeLabel)では出さない(保存側が拾わない＝共通テンプレの物)。 */}
+      {(
+        <div className="bg-orange-50 border-b-2 border-orange-200 px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 relative" data-tpl="skills-row">
+          <span className="text-xs font-black text-orange-800">このテンプレに要るスキル</span>
+          {reqSkills.length === 0 && <span className="fi-tap-text text-slate-500">まだ付いていません（付けると、スキルマップの「このテンプレに要るスキル」と同じ物です）</span>}
+          {reqSkills.map((rs) => { const sk = (skills || []).find((x) => x.id === rs.skillId); const col = skillColorOf(skills, rs.skillId); return (
+            <span key={rs.skillId} data-tpl-skill={rs.skillId} className="inline-flex items-center gap-1.5 bg-white border rounded-full pl-2 pr-1 py-0.5 text-xs font-bold text-slate-700" style={{ borderColor: col }}>
+              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: col }} />
+              {sk?.scope === SKILL_SCOPE.TEMPLATE ? '★' : ''}{sk ? sk.name : rs.skillId}
+              <span className="fi-tap-text font-normal text-slate-400">▸ {rs.stepIds.length === 0 ? '全工程' : `${rs.stepIds.length}工程`}</span>
+              <button type="button" onClick={() => setReqSkills(detachSkill(reqSkills, rs.skillId))} className="text-slate-400 hover:text-rose-600 px-1" title="外す">×</button>
+            </span>
+          ); })}
+          <button type="button" onClick={() => setSkillPickOpen((v) => !v)} data-tpl="skill-add" className="px-3 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-1"><Plus className="w-3.5 h-3.5"/> スキルを足す</button>
+          <span className="ml-auto fi-tap-text text-slate-400">全工程で付けた物は工程ごとには外せません。一部の工程だけに効く物(★)は右の工程編集で✓。</span>
+          {skillPickOpen && (
+            <div className="absolute left-4 top-full mt-1 z-40 bg-white border border-slate-300 rounded-xl shadow-xl p-3 w-80 space-y-2" data-tpl="skill-pick">
+              <div className="fi-tap-text font-bold text-slate-500">＋ スキルを足す（全工程に要る物として付きます）</div>
+              {(skills || []).filter((sk) => !reqSkills.some((rs) => rs.skillId === sk.id)).map((sk) => (
+                <button key={sk.id} type="button" data-tpl-pick={sk.id} onClick={() => { setReqSkills(attachSkill(reqSkills, sk.id, [])); setSkillPickOpen(false); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-orange-50 text-sm font-bold text-slate-700 flex items-center gap-2">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: skillColorOf(skills, sk.id) }} />{sk.scope === SKILL_SCOPE.TEMPLATE ? '★' : ''}{sk.name}
+                </button>
+              ))}
+              {(skills || []).filter((sk) => !reqSkills.some((rs) => rs.skillId === sk.id)).length === 0 && <div className="text-xs text-slate-400 px-2">足せるスキルは全部付いています</div>}
+              {onSaveSkills && (
+                <div className="border-t border-slate-200 pt-2 space-y-1.5">
+                  <div className="fi-tap-text font-bold text-orange-700">＋ 新しいスキルを作る（名前だけ。説明はスキルマップで）</div>
+                  <input value={newSkillName} onChange={(e) => setNewSkillName(e.target.value)} placeholder="例: RTT-215 傾斜回転" data-tpl="new-skill-name" className="w-full border rounded-lg px-2 py-1.5 text-sm" />
+                  <label className="flex items-center gap-1 text-xs text-slate-600 cursor-pointer"><input type="checkbox" checked={newSkillSpecial} onChange={(e) => setNewSkillSpecial(e.target.checked)} data-tpl="new-skill-special" /> ★特注機（このテンプレ専用）</label>
+                  <button type="button" data-tpl="new-skill-save" onClick={() => {
+                    const nm = newSkillName.trim(); if (!nm) return;
+                    const id = newSkillId(Date.now(), Math.random().toString(36).slice(2, 5));
+                    const sk = { id, name: nm, note: '', scope: newSkillSpecial ? SKILL_SCOPE.TEMPLATE : SKILL_SCOPE.SHARED, templateId: newSkillSpecial ? (template?.id || '') : '', by: currentUserName || '', at: Date.now() };
+                    onSaveSkills(upsertSkill(skills, sk));
+                    setReqSkills(attachSkill(reqSkills, id, []));
+                    setNewSkillName(''); setNewSkillSpecial(false); setSkillPickOpen(false);
+                  }} className="w-full py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold">作って、このテンプレに付ける</button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex-1 flex overflow-hidden">
         <div className="w-1/3 p-4 overflow-y-auto border-r bg-white">
           {/* テンプレ全体の総合資料 (手順書PDF・概要写真・全体説明)。工程の上に配置 */}
@@ -5490,11 +5544,31 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
             const resColor = isAuto ? 'bg-purple-100 text-purple-700' :
                              resTag === 'measurement-machine' || resTag === 'jig-shared' || (resTag && resTag !== '') ? 'bg-rose-100 text-rose-700' :
                              (resTag === null || resTag === '') ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700';
-            return (<div key={s.id} className={`p-3 border rounded-lg flex gap-3 cursor-pointer ${editingStepId===s.id ? 'border-blue-500 bg-blue-50' : 'hover:border-slate-300'}`} onClick={() => editStep(s)}><div className="flex flex-col gap-1 justify-center"><button onClick={(e)=>{e.stopPropagation();moveStep(i,'up')}} disabled={i===0} className="text-slate-300 hover:text-slate-600"><ArrowUp className="w-4 h-4"/></button><span className="text-xs font-bold text-slate-400 text-center">{i+1}</span><button onClick={(e)=>{e.stopPropagation();moveStep(i,'down')}} disabled={i===steps.length-1} className="text-slate-300 hover:text-slate-600"><ArrowDown className="w-4 h-4"/></button></div><div className="flex-1 min-w-0"><div className="font-bold text-sm truncate flex items-center gap-1.5">{isAuto && <span className="bg-purple-500 text-white text-xs font-bold px-1 rounded shrink-0">自動</span>}{s.title}</div><p className="text-xs text-slate-500 truncate">{s.description}</p><div className="flex items-center gap-1 mt-1 flex-wrap"><span className={`text-xs font-bold px-1.5 py-0.5 rounded ${resColor}`}>{isAuto ? '🤖 自動測定' : resLabel}</span>{s.jigNo && <span className="fi-tap-text font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">🔧治具:{s.jigNo}</span>}{s.programNo && <span className="fi-tap-text font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">📐Prg:{s.programNo}</span>}</div></div><div className="flex flex-col gap-1"><button onClick={(e)=>{e.stopPropagation();const dup={...s,id:generateId(),title:s.title+' (コピー)'};setSteps(prev=>[...prev.slice(0,i+1),dup,...prev.slice(i+1)]);}} className="text-slate-300 hover:text-blue-500" title="複製"><Copy className="w-4 h-4"/></button><button onClick={(e)=>{e.stopPropagation();deleteStep(s.id)}} className="text-slate-300 hover:text-red-500" title="削除"><Trash2 className="w-4 h-4"/></button></div></div>);
+            return (<div key={s.id} className={`p-3 border rounded-lg flex gap-3 cursor-pointer ${editingStepId===s.id ? 'border-blue-500 bg-blue-50' : 'hover:border-slate-300'}`} onClick={() => editStep(s)}><div className="flex flex-col gap-1 justify-center"><button onClick={(e)=>{e.stopPropagation();moveStep(i,'up')}} disabled={i===0} className="text-slate-300 hover:text-slate-600"><ArrowUp className="w-4 h-4"/></button><span className="text-xs font-bold text-slate-400 text-center">{i+1}</span><button onClick={(e)=>{e.stopPropagation();moveStep(i,'down')}} disabled={i===steps.length-1} className="text-slate-300 hover:text-slate-600"><ArrowDown className="w-4 h-4"/></button></div><div className="flex-1 min-w-0"><div className="font-bold text-sm truncate flex items-center gap-1.5">{isAuto && <span className="bg-purple-500 text-white text-xs font-bold px-1 rounded shrink-0">自動</span>}{s.title}</div><p className="text-xs text-slate-500 truncate">{s.description}</p><div className="flex items-center gap-1 mt-1 flex-wrap"><span className={`text-xs font-bold px-1.5 py-0.5 rounded ${resColor}`}>{isAuto ? '🤖 自動測定' : resLabel}</span>{s.jigNo && <span className="fi-tap-text font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">🔧治具:{s.jigNo}</span>}{s.programNo && <span className="fi-tap-text font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">📐Prg:{s.programNo}</span>}{requiredSkillIdsForStep(reqSkills, s.id).map((sid) => <span key={sid} data-step-skill={sid} className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: skillColorOf(skills, sid) }} title={`要るスキル: ${((skills || []).find((x) => x.id === sid) || {}).name || sid}`} />)}</div></div><div className="flex flex-col gap-1"><button onClick={(e)=>{e.stopPropagation();const dup={...s,id:generateId(),title:s.title+' (コピー)'};setSteps(prev=>[...prev.slice(0,i+1),dup,...prev.slice(i+1)]);}} className="text-slate-300 hover:text-blue-500" title="複製"><Copy className="w-4 h-4"/></button><button onClick={(e)=>{e.stopPropagation();deleteStep(s.id)}} className="text-slate-300 hover:text-red-500" title="削除"><Trash2 className="w-4 h-4"/></button></div></div>);
           })}</div>
         </div>
         <div className="w-2/3 p-6 bg-slate-50 overflow-y-auto flex gap-6">
           <div className="flex-1 space-y-4">
+            {/* 🎯 決まり17: この工程に要るスキル(✓)。全工程の物はここでは外せない(上の行で外す)。 */}
+            {editingStepId && (skills || []).length > 0 && (
+              <div className="bg-pink-50/60 border-2 border-pink-200 rounded-lg p-3" data-tpl="step-skills">
+                <div className="text-xs font-bold text-pink-800 mb-1.5">この工程に要るスキル <span className="fi-tap-text font-normal text-slate-500">（★のような一部の工程だけに効くスキルはここで✓）</span></div>
+                <div className="flex flex-wrap gap-2">
+                  {(skills || []).map((sk) => {
+                    const rs = reqSkills.find((x) => x.skillId === sk.id);
+                    const all = !!rs && rs.stepIds.length === 0;
+                    const on = !!rs && (all || rs.stepIds.includes(editingStepId));
+                    return (
+                      <label key={sk.id} className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border text-xs font-bold ${on ? 'bg-white' : 'bg-white/60 text-slate-500'} ${all ? 'opacity-70' : 'cursor-pointer'}`} style={{ borderColor: on ? skillColorOf(skills, sk.id) : '#e2e8f0' }} title={all ? '全工程で要る物(上の行で外します)' : ''}>
+                        <input type="checkbox" checked={on} disabled={all} data-step-skill-check={sk.id} onChange={(e) => setReqSkills(toggleSkillOnStep(reqSkills, sk.id, editingStepId, e.target.checked))} />
+                        <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: skillColorOf(skills, sk.id) }} />
+                        {sk.scope === SKILL_SCOPE.TEMPLATE ? '★' : ''}{sk.name}{all ? <span className="fi-tap-text font-normal text-slate-400">全工程</span> : null}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div><label className="block text-xs font-bold text-slate-500 mb-1">工程タイトル</label><input value={title} onChange={e => setTitle(e.target.value)} className="w-full p-2 border rounded"/></div>
             <div className="flex gap-4"><div className="flex-1"><label className="block text-xs font-bold text-slate-500 mb-1">タイプ</label><div className="flex gap-1 flex-wrap">{['normal', 'important', 'danger'].map(t => (<button key={t} onClick={() => { setType(t); if (t !== 'measurement') setMeasurementConfig(null); }} className={`flex-1 py-1.5 text-xs rounded border ${type===t ? 'bg-slate-800 text-white' : 'bg-white text-slate-500'}`}>{t}</button>))}<button onClick={() => { setType('measurement'); if (!measurementConfig) setMeasurementConfig({ layout: 'circle-4point', inputs: [...MEASUREMENT_LAYOUTS['circle-4point'].inputs.map(inp => ({ ...inp, inputType: 'number', presetValues: [], group: '' }))], calculations: [{ id: 'calc1', label: '計算結果', method: 'max-min', formula: '', inputIds: [], toleranceUpper: 0.05, toleranceLower: -0.05, unit: 'mm' }] }); }} className={`flex-1 py-1.5 text-xs rounded border ${type==='measurement' ? 'bg-teal-600 text-white' : 'bg-white text-teal-600 border-teal-300'}`}><Calculator className="w-3 h-3 inline mr-0.5"/>測定</button></div></div><div className="w-24"><label className="block text-xs font-bold text-slate-500 mb-1">目標(秒)</label><input type="number" value={targetTime} onChange={e => setTargetTime(Number(e.target.value))} className="w-full p-2 border rounded text-right"/></div></div>
 
@@ -32037,7 +32111,7 @@ const QuotaStoppedPanel = ({ until }) => (
          {activeTab === 'template-mgr' && (
            editingTemplate ? (
              <div className="p-4 h-full flex flex-col overflow-hidden">
-               <TemplateEditor template={editingTemplate} onSave={handleSaveTemplate} onCancel={() => setEditingTemplate(null)} customLayouts={settings?.customLayouts || {}} onSaveLayouts={(layouts, deadKey) => saveSettings({ customLayouts: layouts, ...(deadKey ? { __deleteMapKeys: [['customLayouts', deadKey]] } : {}) })} comboPresets={settings?.comboPresets || []} builtInOverrides={settings?.builtInOverrides || {}} hiddenBuiltIns={settings?.hiddenBuiltIns || []} />
+               <TemplateEditor template={editingTemplate} onSave={handleSaveTemplate} onCancel={() => setEditingTemplate(null)} skills={settings.skills && settings.skills.length ? settings.skills : DEFAULT_SKILLS} onSaveSkills={(list) => saveSettings({ skills: list })} currentUserName={currentUserName} customLayouts={settings?.customLayouts || {}} onSaveLayouts={(layouts, deadKey) => saveSettings({ customLayouts: layouts, ...(deadKey ? { __deleteMapKeys: [['customLayouts', deadKey]] } : {}) })} comboPresets={settings?.comboPresets || []} builtInOverrides={settings?.builtInOverrides || {}} hiddenBuiltIns={settings?.hiddenBuiltIns || []} />
              </div>
            ) : (
              <TemplateListSection
