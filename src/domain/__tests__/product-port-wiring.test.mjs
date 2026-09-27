@@ -136,5 +136,6 @@ test('PP11 掛け持ち案内: 候補は juggleCandidates・移る/戻るは保�
   assert.match(app, /<JuggleGuide cands=\{juggle\.cands\}/, '作業画面に掛け持ち案内を出していない');
   assert.match(app, /key=\{executionLotId\}/, '別のロットへ移った時に作業画面を作り直していない(前のロットの状態が残る)');
   assert.match(app, /onSwitchLot=\{\(id\) => setExecutionLotId\(id\)\}/, '親が移る口を渡していない');
-  assert.match(app, /travelCfg=\{null\}/, '部品に無い区画の表を渡している');
+  // X1(2026-09-27): 区画どうしの片道はマスタ設定で入れる(settings.opsim.zoneTravel)。空なら null(名前の目安だけ)
+  assert.match(app, /travelCfg=\{settings\?\.opsim\?\.zoneTravel \|\| null\}/, '区画どうしの片道を作業画面へ渡していない');
 });

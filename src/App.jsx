@@ -108,9 +108,13 @@ import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './do
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
 // 🤖 自動工程の判定・開始ガードの唯一の正(製品検査 src/domain/workExecution.js と md5 一致の写し)
-import { isAutoStep } from './domain/workExecution.js';
+import { isAutoStep as isAutoStepShared, buildStepMasterIndex } from './domain/workExecution.js';
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
 import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGuide.js';
+import { setEstimatedSession } from './domain/workSessions.js';
+import ZoneTravelSettings from './ZoneTravelSettings.jsx';
+import { taskTimeQualityOf, hasUsableInterval } from './domain/taskTimeQuality.js';
+import { intKeyOf, withInterruptionLog, intWritePatch, intDeletePatch, stopIntEntry, mergePendingInts, dropSettledPending } from './domain/interruptionLog.js';
 // 🚶 掛け持ち案内の枠(製品検査 src/workscreen/JuggleGuide.jsx と md5 一致の写し。描くだけ)
 import { JuggleGuide } from './workscreen/JuggleGuide.jsx';
 // ⏱ 終わっていない工程を「該当なし」で閉じる時、時間・NG・写真を落とさない(製品検査 src/domain/skipKeepingRecord.js と md5 一致の写し)
@@ -443,6 +447,24 @@ const INITIAL_MAP_ZONES = [
   // 未該当エリア (不良品・残ロット待ちなどの一時置き場)
   { id: 'zone_unassigned', name: '未該当エリア', x: 2, y: 92, w: 96, h: 7, color: 'bg-slate-100/80 border-slate-400', isUnassigned: true },
 ];
+
+// 現行マスタ索引(案②): templates購読で更新する。module-levelの純関数からも参照できるようにするため
+//   Reactのstateではなくモジュール変数に置く(読み取り専用・判定のためだけに使う)。
+let STEP_MASTER_INDEX = null;
+const refreshStepMasterIndex = (templates) => { try { STEP_MASTER_INDEX = buildStepMasterIndex(templates); } catch { STEP_MASTER_INDEX = null; } };
+// アプリ全体はこの1関数だけを使う (索引は自動で効く)
+const isAutoStep = (step) => isAutoStepShared(step, STEP_MASTER_INDEX);
+
+// 🔁 修正(やり直し)を始めるとき「理由を記録せず開始」を押した、という合図。
+//   なぜ要るか:
+//     修正開始の処理は「理由の指定が無ければ、その作業の今のNG理由を焼き付ける」ようにしてある。
+//     ところが 2回目以降のピッカーの「理由を記録せず開始」も“指定なし(null)”で落ちていたため、
+//     作業者が「この回の原因は言えない」と分かって押したのに、今のNG理由が勝手に焼かれていた。
+//     しかもそれは分析画面で「回ごと＝確定」として数えられ、確定でない物を確定と言ってしまう。
+//   → 「指定なし(1回目など)」と「記録しないと人が決めた」を必ず別の値で区別する。
+//   ⚠Symbol にしてあるのは、理由が現場の自由入力(どんな文字でも入る)だからで、
+//     何を打ってもこの合図と絶対にぶつからないようにするため。
+const REWORK_REASON_OMITTED = Symbol('rework-reason-omitted');
 
 const DEFAULT_DEFECT_PROCESS_OPTIONS = ['前班', '設計', '調達', '機械'];
 const DEFAULT_COMPLAINT_OPTIONS = ['作業しづらい', '工具が不足', '手順が不明確', '品質に不安', 'その他'];
@@ -3153,7 +3175,8 @@ const nextOptimalMove = (steps, tasks, quantity, analysis, opts = {}) => {
     for (let si = 0; si < steps.length; si++) {
       if (steps[si]?.lotOnce) continue;
       const st = statusOf(si, u);
-      if (isAutoStep(steps[si]) && st === 'processing') { busy = true; break; } // 機械占有 → この台は停止
+      // 自動の台は NG再測定待ち(ng)・再測定中(reworking)も機械に載っている(製品と同じ)
+      if (isAutoStep(steps[si]) && (st === 'processing' || st === 'reworking' || st === 'ng')) { busy = true; break; } // 機械占有 → この台は停止
       if (st === 'waiting' || st === 'paused') { next = si; break; }
       // completed/skipped/ng → 次へ
     }
@@ -7040,7 +7063,7 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
                   const bN = (task.status === 'processing' && task.startTime) ? Math.max(1, Array.from({ length: qty }).reduce((n, _, uu) => { const t2 = getTask(step, sIdx, uu); return n + (t2.status === 'processing' && t2.startTime === task.startTime ? 1 : 0); }, 0)) : 1;
                   const c = cellContent(task, (effTargets[sIdx] || 0) * bN);
                   const isNext = globalNextTask && !globalNextTask.isLot && globalNextTask.sIdx === sIdx && globalNextTask.unitIdx === u && (task.status === 'waiting' || task.status === 'paused');
-                  const isActive = activeCustomTaskKey === `${sIdx}-${u}`;
+                  const isActive = activeCustomTaskKey === `${sIdx}-${u}` || (!!step?.id && activeCustomTaskKey === `${step.id}-${u}`);
                   const reworks = task.reworks || [];
                   const reworkTotal = reworks.reduce((s, r) => s + (r.duration || 0), 0);
                   return (
@@ -7240,7 +7263,7 @@ const ModelQualityInfoPanel = ({ model, stepTitle, info, open, onToggle }) => {
   );
 };
 
-const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [] }) => {
+const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [] }) => {
   // 親側で `lots.find(l => l.id === executionLotId)` が undefined を返すケースに備える。
   // ※ React Hooks ルール準拠: hooks を条件分岐の上に置くと「hooks 呼び出し回数の不一致」エラーになるため、
   //   lot 自体は空 object でフォールバックして hooks を常に同じ回数呼ぶ。実際の render は最後に guard する。
@@ -7249,9 +7272,67 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   //   品名はロットが名乗る名前 → 無ければ設定の品目名簿(settings.itemMaster)。どちらも無ければ品目コードだけ。
   const itemName = resolveItemName(lot.model, lot.modelText, itemMaster);
   const itemLabel = itemName ? `${lot.model || ''}｜${itemName}` : (lot.model || '');
-  // この検査を実施している作業者名 = ロットの担当者(lot.workerId)。担当を切替えると以降の完了が新担当で記録される。
+  // B.1.1: 担当も同じ理由で「直前に保存した値」を正にする。
+  //   担当変更 onSave({workerId}) の直後、Firestore の購読が lot へ返る前に次の作業を開始すると、
+  //   lot.workerId はまだ旧担当のため、新しいセッションが旧担当で開いてしまう。
+  const lastSavedWorkerIdRef = useRef(lot.workerId || null);
+  // この検査を実施している作業者 = ロットの担当者。担当を切替えると以降の完了が新担当で記録される。
   // これを各タスクの workerName に焼き付けることで、台ごとに別の人が作業しても集計が正しくなる。
-  const inspectorName = (lot.workerId && workers.find(w => w.id === lot.workerId)?.name) || currentUserName || '';
+  // ⚠生の lot.workerId ではなく lastSavedWorkerIdRef を正とする(B.1.1 と同じ理由)。
+  //   担当を切替えた直後は Firestore の購読が返るまで lot.workerId が旧担当のままで、
+  //   そのまま完了を押すと task.workerName に前の担当者の名前が焼き付いてしまう(既存バグ)。
+  //   教育中(🎓)判定も同じ ID から引く。
+  // ⚠ref は書き換えても再描画を起こさない。担当を切り替えた瞬間に画面を作り直すための刻み。
+  const [, setInspectorTick] = useState(0);
+  // 他端末が担当を変えた場合は prop 追従で取り込む(自端末の変更は下の onSave が即時に上書きする)。
+  // ⚠ref を書くだけでは再描画が起きない (あら探し#23)。別端末や現場マップで担当が変わっても、
+  //   その prop 更新の描画時点では ref がまだ旧値なので、担当セレクタと🎓バッジが古い担当のまま居座る。
+  //   逐次モードでタイマーが止まっていると毎秒の再描画も無いので、次に何か押すまで直らない。
+  //   → 実際に値が変わった時だけ刻みを進めて描き直す。
+  useEffect(() => {
+    const next = lot.workerId || null;
+    if (lastSavedWorkerIdRef.current === next) return;
+    lastSavedWorkerIdRef.current = next;
+    setInspectorTick(t => t + 1);
+  }, [lot.workerId]);
+  const inspectorWorkerId = lastSavedWorkerIdRef.current || lot.workerId || null;
+  // ⚠担当が未割当のロットでも作業画面は開ける(カードから直接・通知のディープリンクも)。
+  //   その時 workerName は currentUserName にフォールバックするのに、教育中(🎓)判定だけ
+  //   null 引きで必ず false になっていた (あら探し#10) = 新人の名前で記録されるのに印が付かず、
+  //   その記録が標準時間の較正・全社ベースタイム・Cpk・他の新人のものさしに混ざっていた。
+  //   → 名前でも引けるようにして「名前と印」を同じ規約にそろえる(31481 の myWorker と同じ引き方)。
+  const resolveWorkerForWork = (wid) => (wid ? (workers || []).find(w => w.id === wid) : null)
+    || (currentUserName ? (workers || []).find(w => w.name === currentUserName) : null)
+    || null;
+  const inspectorWorker = resolveWorkerForWork(inspectorWorkerId);
+  const inspectorName = inspectorWorker?.name || currentUserName || '';
+  // ================================================================================
+  // 作業中の担当者引き継ぎ(製品と同じ): 見出しのこのセレクタで担当を切替えると lot.workerId を更新 →
+  //   inspectorName が追従し、これ以降に完了する台は新しい担当で記録される(完了済みの台はそのまま=遡及しない)。
+  //   例: 4台のうち1・2台目を A が完了→ここで B に切替→3・4台目は B で記録。
+  //   ⚠教育中(🎓)の印は P132(作業者マスタの教育中)が入るまで出さない。
+  const changeInspector = (workerId) => {
+    if (!workerId || workerId === inspectorWorkerId) return;
+    const nm = (workers.find(w => w.id === workerId)?.name) || '';
+    if (!window.confirm(`担当を「${nm}」に切り替えます。
+これ以降に完了する台は「${nm}」で記録されます（完了済みの台はそのまま）。
+よろしいですか？`)) return;
+    onSave({ workerId }); // 中で lastSavedWorkerIdRef を即時更新する
+    // ⚠ref を書き換えただけでは再描画されない = inspectorName が旧担当のまま残る。ここで描き直す
+    setInspectorTick(t => t + 1);
+  };
+  const inspectorSelector = (
+    <label onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 bg-white/10 rounded px-1.5 py-1 shrink-0" title={`この作業の担当者。切り替えると、これ以降に完了する台は新しい担当で記録されます（完了済みの台はそのまま）${!inspectorWorkerId ? `
+⚠担当が未選択です。記録は「${inspectorName || '(名前なし)'}」で残ります。担当を選んでください。` : ''}`}>
+      <User className="w-3.5 h-3.5 opacity-80 shrink-0" />
+      {/* ⚠表示は lot.workerId ではなく「これから記録に使う担当」を出す(購読が返るまで lot.workerId は旧担当のまま) */}
+      <select value={inspectorWorkerId || ''} onChange={(e) => changeInspector(e.target.value)} className="rounded px-1 py-0.5 text-xs font-bold border max-w-[6.5rem] bg-slate-700 text-white border-white/20">
+        <option value="">担当を選択</option>
+        {/* 🛌休止中の人は外す。ただし今この作業に付いている人は外さない(🛌を付けて出す) */}
+        {laneWorkersOf(workers || [], [], { keepIds: [inspectorWorkerId] }).map(w => <option key={w.id} value={w.id} className="text-black">{isWorkerPaused(w) ? `🛌${w.name}` : w.name}</option>)}
+      </select>
+    </label>
+  );
   // ロットが消えた (削除/置換) 場合は自動でモーダルを閉じる
   useEffect(() => {
     if (!_lotProp && onClose) {
@@ -7309,8 +7390,24 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const toggleGridDense = () => setGridDense(v => { const nv = !v; try { localStorage.setItem('gridDense', nv ? '1' : '0'); } catch {} return nv; });
   // 前回モードを復元 (lot.executionType があれば優先)
   const [executionType, setExecutionType] = useState(lot.executionType || 'initial');
-  const [currentStepIdx, setCurrentStepIdx] = useState(lot.currentStepIndex || 0);
-  const [currentUnitIdx, setCurrentUnitIdx] = useState(lot.currentUnitIndex || 0);
+  // 🖐 2026-09-24 順序実行と保存したロットは 記録から「次にやる作業」を探し直す(保存した位置が古い事がある・カスタムで進めた分を飛ばす)
+  // 🖐 2026-09-24 確かめ役: カスタムで手作業を「開始」したまま(processing)・修正作業中(reworking)の記録があるロットは
+  //   順序実行では終えられない(時間も二重に数える) → 開く時はカスタム(前と同じ)。
+  const seqOpenHasManualRunning = () => Object.entries(lot.tasks || {}).some(([k, t]) => {
+    if (!t || (t.status !== 'processing' && t.status !== 'reworking' && t.status !== 'paused')) return false;
+    if (t.status === 'reworking') return true;
+    // まとめて開始の台(作業中/一時停止)は 完了で「壁時計÷台数」に按分する約束。順序実行は1台ずつ終えるので扱えない
+    if (t.batchOwner != null) return true;
+    if (t.status === 'paused') return false;
+    const steps0 = lot.steps || [];
+    const lotM = k.match(/^(.+)-lot-\d+$/);
+    const ident = lotM ? lotM[1] : k.slice(0, k.lastIndexOf('-'));
+    const st = steps0.find((x) => x && x.id === ident) || (/^\d+$/.test(ident) ? steps0[Number(ident)] : null);
+    return !st || !isAutoStep(st);
+  });
+  const seqInitPos = () => (lot.executionType === 'sequential' && lot.tasks && Object.keys(lot.tasks).length && !seqOpenHasManualRunning() ? seqNextOf(lot.steps || [], lot.tasks, lot.quantity || 1, isAutoStep) : null);
+  const [currentStepIdx, setCurrentStepIdx] = useState(() => { const p = seqInitPos(); return p ? p.s : (lot.currentStepIndex || 0); });
+  const [currentUnitIdx, setCurrentUnitIdx] = useState(() => { const p = seqInitPos(); return p ? p.u : (lot.currentUnitIndex || 0); });
   const totalUnits = lot.quantity || 1;
   // ※ optimizedStepOrder による自動並べ替えは撤去 (2026-05-30 ユーザー指示)
   //   理由: テンプレ/ロットの正規工程順を勝手に書き換えるのは破壊的すぎる。
@@ -7332,6 +7429,13 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const [lotNoteBannerDismissed, setLotNoteBannerDismissed] = useState(0);
   const [tasks, setTasks] = useState(lot.tasks || {});
   const tasksRef = useRef(lot.tasks || {});
+  // 🚦 保存の中継(製品と同じ): 連続操作で次のイベントが再描画より先でも、直前の開始・停止を開始の見張りが見られるようにする
+  const onSave = useCallback((payload) => {
+    if (payload && payload.tasks) tasksRef.current = payload.tasks;
+    // 👤 担当の切替も 購読が返る前の次の操作に効かせる(製品と同じ)
+    if (payload && payload.workerId) lastSavedWorkerIdRef.current = payload.workerId;
+    return onSaveRaw(payload);
+  }, [onSaveRaw]);
   useEffect(() => { tasksRef.current = tasks; }, [tasks]);
 
   // 🚨🚨🚨 「済み」の嘘を止める見張り。
@@ -7492,34 +7596,26 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   ];
 
   // Interruptions (Defects/Monitoring)
-  const [interruptions, setInterruptions] = useState(lot.interruptions || []);
-  // 🚨🚨 中断(不具合・軽微不良・気づき)も **開いた瞬間のコピーを握り続けていた**。
-  //   これは配列なので merge:true でも **丸ごと置き換わる** → 後から保存した端末が勝ち、
-  //   他の端末が足した不具合記録が黙って消える(最終検査・③では 2026-08-14 に直した形)。
-  //   ⚠ここは「サーバに在る物」と「まだ届いていない手元の物」を **id で合わせる**。
-  //     ・サーバにしか無い物 → 取り込む(他端末の記録を消さない)
-  //     ・手元にしか無い物   → 残す(まだ送れていない自分の記録を消さない)
-  //     ・進行中(active)     → 手元を優先(秒数が1秒ごとに進んでいる)
-  //   ⚠id が無い古い記録は触らない(消すと台帳から消える)。
-  const serverInts = Array.isArray(lot && lot.interruptions) ? lot.interruptions : null;
-  useEffect(() => {
-    if (!serverInts) return;
-    setInterruptions((prev) => {
-      const byId = new Map();
-      const noId = [];
-      serverInts.forEach((i) => { if (i && i.id) byId.set(i.id, i); else if (i) noId.push(i); });
-      prev.forEach((i) => {
-        if (!i || !i.id) return;
-        // 手元にしか無い(未送信) / 進行中(秒数が進んでいる) は手元を正とする
-        if (!byId.has(i.id) || i.status === 'active') byId.set(i.id, i);
-      });
-      prev.forEach((i) => { if (i && !i.id) noId.push(i); });
-      const next = [...byId.values(), ...noId];
-      // 中身が同じなら同じ配列を返す(毎秒の描き直しを増やさない)
-      if (next.length === prev.length && next.every((x, k) => x === prev[k])) return prev;
-      return next;
-    });
-  }, [serverInts]);
+  // 🧾中断(不具合・軽微不良・気づき・張り付き)は **この端末の配列を正としない**(製品 2026-08-14 と同じ)。
+  //   開いた瞬間のコピーを握り続けると ①他端末が足した記録を消す ②不具合分析で消した記録を復活させる、の両方が起きる。
+  //   → 共有(lot・購読の出口で withInterruptionLog 済み)を正とし、保存してから購読が返るまでの一瞬だけ pending で繋ぐ。
+  const [pendingInts, setPendingInts] = useState({});
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- timerTick は進行中の秒を描き直すきっかけ
+  const interruptions = useMemo(() => mergePendingInts(lot.interruptions, pendingInts), [lot.interruptions, pendingInts, timerTick]);
+  useEffect(() => { setPendingInts(prev => dropSettledPending(prev, lot.interruptions)); }, [lot.interruptions]);
+  // 中断1件を共有へ書く。書けるまでの間だけ手元に持ち、失敗したら外して知らせる(黙って落とさない)。
+  // ⚠戻り値で成否を返す。呼び出し側は **保存できてから** 画面を閉じる。
+  const writeInterruption = async (next, prev = null) => {
+    const k = intKeyOf(next);
+    setPendingInts(p => ({ ...p, [k]: next }));
+    try { await onSave(intWritePatch(prev, next)); return true; }
+    catch (e) {
+      setPendingInts(p => { const n = { ...p }; delete n[k]; return n; });
+      alert(`記録の保存に失敗しました: ${e?.message || e}
+入力はそのまま残っています。通信を確かめて、もう一度お試しください。`);
+      return false;
+    }
+  };
   // 測定画面メイン拡大表示トグル（測定タイプの工程のみで使用）
   const [measurementFullscreen, setMeasurementFullscreen] = useState(false);
   // 確認チェック拡大表示 + 注意事項/画像 拡大表示
@@ -7670,6 +7766,10 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
   const [showPdf, setShowPdf] = useState(false);
   const [activeCustomTaskKey, setActiveCustomTaskKey] = useState(null);
+  // 🔎右の「工程詳細」が映している作業の写し(製品 2026-09-24「左を押したのに右が切り替わらない」)。
+  //   ⚠音声の待受ループは音声ONの時に1回だけ始まる長生きの関数なので、state を直接読むと始めた時の値のまま。音声の経路はこの ref を読む。
+  const activeCustomTaskKeyRef = useRef(null);
+  activeCustomTaskKeyRef.current = activeCustomTaskKey;
 
   // じっと見るモード: 進行中タスクの「要素ラップ」を記録 (連続ラップ方式)。
   //   { taskKey: [{ elementId, atMs }] }。Firestore には完了時にまとめて書く (タップ毎の書込はしない)。
@@ -7697,6 +7797,27 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     const stepIdxFromId = localSteps.findIndex(s => s.id === prefix);
     if (stepIdxFromId >= 0) return { stepIdx: stepIdxFromId, unitIdx };
     return { stepIdx: 0, unitIdx };
+  };
+
+  // 🔎右の「工程詳細」を、いま押した作業に合わせる(custom のときだけ・製品と同じ)。
+  //   ⚠「映す物が無い」(null)にはしない。null は描画側で Step1 #1 に落ちるので、別の作業へ跳んで見える。
+  const focusCustomTask = (key) => {
+    if (executionType !== 'custom' || !key) return;
+    activeCustomTaskKeyRef.current = key;
+    setActiveCustomTaskKey(key);
+  };
+  // まとめて開始の時用。いま右に映っているのが「手で進めている最中の作業」なら奪わない。
+  const focusCustomTaskUnlessBusy = (key, afterTasks) => {
+    if (executionType !== 'custom' || !key) return;
+    const cur = activeCustomTaskKeyRef.current;
+    if (cur && cur !== key) {
+      const all = afterTasks || {};
+      const { stepIdx: cs, unitIdx: cu } = parseActiveTaskKey(cur);
+      const cStep = localSteps[cs];
+      const curTask = all[cur] || (cStep?.id ? all[`${cStep.id}-${cu}`] : null) || all[`${cs}-${cu}`] || null;
+      if (curTask?.status === 'processing' && cStep && !isAutoStep(cStep)) return;
+    }
+    focusCustomTask(key);
   };
 
   // Voice Assistant
@@ -7791,7 +7912,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
   // Initialize
   useEffect(() => {
-    if (lot.tasks && Object.keys(lot.tasks).length > 0) {
+    // 🖐 順序実行と決めたロットは そのまま(位置は useState の初期値で 記録から探し直す・製品 2026-09-24 と同じ)
+    if (lot.tasks && Object.keys(lot.tasks).length > 0 && (lot.executionType !== 'sequential' || seqOpenHasManualRunning())) {
        setExecutionType('custom');
     }
     setElapsed(lot.totalWorkTime || 0);
@@ -7840,18 +7962,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
          }
 
          // Interruption durations: 進行中のものがある場合のみ map (新オブジェクト生成を最小化)
+         // 進行中の割り込みは「毎秒描き直す」だけ。秒は描画時に計算する(mergePendingInts・製品と同じ)
          if (hasActiveNonBreakInterruption) {
-           setInterruptions(prev => {
-             let changed = false;
-             const next = prev.map(i => {
-               if (i.status === 'active' && i.type !== 'break') {
-                 const d = Math.floor((currentNow - i.startTime) / 1000);
-                 if (i.duration !== d) { changed = true; return { ...i, duration: d }; }
-               }
-               return i;
-             });
-             return changed ? next : prev;
-           });
+           setTimerTick(prev => prev + 1);
          }
 
          // Custom Tasks: timerTick の inc だけで個別タスクの timer 表示を更新 (setTasks 全コピーは廃止)
@@ -7932,27 +8045,30 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           startTime: reportOnly ? null : now,
           duration: 0,
           status: reportOnly ? 'reported' : 'active',
-          workerName: (workers.find(w => w.id === lot.workerId)?.name) || lot.workerId || '', // ID ではなく名前を保存
+          workerName: inspectorName || lot.workerId || '', // ID ではなく名前を保存(担当の切替も即効く・製品と同じ)
           stepInfo: curStep ? { stepId: curStep.id, title: curStep.title } : null,
           causeProcess: causeProcess || '',
           photos: photos || [],
           ...(meta || {}) // 気づき・改善用: { improvementKind, targetStepTitle } 等
       };
-      const updated = [...interruptions, newInt];
-      setInterruptions(updated);
-      onSave({ interruptions: updated });
-      if (type === 'defect') {
-        setShowDefectModal(false);
-        setDefectLabel('');
-        setDefectCauseProcess('');
-        setDefectPhotos([]);
-      }
+      // 🧾配列ごと書き戻さない。1件を鍵つきで書く。⚠保存できてから窓を閉じる(失敗しても入力と写真が残る)
+      writeInterruption(newInt).then((ok) => {
+        if (!ok) return;
+        if (type === 'defect') {
+          setShowDefectModal(false);
+          setDefectLabel('');
+          setDefectCauseProcess('');
+          setDefectPhotos([]);
+        }
+      });
+      return newInt;
   };
 
   const stopInterruption = (id) => {
-      const updated = interruptions.map(i => i.id === id ? { ...i, status: 'completed' } : i);
-      setInterruptions(updated);
-      onSave({ interruptions: updated });
+      const cur = (interruptions || []).find(i => i && i.id === id);
+      if (!cur) return;
+      // ⚠1件だけ書く。秒は止めた瞬間の実時刻から出す(製品と同じ)
+      writeInterruption(stopIntEntry(cur), cur);
   };
 
   // --- Pause Logic (中断 = 作業時間計測の一時停止) ---
@@ -8117,10 +8233,10 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   });
   const startGuard = ({ targetStep, excludeKey = null, currentTasks = tasksRef.current }) => {
     const ctx = workGuardContextRef.current || { lots, lot, localSteps, workers, currentUserName, executionType, isTimerRunning, currentStepIdx };
-    const workerId = ctx.lot.workerId
+    const workerId = lastSavedWorkerIdRef.current || ctx.lot.workerId
       || (ctx.workers || []).find(w => w.name === ctx.currentUserName)?.id || null;
     return guardLotTaskStart({ lots: ctx.lots || [], workerId, targetStep, excludeKey,
-      workers: ctx.workers || [],
+      masterIndex: STEP_MASTER_INDEX, workers: ctx.workers || [],
       currentLot: { ...ctx.lot, steps: ctx.localSteps, tasks: currentTasks,
         executionType: ctx.executionType, currentStepIndex: ctx.currentStepIdx,
         ...(ctx.executionType === 'sequential' ? {
@@ -8245,12 +8361,12 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     if (currentStep && Array.isArray(currentStep.checklistItems) && currentStep.checklistItems.length > 0) {
       const requiredItems = currentStep.checklistItems.filter(it => it.required !== false);
       if (requiredItems.length > 0) {
-        const chkKey = `${currentStep.id}-${currentUnitIdx}-checklist`;
+        const chkKey = `${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}-checklist`;
         const checked = curMR[chkKey] || {};
         const missing = requiredItems.filter(it => !checked[it.id]);
         if (missing.length > 0) {
           alert(`⚠ 確認チェックを完了してください:\n\n${missing.map(m => `・${m.label || '(無題)'}`).join('\n')}`);
-          return;
+          return { ok: false, msg: '確認チェックが残っています。画面で確認してください' };
         }
       }
     }
@@ -8262,13 +8378,15 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     // 🚨 動いている物(自動運転・修正作業中)は ここでは終えない(製品 2026-09-24)。
     //   音声の「完了」や 画面の「次へ」で、機械に載っている台を 測った時間ごと完了にしていた。
     if (seqIsRunning(prevTask)) {
-      setOrderHint(prevTask.status === 'reworking' ? '修正作業中です。修正の完了はカスタム画面で押します' : 'カスタム画面で作業中の記録があります。カスタム画面で終えてください');
-      return;
+      const msg = prevTask.status === 'reworking' ? '修正作業中です。修正の完了はカスタム画面で押します' : 'カスタム画面で作業中の記録があります。カスタム画面で終えてください';
+      setOrderHint(msg);
+      return { ok: false, msg };
     }
     // まとめて開始の台は カスタムの「まとめて完了」で(1台ずつ終えると まとめた時間を台数ぶん付ける)
     if (prevTask && prevTask.batchOwner != null && !seqIsSettled(prevTask)) {
-      setOrderHint('まとめて開始の作業です。カスタム画面で「まとめて完了」してください');
-      return;
+      const msg = 'まとめて開始の作業です。カスタム画面で「まとめて完了」してください';
+      setOrderHint(msg);
+      return { ok: false, msg };
     }
     // 🚨 済・該当なし・NG・修正済みの記録は 上書きしない(前は completed と作った時間で上書きし、該当なしの印や NG の理由を消していた)
     const settled = seqIsSettled(prevTask);
@@ -8330,7 +8448,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes,
           measurementResults: curMR, tasks: tasksRef.current, ...delKeys });
         setOrderHint(gate.message);
-        return;
+        return { ok: false, msg: gate.message };
       }
       setCurrentStepIdx(next.step);
       setCurrentUnitIdx(next.unit);
@@ -8338,9 +8456,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     } else {
       // 全工程×全台完了
       onSave({ totalWorkTime: elapsed, stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes, measurementResults: curMR, tasks: tasksRef.current, ...delKeys });
-      handleCompleteTrigger();
+      // 🎤 弾かれたら理由を返す(音声はそれを読んで待ち受けを続ける・製品と同じ)
+      if (!handleCompleteTrigger()) return { ok: false, msg: VOICE_COMPLETE_BLOCKED_SPEECH[completeBlockReasonRef.current] || '完了できませんでした。画面を確認してください' };
     }
+    return true;
   };
+  // 音声の輪は始めた時の写しを持つので 最新の handleNext を読む(製品と同じ)
+  const handleNextRef = useRef(null);
+  handleNextRef.current = handleNext;
   
   // --- Voice Assistant Logic ---
   const runMicTest = async () => {
@@ -8478,9 +8601,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         }
 
         // --- 次工程コマンド（同じ台数で次の工程へ）---
-        if ((matchNextStep(cmd) || matchNextStep(rawCmd)) && activeCustomTaskKey) {
+        if ((matchNextStep(cmd) || matchNextStep(rawCmd)) && activeCustomTaskKeyRef.current) {
           // activeCustomTaskKey は step.id ベースの場合があるので parseActiveTaskKey で正規化
-          const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKey);
+          const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
           voiceToggleTask(sI, uI); // 現在を完了
           let nextS = sI + 1;
           // ロット1回(段取り)工程は音声「次工程」の着地点にしない (台indexを回数と取り違えるため。準備/片付けは画面タップで)
@@ -8488,7 +8611,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           if (nextS < localSteps.length) {
             const rNext = voiceToggleTask(nextS, uI); // 次工程の同じ台数を開始(連動/厳密ゲートあり)
             if (!rNext.ok) { await speakAsyncWithLog(rNext.hint || 'この工程は画面から開始してください'); continue; }
-            setActiveCustomTaskKey(`${nextS}-${uI}`);
+            focusCustomTask(`${nextS}-${uI}`);
             await speakAsyncWithLog(`${nextS+1}工程、${uI+1}台目を開始しました`);
             await runVoiceCustomTaskFlow(nextS, uI);
           } else {
@@ -8544,7 +8667,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                 await speakAsyncWithLog(rStart.hint || 'この工程は画面から開始してください');
               } else {
                 await speakAsyncWithLog(`${stepNum}工程、${unitNum}台目を開始しました`);
-                setActiveCustomTaskKey(taskKey);
+                focusCustomTask(taskKey);
                 await runVoiceCustomTaskFlow(sIdx, uIdx);
               }
             } else if (curTask.status === 'processing') {
@@ -8561,14 +8684,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             await speakAsyncWithLog('その工程または台数は存在しません');
           }
         } else if (matchComplete(cmd)) {
-          if (activeCustomTaskKey) {
-            const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKey);
+          if (activeCustomTaskKeyRef.current) {
+            const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
             voiceToggleTask(sI, uI);
             await speakAsyncWithLog(`${sI+1}工程${uI+1}台目を完了しました。次はどうしますか？`);
           }
         } else if (matchMeasurement(cmd)) {
-          if (activeCustomTaskKey) {
-            const { stepIdx: sI } = parseActiveTaskKey(activeCustomTaskKey);
+          if (activeCustomTaskKeyRef.current) {
+            const { stepIdx: sI } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
             const step = localSteps[sI];
             if (step?.type === 'measurement' && step.measurementConfig) {
               await runVoiceMeasurementFlow(step, sI);
@@ -8581,8 +8704,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         } else if (matchInterrupt(cmd)) {
           toggleBreak();
           await speakAsyncWithLog('中断しました');
-        } else if (matchNext(cmd) && activeCustomTaskKey) {
-          const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKey);
+        } else if (matchNext(cmd) && activeCustomTaskKeyRef.current) {
+          const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
           voiceToggleTask(sI, uI); // 現在を完了
           let nextS = sI, nextU = uI + 1;
           if (nextU >= lot.quantity) { nextS++; nextU = 0; }
@@ -8591,7 +8714,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           if (nextS < localSteps.length) {
             const rNx = voiceToggleTask(nextS, nextU); // 次を開始(連動/厳密ゲートあり)
             if (!rNx.ok) { await speakAsyncWithLog(rNx.hint || 'この工程は画面から開始してください'); continue; }
-            setActiveCustomTaskKey(`${nextS}-${nextU}`);
+            focusCustomTask(`${nextS}-${nextU}`);
             await speakAsyncWithLog(`${nextS+1}工程、${nextU+1}台目を開始しました`);
             await runVoiceCustomTaskFlow(nextS, nextU);
           } else {
@@ -8692,7 +8815,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       const cur = prev[key];
       if (!cur || cur.status === 'reworking') return prev;
       const now = Date.now();
-      const reworks = [...(cur.reworks || []), { startTime: now, duration: 0, round: (cur.reworks?.length || 0) + 1 }];
+      // 音声の修正も 今のNG理由をこの回に焼く(製品と同じ)
+      const reworks = [...(cur.reworks || []), { startTime: now, duration: 0, round: (cur.reworks?.length || 0) + 1, ...(cur.ngReason ? { reason: cur.ngReason } : {}) }];
       ok = true;
       const updated = { ...prev, [key]: { ...cur, status: 'reworking', reworkStartTime: now, reworkPausedAt: null, firstStartTime: cur.firstStartTime || cur.startTime || now, reworks, workerName: inspectorName || cur.workerName } };
       onSave({ tasks: updated, status: 'processing' });
@@ -8782,8 +8906,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   //   custom で対象未確定なら null(誤った台に作用しないよう案内する)。
   const voiceCurrentTarget = () => {
     if (executionType === 'custom') {
-      if (!activeCustomTaskKey) return null;
-      const { stepIdx, unitIdx } = parseActiveTaskKey(activeCustomTaskKey);
+      if (!activeCustomTaskKeyRef.current) return null;
+      const { stepIdx, unitIdx } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
       if (stepIdx == null || unitIdx == null || Number.isNaN(stepIdx) || Number.isNaN(unitIdx)) return null;
       return { sIdx: stepIdx, uIdx: unitIdx };
     }
@@ -8822,7 +8946,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         const fromU = rng ? parseInt(rng[1]) - 1 : undefined;
         const toU = rng ? parseInt(rng[2]) - 1 : undefined;
         const r = voiceBatchStart(sIdx, fromU, toU);
-        if (r.ok) { setActiveCustomTaskKey(`${sIdx}-${r.firstUnit}`); await speakAsyncWithLog(`${sIdx + 1}工程を${r.started}台、まとめて開始しました。終わったら「まとめて完了」と言ってください`); }
+        if (r.ok) { focusCustomTaskUnlessBusy(`${sIdx}-${r.firstUnit}`, tasksRef.current); await speakAsyncWithLog(`${sIdx + 1}工程を${r.started}台、まとめて開始しました。終わったら「まとめて完了」と言ってください`); }
         else if (r.reason === 'rotary') await speakAsyncWithLog('この工程は分割測定アプリと連動しているため、まとめて開始できません。画面から台ごとに開始してください');
         else if (r.reason === 'strict') await speakAsyncWithLog(`厳密モードです。${r.hint || 'その工程のまとめて開始はまだできません'}`);
         else await speakAsyncWithLog('まとめて開始できる台がありません(全台、作業済みか進行中です)');
@@ -8915,7 +9039,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           const rNs = voiceToggleTask(nextS, uIdx); // 次工程の同じ台数(連動/厳密ゲートあり)
           if (!rNs.ok) { await speakAsyncWithLog(rNs.hint || 'この工程は画面から開始してください'); return; }
           // activeCustomTaskKey は数値index 形式で統一 (他の voice ハンドラと一致させる、parse 時 NaN を避ける)
-          setActiveCustomTaskKey(`${nextS}-${uIdx}`);
+          focusCustomTask(`${nextS}-${uIdx}`);
           await speakAsyncWithLog(`${nextS+1}工程、${uIdx+1}台目を開始しました`);
           await runVoiceCustomTaskFlow(nextS, uIdx);
         } else {
@@ -8935,7 +9059,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         if (nextS < localSteps.length) {
           const rNu = voiceToggleTask(nextS, nextU); // 次を開始(連動/厳密ゲートあり)
           if (!rNu.ok) { await speakAsyncWithLog(rNu.hint || 'この工程は画面から開始してください'); return; }
-          setActiveCustomTaskKey(`${nextS}-${nextU}`);
+          focusCustomTask(`${nextS}-${nextU}`);
           await speakAsyncWithLog(`${nextS+1}工程、${nextU+1}台目を開始しました`);
           await runVoiceCustomTaskFlow(nextS, nextU);
         } else {
@@ -8991,8 +9115,10 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             // 弾かれたら return せず待受を続ける(通常モードもここで抜けると音声が死ぬ)
             if (matchYes(c) || c === null) { if (await (voiceLatestRef.current.voiceTryCompleteAll || voiceTryCompleteAll)()) return; }
           } else if (matchNextStep(cmd) || matchComplete(cmd) || matchNext(cmd)) {
-            // 通常モードは「完了/次/次工程」いずれも次へ進める
-            handleNext(); return;
+            // 通常モードは「完了/次/次工程」いずれも次へ進める。弾かれたら理由を言って待ち受けを続ける(製品と同じ)
+            const r = (handleNextRef.current || handleNext)();
+            if (r === true) return;
+            await speakAsyncWithLog(r?.msg || '今は次へ進めません');
           } else if (matchInterrupt(cmd)) {
             // 止まっている時に「中断」と言っても 二重に止めない(製品 fb4a1bc)
             if (isOnBreakRef.current || !isTimerRunning) { await speakAsyncWithLog('もう止まっています。「再開」で続けます'); continue; }
@@ -9016,7 +9142,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     if (inputs.length === 0) return;
 
     await speakAsyncWithLog('測定入力を開始します');
-    const currentValues = { ...(measurementResults[`${step.id}-values`] || {}) };
+    // 🖐 順序実行も台ごとに書く(前はいつも1台目の欄)。ロット1回は0(製品と同じ)
+    const vUnit = step.lotOnce ? 0 : currentUnitIdx;
+    const currentValues = { ...(measurementResults[`${step.id}-${vUnit}-values`] || (vUnit === 0 ? measurementResults[`${step.id}-values`] : null) || {}) };
 
     for (let i = 0; i < inputs.length; i++) {
       if (!voiceActiveRef.current) return;
@@ -9033,7 +9161,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           await speakAsyncWithLog('測定を完了しますか？');
           const c = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
           if (matchYes(c) || c === null) {
-            handleNext(); return;
+            const r = (handleNextRef.current || handleNext)();
+            if (r !== true) await speakAsyncWithLog(r?.msg || '今は次へ進めません');
+            return;
           }
           retry = 0; continue;
         }
@@ -9075,12 +9205,12 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           const measData = { values: currentValues, calcResults, timestamp: Date.now() };
           const newMR = {
             ...measurementResults,
-            [`${stepKey}-0-values`]: currentValues,
-            [`${stepKey}-0`]: measData,
+            [`${stepKey}-${vUnit}-values`]: currentValues,
+            [`${stepKey}-${vUnit}`]: measData,
           };
-          // 旧キーが既存データに残っている場合のみ更新（互換用）
-          if (measurementResults[`${stepKey}-values`] !== undefined) newMR[`${stepKey}-values`] = currentValues;
-          if (measurementResults[stepKey] !== undefined) newMR[stepKey] = measData;
+          // 旧キーが既存データに残っている場合のみ更新（互換用・1台目だけ）
+          if (vUnit === 0 && measurementResults[`${stepKey}-values`] !== undefined) newMR[`${stepKey}-values`] = currentValues;
+          if (vUnit === 0 && measurementResults[stepKey] !== undefined) newMR[stepKey] = measData;
           setMeasurementResults(newMR);
 
           if (i < inputs.length - 1) {
@@ -9108,7 +9238,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       await speakAsyncWithLog(`計算結果。${announcements}。次工程に進みますか？`);
       const confirm = await listenOnceWithLog({ timeout: 8000, defaultValue: 'はい' });
       if (matchYes(confirm) || confirm === null) {
-        handleNext();
+        const r = (handleNextRef.current || handleNext)();
+        if (r !== true) await speakAsyncWithLog(r?.msg || '今は次へ進めません');
       }
     }
   };
@@ -9146,8 +9277,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         const taskKey = step.lotOnce && step.id ? `${step.id}-lot-${u}` : (step.id ? `${step.id}-${u}` : `${sIdx}-${u}`);
         const t = tasksRef.current[taskKey];
         const taskNeeded = !t || (t.status !== 'skipped' && t.status !== 'completed');
-        // sequential モードでは 1台目で代表
-        const isCurrentStep = (executionType === 'sequential') ? (u === 0) : taskNeeded;
+        // 🖐 順序実行も台ごとに入れる様になったので 台ごとに見る(該当なし・済の台は見ない)。前は1台目で代表。両方の画面で同じ
+        const isCurrentStep = taskNeeded;
         if (missing.length > 0 && isCurrentStep) {
           incomplete.push({ stepIdx: sIdx, stepTitle: step.title, unitIdx: u, missingItems: missing.map(m => m.label || '(無題)') });
         }
@@ -9166,7 +9297,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       const incompleteChks = findIncompleteChecklists();
       if (incompleteChks.length > 0) {
           const summary = incompleteChks.slice(0, 5).map(c =>
-              `・${c.stepTitle}${executionType !== 'sequential' ? ` (#${c.unitIdx + 1})` : ''}: ${c.missingItems.slice(0, 3).join(', ')}${c.missingItems.length > 3 ? '...' : ''}`
+              `・${c.stepTitle} (${localSteps[c.stepIdx]?.lotOnce ? `${c.unitIdx + 1}回目` : `${c.unitIdx + 1}台目`}): ${c.missingItems.slice(0, 3).join(', ')}${c.missingItems.length > 3 ? '...' : ''}`
           ).join('\n');
           alert(`⚠ 確認チェック未完了の工程があります。先にチェックを完了してください:\n\n${summary}${incompleteChks.length > 5 ? `\n他 ${incompleteChks.length - 5} 件` : ''}`);
           completeBlockReasonRef.current = 'checklist';
@@ -9568,7 +9699,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       return { sIdx: mv.stepIdx, unitIdx: mv.unitIdx, isAuto: mv.type === 'auto-start' };
     }
     // 各台が「機械占有中 (自動測定 processing)」かどうか
-    const unitHasRunningAuto = (u) => localSteps.some((step, si) => !step?.lotOnce && isAutoStepFn(step) && statusOf(step, si, u) === 'processing');
+    const unitHasRunningAuto = (u) => localSteps.some((step, si) => !step?.lotOnce && isAutoStepFn(step) && ['processing', 'reworking', 'ng'].includes(statusOf(step, si, u)));
     // 3) 台順 × テンプレ順で最初の未着手を探す (通常工程のみ)。機械占有中の台はスキップ。
     for (let u = 0; u < qty; u++) {
       if (unitHasRunningAuto(u)) continue; // この台は自動測定中 → 作業者は触れない
@@ -9590,6 +9721,16 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     }
     return null;
   }, [tasks, localSteps, lot.quantity, otherAutoTick, optimalNextMove]);
+  // 🔧 開いた直後の右の「工程詳細」が Step1 #1 のままで「次」と食い違っていた(製品 2026-09-26)
+  //   → まだ何も押していない時だけ、「次」の作業を右に映す(押した後は押した物を尊重する)。
+  const initialFocusDoneRef = useRef(false);
+  useEffect(() => {
+    if (initialFocusDoneRef.current || executionType !== 'custom' || !globalNextTask || activeCustomTaskKeyRef.current) return;
+    const step = localSteps[globalNextTask.sIdx]; if (!step) return;
+    initialFocusDoneRef.current = true;
+    const u = globalNextTask.unitIdx || 0;
+    focusCustomTask(step.lotOnce && step.id ? `${step.id}-lot-${u}` : (step.id ? `${step.id}-${u}` : `${globalNextTask.sIdx}-${u}`));
+  }, [globalNextTask, executionType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // データ最適順モードの「タップ可否ゲート」。承認コンボ＋厳密ON時のみ作用。
   //   返り値: null=タップOK / {hint}=ブロック(理由ヒント)。
@@ -9687,7 +9828,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   // 🚶 掛け持ち案内(製品検査 2026-09-26 と同じ): この自動測定の残りの間に、別のロットへ行って何ができるか。計算は domain/juggleGuide.js。
   //   残りは 自動終了の秒(テンプレも見る) → 目標時間 の順。
   //   me: 端末で選んだ名前の作業者。フリー・管理者は担当で絞らない(見るだけ)。
-  //   ⚠部品には操業シミュの「区画どうしの表」が無いので travelCfg は null。片道は区画の名前の目安(中間・完品 10秒 等)だけ・無ければ「不明」。
+  //   travelCfg = settings.opsim.zoneTravel(マスタ設定の作業エリアの下で入れる区画どうしの片道・2分の決まり)。空なら区画の名前の目安(中間・完品 10秒 等)・無ければ「不明」。
   const juggle = useMemo(() => {
     const ra = liveParallelGuide && liveParallelGuide.runningAuto;
     if (!ra) return null;
@@ -9821,7 +9962,12 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       // endTime=now のままだと壁時計幅が duration と無関係になり、ガント/並列分析の窓が手入力値とずれる。
       const fst = Number(t.firstStartTime) || now;
       const dur = Math.round(totalSec);
-      newTasks[key] = { ...t, status: 'completed', duration: dur, startTime: null, firstStartTime: fst, endTime: fst + dur * 1000, manualTime: true, workerName: inspectorName || t.workerName };
+      // batchOwner/batchStartedAt は完了時に必ず外す(残すと後日の同工程バッチ完了に巻き込まれる)
+      // 時間の直接入力は打刻ではないので、区間は「推定(estimated)」として1本置く(確定と混ぜない・製品と同じ)
+      newTasks[key] = setEstimatedSession(
+        { ...t, status: 'completed', duration: dur, startTime: null, firstStartTime: fst, endTime: fst + dur * 1000, manualTime: true, workerName: inspectorName || t.workerName, batchOwner: null, batchStartedAt: null },
+        { startTime: fst, durationSec: dur, workerId: lot.workerId || null, workerName: inspectorName || t.workerName || '' }
+      );
     });
     setTasks(newTasks);
     onSave({ tasks: newTasks, status: 'processing' });
@@ -9847,6 +9993,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     const key = getTaskKey(stepIdx, unitIdx);
     const newTasks = { ...tasks };
     const currentTask = tasks[key] || { status: 'waiting', duration: 0, startTime: null };
+    // 🔎 開始以外(メニュー・修正など)は押した時に右へ映す。開始は見張りを通ってから映す(製品と同じ)
+    const isStartTap = currentTask.status === 'waiting' || currentTask.status === 'paused';
+    if (!isStartTap) focusCustomTask(key);
 
     if (currentTask.status === 'completed' || currentTask.status === 'ng') {
       // 完了済み/NG → ポップアップメニュー表示
@@ -9878,6 +10027,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       //   ⚠UIのdisabledだけに頼らず「書込み直前」でも必ず通す。カード/コンパクト/ロット1回など toggleTask を呼ぶ全経路がここを通る。
       const startGate = startGuard({ targetStep: (localSteps || [])[stepIdx], excludeKey: key });
       if (!startGate.ok) { alert('🚫 ' + startGate.message); return; }
+      focusCustomTask(key); // 🔎開始できる事が決まったので、この作業を右に映す
       // 分割測定アプリ連携: 連動工程の開始はステーション選択を挟む (マスタON時のみ)。選択後にこの開始処理を skipRotary で再実行する。
       const stepObj = (localSteps || [])[stepIdx];
       // 連動は手動・台ごとの工程専用 (lotOnce だと unitIdx が回数kになり workId が台と噛み合わないため除外: 監査確定)
@@ -9908,7 +10058,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           ? { pausedAt: null, ...(currentTask.batchStartedAt != null ? { batchStartedAt: currentTask.batchStartedAt + Math.max(0, nowTs - currentTask.pausedAt) } : {}) }
           : {}),
       };
-      setActiveCustomTaskKey(key);
+      focusCustomTask(key);
       setTasks(newTasks);
       onSave({ tasks: newTasks, status: 'processing' });
       // 🗣 2026-09-27 始めた時の帯は「開始しました」(前は始めただけでも「完了しました」と出て作業者が迷った)
@@ -10127,9 +10277,17 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
   // 完了タスクメニューのアクション（メニュー経由 or 直接呼び出し両対応）
   // ngReason: NG 理由 (action='ng' のときに task.ngReason に保存)
-  const handleTaskMenuAction = (action, directKey = null, ngReason = null, ctx = null) => {
+  // ngReason: NG 理由 (action='ng' のときに task.ngReason に保存)
+  //   ⚠特別な値 REWORK_REASON_OMITTED が来たときは「理由を記録せず開始を押した」という合図で、
+  //     理由そのものではない。ここで null に戻し、下の 'rework' では reasonOmitted を見て
+  //     NG理由へのフォールバックをしない(=この回には理由を焼かない)。
+  const handleTaskMenuAction = (action, directKey = null, ngReasonArg = null, ctx = null) => {
+    const reasonOmitted = ngReasonArg === REWORK_REASON_OMITTED;
+    const ngReason = reasonOmitted ? null : ngReasonArg;
     const key = directKey || completedTaskMenu?.key;
     if (!key) return;
+    // 🔎 メニュー・NG・修正で触った作業を右に映す(続きは開始の所で映す・製品と同じ)
+    if (action !== 'continue') focusCustomTask(key);
     const previousTasks = { ...tasks };
     const newTasks = { ...tasks };
     const currentTask = tasks[key] || {};
@@ -10166,7 +10324,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       const contStep = localSteps[completedTaskMenu?.stepIdx];
       const isAutoCont = autoEndSecForStep(contStep) > 0;
       newTasks[key] = { ...currentTask, status: 'processing', startTime: nowTs, firstStartTime: currentTask.firstStartTime || nowTs, batchOwner: null, batchStartedAt: null, ...(isAutoCont ? { autoEnded: false } : {}) };
-      setActiveCustomTaskKey(key);
+      focusCustomTask(key);
       clearElementLaps(key); // じっと見る: 続きは別セッション。前回ラップを残さない(続きは壁時計ギャップで内訳対象外になる)
 
       // 分割測定 連動(測定開始)工程を「作業の続き」で延長する場合: done自動停止は完了時に追跡を外しているため、
@@ -10190,7 +10348,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       //   ⚠この印は保存の関所が「人が承知でやったやり直し」と読む鍵でもある(workTimeGuard の redoReset)。
       newTasks[key] = { status: 'waiting', duration: 0, startTime: null, firstStartTime: null, endTime: null, reworks: currentTask.reworks,
         redoReset: { at: Date.now(), why: 'restart', before: Number(currentTask.duration) || 0, firstStartTime: currentTask.firstStartTime || null } };
-      if (activeCustomTaskKey === key) setActiveCustomTaskKey(null);
+      // 右の詳細は null に戻さない(Step1 #1 に跳んで見える・製品と同じ)
     } else if (action === 'ng') {
       const captured = captureSessionIfProcessing(currentTask);
       const nowTs = Date.now();
@@ -10210,7 +10368,17 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       if (!gate.ok) { alert('🚫 ' + gate.message); return; }
       const captured = captureSessionIfProcessing(currentTask);
       // ngReason 引数を「この修正回の理由」として記録する (2回目以降は同異確認 picker から渡る)。
-      const reworks = [...(captured.reworks || []), { startTime: Date.now(), duration: 0, round: (captured.reworks?.length || 0) + 1, ...(ngReason ? { reason: ngReason } : {}) }];
+      // この修正回の理由を焼き付ける。
+      //   ・2回目以降は同異確認 picker から ngReason 引数が渡ってくる。
+      //   ・引数が無い(1回目)ときは、その時点の NG 理由をそのまま使う。
+      //     ⚠ngReason はタスクに1個しか無く、次のNGで上書きされる。回ごとに焼いておかないと1回目の原因が消える。
+      //     ⚠現場の操作は増やさない(ここで追加のpickerは出さない)。
+      //   ・ただし「理由を記録せず開始」を押した時(reasonOmitted)だけは何も焼かない。
+      //     ⚠ここでNG理由を代わりに入れると、作業者が「この回の原因は言えない」と言ったのに
+      //       分析画面では「回ごとの理由＝確定」として数えられ、確定でない物を確定と言うことになる。
+      //       理由が無い回は「原因不明」か「NG理由からの代用」として正直に出す(値を作らない)。
+      const rwReason = reasonOmitted ? '' : (ngReason || captured.ngReason || '');
+      const reworks = [...(captured.reworks || []), { startTime: Date.now(), duration: 0, round: (captured.reworks?.length || 0) + 1, ...(rwReason ? { reason: rwReason } : {}) }];
       newTasks[key] = { ...captured, status: 'reworking', reworkStartTime: Date.now(), reworks };
     } else if (action === 'rework-ok') {
       // 修正完了: firstStartTime は currentTask から維持される (spread で継承)
@@ -10227,7 +10395,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       const captured = captureSessionIfProcessing(currentTask);
       const nowTs = Date.now();
       newTasks[key] = { ...captured, status: 'skipped', duration: captured.duration || 0, endTime: nowTs, firstStartTime: captured.firstStartTime || captured.startTime || null };
-      if (activeCustomTaskKey === key) setActiveCustomTaskKey(null);
+      // 右の詳細は null に戻さない(Step1 #1 に跳んで見える・製品と同じ)
     } else if (action === 'redo-unit-all' || action === 'redo-from-here') {
       // 一括やり直し: 指定台(unitIdx)の「全工程」または「参照工程から下」の実施済みタスクを一括NGに。
       // ・1回目の作業時間(duration)と修正履歴(reworks)は保持 → 適正時間(初回 duration)を汚さない。
@@ -10771,7 +10939,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             </div>
             <div className="grid grid-cols-2 gap-1.5">
               <button onClick={() => { const c = prompt('違う内容の理由を入力してください', ''); if (c && c.trim()) start(c.trim()); }} className="py-2 px-3 bg-slate-50 hover:bg-slate-100 border border-dashed border-slate-300 rounded-lg text-slate-600 font-bold text-xs">✎ その他 (自由入力)</button>
-              <button onClick={() => start(null)} className="py-2 px-3 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-500 font-bold text-xs">理由を記録せず開始</button>
+              <button onClick={() => start(REWORK_REASON_OMITTED)} className="py-2 px-3 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-500 font-bold text-xs">理由を記録せず開始</button>
             </div>
           </div>
           <div className="p-2 border-t text-center">
@@ -11093,100 +11261,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   // Safeguard against empty steps or invalid index
   const displayStep = localSteps[displayStepIdx] || localSteps[0] || { title: 'No Step', description: '', images: [] };
 
-  // --- Custom Mode with Monitoring & Defects ---
-  if (isCustom) {
-    return (
-      <div data-fs="execution" className="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-2 overflow-auto">
-        {autoEndToast && (
+  // 🧾 自動終了のお知らせ・軽微不良・気づきの窓は カスタムと順序実行の両方で使う(順序実行ではボタンだけあって窓が出なかった・製品と同じ)
+  const sharedAutoEndToast = autoEndToast && (
           <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[400] bg-purple-600 text-white px-4 py-2 rounded-lg shadow-2xl text-sm font-bold flex items-center gap-2 animate-bounce">
             🤖 自動測定{autoEndToast.title ? `「${autoEndToast.title}」` : ''}が時間経過で完了しました
           </div>
-        )}
-        {/* 画面外枠ゲージ (円形ゲージの画面全体版): 経過時間が枠として上辺中央から時計回りに「塗られていく」。
-            一周 = 超過しきい値(overPct)。超過したら枠全体が超過色になり、明るい帯が回り続ける(回転速度/帯の長さは設定)。
-            設定(oaCfg): gaugeEnabled / gaugeColor(進行中の色) / gaugeWidth(太さ) / gaugeTrack(下地) / gaugeRotate / gaugeCometLen */}
-        {gaugeWorst && oaCfg.gaugeEnabled !== false && (() => {
-          const filled = Math.min(100, gaugeWorst.pct / (oaCfg.overPct || 100) * 100);
-          const color = gaugeWorst.warn ? oaCfg.warnColor : (oaCfg.gaugeColor || '#10B981');
-          const gw = Math.max(8, Math.min(60, oaCfg.gaugeWidth || 24));
-          const rotDur = { slow: '2.6s', normal: '1.6s', fast: '0.8s' }[oaCfg.gaugeRotate || 'normal'] || null; // 'none'→null=回転なし
-          const cometLen = Math.max(6, Math.min(45, oaCfg.gaugeCometLen || 18));
-          return (
-            <svg className="fixed inset-0 z-[105] pointer-events-none w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-              {gaugeWorst.over ? (
-                rotDur ? (
-                  <>
-                    {/* 超過: 枠全体が超過色 + 明るい帯が時計回りに回転し続ける */}
-                    <path d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" opacity="0.45" />
-                    <path className="oa-rotate" style={{ animationDuration: rotDur }} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" strokeDasharray={`${cometLen} ${100 - cometLen}`} strokeLinecap="round" />
-                  </>
-                ) : (
-                  /* 回転なし設定: 全周を超過色で点灯 (点滅はoverBlink設定) */
-                  <path className={oaBlinkCls(oaCfg.overBlink)} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" />
-                )
-              ) : (
-                <>
-                  {/* 進行中: うっすら下地(設定で非表示可) + 経過分が時計回りに塗られていく */}
-                  {oaCfg.gaugeTrack !== false && <path d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={color} strokeWidth={gw} vectorEffect="non-scaling-stroke" opacity="0.12" />}
-                  <path className={gaugeWorst.warn ? oaBlinkCls(oaCfg.warnBlink) : ''} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={color} strokeWidth={gw} vectorEffect="non-scaling-stroke" strokeDasharray="100 100" strokeDashoffset={100 - filled} style={{ transition: 'stroke 0.5s, stroke-dashoffset 0.95s linear' }} />
-                </>
-              )}
-            </svg>
-          );
-        })()}
-        {worstOverrun && oaCfg.screenEffect && (
-          <div className={`fixed top-0 left-1/2 -translate-x-1/2 z-[106] pointer-events-none px-5 py-2 rounded-b-2xl shadow-2xl text-white font-black text-sm flex items-center gap-2 ${oaBlinkCls(worstOverrun.over ? oaCfg.overBlink : oaCfg.warnBlink)}`} style={{ backgroundColor: worstOverrun.over ? oaCfg.overColor : oaCfg.warnColor }}>
-            ⏰ {worstOverrun.over ? '目標時間オーバー！' : 'まもなく目標時間'}：{worstOverrun.title}{worstOverrun.isLot ? '' : ` #${worstOverrun.u + 1}`} — {formatTime(worstOverrun.sec)} / 目標{formatTime(worstOverrun.tgt)}{myOverruns.length > 1 ? ` （他${myOverruns.length - 1}件）` : ''}
-          </div>
-        )}
-        {showDefectModal && (
-            <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-                <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
-                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-rose-600"><AlertCircle className="w-5 h-5"/> 不具合報告</h3>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">不具合内容</label>
-                        <textarea className="w-full border rounded-lg p-2" rows={3} placeholder="不具合の内容を入力..." value={defectLabel} onChange={e=>setDefectLabel(e.target.value)}/>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">原因工程</label>
-                        <select className="w-full border rounded-lg p-2" value={defectCauseProcess} onChange={e=>setDefectCauseProcess(e.target.value)}>
-                          <option value="">選択してください</option>
-                          {(defectProcessOptions || DEFAULT_DEFECT_PROCESS_OPTIONS).map(opt => (
-                            <option key={opt} value={opt}>{opt}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">写真添付</label>
-                        <div className="flex gap-2 flex-wrap">
-                          {defectPhotos.map((p, i) => (
-                            <div key={i} className="w-16 h-16 border rounded overflow-hidden relative group/ph">
-                              <img src={p} className="w-full h-full object-cover"/>
-                              <button onClick={()=>setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i))} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
-                            </div>
-                          ))}
-                          <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
-                            <Camera className="w-5 h-5"/>
-                          </button>
-                          <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); setDefectPhotos(prev=>[...prev, img]);} e.target.value='';}}/>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="bg-rose-50 border border-rose-200 rounded-lg p-2 text-xs text-rose-700 mt-3">
-                      <div className="font-bold mb-1">📋 報告方法を選択</div>
-                      <div><span className="font-bold">報告のみ</span>: 不具合を記録するだけ。作業を続行 (タイマー停止なし)</div>
-                      <div><span className="font-bold">対応開始</span>: 今すぐ対処開始。作業時間を分離して計測</div>
-                    </div>
-                    <div className="flex justify-end gap-2 mt-4 flex-wrap">
-                        <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
-                        <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, true)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold min-h-[44px] disabled:opacity-40">📋 報告のみ</button>
-                        <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, false)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">🚨 対応開始</button>
-                    </div>
-                </div>
-            </div>
-        )}
-
+        );
+  const sharedReportModals = (
+    <>
         {showComplaintModal && (
             <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
@@ -11279,6 +11361,100 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                 </div>
             </div>
         )}
+    </>
+  );
+
+  // --- Custom Mode with Monitoring & Defects ---
+  if (isCustom) {
+    return (
+      <div data-fs="execution" className="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-2 overflow-auto">
+        {sharedAutoEndToast}
+        {/* 画面外枠ゲージ (円形ゲージの画面全体版): 経過時間が枠として上辺中央から時計回りに「塗られていく」。
+            一周 = 超過しきい値(overPct)。超過したら枠全体が超過色になり、明るい帯が回り続ける(回転速度/帯の長さは設定)。
+            設定(oaCfg): gaugeEnabled / gaugeColor(進行中の色) / gaugeWidth(太さ) / gaugeTrack(下地) / gaugeRotate / gaugeCometLen */}
+        {gaugeWorst && oaCfg.gaugeEnabled !== false && (() => {
+          const filled = Math.min(100, gaugeWorst.pct / (oaCfg.overPct || 100) * 100);
+          const color = gaugeWorst.warn ? oaCfg.warnColor : (oaCfg.gaugeColor || '#10B981');
+          const gw = Math.max(8, Math.min(60, oaCfg.gaugeWidth || 24));
+          const rotDur = { slow: '2.6s', normal: '1.6s', fast: '0.8s' }[oaCfg.gaugeRotate || 'normal'] || null; // 'none'→null=回転なし
+          const cometLen = Math.max(6, Math.min(45, oaCfg.gaugeCometLen || 18));
+          return (
+            <svg className="fixed inset-0 z-[105] pointer-events-none w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+              {gaugeWorst.over ? (
+                rotDur ? (
+                  <>
+                    {/* 超過: 枠全体が超過色 + 明るい帯が時計回りに回転し続ける */}
+                    <path d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" opacity="0.45" />
+                    <path className="oa-rotate" style={{ animationDuration: rotDur }} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" strokeDasharray={`${cometLen} ${100 - cometLen}`} strokeLinecap="round" />
+                  </>
+                ) : (
+                  /* 回転なし設定: 全周を超過色で点灯 (点滅はoverBlink設定) */
+                  <path className={oaBlinkCls(oaCfg.overBlink)} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" />
+                )
+              ) : (
+                <>
+                  {/* 進行中: うっすら下地(設定で非表示可) + 経過分が時計回りに塗られていく */}
+                  {oaCfg.gaugeTrack !== false && <path d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={color} strokeWidth={gw} vectorEffect="non-scaling-stroke" opacity="0.12" />}
+                  <path className={gaugeWorst.warn ? oaBlinkCls(oaCfg.warnBlink) : ''} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={color} strokeWidth={gw} vectorEffect="non-scaling-stroke" strokeDasharray="100 100" strokeDashoffset={100 - filled} style={{ transition: 'stroke 0.5s, stroke-dashoffset 0.95s linear' }} />
+                </>
+              )}
+            </svg>
+          );
+        })()}
+        {worstOverrun && oaCfg.screenEffect && (
+          <div className={`fixed top-0 left-1/2 -translate-x-1/2 z-[106] pointer-events-none px-5 py-2 rounded-b-2xl shadow-2xl text-white font-black text-sm flex items-center gap-2 ${oaBlinkCls(worstOverrun.over ? oaCfg.overBlink : oaCfg.warnBlink)}`} style={{ backgroundColor: worstOverrun.over ? oaCfg.overColor : oaCfg.warnColor }}>
+            ⏰ {worstOverrun.over ? '目標時間オーバー！' : 'まもなく目標時間'}：{worstOverrun.title}{worstOverrun.isLot ? '' : ` #${worstOverrun.u + 1}`} — {formatTime(worstOverrun.sec)} / 目標{formatTime(worstOverrun.tgt)}{myOverruns.length > 1 ? ` （他${myOverruns.length - 1}件）` : ''}
+          </div>
+        )}
+        {showDefectModal && (
+            <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-rose-600"><AlertCircle className="w-5 h-5"/> 不具合報告</h3>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">不具合内容</label>
+                        <textarea className="w-full border rounded-lg p-2" rows={3} placeholder="不具合の内容を入力..." value={defectLabel} onChange={e=>setDefectLabel(e.target.value)}/>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">原因工程</label>
+                        <select className="w-full border rounded-lg p-2" value={defectCauseProcess} onChange={e=>setDefectCauseProcess(e.target.value)}>
+                          <option value="">選択してください</option>
+                          {(defectProcessOptions || DEFAULT_DEFECT_PROCESS_OPTIONS).map(opt => (
+                            <option key={opt} value={opt}>{opt}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">写真添付</label>
+                        <div className="flex gap-2 flex-wrap">
+                          {defectPhotos.map((p, i) => (
+                            <div key={i} className="w-16 h-16 border rounded overflow-hidden relative group/ph">
+                              <img src={p} className="w-full h-full object-cover"/>
+                              <button onClick={()=>setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i))} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
+                            </div>
+                          ))}
+                          <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
+                            <Camera className="w-5 h-5"/>
+                          </button>
+                          <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); setDefectPhotos(prev=>[...prev, img]);} e.target.value='';}}/>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-rose-50 border border-rose-200 rounded-lg p-2 text-xs text-rose-700 mt-3">
+                      <div className="font-bold mb-1">📋 報告方法を選択</div>
+                      <div><span className="font-bold">報告のみ</span>: 不具合を記録するだけ。作業を続行 (タイマー停止なし)</div>
+                      <div><span className="font-bold">対応開始</span>: 今すぐ対処開始。作業時間を分離して計測</div>
+                    </div>
+                    <div className="flex justify-end gap-2 mt-4 flex-wrap">
+                        <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
+                        <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, true)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold min-h-[44px] disabled:opacity-40">📋 報告のみ</button>
+                        <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, false)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">🚨 対応開始</button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {sharedReportModals}
 
         {batchRangeModal && (() => {
           const step = localSteps[batchRangeModal.stepIdx];
@@ -11461,7 +11637,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
         <div className="bg-white w-full max-w-6xl h-full max-h-full rounded-2xl shadow-2xl flex flex-col overflow-hidden relative">
           <div className="bg-slate-800 text-white px-3 py-1.5 flex justify-between items-center shrink-0 gap-2">
-             <div className="shrink-0"><h2 className="text-sm font-bold flex items-center gap-1.5"><button onClick={switchToSequential} className="bg-emerald-600 hover:bg-blue-600 px-2 py-0.5 rounded text-xs transition-colors" title="通常モードに切替">カスタム ⇄</button><span className="truncate max-w-[16rem]" title={itemLabel} data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70 text-xs">#{lot.serialNo}</span> {lotTemplate?.name && <span className="text-xs bg-white/15 px-1.5 py-0.5 rounded font-bold truncate max-w-[10rem]" title={`テンプレート: ${lotTemplate.name}`}>📋 {lotTemplate.name}</span>} <span className="text-xs opacity-70 shrink-0">({lot.quantity}台)</span></h2></div>
+             <div className="shrink-0 flex flex-wrap items-center gap-1.5"><h2 className="text-sm font-bold flex items-center gap-1.5"><button onClick={switchToSequential} className="bg-emerald-600 hover:bg-blue-600 px-2 py-0.5 rounded text-xs transition-colors" title="通常モードに切替">カスタム ⇄</button><span className="truncate max-w-[16rem]" title={itemLabel} data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70 text-xs">#{lot.serialNo}</span> {lotTemplate?.name && <span className="text-xs bg-white/15 px-1.5 py-0.5 rounded font-bold truncate max-w-[10rem]" title={`テンプレート: ${lotTemplate.name}`}>📋 {lotTemplate.name}</span>} <span className="text-xs opacity-70 shrink-0">({lot.quantity}台)</span></h2>{inspectorSelector}</div>
              <div className="flex flex-wrap gap-1.5 items-center justify-end">
                  {voiceHelpModal}
                  <button onClick={toggleVoice} className={`p-2 rounded-full transition-all ${voiceEnabled ? 'bg-blue-500 text-white animate-pulse ring-2 ring-blue-300' : 'bg-white/10 text-white/60 hover:bg-white/20'}`} title={voiceEnabled ? '音声OFF' : '音声ON'}>
@@ -11860,8 +12036,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                      } else if (isOOO && strictOrderMode) {
                        setOrderHint(`🔒 厳密モード: 先に「${localSteps[globalNextTask.sIdx]?.title}」#${globalNextTask.unitIdx + 1}台目 を完了してください`); return;
                      }
-                     setActiveCustomTaskKey(`${sIdx}-${uIdx}`);
-                     toggleTask(sIdx, uIdx);
+                     toggleTask(sIdx, uIdx); // 🔎右へ映すのは toggleTask(開始は見張りを通ってから)
                    }}
                    onBatchClick={(sIdx) => handleBatchClick(sIdx)}
                    onSkipRow={(sIdx) => handleSkipRow(sIdx)}
@@ -11964,7 +12139,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                                    </button>
                                  );
                                })()}
-                               {!step.lotOnce && <button onClick={() => setActiveCustomTaskKey(`${sIdx}-0`)} className="text-xs text-blue-600 underline">詳細を表示</button>}
+                               {!step.lotOnce && <button onClick={() => focusCustomTask(`${sIdx}-0`)} className="text-xs text-blue-600 underline">詳細を表示</button>}
                            </div>
                         </div>
                         {stepSpecificNotes.length > 0 && (
@@ -12084,8 +12259,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                                        setOrderHint(`🔒 厳密モード: 先に「${nextStepTitle}」#${globalNextTask.unitIdx + 1}台目 を完了してください`);
                                        return;
                                      }
-                                     setActiveCustomTaskKey(`${sIdx}-${uIdx}`);
-                                     toggleTask(sIdx, uIdx);
+                                     toggleTask(sIdx, uIdx); // 🔎右へ映すのは toggleTask(開始は見張りを通ってから)
                                    };
                                    return (
                                  <div className="relative">
@@ -12168,7 +12342,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                    <span className="text-xs font-normal text-slate-500">Step {displayStepIdx + 1}</span>
                  </h3>
                  {/* 機番切り替えボタン (台数が複数あるとき) */}
-                 {lot.quantity > 1 && (
+                 {lot.quantity > 1 && !displayStep?.lotOnce && (
                    <div className="mt-2">
                      <div className="text-xs font-bold text-slate-500 mb-1">表示中の機番 (クリックで切り替え)</div>
                      <div className="flex flex-wrap gap-1">
@@ -12190,8 +12364,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                          return (
                            <button
                              key={uIdx}
-                             onClick={() => setActiveCustomTaskKey(`${displayStepIdx}-${uIdx}`)}
-                             className={`px-2 py-1 border-2 rounded text-xs font-bold transition-all min-w-[40px] ${cls}`}
+                             onClick={() => focusCustomTask(`${displayStepIdx}-${uIdx}`)}
+                             className={`px-2 py-1 min-h-11 border-2 rounded text-xs font-bold transition-all min-w-[44px] ${cls}`}
                              title={lot.unitSerialNumbers?.[uIdx] ? `機番: ${lot.unitSerialNumbers[uIdx]}` : `${uIdx + 1}台目`}
                            >
                              #{uIdx + 1}
@@ -12708,6 +12882,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   // --- Sequential Mode UI (Same as before) ---
   return (
     <div data-fs="execution" className="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-4">
+      {/* 🧾 軽微不良・気づき・自動終了のお知らせ は両方の画面で同じ窓(製品と同じ) */}
+      {sharedAutoEndToast}
+      {sharedReportModals}
       {/* 🚨🚨🚨 画面の「済み」とサーバの中身が食い違っている。**この画面を信じてはいけない**状態。
              2026-08-17 の事故はここが見えなかったので、作業者は最後まで気づけなかった。
              ⚠× で消せないようにする(消せると意味が無い)。押せるのは「送り直す」だけ。 */}
@@ -12719,7 +12896,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             <div className="text-xs opacity-95">画面は「済み」に見えていますが、まだ保存されていません。閉じると失われます。</div>
           </div>
           <button
-            onClick={() => { try { onSave({ tasks: tasksRef.current, interruptions }); } catch (e) { console.error(e); } }}
+            onClick={() => { try { onSave({ tasks: tasksRef.current }); } catch (e) { console.error(e); } }}
             className="bg-white text-rose-700 px-3 py-2 rounded-lg font-black text-xs hover:bg-rose-50 flex items-center gap-1 shrink-0"
           ><RefreshCw className="w-3.5 h-3.5"/> いま送り直す</button>
         </div>
@@ -12782,7 +12959,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
       <div className="bg-white w-full max-w-4xl h-[85vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         <div className="bg-slate-800 text-white p-4 flex justify-between items-center shrink-0">
-          <div><h2 className="text-lg font-bold flex items-center gap-2"><button onClick={switchToCustom} className="bg-blue-600 hover:bg-emerald-600 px-2 py-0.5 rounded text-xs transition-colors" title="カスタムモードに切替">順序実行 ⇄</button><span data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70">#{lot.serialNo}</span></h2><p className="text-xs text-slate-400 mt-1">工程 {currentStepIdx + 1} / {localSteps.length}: {currentStep.title}{totalUnits > 1 ? ` — ${currentUnitIdx + 1}/${totalUnits}台目` : ''}</p></div>
+          <div><h2 className="text-lg font-bold flex items-center gap-2"><button onClick={switchToCustom} className="bg-blue-600 hover:bg-emerald-600 px-2 py-0.5 rounded text-xs transition-colors" title="カスタムモードに切替">順序実行 ⇄</button><span data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70">#{lot.serialNo}</span> {inspectorSelector}</h2><p className="text-xs text-slate-400 mt-1">工程 {currentStepIdx + 1} / {localSteps.length}: {currentStep.title}{totalUnits > 1 ? ` — ${currentUnitIdx + 1}/${totalUnits}台目` : ''}</p></div>
           <div className="flex items-center gap-2">
             {voiceEnabled && voiceStatus && <div className="bg-blue-500/30 text-blue-100 text-xs px-3 py-1 rounded-full max-w-xs truncate animate-pulse">{voiceStatus}</div>}
             <button onClick={toggleVoice} className={`p-2 rounded-full transition-all ${voiceEnabled ? 'bg-blue-500 text-white animate-pulse ring-2 ring-blue-300' : 'bg-white/10 text-white/60 hover:bg-white/20'}`} title={voiceEnabled ? '音声OFF' : '音声ON'}>
@@ -12806,7 +12983,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
              />
              {Array.isArray(currentStep.checklistItems) && currentStep.checklistItems.length > 0 && currentStep.type !== 'measurement' ? (() => {
                // チェックリスト単独工程 (順序実行モード、測定なし)
-               const chkKey = `${currentStep.id}-0-checklist`;  // 順序実行は 1台目で代表
+               const chkKey = `${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}-checklist`;  // 順序実行も台ごと(ロット1回は0・handleNext の見張りと同じ鍵)
                const checked = measurementResults[chkKey] || {};
                const items = currentStep.checklistItems;
                const requiredItems = items.filter(it => it.required !== false);
@@ -12924,14 +13101,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                  <div className="flex-1 min-h-0 overflow-y-auto">
                    <MeasurementInputPanel
                      config={currentStep.measurementConfig}
-                     values={measurementResults[`${currentStep.id}-0-values`] || measurementResults[`${currentStep.id}-values`] || {}}
+                     values={measurementResults[`${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}-values`] || measurementResults[`${currentStep.id}-values`] || {}}
                      onChange={(newValues) => {
                        const resultVal = calculateMeasurementResult(newValues, currentStep.measurementConfig);
                        const crossVals = collectCrossStepValues(lot, currentStep.id);
                        const calcResults = calculateMeasurementResults(newValues, currentStep.measurementConfig, crossVals);
                        const measData = { values: newValues, result: resultVal, calcResults, timestamp: Date.now() };
                        // 統一キー方針: ${id}-${unit}-values と ${id}-${unit}
-                       const newResults = { ...measurementResults, [`${currentStep.id}-0-values`]: newValues, [`${currentStep.id}-0`]: measData };
+                       const newResults = { ...measurementResults, [`${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}-values`]: newValues, [`${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}`]: measData };
                        // 旧キーがあれば互換維持
                        if (measurementResults[`${currentStep.id}-values`] !== undefined) newResults[`${currentStep.id}-values`] = newValues;
                        if (measurementResults[`${currentStep.id}-result`] !== undefined) newResults[`${currentStep.id}-result`] = measData;
@@ -13032,7 +13209,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       {measurementFullscreen && (() => {
         const activeStep = executionType === 'sequential' ? currentStep : (localSteps[displayStepIdx] || currentStep);
         if (!activeStep || activeStep.type !== 'measurement' || !activeStep.measurementConfig) return null;
-        const activeUnitIdx = executionType === 'sequential' ? 0 : displayUnitIdx;
+        const activeUnitIdx = executionType === 'sequential' ? (activeStep.lotOnce ? 0 : currentUnitIdx) : displayUnitIdx;
         return (
           <div data-fs="measurement" className="fixed inset-0 z-[300] bg-slate-900/95 flex flex-col">
             <div className="bg-slate-800 text-white p-3 flex justify-between items-center shrink-0">
@@ -13199,16 +13376,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                 // 推奨のタスクに切り替えてスタート
                 const { nextSIdx, nextU } = outOfOrderConfirm;
                 setOutOfOrderConfirm(null);
-                setActiveCustomTaskKey(`${nextSIdx}-${nextU}`);
-                toggleTask(nextSIdx, nextU);
+                toggleTask(nextSIdx, nextU); // 🔎右へ映すのは toggleTask(開始は見張りを通ってから)
               }} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-sm flex items-center gap-1">
                 <CheckCircle2 className="w-4 h-4"/> 推奨の方をやる
               </button>
               <button onClick={() => {
                 const { sIdx, uIdx } = outOfOrderConfirm;
                 setOutOfOrderConfirm(null);
-                setActiveCustomTaskKey(`${sIdx}-${uIdx}`);
-                toggleTask(sIdx, uIdx);
+                toggleTask(sIdx, uIdx); // 🔎右へ映すのは toggleTask(開始は見張りを通ってから)
               }} className="px-4 py-2 bg-rose-100 hover:bg-rose-200 text-rose-700 border border-rose-300 rounded font-bold text-sm">それでも飛ばす</button>
             </div>
           </div>
@@ -19251,9 +19426,11 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     if (!confirm(`この${typeName}を削除しますか？`)) return;
     const lot = lots.find(l => l.id === lotId);
     if (lot) {
-      const newInterruptions = (lot.interruptions || []).filter(i => i.id !== interruptionId);
+      // ⚠配列から抜いて丸ごと書き戻さない(作業画面の古い配列ですぐ復活する)。消した印を1件書く(製品と同じ)
+      const target = (lot.interruptions || []).find(i => i && i.id === interruptionId);
+      if (!target) return;
       try {
-        await saveData('lots', lotId, { interruptions: newInterruptions });
+        await saveData('lots', lotId, intDeletePatch(target, currentUserName));
       } catch (e) {
         console.error('🚨 削除がサーバに届きませんでした', e);
         alert('🚨 削除がサーバに届きませんでした。\n\n'
@@ -19275,8 +19452,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     const { data, lotId, type } = editModal;
     const lot = lots.find(l => l.id === lotId);
     if (!lot) return;
-    const updatedInterruptions = (lot.interruptions || []).map(i => {
-      if (i.id !== data.id) return i;
+    const curInt = (lot.interruptions || []).find(i => i && i.id === data.id);
+    if (!curInt) return;
+    const updatedInterruptions = [curInt].map(i => {
       if (type === 'defect') {
         const updated = { ...i, label: editLabel };
         if (editCauseProcess) updated.causeProcess = editCauseProcess; else delete updated.causeProcess;
@@ -19288,7 +19466,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     // 🚨 **届いてから閉じる**。先に閉じると、打ち直した内容が手元ごと消える。
     setSavingEdit(true);
     try {
-      await saveData('lots', lotId, { interruptions: updatedInterruptions });
+      // 1件だけ書く(消した項目には消す印・製品と同じ)
+      await saveData('lots', lotId, intWritePatch(curInt, updatedInterruptions[0]));
       setEditModal({ isOpen: false, type: null, data: null, lotId: null });
     } catch (e) {
       // 🚨 **閉じない**。打った内容は窓に残っているので、送り直せる。
@@ -20203,6 +20382,22 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
              // 自動工程の判定: executionMode='batch' or title に '自動' を含む
              const isAutoStep = (step) => step?.executionMode === 'batch' || step?.title?.includes('自動');
 
+             // === 記録の質の件数(taskTimeQualityOf を画面へ・製品と同じ数え方) ===
+             //   確定=作業区間あり / 推定=開始〜終了だけ(時間の手入力もここ) / 低信頼=記録が矛盾 / 記録不足=時刻なし
+             //   ⚠件数を数えるだけ。並列作業率の式は変えない。
+             const timeQualityStats = (() => {
+               const c = { confirmed: 0, estimated: 0, unreliable: 0, missing: 0, usable: 0, total: 0 };
+               completedLots.forEach(lot => {
+                 Object.values(lot.tasks || {}).forEach(t => {
+                   if (!t || (t.status !== 'completed' && t.status !== 'ng')) return;
+                   c.total++;
+                   c[taskTimeQualityOf(t).quality]++;
+                   if (hasUsableInterval(t)) c.usable++;
+                 });
+               });
+               return c;
+             })();
+
              // === 1) 工程別の全社ベースタイム (平均) と最速タイムを事前算出 ===
              const stepGlobalTimes = {}; // stepKey → { times: [], targetTime }
              completedLots.forEach(lot => {
@@ -20398,6 +20593,20 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
 
              return (
                <div className="space-y-6">
+                 {/* 📋 記録の質 — 実測(作業区間)と推定を混ぜないための件数(製品と同じ帯) */}
+                 <div className="bg-indigo-50 border border-indigo-300 rounded-xl p-3 text-xs" data-time-quality-band>
+                   <div className="font-bold text-indigo-800 mb-1">📋 この期間の記録の質（完了タスク {timeQualityStats.total.toLocaleString()} 件）</div>
+                   <div className="flex flex-wrap gap-1.5">
+                     <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold">確定 {timeQualityStats.confirmed.toLocaleString()}</span>
+                     <span className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 font-bold">推定 {timeQualityStats.estimated.toLocaleString()}</span>
+                     <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 font-bold">低信頼 {timeQualityStats.unreliable.toLocaleString()}</span>
+                     <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 font-bold">記録不足 {timeQualityStats.missing.toLocaleString()}</span>
+                   </div>
+                   <div className="text-slate-600 mt-1 leading-relaxed">
+                     部品検査は まだ作業の打刻の区間を残していないので、<b>確定は当面 0件</b>です。下の数字は<b>推定</b>（開始〜終了からの再構成・時間の手入力を含む）です。
+                     <b>実測と推定は精度が違うので合計しません。</b>
+                   </div>
+                 </div>
                  {/* 概要 (ベンチマーク) */}
                  <div className="bg-gradient-to-br from-slate-50 to-slate-100 border-2 border-slate-200 rounded-xl p-4">
                    <div className="text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><Users className="w-4 h-4"/> 全体ベンチマーク (期間内・完了ロット {completedLots.length}件)</div>
@@ -22951,6 +23160,9 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
              ))}
            </div>
          </div>
+
+         {/* 🚶 区画どうしの片道・掛け持ちの決まり(settings.opsim.zoneTravel・作業画面の掛け持ち案内が読む) */}
+         <ZoneTravelSettings settings={settings} saveSettings={saveSettings} zones={localZones} />
 
          {/* 音声アシスタント設定 */}
          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
@@ -28736,9 +28948,10 @@ const QuotaStoppedPanel = ({ until }) => (
    //   届いた後は普段の窓(liveLots)を混ぜない。混ぜると、窓の購読を止めた後に
    //   **古い姿で新しい姿を上書き**してしまう。過去 ⊇ 窓 なので混ぜる必要も無い。
    const lots = useMemo(() => {
-     if (lotsWindowWhole) return liveLots;                       // 全部読めている = 今までと同一
-     if (historyLots !== null) return mergeLotsById(historyLots, openLots);
-     return mergeLotsById(liveLots, openLots);
+     // 🧾 中断の記録(interruptionsMap)を配列へ合流させるのは ここ1回だけ(製品の購読の出口と同じ)
+     if (lotsWindowWhole) return liveLots.map(withInterruptionLog);                       // 全部読めている = 今までと同一
+     if (historyLots !== null) return mergeLotsById(historyLots, openLots).map(withInterruptionLog);
+     return mergeLotsById(liveLots, openLots).map(withInterruptionLog);
    }, [lotsWindowWhole, historyLots, openLots, liveLots]);
    // 過去まで揃っているか。🚨**揃っていない状態で過去の数字を出さない**(黙って減るのが一番まずい)。
    const historyLoaded = historyLots !== null;
@@ -29257,7 +29470,7 @@ const QuotaStoppedPanel = ({ until }) => (
      const watch = (colName, cb) => P.watchCollection(APP_DATA_ID, colName, (rows, snap) => { meter(colName, snap); readOk(colName); cb(rows, snap); }, { onError: readFailed(colName) });
 
      unsubs = [
-       P.watchCollection(APP_DATA_ID, 'templates', (rows, snap) => { meter('templates', snap); readOk('templates'); setTemplates(rows); }, { includeMetadataChanges: true, onError: readFailed('templates') }),
+       P.watchCollection(APP_DATA_ID, 'templates', (rows, snap) => { meter('templates', snap); readOk('templates'); refreshStepMasterIndex(rows); setTemplates(rows); }, { includeMetadataChanges: true, onError: readFailed('templates') }),
        P.watchCollection(APP_DATA_ID, 'workers', (rows, snap) => { meter('workers', snap); readOk('workers'); setWorkers(rows); }, { includeMetadataChanges: true, onError: readFailed('workers') }),
        // ⚠notes / announcements はヘッダーのバッジ(未読件数)で **常に** 使う。外すと数字が黙って0になる。
        watch('notes', (rows) => setNotes(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
@@ -29653,6 +29866,34 @@ const QuotaStoppedPanel = ({ until }) => (
        bumpInflight(-1);
      }
    };
+
+   // 🚶 別のロットにいる間に時間が来た自動測定を、この端末が後追いで完了にする(製品 2026-09-26 と同じ)。
+   //   前は作業画面を開き直すまで processing のまま残り、マップ・リスト・掛け持ち案内の判断が古かった。
+   //   書くのは「端末で選んだ名前の作業者の担当ロット」だけ・今開いているロットは作業画面の1秒タイマーに任せる・同じロットは30秒に1回まで。
+   //   ⚠部品には buildLotSave(作業区間・機械の運転記録)が無いので tasks と status だけを書く。
+   const juggleAutoEndRef = useRef(new Map());
+   const saveDataForJuggleRef = useRef(null);
+   saveDataForJuggleRef.current = saveData;
+   useEffect(() => {
+     const iv = setInterval(() => {
+       if (!lotsLoadedRef.current) return;
+       const me = String(currentUserName || '').trim();
+       const mine = (workers || []).find(w => w && w.name === me);
+       if (!mine || !mine.id) return;
+       const now = Date.now();
+       (lots || []).forEach((l) => {
+         if (!l || !l.id || l.id === executionLotId || l.status === 'completed' || l.workerId !== mine.id) return;
+         const last = juggleAutoEndRef.current.get(l.id) || 0; if (now - last < 30000) return;
+         const tplSteps = ((templates || []).find(t => t.id === l.templateId)?.steps) || [];
+         const r = autoCatchUp({ lot: l, tplSteps, now, isAuto: isAutoStep, inspectorName: me });
+         if (!r.tasks) return;
+         juggleAutoEndRef.current.set(l.id, now);
+         Promise.resolve(saveDataForJuggleRef.current?.('lots', l.id, { tasks: r.tasks, ...(l.status === 'paused' ? {} : { status: 'processing' }) }))
+           .catch((e) => console.error('[掛け持ち] 後追いの自動終了の保存に失敗', e));
+       });
+     }, 5000);
+     return () => clearInterval(iv);
+   }, [lots, executionLotId, currentUserName, workers, templates]);
 
    const retryLastSave = async () => {
      const p = lastFailedPayloadRef.current;
@@ -32275,8 +32516,8 @@ const QuotaStoppedPanel = ({ until }) => (
            itemMaster={settings?.itemMaster || null}
            // 🚶 掛け持ち案内の「移る」「↩ 戻る」: 作業画面が保存を見届けてから、開くロットを替える(key で画面を作り直す)
            onSwitchLot={(id) => setExecutionLotId(id)}
-           // 部品には操業シミュの区画どうしの表が無い → 片道は区画の名前の目安だけ(無ければ「不明」)
-           travelCfg={null}
+           // 🚶 区画どうしの片道・2分の決まり(マスタ設定の作業エリアの下で誰でも変えられる)。空なら区画の名前の目安だけ
+           travelCfg={settings?.opsim?.zoneTravel || null}
            onClose={() => setExecutionLotId(null)}
            // 🚨🚨 作業画面の onSave は **投げっぱなし(await も catch も無い)が61箇所**ある。
            //   61箇所を書き換えるのではなく、**入口を1つにして**そこで面倒を見る
