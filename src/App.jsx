@@ -16879,15 +16879,136 @@ const KpiDetailView = ({ lots = [], settings = {}, saveSettings = null, currentU
   const [editYear, setEditYear] = useState(new Date().getFullYear());
   const [prodDraft, setProdDraft] = useState({});
   useEffect(() => { setProdDraft({ ...((settings.annualProduction || {})[editYear] || {}) }); }, [editYear, settings.annualProduction]);
-  // 記録上の台数(参考): 直近365日に完了したロットの quantity 合計を品目別に。実生産台数の目安。
+  // 記録上の台数(参考): 直近365日に完了した台数を品目コード別に(製品と同じ・指図で名寄せ)。
+  // ⚠⚠ **指図ごとに1回だけ数える。ロットの quantity を全部足してはいけない。**
+  //   清水さん(2026-08-01):「一台毎にテンプレ毎に仕事してるからそれを合計してるからじゃ？
+  //   RTT-215は一台で4個テンプレあるよ」→ そのとおりだった。
+  //   1つの指図は **テンプレの数だけロットに分かれる**(実測: 268指図中99指図が複数ロット)。
+  //   足し算にすると RTT-215 が 104台(実際は29台)、全体で 1,315台(実際は943台)と
+  //   **39%も多く**出ていた。ここは実績表と見比べる欄なので、水増しは致命的。
+  //
+  // ⚠同じ指図なのにロットごとに台数が違う場合がある(実測2件)。どれが正しいか機械には
+  //   決められないので **一番大きい値**を採る。少なく見積もる方が危ないため。
+  // ⚠同じ指図の中で品目コードが違うことがある(例「RTT-215回転」と「RTT-215,AB傾斜」= 同じ1台の別工程)。
+  //   1台を2品目コードで数えないよう **代表を1つだけ選ぶ**。選び方は 台数が多い → 名前順 の順で決め打ち
+  //   (毎回同じ答えになるように。ロットの並び順に依存させない)。
   const measuredByModel = useMemo(() => {
-    const m = {}; const cutoff = Date.now() - 365 * 86400000;
-    (lots || []).forEach(l => { if (!isCompleted(l)) return; const cm = compMs(l); if (cm == null || cm < cutoff) return; const k = l.model || '不明'; m[k] = (m[k] || 0) + (l.quantity || 1); });
+    const cutoff = Date.now() - 365 * 86400000;
+    const perOrder = new Map(); // 指図 → { model, qty }
+    (lots || []).forEach(l => {
+      if (!isCompleted(l)) return;
+      const cm = compMs(l); if (cm == null || cm < cutoff) return;
+      const model = l.model || '不明';
+      const qty = Number(l.quantity) || 1;
+      // 指図番号が無いロット(手入力など)は、ロット自身を1件として数える
+      const key = String(l.orderNo || '').trim() ? `o:${String(l.orderNo).trim()}` : `l:${l.id}`;
+      const cur = perOrder.get(key);
+      if (!cur) { perOrder.set(key, { model, qty }); return; }
+      const better = qty > cur.qty || (qty === cur.qty && model < cur.model);
+      perOrder.set(key, { model: better ? model : cur.model, qty: Math.max(qty, cur.qty) });
+    });
+    const m = {};
+    perOrder.forEach(({ model, qty }) => { m[model] = (m[model] || 0) + qty; });
     return m;
   }, [lots]);
   const prodModels = useMemo(() => { const s = new Set(Object.keys(measuredByModel)); Object.keys(prodDraft).forEach(k => s.add(k)); return [...s].filter(Boolean).sort(); }, [measuredByModel, prodDraft]);
   const prodYearOpts = useMemo(() => { const y0 = new Date().getFullYear(); const ys = new Set([y0, y0 - 1, y0 - 2]); Object.keys(settings.annualProduction || {}).forEach(y => ys.add(Number(y))); return [...ys].filter(Boolean).sort((a, b) => b - a); }, [settings.annualProduction]);
   const saveProd = () => { const clean = {}; Object.entries(prodDraft).forEach(([k, v]) => { const n = Number(v); if (n > 0) clean[k] = Math.round(n); }); saveSettings && saveSettings({ annualProduction: { ...(settings.annualProduction || {}), [editYear]: clean } }); };
+  // 品名(Excel の参考の列だけ): ロットの名乗る品名 → 品目名簿。合算・取込の鍵は品目コードのまま。
+  const lotTextByModel = useMemo(() => { const m = {}; (lots || []).forEach(l => { if (l?.model && l.modelText && !m[l.model]) m[l.model] = l.modelText; }); return m; }, [lots]);
+  // 年間生産台数をExcelで一括(全品目コード×全年のマトリクス): ダウンロードで現状が丸見え→各年の列を編集→取込で該当年を一括更新(取込は確認後すぐ保存)。
+  const exportProdExcel = async () => {
+    try {
+      const ExcelJS = await loadExcelJS();
+      const ap = settings.annualProduction || {};
+      const years = [...new Set([Number(editYear), ...prodYearOpts.map(Number), ...Object.keys(ap).map(Number)])].filter(Boolean).sort((a, b) => a - b);
+      const modelSet = new Set(prodModels);
+      Object.values(ap).forEach(obj => Object.keys(obj || {}).forEach(m => modelSet.add(m)));
+      const models = [...modelSet].filter(Boolean).sort();
+      const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('年間生産台数');
+      ws.addRow(['年間生産台数（各年の列に台数を入れてアップロード＝その年を更新。空欄はそのまま・記録上の台数列は編集不要）']); ws.mergeCells(1, 1, 1, 3 + years.length); ws.getRow(1).font = { bold: true };
+      const head = ws.addRow(['品目コード', '品名(参考・編集不要)', '記録上の台数(参考・編集不要)', ...years.map(y => `${y}年`)]); head.font = { bold: true };
+      const nameOf = (m) => resolveItemName(m, lotTextByModel[m] || '', settings.itemMaster) || '';
+      models.forEach(m => ws.addRow([m, nameOf(m), measuredByModel[m] || 0, ...years.map(y => { const v = Number((ap[y] || {})[m]); return v > 0 ? v : ''; })]));
+      ws.columns = [{ width: 26 }, { width: 28 }, { width: 22 }, ...years.map(() => ({ width: 12 }))];
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `年間生産台数_全品目コード全年.xlsx`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { alert('Excel書き出しに失敗しました: ' + (e.message || e)); }
+  };
+  // Excelを「行の配列」に開く。⚠読み手を2つ用意する。
+  //   ExcelJS は書き出したファイルとの相性が良いが、**作り手によっては読めずに落ちる**
+  //   (2026-08-01: 本番で「Cannot read properties of undefined (reading 'sheets')」= xl/workbook.xml
+  //    の解釈で失敗。ローカルの開発サーバーでは同じファイルが読めたため、片方だけでは気づけない)。
+  //   SheetJS(xlsx) は素性の違うファイルにずっと寛容なので、落ちたらそちらで読み直す。
+  //   ⚠入荷登録の取込でも同じことが起きて JSZip へ逃がした前例がある。
+  const readSheetRows = async (file) => {
+    const buf = await file.arrayBuffer();
+    const errs = [];
+    try {
+      const ExcelJS = await loadExcelJS();
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(buf);
+      const ws = wb.worksheets[0];
+      if (!ws) throw new Error('シートがありません');
+      const rows = [];
+      ws.eachRow((row) => {
+        const vals = row.values || [];
+        const out = [];
+        for (let c = 1; c < vals.length; c++) {
+          const v = vals[c];
+          out[c - 1] = (v && v.result != null) ? v.result : (v && v.text != null ? v.text : v);
+        }
+        rows.push(out);
+      });
+      return { rows, by: 'ExcelJS' };
+    } catch (e) { errs.push('ExcelJS: ' + (e?.message || e)); }
+    try {
+      // 部品は SheetJS を持たないので、入荷登録の取込と同じ JSZip 直読み(1始まりのグリッド)で読み直し、0始まりの行へ直す。
+      const grid = await readXlsxGridWithJSZip_pl(buf);
+      const rows = (grid || []).slice(1).map(r => (r || []).slice(1));
+      return { rows, by: 'JSZip' };
+    } catch (e) { errs.push('JSZip: ' + (e?.message || e)); }
+    throw new Error(`このファイルを開けませんでした。\n${errs.join('\n')}`);
+  };
+
+  const importProdExcel = async (file) => {
+    if (!file) return;
+    try {
+      const { rows, by } = await readSheetRows(file);
+      // ヘッダ行から「品目コード」列と「◯◯◯◯年」列(複数可)を特定。各年の列を全部読み、その年に反映する。
+      let modelCol = -1, dataStart = -1; const yearCols = [];
+      rows.forEach((cells, idx) => {
+        if (dataStart >= 0) return;
+        let mi = -1; const ycs = [];
+        (cells || []).forEach((v, c) => {
+          const s = String(v == null ? '' : (v.text || v)).trim();
+          if (s === '品目コード' || s === '型式') mi = c;
+          const my = s.match(/(20\d{2})\s*年?/); if (my && !s.includes('記録')) ycs.push({ col: c, year: Number(my[1]) });
+        });
+        if (mi >= 0 && ycs.length) { modelCol = mi; ycs.forEach(y => yearCols.push(y)); dataStart = idx + 1; }
+      });
+      if (modelCol < 0 || !yearCols.length) { alert('「品目コード」列と「◯◯◯◯年」の列が見つかりませんでした。ダウンロードしたExcelの形式（品目コードの列と、各年の列）でお願いします。'); return; }
+      const ap = { ...(settings.annualProduction || {}) };
+      yearCols.forEach(yc => { ap[yc.year] = { ...(ap[yc.year] || {}) }; });
+      let applied = 0; const touched = new Set();
+      rows.forEach((cells, idx) => {
+        if (idx < dataStart) return;
+        const model = String((cells && cells[modelCol]) == null ? '' : ((cells[modelCol].text) || cells[modelCol])).trim();
+        if (!model) return;
+        yearCols.forEach(yc => {
+          const raw = cells[yc.col]; const v = Number(raw && raw.result != null ? raw.result : raw);
+          if (Number.isFinite(v) && v > 0) { ap[yc.year][model] = Math.round(v); applied++; touched.add(yc.year); }
+        });
+      });
+      if (applied === 0) { alert('取り込める台数がありませんでした（品目コードの行と各年の列に数字が入っているかご確認ください）。'); return; }
+      const yrs = [...touched].sort((a, b) => a - b).join('・');
+      if (!window.confirm(`${yrs}年 の台数を ${applied}件 取り込んで保存します。よろしいですか？（Excelで空欄の品目コード・年は変更しません）`)) return;
+      saveSettings && saveSettings({ annualProduction: ap });
+      setProdDraft(d => ({ ...d, ...(ap[Number(editYear)] || {}) }));
+      alert(`保存しました（${yrs}年 / 合計${applied}件）。${by === 'JSZip' ? '\n※このファイルは別の読み方で開きました（中身は同じです）。' : ''}`);
+    } catch (e) { alert('Excel取込に失敗しました: ' + (e.message || e)); }
+  };
   const prodDirty = useMemo(() => { const saved = (settings.annualProduction || {})[editYear] || {}; const keys = new Set([...Object.keys(saved), ...Object.keys(prodDraft)]); for (const k of keys) { const a = Math.round(Number(prodDraft[k]) || 0); const b = Math.round(Number(saved[k]) || 0); if (a !== b) return true; } return false; }, [prodDraft, settings.annualProduction, editYear]);
 
   const range = () => { const t = new Date(); if (period === 'thisMonth') return [new Date(t.getFullYear(), t.getMonth(), 1).getTime(), new Date(t.getFullYear(), t.getMonth() + 1, 1).getTime()]; if (period === 'lastMonth') return [new Date(t.getFullYear(), t.getMonth() - 1, 1).getTime(), new Date(t.getFullYear(), t.getMonth(), 1).getTime()]; if (period === 'thisYear') return [new Date(t.getFullYear(), 0, 1).getTime(), new Date(t.getFullYear() + 1, 0, 1).getTime()]; return [-Infinity, Infinity]; };
@@ -16995,6 +17116,9 @@ const KpiDetailView = ({ lots = [], settings = {}, saveSettings = null, currentU
           </select>
           {isAdmin && <button onClick={() => setProdDraft(d => { const n = { ...d }; prodModels.forEach(m => { if (!(Number(n[m]) > 0)) n[m] = measuredByModel[m] || 0; }); return n; })} className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded border" title="空欄に記録上の台数を入れて、あとは手で直す">記録台数を初期値に入れる</button>}
           {isAdmin && <button onClick={saveProd} disabled={!prodDirty} className={`px-3 py-1 text-white text-xs font-bold rounded ${prodDirty ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-slate-300 cursor-not-allowed'}`}>{editYear}年の台数を保存</button>}
+          <span className="text-slate-300">|</span>
+          <button onClick={exportProdExcel} className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 fi-tap-text font-bold rounded border border-emerald-200" title="登録済みの全品目コード・全年の台数を1枚のExcelで出力（現状が丸見え）。各年の列を編集して取込むと更新できます">⬇ 現状をExcelでDL（全品目コード×全年）</button>
+          {isAdmin && <label className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white fi-tap-text font-bold rounded cursor-pointer" title="ダウンロードしたExcelの各年の列を編集して取込むと、その年の台数を一括更新（確認後すぐ保存）">⬆ Excelで取込んで更新<input type="file" accept=".xlsx,.xls" className="hidden" onChange={e => { importProdExcel(e.target.files && e.target.files[0]); e.target.value = ''; }} /></label>}
           {!isAdmin && <span className="text-xs text-slate-400">入力は管理者のみ</span>}
           {prodDirty && <span className="text-xs text-amber-600 font-bold">未保存の変更があります</span>}
         </div>
@@ -17003,7 +17127,7 @@ const KpiDetailView = ({ lots = [], settings = {}, saveSettings = null, currentU
             <table className="w-full text-xs border-collapse">
               <thead className="sticky top-0 bg-slate-100 text-slate-500"><tr>
                 <th className="px-2 py-1.5 text-left font-bold">品目コード</th>
-                <th className="px-2 py-1.5 text-right font-bold" title="直近365日に完了したロットの台数合計(目安)">記録上の台数<div className="text-xs font-normal text-slate-400">参考</div></th>
+                <th className="px-2 py-1.5 text-right font-bold" title="直近365日に完了した台数(目安)。同じ指図は1回だけ数える(テンプレごとに分かれたロットや分納を二重に数えない)">記録上の台数<div className="text-xs font-normal text-slate-400">参考</div></th>
                 <th className="px-2 py-1.5 text-right font-bold">実際の年間生産台数<div className="text-xs font-normal text-slate-400">{editYear}年</div></th>
               </tr></thead>
               <tbody>
