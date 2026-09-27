@@ -282,7 +282,10 @@ export const createFirebaseBackend = (db, fs) => {
       return await fs.runTransaction(db, async (tx) => {
         const snap = await tx.get(ref);
         const cur = snap.exists() ? (snap.data() || {}) : fallback;
-        let arr = [...((cur && cur[field]) || []), item];
+        const before = (cur && cur[field]) || [];
+        // 2026-09-27 製品と同じ opts.expectLength(審査の履歴が動いていたら書かず stale)
+        if (Number.isInteger(opts.expectLength) && before.length !== opts.expectLength) return { count: before.length, dropped: 0, stale: true };
+        let arr = [...before, item];
         const size = () => JSON.stringify(arr).length;
         let dropped = 0;
         while (arr.length > 1 && size() > max) { arr = arr.slice(1); dropped++; }
@@ -291,6 +294,50 @@ export const createFirebaseBackend = (db, fs) => {
         else tx.set(ref, prep({ [field]: arr, updatedAt: DATA_SERVER_NOW }), { merge: true });
         return { count: arr.length, dropped };
       });
+    },
+
+    /** 版を1つ足して、採用中の版を指す head を進める。全部が1つの取引。
+     *  🚨「読んで→確かめて→書く」を端末側で分けると、2台が同じ版を確かめてから両方書けて
+     *    後勝ちで片方が消える(2026-09-22 保存計画で再現)。取引の中で確かめて書く。
+     *  - head(headCol/headId) の revision が expectRevision と違えば何も書かず stale。
+     *  - 版の書類(versionCol/versionId)が既に在れば何も書かず exists(再試行で二重に作らない)。
+     *  - preserveOld(headの今の中身) が {col,id,doc} を返せば、それも同じ取引で書く
+     *    (古い形= head に計画本体が入っていた頃の物を版へ移す。黙って捨てない)。
+     *  ⚠ 取引が途中で失敗すれば、版だけ・head だけが残る事は無い。 */
+    commitVersion: async (ns, { headCol, headId, versionCol, versionId, expectRevision, versionDoc, headDoc, preserveOld = null, chunks = [] }) => {
+      const headRef = docRef(ns, headCol, headId);
+      const verRef = docRef(ns, versionCol, versionId);
+      return await fs.runTransaction(db, async (tx) => {
+        const hs = await tx.get(headRef);
+        const vs = await tx.get(verRef);
+        const cur = hs.exists() ? (hs.data() || {}) : null;
+        const curRev = cur ? (Number(cur.revision) || 0) : 0;
+        if (curRev !== (Number(expectRevision) || 0)) return { ok: false, reason: 'stale', headRevision: curRev };
+        if (vs.exists()) return { ok: false, reason: 'exists', headRevision: curRev };
+        const keep = cur && typeof preserveOld === 'function' ? preserveOld(cur) : null;
+        if (keep && keep.col && keep.id && keep.doc) tx.set(docRef(ns, keep.col, keep.id), prep(keep.doc));
+        // 1書類に収まらない本体の欠片(…__c0, __c1)。索引と同じ取引で書く(片方だけ残さない)
+        for (const c of chunks) tx.set(docRef(ns, versionCol, c.id), prep(c.doc));
+        tx.set(verRef, prep(versionDoc));
+        tx.set(headRef, prep({ ...headDoc, updatedAt: DATA_SERVER_NOW }));
+        return { ok: true, headRevision: curRev + 1 };
+      });
+    },
+
+    /** 無い時だけ作る(取引)。在れば何も書かず taken。
+     *  🚨「読んで無いと確かめて→save」を端末側で分けると、2台が同時に確かめてから両方書けて後勝ち(移動案の初回保存)。 */
+    createOnce: async (ns, col, id, doc) => {
+      const ref = docRef(ns, col, id);
+      try {
+        return await fs.runTransaction(db, async (tx) => {
+          const snap = await tx.get(ref);
+          if (snap.exists()) return { acquired: false, reason: CLAIM.TAKEN };
+          tx.set(ref, prep({ ...doc, updatedAt: DATA_SERVER_NOW }));
+          return { acquired: true, reason: CLAIM.OK };
+        });
+      } catch (e) {
+        return { acquired: false, reason: CLAIM.ERROR, error: e };
+      }
     },
   };
 };
@@ -373,6 +420,8 @@ export const createProvider = ({ backends, providers = DEFAULT_PROVIDERS, onUnkn
     // --- 割り込まれない書き込み(意図の名前で呼ぶ) ----------------------------
     claimOnce: callAsync('claimOnce'),
     appendCapped: callAsync('appendCapped'),
+    commitVersion: callAsync('commitVersion'),
+    createOnce: callAsync('createOnce'),
   };
 };
 

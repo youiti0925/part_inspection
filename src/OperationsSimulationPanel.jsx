@@ -2,6 +2,7 @@ import PlanControlPanel from './opsim/planControl/PlanControlPanel.jsx';
 import ParallelLabPanel from './opsim/parallelLab/ParallelLabPanel.jsx';
 import LotPairLab from './opsim/parallelLab/LotPairLab.jsx';
 import { RiskFlowBoard } from './opsim/RiskFlowBoard.jsx';
+import { ItemNameProvider, ItemNameTag } from './opsim/partsItemName.jsx';
 // 🗂 割付と空き(Codex 13bb9d2 の画面。清水さん「全部確認してちゃんと入れて」2026-09-23)
 import DecisionBoard from './opsim/DecisionBoard.jsx';
 // 🚨 2026-09-23 清水さん「使えない物を追加した」: 並列ラボは本番の控えで効き目 0件(docs/効き目_本番の控え.json)。
@@ -455,6 +456,7 @@ function LotListDialog({ req, lots, onClose, onPick, templatesById = null }) {
                     >
                       <span className="block text-xs font-bold text-slate-800">
                         {(l && l.model) || '（品目コードの記録がありません）'}
+                        {l && l.model ? <ItemNameTag model={l.model} modelText={l.modelText} /> : null}
                         <span className="font-bold text-slate-500">{`｜${tplNameOf(templatesById, l && l.templateId) || 'テンプレ名なし'}`}</span>
                       </span>
                       <span className="block text-2xs text-slate-500">
@@ -4188,6 +4190,7 @@ function OperationsSimulationBody({ planShelf = null, publishOnly = false, isAdm
                   data-opsim-model-tpl-id={String(selectedLot.templateId)}>
                   <div className="fi-tap-text font-bold text-slate-700">
                     品目コード <b className="text-slate-900">{selectedLot.model}</b>
+                    <ItemNameTag model={selectedLot.model} modelText={selectedLot.modelText} />
                     <span className="mx-1 text-slate-400">｜</span>
                     テンプレ <b className="text-slate-900">{tplNameOf(templatesById, selectedLot.templateId) || 'テンプレ名なし'}</b>
                   </div>
@@ -5002,7 +5005,7 @@ export function AssumedArrivalStrip({
               return (
                 <React.Fragment key={r.lotId}>
                   <span className="text-2xs font-bold text-slate-700 tabular-nums">{r.orderNo || r.lotId}</span>
-                  <span className="min-w-0 break-words text-2xs font-bold text-slate-800" data-assumed-row-model={r.model || ''}>{r.model || '（品目コードの記録がありません）'}<span className="font-bold text-slate-500">{`｜${r.tplName || 'テンプレ名なし'}`}</span></span>
+                  <span className="min-w-0 break-words text-2xs font-bold text-slate-800" data-assumed-row-model={r.model || ''}>{r.model || '（品目コードの記録がありません）'}{r.model ? <ItemNameTag model={r.model} /> : null}<span className="font-bold text-slate-500">{`｜${r.tplName || 'テンプレ名なし'}`}</span></span>
                   <span
                     title={why}
                     data-testid="assumed-arrival-row-kind"
@@ -5031,7 +5034,7 @@ export function AssumedArrivalStrip({
           <div className="flex flex-wrap gap-1.5">
             {noAnchor.map((r) => (
               <span key={r.lotId} className="rounded border border-slate-300 bg-slate-50 px-1.5 py-0.5 text-2xs font-bold text-slate-600">
-                {r.orderNo || r.lotId} {r.model}{`｜${r.tplName || 'テンプレ名なし'}`}
+                {r.orderNo || r.lotId} {r.model}<ItemNameTag model={r.model} />{`｜${r.tplName || 'テンプレ名なし'}`}
               </span>
             ))}
           </div>
@@ -5126,7 +5129,7 @@ function DueConflictStrip({ conflicts = [], templatesById = null }) {
       <summary className="flex min-h-11 cursor-pointer items-center fi-tap-text font-black text-rose-700">⚠ 納期の更新が必要 {conflicts.length}件 — 入荷が納期より後(矛盾)。入荷登録されたら納期も直す決まり(2026-08-28)</summary>
       <div className="mt-1 flex flex-wrap gap-1.5">
         {conflicts.map((c) => (
-          <span key={c.id} className="fi-tap-text font-bold bg-white border border-rose-300 text-rose-700 rounded px-1.5 py-0.5">{c.orderNo} {c.model}{`｜${tplNameOf(templatesById, c.templateId) || 'テンプレ名なし'}`}</span>
+          <span key={c.id} className="fi-tap-text font-bold bg-white border border-rose-300 text-rose-700 rounded px-1.5 py-0.5">{c.orderNo} {c.model}<ItemNameTag model={c.model} className="font-normal" />{`｜${tplNameOf(templatesById, c.templateId) || 'テンプレ名なし'}`}</span>
         ))}
       </div>
     </details>
@@ -5141,7 +5144,7 @@ function StaleStrip({ stale = [], templatesById = null }) {
       <summary className="flex min-h-11 cursor-pointer items-center fi-tap-text font-bold text-slate-600">過去納期のため対象外 {stale.length}件(処理済みか登録間違いの可能性。入荷登録が付けば自動で対象に戻ります)</summary>
       <div className="mt-1 flex flex-wrap gap-1.5">
         {stale.map((c) => (
-          <span key={c.id} className="fi-tap-text bg-white border border-slate-300 text-slate-500 rounded px-1.5 py-0.5">{c.orderNo} {c.model}{`｜${tplNameOf(templatesById, c.templateId) || 'テンプレ名なし'}`}</span>
+          <span key={c.id} className="fi-tap-text bg-white border border-slate-300 text-slate-500 rounded px-1.5 py-0.5">{c.orderNo} {c.model}<ItemNameTag model={c.model} className="font-normal" />{`｜${tplNameOf(templatesById, c.templateId) || 'テンプレ名なし'}`}</span>
         ))}
       </div>
     </details>
@@ -5217,6 +5220,7 @@ function ResampleFoldStrip({ resample = null, lotById = null, templatesById = nu
 export function OperationsSimulationPanel({ planShelf = null, publishOnly = false, isAdmin = false, readOverviewMap = null, lots, templates, workers, settings, saveSettings = null, canEdit, arrivalByLot = {}, factoryCalendar = null, otherAppWorkerNames = null, otherAppDailyLoad = null, ownDailyLoad = null, publishDailyLoad = null, capacityShelfLoaded = false, arrivalActuals = null, contactRequests = null, onEditModelTemplate = null, onRemoveModelTemplate = null, onRevertModelTemplate = null, modelTemplates = null, placementRules = null, savePlacementRule = null, onEditLot = null, onDeleteLot = null, onChangeLotPriority = null }) {
   return (
     <ErrorBoundary compact where="操業シミュレーション">
+      <ItemNameProvider lots={lots} itemMaster={settings && settings.itemMaster}>
       <OperationsSimulationBody
         /* 📋 2026-09-22 保存計画の共有棚の口 { readHead, readVersion, listVersions, commitVersion }。
      🚨 渡されなければ 計画の保存・読み込みをしない(端末の中へ逃がさない)。
@@ -5246,6 +5250,7 @@ export function OperationsSimulationPanel({ planShelf = null, publishOnly = fals
         onRevertModelTemplate={onRevertModelTemplate}
         modelTemplates={modelTemplates}
       />
+      </ItemNameProvider>
     </ErrorBoundary>
   );
 }
