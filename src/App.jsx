@@ -125,6 +125,8 @@ import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStar
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
 //   この部品検査アプリは **読むだけ**(登録する画面は製品検査/最終検査にある)。
 import { isWorkdayYmd, makeIsWorkday } from './domain/factoryCalendar.js';
+import { planProgressImport, normalizeSheetMap, DEFAULT_SHEET_MAP, isShippedGrayFills, colToIndex } from './domain/progressSheet.js';
+import { DEFAULT_IMPORT_OPTIONS } from './domain/importPlan.js';
 import { LOT_PRIORITY_CHOICES, LOT_PRIORITY_LABEL, normalizeLotPriority, priorityLabelOf, priorityFromImportText, priorityBadgeOf, priorityFilterStyleOf } from './domain/lotPriority.js';
 import { workerWorkedSecondsInRange, dayRangeOf } from './domain/workerDailyActual.js';
 import { remainingByTasks, lotRemainingSec } from './domain/lotRemaining.js';
@@ -30750,6 +30752,79 @@ const QuotaStoppedPanel = ({ until }) => (
    };
 
    // === 工機進捗管理表 取込: パース → プレビュー ===
+   // === 工機進捗管理表 取込(P022): 判定は domain/progressSheet.js の planProgressImport(製品と同じ純関数)。ここはセルを読むだけ。
+   //   部品には型式マスタが無いので modelMasters は {}(品目コード → 品質規格 → テンプレに落ちる)。到着予定も無いので entryPinned は {}。
+   const progressPlanCtx = () => ({
+     lots,
+     modelMasters: {},
+     qualityStandards: settings.qualityStandards || {},
+     modelStandardMap: settings.modelStandardMap || {},
+     templates,
+     today: localYMD(new Date()),
+   });
+   const replanProgress = (rows, opts, smap) => planProgressImport(rows, {
+     ...progressPlanCtx(),
+     options: {
+       calendar: factoryCalendar || null,
+       includeProvisional: !!opts.includeProvisional,
+       entryHHMM: DEFAULT_IMPORT_OPTIONS.entryHHMM,
+       defaultEntryDaysBefore: DEFAULT_IMPORT_OPTIONS.defaultEntryDaysBefore,
+       doneStages: smap.doneStages, doneProgress: smap.doneProgress,
+       entryPinned: {},
+       k33Means: smap.k33Means,
+       defaultShipDaysBefore: smap.shipDaysBefore,
+       colLabels: { k33: smap.cols.k33, assyDone: smap.cols.assyDone, start: smap.cols.start, shipDate: smap.cols.shipDate },
+     },
+   });
+   // 品名は表の値ではなく品目名簿から引く(resolveItemName。名簿に無ければ空)
+   const progressRowModelText = (c) => resolveItemName(c.model, '', settings.itemMaster) || '';
+   // 🗂 取込で作るロットの書き手ただ1本(製品 writeProgressCreates を写した。分納の便 arrival_times は部品には無いので作らない)
+   const writeProgressCreates = async (createLots, { timestamp, tick }) => {
+     for (const c of createLots) {
+       const id = generateId();
+       const baseSteps = templates.find(t => t.id === c.templateId)?.steps || DEMO_STEPS;
+       const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(c.model, baseSteps, settings, c.templateId);
+       const serials = Array.from({ length: c.quantity }, (_, i) => `#${i + 1}`);
+       const modelText = progressRowModelText(c);
+       await saveData('lots', id, {
+         id, batchId: generateId(),
+         model: c.model, orderNo: c.orderNo,
+         ...(modelText ? { modelText } : {}),
+         serialNo: c.orderNo,
+         quantity: c.quantity,
+         unitSerialNumbers: serials,
+         templateId: c.templateId,
+         priority: 'normal',
+         dueDate: c.dueDate,
+         dueDateProvisional: c.dueDateProvisional || false,
+         // 🚚 出荷日(AD列)。読めた行だけ書く
+         ...(c.shipDate ? { shipDate: c.shipDate } : {}),
+         importedFromExcel: true,
+         importSource: 'progress-sheet',
+         // 🔑 納期と入荷を何から決めたかの印(P124。後で日数を変えた時に同じ元から数える為)
+         ...(c.dueBasis ? { dueBasis: c.dueBasis } : {}),
+         ...(c.entryBasis ? { entryBasis: c.entryBasis } : {}),
+         ...(c.entryBase ? { entryBase: c.entryBase } : {}),
+         // 🚚 P022 入庫は表の入荷の日(純関数が決めた物)。以前は「取込を押した瞬間」だった
+         entryAt: c.entryAt || timestamp,
+         status: 'waiting',
+         location: 'arrival',
+         mapZoneId: null,
+         x: 0, y: 0,
+         workerId: null,
+         createdAt: timestamp,
+         currentStepIndex: 0,
+         steps,
+         totalWorkTime: 0,
+         workStartTime: null,
+         ...profileSkippedPatch(steps, naStepIds, c.quantity),
+         ...templateSkipPatch({ model: c.model, templateId: c.templateId, steps, qty: c.quantity, lots, settings, at: timestamp }),
+         interruptions: [],
+         appliedStandard,
+       });
+       tick('作っています');
+     }
+   };
    const handleProgressMgmtUpload = async (e) => {
      const file = e.target.files[0];
      if (!file) return;
@@ -30758,11 +30833,11 @@ const QuotaStoppedPanel = ({ until }) => (
      try {
        // 📊 P023 ExcelJS で開き、落ちたら JSZip で読み直す(製品 openProgressBook_pi と同じ)。getWorksheet は await で呼ぶ
        const wb = await openProgressBook_pi(await file.arrayBuffer());
-       const sheet = await wb.getWorksheet('進捗管理表');
+       const smap = normalizeSheetMap(null, DEFAULT_SHEET_MAP);
+       const sheet = await wb.getWorksheet(smap.sheetName);
        if (!sheet) { alert('「進捗管理表」シートが見つかりません'); return; }
 
        // 品質規格マスタを参照 (modelStandardMap[model] → qualityStandards[qsId].templates[])
-       const qualityStandards = settings.qualityStandards || {};
        const modelStandardMap = settings.modelStandardMap || {};
        if (Object.keys(modelStandardMap).length === 0) {
          if (!confirm('「品目コード → 品質規格」のマッピングが未設定です。\n品質規格マスタで品目コードに規格を割り当ててください。\n\nそれでも続けますか? (どの行も取り込まれません)')) return;
@@ -30783,201 +30858,47 @@ const QuotaStoppedPanel = ({ until }) => (
          }
          return String(v).trim();
        };
-       const getDate = (cell) => {
+       // 🩶 灰色行(出荷済)の判定は domain/progressSheet.js の isShippedGrayFills ただ1本(製品と同じ)。ここは塗りを集めて渡すだけ。
+       const isShippedGray = (row) => {
+         const fills = [];
+         for (let c = 1; c <= 10; c++) {
+           const fill = row.getCell(c)?.fill;
+           if (fill?.type === 'pattern' && fill.fgColor) fills.push({ col: c, fgColor: fill.fgColor });
+         }
+         return isShippedGrayFills(fills, { orderCol: colToIndex(smap.cols.orderNo) + 1 });
+       };
+       // 日付の列は「生の値」(Date / 数値 / 文字)のまま純関数へ渡す(数式なら計算結果)。読み方は純関数が持つ。
+       const rawOf = (cell) => {
          const v = cell?.value;
          if (v == null) return null;
-         if (v instanceof Date) return v;
-         if (v && v.formula && v.result instanceof Date) return v.result;
-         if (typeof v === 'string') {
-           const s = v.trim();
-           if (s === '' || s === '-' || s === 'ー') return null;
-           // 試しに parse
-           const d = new Date(s);
-           if (!isNaN(d.getTime())) return d;
-         }
-         return null;
+         if (v instanceof Date || typeof v === 'number' || typeof v === 'string') return v;
+         if (Array.isArray(v.richText)) return v.richText.map(t => t.text).join('');
+         if (v.formula !== undefined) return (v.result instanceof Date || typeof v.result === 'number' || typeof v.result === 'string') ? v.result : null;
+         return String(v);
        };
-       // 行のfillが灰色 (出荷済) かを判定
-       const isShippedGray = (row) => {
-         // 行内のセルをいくつか見て、灰色(theme:0 + tint負)が支配的か簡易判定
-         let grayCount = 0, total = 0;
-         for (let c = 1; c <= 10; c++) {
-           const cell = row.getCell(c);
-           const fill = cell?.fill;
-           if (fill?.type === 'pattern' && fill.fgColor) {
-             total++;
-             const fg = fill.fgColor;
-             // 灰色: theme:0 で tint が -0.15 〜 -0.5 の範囲
-             if (fg.theme === 0 && typeof fg.tint === 'number' && fg.tint < -0.1 && fg.tint > -0.5) {
-               grayCount++;
-             }
-           }
-         }
-         return total > 0 && grayCount >= Math.ceil(total / 2);
-       };
-       // 品目コード → 品質規格 → テンプレ entry 配列 を解決
-       //   1. 完全一致を最優先
-       //   2. 大文字小文字無視
-       //   3. ハイフン/カンマ/スペース揺れ吸収して再試行
-       const normalize = (s) => (s || '').toString().toUpperCase().replace(/[\s\-_,\.]/g, '');
-       const findQsEntriesForModel = (model) => {
-         const m = (model || '').trim();
-         if (!m) return null;
-         // 直接一致
-         let qsId = modelStandardMap[m];
-         if (!qsId) {
-           // 正規化して照合
-           const norm = normalize(m);
-           for (const [registeredModel, mapped] of Object.entries(modelStandardMap)) {
-             if (normalize(registeredModel) === norm) { qsId = mapped; break; }
-           }
-         }
-         if (!qsId) return null;
-         const qs = qualityStandards[qsId];
-         if (!qs) return null;
-         const entries = getQsTemplateEntries(qs);
-         return { qs, entries };
-       };
-       // 「①Z5/15②Z5/18」のような複数日付文字列から最初の日付を抽出
-       const parseFirstDate = (str) => {
-         if (!str) return null;
-         const s = String(str);
-         // 日付パターン M/D を探す
-         const m = s.match(/(\d{1,2})\/(\d{1,2})/);
-         if (m) {
-           const month = parseInt(m[1]);
-           const day = parseInt(m[2]);
-           const now = new Date();
-           let year = now.getFullYear();
-           // 過去日付すぎたら翌年と仮定
-           let d = new Date(year, month - 1, day);
-           if (d.getTime() < now.getTime() - 90 * 86400000) {
-             d = new Date(year + 1, month - 1, day);
-           }
-           return d;
-         }
-         return null;
-       };
-
-       const result = {
-         createLots: [],   // 新規作成予定
-         updateLots: [],   // 既存更新予定
-         skipped: [],      // スキップ (理由付き)
-         warnings: [],     // 警告 (複数日付など)
-         totalRows: 0,
-         reader: wb.reader, // どちらの読み手で読んだか(exceljs / jszip)
-       };
-
-       const today = new Date();
+       // 📄 P022 列は製品と同じ既定(B 指図 / C 品目番号 / D 品目コード / E 数量 / Z 入荷 / AB 基準開始日付 / AD 出荷日)。
+       //   既定: 部品の表も Z列=入荷の日として読む(製品と同じ読み方)。表ごとの読み方の設定(P053)は後で入れる。
+       const cellAt = (row, key) => { const i = colToIndex(smap.cols[key]); return i < 0 ? null : row.getCell(i + 1); };
+       const strAt = (row, key) => { const c = cellAt(row, key); return c ? getStr(c) : ''; };
+       const rawAt = (row, key) => { const c = cellAt(row, key); return c ? rawOf(c) : null; };
+       const rows = [];
        const totalRows = sheet.rowCount;
-       for (let r = 3; r <= totalRows; r++) {  // 行1,2はヘッダ
+       for (let r = smap.firstDataRow; r <= totalRows; r++) {  // 開始行より上は見出し
          const row = sheet.getRow(r);
-         const orderNo = getStr(row.getCell('B'));
-         if (!orderNo || !/^\d+$/.test(orderNo)) continue;  // 指図無し or 数値以外はスキップ (静かに)
-         result.totalRows++;
-
-         const productNo = getStr(row.getCell('C'));
-         const model = getStr(row.getCell('D'));
-         const qtyStr = getStr(row.getCell('E'));
-         const quantity = parseInt(qtyStr) || 1;
-         const zVal = row.getCell('Z').value;
-         const zStr = getStr(row.getCell('Z'));
-         const abDate = getDate(row.getCell('AB'));
-
-         // スキップ判定
-         if (zStr === '-' || zStr === 'ー') {
-           result.skipped.push({ row: r, orderNo, model, reason: 'Z列="-": 検査終了済' });
-           continue;
-         }
-         if (isShippedGray(row)) {
-           result.skipped.push({ row: r, orderNo, model, reason: '灰色行: 出荷済の可能性' });
-           continue;
-         }
-         if (!model) {
-           result.skipped.push({ row: r, orderNo, model: '(空)', reason: '品目コードが空' });
-           continue;
-         }
-         if (productNo && productNo.includes('PARTS')) {
-           result.skipped.push({ row: r, orderNo, model, reason: 'PARTS品 (検査対象外)' });
-           continue;
-         }
-
-         // 基準日決定: Z > AB の優先順
-         let baseDate = getDate(row.getCell('Z'));
-         let baseDateProvisional = false;
-         let multiDateWarning = false;
-         if (!baseDate) {
-           // Z列の文字列から最初の日付を抽出
-           const parsed = parseFirstDate(zStr);
-           if (parsed) {
-             baseDate = parsed;
-             if (zStr.match(/[①②③④⑤]/) || (zStr.match(/\d{1,2}\/\d{1,2}/g) || []).length > 1) {
-               multiDateWarning = true;
-             }
-           }
-         }
-         if (!baseDate) {
-           // Z空 → AB を仮基準日に
-           if (abDate) {
-             baseDate = abDate;
-             baseDateProvisional = true;
-           } else {
-             result.skipped.push({ row: r, orderNo, model, reason: 'Z列・AB列ともに日付なし' });
-             continue;
-           }
-         }
-
-         // 品目コード → 品質規格 → テンプレ entry を解決
-         const qsResult = findQsEntriesForModel(model);
-         if (!qsResult) {
-           result.skipped.push({ row: r, orderNo, model, reason: '品質規格マスタに品目コードの紐付けなし' });
-           continue;
-         }
-         const { qs, entries } = qsResult;
-         const validEntries = entries.filter(e => e.templateId);
-         if (validEntries.length === 0) {
-           result.skipped.push({ row: r, orderNo, model, reason: `品質規格「${qs.standardNo}」にテンプレ未割当` });
-           continue;
-         }
-
-         // 各テンプレ × 指図 でロットを作成 or 更新判定
-         for (const e of validEntries) {
-           const tpl = templates.find(t => t.id === e.templateId);
-           if (!tpl) {
-             result.skipped.push({ row: r, orderNo, model, reason: `テンプレ未存在 (${e.templateId})` });
-             continue;
-           }
-           const daysBefore = e.daysBefore ?? 0;  // 未設定なら 0日 (K33当日)
-           const dueDate = new Date(baseDate);
-           dueDate.setDate(dueDate.getDate() + daysBefore);
-           const dueDateStr = localYMD(dueDate);
-
-           // 既存ロット判定 (指図 + テンプレID)
-           const existing = lots.find(l => l.orderNo === orderNo && l.templateId === e.templateId && l.location !== 'completed');
-           const lotData = {
-             orderNo,
-             model,
-             quantity,
-             templateId: e.templateId,
-             templateName: tpl.name,
-             dueDate: dueDateStr,
-             dueDateProvisional: baseDateProvisional,
-             qsName: `${qs.standardNo} ${qs.name}`,
-             baseDate: localYMD(baseDate),
-             daysBefore,
-           };
-           if (existing) {
-             result.updateLots.push({ ...lotData, existingId: existing.id, oldDueDate: existing.dueDate });
-           } else {
-             result.createLots.push(lotData);
-           }
-           if (multiDateWarning) {
-             result.warnings.push({ row: r, orderNo, model, message: `Z列に複数日付検出: "${zStr.slice(0,40)}" → 最初の日付を採用 (${baseDate.toLocaleDateString()})` });
-           }
-         }
+         const orderNo = strAt(row, 'orderNo');
+         if (!orderNo) continue;
+         rows.push({
+           row: r, orderNo,
+           productNo: strAt(row, 'productNo'), model: strAt(row, 'model'), qty: strAt(row, 'qty'),
+           k33: rawAt(row, 'k33'), assyDone: rawAt(row, 'assyDone'), start: rawAt(row, 'start'), shipDate: rawAt(row, 'shipDate'),
+           stage: strAt(row, 'stage'), progress: strAt(row, 'progress'),
+           isGray: smap.grayIsShipped ? isShippedGray(row) : false,
+         });
        }
-
-       setProgressImportPreview(result);
+       // 既定: 日付の無い行は仮で作らない・納期は直す・表では終わっている物は消さない(P095 で入れる)・アプリで検査済みの指図は作らない(製品と同じ)
+       const opts = { includeProvisional: false, updateDue: true, deleteStale: false, createDone: false };
+       const plan = replanProgress(rows, opts, smap);
+       setProgressImportPreview({ ...plan, rows, opts, fileName: file.name, reader: wb.reader, sheetMap: smap });
      } catch (err) {
        console.error('Progress Mgmt parse error:', err);
        alert('取込み中にエラーが発生しました: ' + (err.message || err));
@@ -30989,68 +30910,40 @@ const QuotaStoppedPanel = ({ until }) => (
    // 取込プレビューの確定 (Firebase 一括保存)
    const confirmProgressImport = async () => {
      if (!progressImportPreview) return;
-     const { createLots, updateLots } = progressImportPreview;
+     const { createLots, updateLots, opts = {} } = progressImportPreview;
+     const applyUpdates = opts.updateDue === false ? [] : updateLots;
      setProgressImportPreview(null);
-     const totalWrites = createLots.length + updateLots.length;
+     const totalWrites = createLots.length + applyUpdates.length;
      let doneWrites = 0;
      const tick = (what) => { doneWrites++; setProgressImportSaving(`${what}… ${doneWrites}/${totalWrites}`); };
      setProgressImportSaving(`書き込んでいます… 0/${totalWrites}`);
      try {
        const timestamp = Date.now();
-       // 新規作成
-       for (const c of createLots) {
-         const id = generateId();
-         const baseSteps = templates.find(t => t.id === c.templateId)?.steps || DEMO_STEPS;
-         const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(c.model, baseSteps, settings, c.templateId);
-         const serials = Array.from({ length: c.quantity }, (_, i) => `#${i + 1}`);
-         await saveData('lots', id, {
-           id, batchId: generateId(),
-           model: c.model, orderNo: c.orderNo,
-           serialNo: c.orderNo,
-           quantity: c.quantity,
-           unitSerialNumbers: serials,
-           templateId: c.templateId,
-           priority: 'normal',
-           dueDate: c.dueDate,
-           dueDateProvisional: c.dueDateProvisional || false,
-           importedFromExcel: true,
-           entryAt: timestamp,
-           status: 'waiting',
-           location: 'arrival',
-           mapZoneId: null,
-           x: 0, y: 0,
-           workerId: null,
-           createdAt: timestamp,
-           currentStepIndex: 0,
-           steps,
-           totalWorkTime: 0,
-           workStartTime: null,
-           ...profileSkippedPatch(steps, naStepIds, c.quantity), // 品目別プロファイルの該当なし工程を事前スキップ(🚨空なら tasks のキーごと送らない)
-           ...templateSkipPatch({ model: c.model, templateId: c.templateId, steps, qty: c.quantity, lots, settings, at: timestamp }),
-           // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。読む側は lot.stepTimes || {}。
-           interruptions: [],
-           appliedStandard,
-         });
-         tick('作っています');
-       }
-       // 既存更新 (dueDate / quantity のみ)
-       for (const u of updateLots) {
+       await writeProgressCreates(createLots, { timestamp, tick });
+       // 既存更新(製品と同じ: 納期・印・入庫は entryChange の時だけ・出荷日・台数は qtyChange の時だけ)
+       for (const u of applyUpdates) {
          const updates = {
            dueDate: u.dueDate,
            dueDateProvisional: u.dueDateProvisional || false,
+           ...(u.dueBasis ? { dueBasis: u.dueBasis } : {}),
+           ...(u.entryBasis ? { entryBasis: u.entryBasis } : {}),
+           ...(u.entryBase ? { entryBase: u.entryBase } : {}),
          };
-         // quantity が変わってる場合のみ更新 (タスク整合性のため、進捗ありなら quantity は触らない)
+         // 🚚 入庫を動かすのは純関数が entryChange:true と言った物だけ(作業記録のあるロットは止まる)
+         if (u.entryChange && u.entryAt) updates.entryAt = u.entryAt;
+         if (u.shipChange && u.shipDate) updates.shipDate = u.shipDate;
          const existingLot = lots.find(l => l.id === u.existingId);
-         const hasProgress = existingLot && existingLot.tasks && Object.keys(existingLot.tasks).length > 0;
-         if (!hasProgress && existingLot?.quantity !== u.quantity) {
+         if (u.qtyChange) {
            updates.quantity = u.quantity;
            updates.unitSerialNumbers = Array.from({ length: u.quantity }, (_, i) => existingLot?.unitSerialNumbers?.[i] || `#${i + 1}`);
          }
          await saveData('lots', u.existingId, updates);
          tick('直しています');
        }
+       const entryMoved = applyUpdates.filter(u => u.entryChange && u.entryAt).length;
+       const notMade = opts.createDone ? 0 : (progressImportPreview.alreadyDone || []).length;
        setProgressImportSaving('');
-       alert(`✓ 取込み完了\n新規作成: ${createLots.length}件\n更新: ${updateLots.length}件`);
+       alert(`✓ 取込み完了\n新規作成: ${createLots.length}件\n更新: ${applyUpdates.length}件（うち入庫を直した: ${entryMoved}件）${notMade ? `\nアプリではもう検査が終わっていたので作らなかった: ${notMade}件` : ''}`);
      } catch (err) {
        setProgressImportSaving('');
        console.error(err);
