@@ -62,7 +62,7 @@ const S = (f) => path.join('scripts', f);
 //   つまり フォルダ名を変えた・パターンが壊れた だけで、
 //   試験が丸ごと消えても **ゲートは緑になる**。
 // → 走らせる前に「本当にファイルが見つかるか」を数え、0件なら赤にする。
-const TEST_GLOBS = ['src/domain/**/*.test.mjs', 'src/data/**/*.test.mjs'];
+const TEST_GLOBS = ['src/domain/**/*.test.mjs', 'src/data/**/*.test.mjs', 'src/opsim/**/*.test.mjs'];
 
 // package.json の `npm test` が見ている対象を読む。
 // ⚠人が目で見る約束は必ず抜ける。ここで機械に見させる。

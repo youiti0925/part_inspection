@@ -284,6 +284,8 @@ import { layoutInfo, nextLayoutMode, readLayoutMode, saveLayoutMode, layoutModeL
 import { bindContactHelpers, RENRAKU_PORTAL, ContactPortal, ForegroundPushToast, ContactAlarm, InstallAppButton } from './contact/ContactKit.jsx';
 import { useContactHub, WorkContactBlock, contactPropsOf, ContactTabBadge, ContactTab } from './contact/ContactHub.jsx';
 import { IncomingArrivalsPanel } from './IncomingArrivals.jsx';
+import { DriveFileViewer } from './DriveFileViewer.jsx';
+import RotaryMeasurementsPanel from './RotaryMeasurements.jsx';
 import { MessageCircle, Truck as TruckIcon } from 'lucide-react';
 import { NOTICE_COL, noticeConfigOf } from './domain/appNotices.js';
 
@@ -751,6 +753,20 @@ const FONT_SIZE_AREAS = [
   { key: 'settings', label: '設定画面', default: 100, min: 70, max: 160, desc: 'マスタ設定・テンプレート編集' },
 ];
 
+// Tailwind の文字サイズ段(rem)。tailwind.config.js の TEXT_STEPS / SMALL_STEPS と**同じ値**(製品と同じ)。
+// ⚠ここに無い段は area 内で k 倍されない。新しい段を使い始めたら必ずここへ足すこと。
+const TW_TEXT_REM = {
+  '5xs': 0.75, '4xs': 0.75, '3xs': 0.75, '2xs': 0.75,
+  'xs': 0.75, 'sm': 0.875, 'base': 1, 'lg': 1.125, 'xl': 1.25,
+  '2xl': 1.5, '3xl': 1.875, '4xl': 2.25, '5xl': 3, '6xl': 3.75, '7xl': 4.5, '8xl': 6, '9xl': 8,
+};
+const fsAreaRule = (area, k) => {
+  const textVars = Object.keys(TW_TEXT_REM)
+    .map(n => `--text-${n}: ${Number((TW_TEXT_REM[n] * k).toFixed(6))}rem;`)
+    .join(' ');
+  return `[data-fs="${area}"] { --spacing: ${0.25 * k}rem; ${textVars} font-size: ${k}rem; }`;
+};
+
 const applyFontSizes = (fontSizes = {}) => {
   const globalScale = (fontSizes.global || 100) / 100;
   document.documentElement.style.fontSize = (16 * globalScale) + 'px';
@@ -775,16 +791,14 @@ const applyFontSizes = (fontSizes = {}) => {
     //   ⚠ この行を消さない(見張り: src/domain/__tests__/ui-density-parts-gaps.test.mjs UG5)。
     rules.push(`[data-fs="${area}"] [data-fs-reset] { zoom: ${(1 / scale).toFixed(4)}; }`);
   }
-  // execution: zoom on the fixed container, but compensate dimensions so it stays within viewport
-  const execScale = (fontSizes.execution || 100) / 100;
-  if (execScale !== 1) {
-    rules.push(`[data-fs="execution"] { zoom: ${execScale}; width: ${100 / execScale}vw; height: ${100 / execScale}vh; left: 0; top: 0; transform-origin: top left; }`);
-  }
-  // measurement: 測定モーダル専用 (最大化時の文字サイズ)
-  const measScale = (fontSizes.measurement || 100) / 100;
-  if (measScale !== 1) {
-    rules.push(`[data-fs="measurement"] { zoom: ${measScale}; width: ${100 / measScale}vw; height: ${100 / measScale}vh; left: 0; top: 0; transform-origin: top left; }`);
-  }
+  // 作業画面(execution)・測定画面(measurement)は zoom ではなく 変数(--text-*/--spacing)を k 倍する(製品と同じ)。
+  //   zoom の中では vh/vw が ×k になり h-[85vh] 等の帯が画面の外へ出る・fixed の inset も ×k になる。
+  //   入れ子(execution の中に measurement)なので fsAreaRule は em ではなく rem で書く。
+  ['execution', 'measurement'].forEach(area => {
+    const k = (fontSizes[area] || 100) / 100;
+    if (k === 1) return;
+    rules.push(fsAreaRule(area, k));
+  });
   styleEl.textContent = rules.join('\n');
 };
 
@@ -2453,7 +2467,6 @@ const WorkerBadge = ({ id, workers }) => {
 // バイナリはDrive側に置くため Firebase の容量を食わない。リンク共有ONも不要(プロキシが本体を流すため)。
 // 接続先: .env の VITE_DRIVE_PROXY_URL (無ければ localStorage 'driveProxyUrl' → どちらも無ければ設定ガイドを表示)
 const DRIVE_PROXY_URL = String(import.meta.env.VITE_DRIVE_PROXY_URL || (typeof localStorage !== 'undefined' && localStorage.getItem('driveProxyUrl')) || '').replace(/\/+$/, '');
-const driveFileUrl = (id) => `${DRIVE_PROXY_URL}/drive/file?id=${encodeURIComponent(id)}`;
 const driveFmtSize = (n) => { if (!n) return ''; if (n < 1024) return `${n}B`; if (n < 1048576) return `${Math.round(n / 1024)}KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(1)}MB`; return `${(n / 1073741824).toFixed(2)}GB`; };
 const driveKindOf = (mime, name) => {
   const m = String(mime || '');
@@ -2532,32 +2545,9 @@ const DriveDocsModal = ({ title, sections, onClose }) => {
           <div className="text-xs text-slate-400 px-1">Driveの該当フォルダにファイルを置くだけで自動で反映されます(反映は最大1分後・「↻ 更新」で即時)。ファイル本体はDriveにあり、このアプリの容量は使いません。</div>
         </div>
       </div>
+      {/* 📄🎬 ファイルの表示は共通ビューア(src/DriveFileViewer.jsx)へ(製品と同じ)。 */}
       {viewer && (
-        <div className="fixed inset-0 z-[540] bg-black/85 flex flex-col" onClick={() => setViewer(null)}>
-          <div className="flex items-center justify-between px-4 py-2 text-white shrink-0" onClick={e => e.stopPropagation()}>
-            <span className="text-sm font-bold truncate">{DRIVE_KIND_ICON[viewer.kind]} {viewer.file.name}</span>
-            <div className="flex items-center gap-2">
-              {viewer.file.webViewLink && <a href={viewer.file.webViewLink} target="_blank" rel="noopener noreferrer" className="text-xs bg-white/15 hover:bg-white/25 rounded px-2 py-1 font-bold" onClick={e => e.stopPropagation()}>Driveで開く ↗</a>}
-              <button onClick={() => setViewer(null)} className="p-1.5 rounded hover:bg-white/20"><X className="w-5 h-5" /></button>
-            </div>
-          </div>
-          <div className="flex-1 min-h-0 flex items-center justify-center p-2" onClick={e => e.stopPropagation()}>
-            {viewer.kind === 'video' && <video controls autoPlay className="max-w-full max-h-full rounded-lg bg-black" src={driveFileUrl(viewer.file.id)} />}
-            {viewer.kind === 'audio' && <audio controls autoPlay src={driveFileUrl(viewer.file.id)} />}
-            {viewer.kind === 'image' && <img alt={viewer.file.name} className="max-w-full max-h-full object-contain rounded-lg" src={driveFileUrl(viewer.file.id)} />}
-            {viewer.kind === 'pdf' && <iframe title={viewer.file.name} className="w-full h-full bg-white rounded-lg" src={driveFileUrl(viewer.file.id)} />}
-            {viewer.kind === 'other' && (
-              <div className="bg-white rounded-xl p-6 text-center space-y-3 max-w-sm">
-                <div className="text-3xl">📎</div>
-                <div className="text-sm text-slate-600">この形式はアプリ内表示に対応していません。</div>
-                <div className="flex gap-2 justify-center">
-                  <a href={driveFileUrl(viewer.file.id)} download={viewer.file.name} className="px-3 py-2 bg-sky-600 text-white rounded-lg text-sm font-bold">ダウンロード</a>
-                  {viewer.file.webViewLink && <a href={viewer.file.webViewLink} target="_blank" rel="noopener noreferrer" className="px-3 py-2 bg-slate-600 text-white rounded-lg text-sm font-bold">Driveで開く</a>}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        <DriveFileViewer key={viewer.file.id} file={viewer.file} kind={viewer.kind} onClose={() => setViewer(null)} />
       )}
     </div>
   );
@@ -20530,9 +20520,10 @@ const ANALYSIS_GROUPS = [
     { k: 'monthly', l: '月次レポート', color: 'text-slate-800' },
     { k: 'audit', l: '点検・バックアップ', color: 'text-emerald-600' },
     { k: 'export', l: 'データ書き出し', color: 'text-blue-600' },
+    { k: 'rotary', l: '分割測定結果', color: 'text-cyan-600' },
   ] },
 ];
-const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settings, saveSettings, currentUserName = '', minorReports = [], indirectWork = [], improvements = [], observationPlans = [], templates = [], notes = [], announcements = [], strictModeHistory = [], onRestore = null, db = null, anomalies = [], onGoOptimize = null, parentTabs = null }) => {
+const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settings, saveSettings, currentUserName = '', minorReports = [], indirectWork = [], improvements = [], observationPlans = [], templates = [], notes = [], announcements = [], strictModeHistory = [], onRestore = null, db = null, anomalies = [], onGoOptimize = null, wide = false, onToggleWide = null, parentTabs = null }) => {
   // デフォルトは process (工程改善分析)。旧 'daily' は全体進捗タブと重複していたため削除済み
   const [showLedger, setShowLedger] = useState(false); // 📒 軽微不良・改善 台帳の窓
   const [activeMode, setActiveMode] = useState('process-analysis'); // 既定=工程分析(データを見る土台)。グループは activeMode から導出
@@ -21229,7 +21220,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
            ⚠ この2本を分けたり、1つの押す物のために行を足したりしない(見張り: src/domain/__tests__/ui-density-parts.test.mjs)。 */}
        <div data-band="analysis-header" className="bg-white border-b px-6 py-2 flex flex-col gap-2 shrink-0">
           {/* 帯1: 親タブ(分析 | 作業最適化) │ 大分類(5つ) … 右端に 出力 */}
-          <div data-band="analysis-top" className="flex items-center gap-2 flex-wrap">
+          {/* ⤢広く使う の間は 帯1(親タブ・大分類)を隠す(製品と同じ)。⤢ボタンは帯2に在るので戻る道は消えない。 */}
+          <div data-band="analysis-top" className={`flex items-center gap-2 flex-wrap${wide ? ' hidden' : ''}`}>
               {/* 親タブ(分析 / 作業最適化)は App 側から受け取ってこの帯へ入れる。専用の行は作らない。
                   ⚠ 渡って来ない時(単体で使う時)は App 側が今までどおり自分の帯で出す。行き先を消さない。 */}
               {/* ⚠ data-fs-reset: この画面は data-fs="tables"(テーブル・リストの文字サイズ 70〜160%)の中。
@@ -21516,6 +21508,20 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                 )}
               </div>
             </details>
+            )}
+            {/* ⤢ 広く使う: 上のバー・大分類の帯を畳んで中身だけにする(製品と同じ)。
+                ⚠既定はOFF(今までどおり)。押した人にだけ効き、この端末に覚える(localStorage)。
+                ⚠畳んでいる間もこのボタンは必ず見える = 戻る道が消えない。 */}
+            {onToggleWide && (
+              <button
+                onClick={onToggleWide}
+                data-wide-toggle={wide ? 'on' : 'off'}
+                title={wide ? '元に戻す（上のバー・中タブ・グループを出す）' : '広く使う（上のバー・中タブ・グループを畳んで中身を広げる）'}
+                className={`ml-auto shrink-0 min-h-11 min-w-11 px-2 rounded-lg border text-xs font-bold flex items-center justify-center gap-1 ${wide ? 'bg-blue-600 text-white border-blue-700' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
+              >
+                {wide ? <Minimize2 className="w-5 h-5"/> : <Maximize2 className="w-5 h-5"/>}
+                <span className="hidden lg:inline whitespace-nowrap">{wide ? '元に戻す' : '広く使う'}</span>
+              </button>
             )}
           </div>
        </div>
@@ -22830,6 +22836,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
 
            {activeMode === 'monthly' && <MonthlyReportView lots={lots} workers={workers} settings={settings} customTargetTimes={settings.customTargetTimes || {}} targetTimeHistory={settings.targetTimeHistory || []} improvements={improvements} currentUserName={currentUserName} templates={templates} indirectWork={indirectWork} onSaveSettings={saveSettings} minorReports={minorReports} />}
            {activeMode === 'export' && <DataExportCenter lots={lots} workers={workers} indirectWork={indirectWork} settings={settings} currentUserName={currentUserName} saveSettings={saveSettings} minorReports={minorReports} />}
+           {activeMode === 'rotary' && <RotaryMeasurementsPanel db={db} />}
            {activeMode === 'dashboard' && <ManagerDashboard lots={lots} settings={settings} minorReports={minorReports} />}
            {activeMode === 'kpi' && <KpiDetailView lots={lots} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} />}
            {activeMode === 'achievement' && <AchievementRateView lots={lots} customTargetTimes={settings.customTargetTimes || {}} settings={settings} templates={templates} />}
@@ -31099,6 +31106,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    // State: UI
    const [viewMode, setViewMode] = useState(EMBED_MAP ? 'map-only' : 'dashboard'); // 埋め込みは「マップだけ」画面(現場マップの地図そのもの)
    const [activeTab, setActiveTab] = useState('main');
+   // ⤢ 広く使う(製品と同じ・端末ごと localStorage 'pi-analysis-wide')。効かせるのは分析タブの間だけ(⤢ボタンが分析の画面の中に在る = 戻る道が消えない)。
+   const [wideMode, setWideMode] = useState(() => { try { return localStorage.getItem('pi-analysis-wide') === '1'; } catch { return false; } });
+   const toggleWideMode = () => setWideMode(v => { const n = !v; try { localStorage.setItem('pi-analysis-wide', n ? '1' : '0'); } catch { /* 端末が拒否しても畳めること自体は動く */ } return n; });
+   const wideNow = wideMode && activeTab === 'analysis';
+   const chromeBoxCls = 'shrink-0 grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none';
+   const chromeRows = { gridTemplateRows: wideNow ? '0fr' : '1fr' };
    // 司令塔からの深掘りリンク(?q=指図)で来たら、検査リストタブを開く(検索欄への反映は一覧側の effect)。
    useEffect(() => { try { if (new URLSearchParams(window.location.search).get('q')) setActiveTab('inspection'); } catch (e) { /* noop */ } }, []);
    // タブ集約: 親タブの下にサブタブをぶら下げる。activeTab は子の値('history'等)も取りうる。
@@ -34815,6 +34828,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          </div>
        )}
        {!EMBED_MAP && (
+       <div className={`${chromeBoxCls} z-50`} style={chromeRows} data-chrome="header"><div className="overflow-hidden">{/* 📐 ⤢広く使う の間は 1fr→0fr で畳む(製品と同じ入れ物) */}
        <header data-fs="header" className="h-14 bg-slate-800 text-white flex items-center justify-between px-6 shadow-md z-50 shrink-0">
          <div className="flex items-center gap-3">
            <div className="bg-blue-600 p-1.5 rounded"><Layout className="w-5 h-5 text-white" /></div>
@@ -34911,6 +34925,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
            </div>
          </div>
        </header>
+       </div></div>
        )}
        {hdrMenu && (
          <>
@@ -34982,7 +34997,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
          {/* 📒 ヘッダーの☰から開く台帳(読み終わるまで出さない=0件と見分けが付かないため) */}
          {showQuickLedger && minorReportsReady && <MinorReportLedgerModal reports={minorReports} lots={lots} workers={workers} currentUserName={currentUserName} saveData={saveData} deleteData={deleteData} itemMaster={settings?.itemMaster || {}} onClose={() => setShowQuickLedger(false)} />}
-         {activeTab === 'analysis' && analysisDataReady && !quotaBlock && <AnalysisView lots={lots} logs={logs} workers={workers} saveData={saveData} deleteData={deleteData} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} minorReports={minorReports} indirectWork={indirectWork} improvements={improvementCards} observationPlans={observationPlans} templates={templates} notes={notes} announcements={announcements} strictModeHistory={strictModeHistory} onRestore={restoreAllFromBackup} db={db} anomalies={anomalies} onGoOptimize={(view) => { setOptimizeView(view); setActiveTab('optimize'); }} parentTabs={renderTabGroupButtons(TAB_GROUPS.analysis)} />}
+         {activeTab === 'analysis' && analysisDataReady && !quotaBlock && <AnalysisView lots={lots} logs={logs} workers={workers} saveData={saveData} deleteData={deleteData} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} minorReports={minorReports} indirectWork={indirectWork} improvements={improvementCards} observationPlans={observationPlans} templates={templates} notes={notes} announcements={announcements} strictModeHistory={strictModeHistory} onRestore={restoreAllFromBackup} db={db} anomalies={anomalies} onGoOptimize={(view) => { setOptimizeView(view); setActiveTab('optimize'); }} wide={wideNow} onToggleWide={toggleWideMode} parentTabs={renderTabGroupButtons(TAB_GROUPS.analysis)} />}
          {activeTab === 'optimize' && (
            <div className="h-full flex flex-col gap-3">
              {/* 🚨 2026-09-07: 親タブ(分析 | 作業最適化)をこの帯へ合流させて1本減らした。札の名前・順番・行き先はそのまま。
