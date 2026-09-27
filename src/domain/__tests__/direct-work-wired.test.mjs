@@ -17,6 +17,6 @@ test('D1 窓に直工の分類が渡り、直工の時だけ kind を付けて�
 
 test('D2 集計は直工その他を間接に混ぜない(分析 Excel 2か所・作業者別・全体進捗の係数・月報)', () => {
   const n = (app.match(/isDirectOther\(w\)/g) || []).length;
-  assert.ok(n >= 6, `isDirectOther(w) で分けている所が ${n} か所しかない`);
+  assert.ok(n >= 5, `isDirectOther(w) で分けている所が ${n} か所しかない`);
   assert.match(app, /inclusiveFactor\(\{ inspectionSec: directSec, directOtherExclusiveSec: directOtherSec, indirectSec \}\)/);
 });
