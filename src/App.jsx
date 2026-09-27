@@ -207,6 +207,13 @@ import { WorkerAvatar } from './WorkerAvatar.jsx';
 import { workerToneOf } from './workerTone.js';
 import SignoffModal from './SignoffModal.jsx';
 import { stampTrainee } from './domain/lotSavePipeline.js';
+// 🗂 P067 品目コードマスタ / P119 品目コード専用テンプレと差分反映 / P157 日数の波及(製品の画面と関数を新しいファイルへ写した)
+import ModelMasterPanel from './ModelMasterPanel.jsx';
+import TemplateSyncPanel from './TemplateSyncPanel.jsx';
+import { MasterPropagateModal, MasterPropagateBusy, ModelTemplateEditorOverlay } from './ItemMasterOverlays.jsx';
+import { makeModelTemplateActions, isUntouchedLot as mtIsUntouchedLot } from './modelTemplateActions.js';
+import { resolveModelEntry, findModelTemplate } from './domain/modelMaster.js';
+import { diffTemplate as tsDiff, syncPolicyOf as tsPolicy } from './domain/templateSync.js';
 // ⭐ P116 星取表 / 👀 P161 独り立ち直後の見守り(製品の画面を写し・純関数は写し済み)
 import StarChartView from './StarChartView.jsx';
 import MimamoriCard from './MimamoriCard.jsx';
@@ -1524,9 +1531,15 @@ const applyQualityStandardToSteps = (model, baseSteps, settings, templateId = nu
     });
   };
 
+  // 0) 🗂 P067 品目コードマスタ(settings.modelMasters)を第一候補(製品 2782 resolveModelEntry)。
+  //    登録が無い品目コードは今までどおり品質規格マスタへ落ちる(登録しない限り1バイトも変わらない)。
+  //    エントリの形は品質規格のテンプレと同じなので、1件だけの規格に見立てて下の同じ道を通す。
+  const mmResolved = resolveModelEntry(settings, model, templateId);
   // 1) 品質規格マスタを優先
-  const qsId = settings?.modelStandardMap?.[model];
-  const qs = qsId ? settings?.qualityStandards?.[qsId] : null;
+  const qsId = mmResolved ? null : settings?.modelStandardMap?.[model];
+  const qs = mmResolved
+    ? { id: 'mm-' + model, standardNo: mmResolved.entry.standardNo || '', name: model, revision: mmResolved.entry.revision || '', templates: [{ ...mmResolved.entry, templateId: mmResolved.entry.templateId || '' }], _source: 'modelMaster' }
+    : (qsId ? settings?.qualityStandards?.[qsId] : null);
   if (qs) {
     // 規格内に対象テンプレートに一致するエントリがあるか探す
     const entries = getQsTemplateEntries(qs);
@@ -1596,9 +1609,9 @@ const applyQualityStandardToSteps = (model, baseSteps, settings, templateId = nu
         standardNo: qs.standardNo || '',
         name: qs.name || '',
         revision: qs.revision || '',
-        templateId: entry.templateId,
+        templateId: templateId || entry.templateId,
         appliedAt: Date.now(),
-        source: 'qualityStandard',
+        source: qs._source || 'qualityStandard',
       };
       return { steps: applyCalibratedTargets(steps), appliedStandard, naStepIds };
     }
@@ -23767,7 +23780,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
    saveData('workers', w.id, resumePatch(Date.now()));
  };
 
- const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onRegisterPending = null, onRemovePending = null, onOpenStrictManager = null, currentUserName = '', parentTabs = null }) => {
+ const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onRegisterPending = null, onRemovePending = null, itemMasterHost = null, onOpenStrictManager = null, currentUserName = '', parentTabs = null }) => {
   // 🏅 P117 卒業の直後に開く「独り立ちの記録」(SignoffModal)の相手。hooks は関数の先頭
   const [signoffFor, setSignoffFor] = useState(null);
   const [newProcessOpt, setNewProcessOpt] = useState('');
@@ -24448,6 +24461,14 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          {/* 🗂 P057 未登録リスト(進捗管理表の取込で品質規格マスタに紐付けが無く落ちた行。無ければ何も出さない) */}
          <PendingImportPanel settings={settings} onRegisterPending={onRegisterPending} onRemovePending={onRemovePending} />
 
+         {/* 🗂 P067 品目コードマスタ(品目コードが主役・規格番号は任意)。既定: 品質規格マスタは消さずに下へ残す(登録がある品目コードはこちらが優先) */}
+         {itemMasterHost && (
+           <div data-mm-panel>
+             <ModelMasterPanel templates={templates} lots={lots} modelMasters={settings.modelMasters || {}} qualityStandards={settings.qualityStandards || {}} modelStandardMap={settings.modelStandardMap || {}} modelTemplates={itemMasterHost.modelTemplates || []} saveSettings={saveSettings} deleteSettingsFields={deleteSettingsFields} deleteData={deleteData}
+               onEditModelStep={itemMasterHost.onEditModelStep} onRevertModelTemplate={itemMasterHost.revertModelTemplate} onRemoveEntry={itemMasterHost.removeModelTemplateEntry} onOpenSync={itemMasterHost.openTemplateSyncFor} onUndoSync={itemMasterHost.undoTemplateSync} onEntryDaysChanged={itemMasterHost.openMasterPropagate}
+               isAutoStep={itemMasterHost.isAutoStep} getQsTemplateEntries={itemMasterHost.getQsTemplateEntries} itemMaster={settings.itemMaster || {}} />
+           </div>
+         )}
          {/* 品質規格マスタ (新方式: 品目コード → 品質規格 → 公差/測定条件) */}
          <div data-qs-panel>
            <QualityStandardsPanel
@@ -30788,7 +30809,13 @@ const QuotaStoppedPanel = ({ until }) => (
      lazyCtx, 'minor_reports',
      activeTab === 'analysis' || showQuickLedger,
      (rows) => rows.slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
-   // ⭐ P116 星取表の「教えられる」の指名(追記型 skill_marks)。作業最適化のタブを開いた時だけ読む
+   // 🗂 P119 品目コード専用テンプレ(model_templates・docId=mt_品目コード__テンプレID)。ロットを作る時に要るので常に読む(件数は品目コード×テンプレぶんだけ)
+  const [modelTemplates] = useLazyCollection(lazyCtx, 'model_templates', true, null);
+  const [tplSync, setTplSync] = useState(null);                 // 共通テンプレとの差分パネル
+  const [modelTplEditing, setModelTplEditing] = useState(null); // 専用テンプレの編集中 { model, templateId, stepId }
+  const [masterPropagate, setMasterPropagate] = useState(null); // 🗂 P157 日数の波及の確かめの窓
+  const [masterPropagateSaving, setMasterPropagateSaving] = useState('');
+  // ⭐ P116 星取表の「教えられる」の指名(追記型 skill_marks)。作業最適化のタブを開いた時だけ読む
   const [skillMarks] = useLazyCollection(
     lazyCtx, 'skill_marks',
     activeTab === 'optimize',
@@ -32183,7 +32210,7 @@ const QuotaStoppedPanel = ({ until }) => (
 
    // 2. Backup Export
    const handleBackupExport = () => {
-     const data = { templates, workers, settings, savedAt: Date.now() };
+     const data = { templates, workers, settings, modelTemplates, savedAt: Date.now() }; // 🗂 P119 専用テンプレも控える
      const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
      const url = URL.createObjectURL(blob);
      const a = document.createElement('a');
@@ -32204,6 +32231,7 @@ const QuotaStoppedPanel = ({ until }) => (
            if (data.templates) data.templates.forEach(t => saveData('templates', t.id, t));
            if (data.workers) data.workers.forEach(w => saveData('workers', w.id, w));
            if (data.settings) saveSettings(data.settings);
+           if (Array.isArray(data.modelTemplates)) data.modelTemplates.forEach(mt => mt && mt.id && saveData('model_templates', mt.id, mt)); // 🗂 P119
            alert('復元が完了しました');
          }
        } catch {
@@ -32257,10 +32285,12 @@ const QuotaStoppedPanel = ({ until }) => (
      let baseSteps = DEMO_STEPS;
      const template = templates.find(t => t.id === templateId);
      if (template && template.steps) {
-       baseSteps = template.steps;
-     }
+      baseSteps = template.steps;
+    }
+    // 🗂 P119 品目コード専用テンプレがあれば、その steps を元にする(共通テンプレより優先)
+    { const mtDoc = findModelTemplate(modelTemplates, model, templateId); if (mtDoc && Array.isArray(mtDoc.steps) && mtDoc.steps.length > 0) baseSteps = mtDoc.steps; }
 
-     // 品質規格 / 品目コードオーバーライドを適用 (共通ヘルパー)
+    // 品質規格 / 品目コードオーバーライドを適用 (共通ヘルパー)
      const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(model, baseSteps, settings, templateId);
 
      // 台数を決定:
@@ -32680,7 +32710,7 @@ const QuotaStoppedPanel = ({ until }) => (
    };
    const progressPlanCtx = () => ({
      lots,
-     modelMasters: {},
+     modelMasters: settings.modelMasters || {}, // 🗂 P067 品目コードマスタを第一候補(登録が無ければ {} と同じ)
      qualityStandards: settings.qualityStandards || {},
      modelStandardMap: settings.modelStandardMap || {},
      templates,
@@ -32707,7 +32737,9 @@ const QuotaStoppedPanel = ({ until }) => (
    const writeProgressCreates = async (createLots, { timestamp, tick }) => {
      for (const c of createLots) {
        const id = generateId();
-       const baseSteps = templates.find(t => t.id === c.templateId)?.steps || DEMO_STEPS;
+       // 🗂 P119 品目コード専用テンプレがあれば、その steps を元にする(共通テンプレより優先)
+      const mtDocC = findModelTemplate(modelTemplates, c.model, c.templateId);
+      const baseSteps = (mtDocC && Array.isArray(mtDocC.steps) && mtDocC.steps.length > 0) ? mtDocC.steps : (templates.find(t => t.id === c.templateId)?.steps || DEMO_STEPS);
        const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(c.model, baseSteps, settings, c.templateId);
        const serials = Array.from({ length: c.quantity }, (_, i) => `#${i + 1}`);
        const modelText = progressRowModelText(c);
@@ -33148,7 +33180,7 @@ const QuotaStoppedPanel = ({ until }) => (
        for (const r of rawRows) {
          const res = planRowLots(
            { model: String(r.model), orderNo: String(r.orderNo), qty: r.qty, dueYMD: r.dueDate, entryRaw: r.entryGiven ? msToYmdHm(r.entryAt) : '', templateIdFromExcel: r.templateIdRaw },
-           { modelMasters: {}, qualityStandards: settings.qualityStandards || {}, modelStandardMap: settings.modelStandardMap || {}, templates, options: { calendar: factoryCalendar || null } },
+           { modelMasters: settings.modelMasters || {}, qualityStandards: settings.qualityStandards || {}, modelStandardMap: settings.modelStandardMap || {}, templates, options: { calendar: factoryCalendar || null } },
          );
          for (const sk of res.skipped) expandSkipped.push(`⏭ ${r.orderNo} ${r.model} — ${sk.reason === '型式マスタにこの型式の登録がありません' ? '品質規格マスタに品目コードの紐付けがありません' : sk.reason === '型式マスタにテンプレートが割り当てられていません' ? '品質規格にテンプレートが割り当てられていません' : sk.reason}`);
          for (const l of res.lots) {
@@ -33199,7 +33231,9 @@ const QuotaStoppedPanel = ({ until }) => (
          let baseSteps = DEMO_STEPS;
          const template = templates.find(t => t.id === row.templateId);
          if (template?.steps) baseSteps = template.steps;
-         // 品質規格 / 品目コードオーバーライドを適用 (共通ヘルパー: ロット登録画面と同じ挙動)
+        // 🗂 P119 品目コード専用テンプレがあれば、その steps を元にする
+        { const mtDoc = findModelTemplate(modelTemplates, row.model, row.templateId); if (mtDoc && Array.isArray(mtDoc.steps) && mtDoc.steps.length > 0) baseSteps = mtDoc.steps; }
+        // 品質規格 / 品目コードオーバーライドを適用 (共通ヘルパー: ロット登録画面と同じ挙動)
          const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(row.model, baseSteps, settings, row.templateId);
          const stdLabel = appliedStandard?.source === 'qualityStandard' ? ` [${appliedStandard.standardNo} Rev.${appliedStandard.revision}]` : '';
 
@@ -33695,7 +33729,36 @@ const QuotaStoppedPanel = ({ until }) => (
    };
  
    // --- Template Management ---
-   const handleSaveTemplate = async (templateData) => {
+   // 🗂 P119 未着手ロットへ steps を焼き直す(共通テンプレの保存と同じ式)。見届けて true/false
+  const rebakeLotsWithSteps = async (targets, stepsSrc, templateId) => {
+    const saves = targets.map(l => {
+      const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(l.model, stepsSrc, settings, templateId);
+      const naSet = new Set(naStepIds || []);
+      const p = saveData('lots', l.id, { steps, appliedStandard: appliedStandard ?? null, ...profileSkippedPatch(steps, naStepIds, l.quantity || 1) });
+      const removals = {};
+      Object.keys(l.tasks || {}).forEach(k => {
+        const t = (l.tasks || {})[k];
+        if (t && t.status === 'skipped' && t.profileSkipped) {
+          const sid = k.includes('-lot-') ? k.split('-lot-')[0] : k.slice(0, k.lastIndexOf('-'));
+          if (!naSet.has(sid)) removals[`tasks.${k}`] = DATA_DELETE;
+        }
+      });
+      if (Object.keys(removals).length) DATA(db).setFields(APP_DATA_ID, 'lots', l.id, removals).catch(() => {});
+      return p;
+    });
+    const r = await settleSaveBriefly(Promise.all(saves));
+    return mayCloseAfterSave(r);
+  };
+  const mmActions = makeModelTemplateActions({
+    settings, saveSettings, saveData, deleteData, templates, lots, modelTemplates, currentUserName,
+    DATA_DELETE, rebakeLots: rebakeLotsWithSteps, setTplSync, setModelTplEditing, setMasterPropagate, setMasterPropagateSaving,
+    masterPropagate, calendar: factoryCalendar || null,
+    defaultEntryDaysBefore: DEFAULT_IMPORT_OPTIONS.defaultEntryDaysBefore, entryHHMM: DEFAULT_IMPORT_OPTIONS.entryHHMM,
+    defaultShipDaysBefore: (() => { try { const { profiles, activeId } = normalizeSheetProfiles(settings, DEFAULT_SHEET_MAP); const p = profiles.find(x => x.id === activeId) || profiles[0]; return p && p.map ? p.map.shipDaysBefore : undefined; } catch { return undefined; } })(),
+  });
+  // マスタ設定の画面(TemplatesView)へ渡す束
+  const itemMasterHost = { modelTemplates, isAutoStep, getQsTemplateEntries, onEditModelStep: (model, templateId, stepId) => setModelTplEditing({ model, templateId, stepId }), ...mmActions };
+  const handleSaveTemplate = async (templateData) => {
      const id = templateData.id || generateId();
      // 🚨 テンプレ本体の保存を **見届けてから** 先へ進む(製品検査 2026-09-04 と同じ)。
      //   投げっぱなしだと、拒否されても人には「✅反映しました」だけが見える(済みの嘘)。
@@ -33707,12 +33770,24 @@ const QuotaStoppedPanel = ({ until }) => (
        return;
      }
      setEditingTemplate(null);
-     // テンプレ変更を「未着手」の既存ロットに反映する(任意・確認制)。作業中/完了は実測データを守るため触らない。
+    // 🗂 P119 専用テンプレを持つ品目コードに「差ができた」ことを知らせる。⚠ここでは1バイトも書かない(差分パネルを開くだけ)
+    if (Array.isArray(templateData.steps) && templateData.steps.length > 0) {
+      const mts = (modelTemplates || []).filter(d => d && d.templateId === id);
+      const withDiff = mts.filter(d => tsDiff(templateData.steps, Array.isArray(d.steps) ? d.steps : [], tsPolicy(d).stepMap).hasDiff);
+      if (withDiff.length > 0) {
+        setTplSync({ templateId: id, templateName: templateData.name || '', baseSteps: templateData.steps,
+          targets: withDiff.map(d => ({ model: d.model, templateId: id, doc: d })) });
+      }
+    }
+    // テンプレ変更を「未着手」の既存ロットに反映する(任意・確認制)。作業中/完了は実測データを守るため触らない。
      //   未着手 = まだ一度も着手していない(workStartTime無し かつ どのタスクも firstStartTime 無し。規格の該当なしタスクは着手扱いにしない)。
      if (Array.isArray(templateData.steps) && templateData.steps.length > 0) {
        const isUntouched = (l) => !l.workStartTime && l.status !== 'completed' && l.location !== 'completed' && !Object.values(l.tasks || {}).some(t => t && t.firstStartTime);
-       const targets = (lots || []).filter(l => l.templateId === id && isUntouched(l));
-       if (targets.length > 0 && confirm(`このテンプレを使う「未着手」の検査ロット ${targets.length}件 にも、変更した工程を反映しますか？\n\n・反映する＝各ロットの工程が最新テンプレに更新されます\n・作業中／完了のロットは実測データを守るため反映しません`)) {
+       // 🗂 P119 品目コード専用テンプレを持つ(品目コード×このテンプレ)のロットは対象外(専用は共通と独立して管理する)
+      const untouchedAll = (lots || []).filter(l => l.templateId === id && isUntouched(l));
+      const targets = untouchedAll.filter(l => !findModelTemplate(modelTemplates, l.model, id));
+      const excludedCount = untouchedAll.length - targets.length;
+      if (targets.length > 0 && confirm(`このテンプレを使う「未着手」の検査ロット ${targets.length}件 にも、変更した工程を反映しますか？\n\n・反映する＝各ロットの工程が最新テンプレに更新されます\n・作業中／完了のロットは実測データを守るため反映しません${excludedCount > 0 ? `\n・品目コード専用テンプレを持つロット ${excludedCount}件 は対象外です（専用テンプレは共通と独立して管理されます）` : ''}`)) {
          // 🚨「✅反映しました」は保存を見届けてから言う(製品検査 2026-08-31 と同じ)。
          //   ⚠発行は全件続けて行い(awaitを挟まない)、そのあと settleSaveBriefly でまとめて見届ける。
          const saves = targets.map(l => {
@@ -33779,6 +33854,17 @@ const QuotaStoppedPanel = ({ until }) => (
        }
      `}</style>
      <div className="h-screen bg-slate-100 font-sans flex flex-col text-slate-900 overflow-hidden relative">
+       {/* 🗂 P119 共通テンプレを保存した直後の差分パネル(開いただけでは何も書かない)・専用テンプレの編集・🗂 P157 日数の波及 */}
+       {tplSync && tplSync.targets.length > 0 && (
+         <TemplateSyncPanel templateName={tplSync.templateName} baseSteps={tplSync.baseSteps}
+           targets={tplSync.targets.map(t => ({ ...t, doc: findModelTemplate(modelTemplates, t.model, t.templateId) || t.doc }))}
+           onApply={mmActions.applyTemplateSync} onClose={() => setTplSync(null)} />
+       )}
+       <ModelTemplateEditorOverlay editing={modelTplEditing} templates={templates} modelTemplates={modelTemplates} findModelTemplate={findModelTemplate} Editor={TemplateEditor}
+         editorProps={{ skills: settings.skills && settings.skills.length ? settings.skills : DEFAULT_SKILLS, onSaveSkills: (list) => saveSettings({ skills: list }), currentUserName, customLayouts: settings?.customLayouts || {}, onSaveLayouts: (layouts, deadKey) => saveSettings({ customLayouts: layouts, ...(deadKey ? { __deleteMapKeys: [['customLayouts', deadKey]] } : {}) }), comboPresets: settings?.comboPresets || [], builtInOverrides: settings?.builtInOverrides || {}, hiddenBuiltIns: settings?.hiddenBuiltIns || [] }}
+         onSave={(data) => mmActions.handleSaveModelTemplate(modelTplEditing.model, modelTplEditing.templateId, data)} onCancel={() => setModelTplEditing(null)} />
+       <MasterPropagateBusy text={masterPropagateSaving} />
+       <MasterPropagateModal masterPropagate={masterPropagate} setMasterPropagate={setMasterPropagate} applyMasterPropagate={mmActions.applyMasterPropagate} />
        {showBreakAlert && (
          <div className="absolute top-0 left-0 right-0 bg-orange-500 text-white z-[100] p-4 flex justify-between items-center shadow-lg">
            <div className="flex items-center gap-3 text-lg font-bold"><Bell className="w-6 h-6 animate-bounce" />{String(showBreakAlert)}</div>
@@ -34295,7 +34381,7 @@ const QuotaStoppedPanel = ({ until }) => (
            </div>
          )}
          {activeTab === 'measurement-settings' && <MeasurementSettingsView settings={settings} saveSettings={saveSettings} comboPresets={settings?.comboPresets || []} templates={templates} />}
-         {activeTab === 'templates' && <TemplatesView onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel} editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
+         {activeTab === 'templates' && <TemplatesView onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel} itemMasterHost={itemMasterHost} editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
          </div>
        </main>
        
