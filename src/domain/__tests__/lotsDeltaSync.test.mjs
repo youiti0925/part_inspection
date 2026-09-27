@@ -582,7 +582,7 @@ test('DS21 ロットを消す道(deleteData)は、消す前に墓標 lots_delete
 test('DS22 ①②は差分読みの時だけ端末の控えに張る(問い合わせの字面は今までと同じ)・③過去はサーバのまま', () => {
   const app = read('App.jsx');
   assert.ok(app.includes("}, { orderBy: [['createdAt', 'desc']], limit: LOTS_LIVE_LIMIT, includeMetadataChanges: true, ...(src === 'cache' ? { source: 'cache' } : {}), onError:"), '①に控えの張り方が無い');
-  assert.ok(app.includes("}, { where: [['status', '!=', 'completed']], limit: OPEN_LOTS_LIMIT, ...(src === 'cache' ? { source: 'cache' } : {}), onError:"), '②に控えの張り方が無い');
+  assert.ok(app.includes("}, { where: [['status', '!=', 'completed']], limit: OPEN_LOTS_LIMIT, includeMetadataChanges: true, ...(src === 'cache' ? { source: 'cache' } : {}), onError:"), '②に控えの張り方が無い');
   assert.ok(app.includes("}, { orderBy: [['createdAt', 'desc']], limit: LOTS_HISTORY_LIMIT, includeMetadataChanges: true, onError:"), '③過去の字面が変わった');
   assert.ok(app.includes("lotsDeltaRef.current.onWindow('live', rows, snap, src);"));
   assert.ok(app.includes("lotsDeltaRef.current.onWindow('open', rows, snap, src);"));
@@ -593,6 +593,16 @@ test('DS22 ①②は差分読みの時だけ端末の控えに張る(問い合�
   assert.ok(app.includes("const enabled = !!(LOTS_CACHE.persistent && backendOf('lots') === 'firebase' && backendOf(LOTS_TOMB_COL) === 'firebase');"));
   assert.ok(/const FS_API = \{[^}]*getDocsFromCache[^}]*getDocFromServer[^}]*getCountFromServer/.test(app), 'FS_API に控えだけ読む・1件読み直す・件数だけ が無い');
   assert.ok(app.includes("const cacheOnly = !!(hasOpts && rest[0] && rest[0].source === 'cache');"), '控えだけの購読を課金の見込みに載せている');
+});
+
+test('DS25 🚨 ②と墓標も「サーバで確かめた」合図を受ける(includeMetadataChanges)。前の版の控えを持つ端末で控え帳が1度も書かれなかった(製品の写しで再現 2026-09-28)', () => {
+  // 最初の答えが控えから(fromCache)来て、サーバは「変わり無し」と確かめるだけの時、includeMetadataChanges の無い購読には
+  //   その合図が来ない → ②の server が立たず(①が上限の日は)控え帳が書けない・墓標の tombServer が立たず差分読みの控え帳が書けない。
+  const app = read('App.jsx');
+  assert.ok(app.includes("}, { where: [['status', '!=', 'completed']], limit: OPEN_LOTS_LIMIT, includeMetadataChanges: true, ...(src === 'cache' ? { source: 'cache' } : {}), onError:"), '②が「サーバで確かめた」合図を受けない');
+  assert.ok(/openTombs: \(sinceMs, next, onErr\) => P\.watchQuery\(APP_DATA_ID, LOTS_TOMB_COL, tombLotsSpec\(sinceMs\), metered\('lots_deleted\(墓標\)', next\),\s*\{ includeMetadataChanges: true, onError: onErr \}\)/.test(app), '墓標が「サーバで確かめた」合図を受けない');
+  // ⚠ 合図だけの答えは画面(setOpenLots・読みの数え)へ流さない = 再描画と読みメーターは今までと同じ
+  assert.ok(app.includes("if (openMetaOnly) { if (lotsDeltaRef.current) lotsDeltaRef.current.onWindow('open', rows, snap, src); return; }"), '合図だけの答えで ②の画面を描き直している');
 });
 
 test('DS23 窓口: source を渡さない時の Firestore の呼び方は今までと同じ・控えだけ読む/1件読み直す/件数だけ が在る', async () => {

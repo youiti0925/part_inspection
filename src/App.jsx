@@ -33210,8 +33210,9 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        // ⚠ includeMetadataChanges: 切れて戻った合図を課金の見込みの帳面(P-L1)が受け取れるように(①が控えに移ったので、その役をこちらが持つ)
        openDelta: (sinceMs, next, onErr) => P.watchQuery(APP_DATA_ID, 'lots', deltaLotsSpec(sinceMs), metered('lots(差分)', next),
          { map: deltaRowOf, includeMetadataChanges: true, onError: onErr }),
+       // ⚠ includeMetadataChanges: 最初の答えが控えから来た時も「サーバで確かめた」合図を受ける(受けないと差分読みの控え帳が書けない)
        openTombs: (sinceMs, next, onErr) => P.watchQuery(APP_DATA_ID, LOTS_TOMB_COL, tombLotsSpec(sinceMs), metered('lots_deleted(墓標)', next),
-         { onError: onErr }),
+         { includeMetadataChanges: true, onError: onErr }),
        refetch: (id) => P.refreshDocFromServer(APP_DATA_ID, 'lots', id).then((r) => { countReads('lots(消えたロットの読み直し)', 1); return r; }),
        count: (spec) => P.countQuery(APP_DATA_ID, 'lots', spec).then((n) => { countReads('lots(件数だけ)', Math.max(1, Math.ceil((Number(n) || 0) / 1000))); return n; }),
        setSource: (src) => setLotsSrc(src),
@@ -33370,7 +33371,16 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      const P = DATA(db);
      const src = lotsSrc;
      let first = true;
+     let openRaised = false;
      const unsub = P.watchCollection(APP_DATA_ID, 'lots', (rows, snap) => {
+       // 📉 2026-09-28(製品の写しで再現): includeMetadataChanges を付けたので「サーバで確かめた(fromCache→false)」だけの答えも来る。
+       //   前の版の控えを持つ端末では、最初の答えが控えから来てサーバは「変わり無し」と確かめるだけ。この合図が来ないと
+       //   前回の続きだけ読む係が「②のサーバの答えがまだ」のままになり、控え帳が1度も書かれなかった。
+       //   ⚠ 合図だけの答え(行も中身も同じ)は係へ渡すだけ。画面(setOpenLots)と読みの数えへは流さない = 今までと同じ回数。
+       let openMetaOnly = false;
+       try { openMetaOnly = openRaised && !!(snap && typeof snap.docChanges === 'function') && snap.docChanges().length === 0; } catch { openMetaOnly = false; }
+       openRaised = true;
+       if (openMetaOnly) { if (lotsDeltaRef.current) lotsDeltaRef.current.onWindow('open', rows, snap, src); return; }
        let changes = 0;
        try { changes = snap && snap.docChanges ? snap.docChanges().length : 0; } catch { changes = 0; }
        const cached = !!(snap && snap.metadata && snap.metadata.fromCache);
@@ -33383,7 +33393,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        //   P062: console だけでなく画面の札(LotsReadNotice)に出す。判定は lotsOverflowOf。
        // 📉 前回の続きだけ読む係へ(控え帳の材料)
        if (lotsDeltaRef.current) lotsDeltaRef.current.onWindow('open', rows, snap, src);
-     }, { where: [['status', '!=', 'completed']], limit: OPEN_LOTS_LIMIT, ...(src === 'cache' ? { source: 'cache' } : {}), onError: (e) => noteReadError('lots(未完了)', e) });
+     }, { where: [['status', '!=', 'completed']], limit: OPEN_LOTS_LIMIT, includeMetadataChanges: true, ...(src === 'cache' ? { source: 'cache' } : {}), onError: (e) => noteReadError('lots(未完了)', e) });
      countReads('lots(未完了)', 0, { attach: true }); // 張った事は0件でも残す
      return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } if (lotsDeltaRef.current) lotsDeltaRef.current.windowOff('open', src); };
    }, [lotSubPlan.open, lotsSrc, user, db, countReads, noteReadError]);
