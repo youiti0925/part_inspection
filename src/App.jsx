@@ -5215,6 +5215,18 @@ const MeasurementPreviewBox = ({ config, variant = 'tiny', maxHeight = 200 }) =>
   );
 };
 
+// 🔧治具番号・📐プログラム番号のチップ (工程に登録がある時だけ出る。両方無ければ何も描かない)
+//   ⚠描画関数の中で定義しない(再マウントで入力が飛ぶ)。module-level に置く。
+const StepSetupChips = ({ step, className = '' }) => {
+  if (!step || (!step.jigNo && !step.programNo)) return null;
+  return (
+    <div className={`flex flex-wrap items-center gap-1.5 ${className}`}>
+      {step.jigNo && <span className="inline-flex items-center gap-1 bg-amber-50 border border-amber-300 text-amber-800 text-xs font-bold px-2 py-0.5 rounded">🔧 治具 {step.jigNo}</span>}
+      {step.programNo && <span className="inline-flex items-center gap-1 bg-sky-50 border border-sky-300 text-sky-800 text-xs font-bold px-2 py-0.5 rounded">📐 プログラム {step.programNo}</span>}
+    </div>
+  );
+};
+
 const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSaveLayouts, comboPresets = [], builtInOverrides = {}, hiddenBuiltIns = [] }) => {
   const [name, setName] = useState(template?.name || '');
   const [steps, setSteps] = useState(template?.steps || []);
@@ -5224,6 +5236,9 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
   // 確認チェック項目 (type 不問で工程に添付できる)
   const [checklistItems, setChecklistItems] = useState([]);
   const [targetTime, setTargetTime] = useState(0);
+  // 段取り情報: 治具番号・プログラム番号 (工程に直付けで保存。空なら保存しない)
+  const [jigNo, setJigNo] = useState('');
+  const [programNo, setProgramNo] = useState('');
   // 自動測定 (機械占有) 工程か / この工程は他の台の自動測定中に並行できるか
   const [executionMode, setExecutionMode] = useState('manual'); // 'manual' | 'batch' (= 自動)
   // workResource: この工程が占有するリソース。デフォルト null = 機械独立 (= 並行可)
@@ -5358,6 +5373,9 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
       // 自動測定の既知時間 (経過で自動終了)。自動工程かつ有効かつ正の秒数のときのみ保存。
       ...(executionMode === 'batch' && autoEndEnabled && autoEndSec > 0 ? { autoEndEnabled: true, autoEndSec: Math.round(autoEndSec) } : {}),
       ...(lotOnce ? { lotOnce: true } : {}),  // ロット1回(段取り)工程
+      // 段取り情報 (治具番号・プログラム番号)。空文字は保存しない (条件付きスプレッド)
+      ...(jigNo.trim() ? { jigNo: jigNo.trim() } : {}),
+      ...(programNo.trim() ? { programNo: programNo.trim() } : {}),
       ...(rotaryLink && !lotOnce && executionMode !== 'batch' ? { rotaryLink: true, rotaryRole, rotaryMode } : {}),  // 分割測定アプリ連携(準備/測定開始の指令送信+測定モード)。lotOnce/batchとは併用不可(workId採番が噛み合わない)
       ...(type === 'measurement' && measurementConfig ? { measurementConfig } : {}),
       // checklistItems は type 問わず保存可能 (測定 + チェックの併用OK)
@@ -5366,7 +5384,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
     if (editingStepId) { setSteps(steps.map(s => s.id === editingStepId ? newStep : s)); } else { setSteps([...steps, newStep]); }
     resetInput();
   };
-  const resetInput = () => { setTitle(''); setDescription(''); setType('normal'); setTargetTime(0); setImages([]); setPdfData(null); setEditingStepId(null); setMeasurementConfig(null); setChecklistItems([]); setExecutionMode('manual'); setWorkResource(''); setAutoEndEnabled(false); setAutoEndSec(0); setLotOnce(false); setRotaryLink(false); setRotaryRole('capture'); setRotaryMode('回転分割'); };
+  const resetInput = () => { setTitle(''); setDescription(''); setType('normal'); setTargetTime(0); setJigNo(''); setProgramNo(''); setImages([]); setPdfData(null); setEditingStepId(null); setMeasurementConfig(null); setChecklistItems([]); setExecutionMode('manual'); setWorkResource(''); setAutoEndEnabled(false); setAutoEndSec(0); setLotOnce(false); setRotaryLink(false); setRotaryRole('capture'); setRotaryMode('回転分割'); };
   const editStep = (s) => {
     setEditingStepId(s.id);
     setTitle(s.title);
@@ -5374,6 +5392,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
     // 旧 'checklist' タイプは normal に正規化 (checklistItems は別フィールドで保持)
     setType(s.type === 'checklist' ? 'normal' : s.type);
     setTargetTime(s.targetTime);
+    setJigNo(s.jigNo || '');
+    setProgramNo(s.programNo || '');
     setImages(s.images || []);
     setPdfData(s.pdfData || null);
     setMeasurementConfig(s.measurementConfig || null);
@@ -5470,7 +5490,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
             const resColor = isAuto ? 'bg-purple-100 text-purple-700' :
                              resTag === 'measurement-machine' || resTag === 'jig-shared' || (resTag && resTag !== '') ? 'bg-rose-100 text-rose-700' :
                              (resTag === null || resTag === '') ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700';
-            return (<div key={s.id} className={`p-3 border rounded-lg flex gap-3 cursor-pointer ${editingStepId===s.id ? 'border-blue-500 bg-blue-50' : 'hover:border-slate-300'}`} onClick={() => editStep(s)}><div className="flex flex-col gap-1 justify-center"><button onClick={(e)=>{e.stopPropagation();moveStep(i,'up')}} disabled={i===0} className="text-slate-300 hover:text-slate-600"><ArrowUp className="w-4 h-4"/></button><span className="text-xs font-bold text-slate-400 text-center">{i+1}</span><button onClick={(e)=>{e.stopPropagation();moveStep(i,'down')}} disabled={i===steps.length-1} className="text-slate-300 hover:text-slate-600"><ArrowDown className="w-4 h-4"/></button></div><div className="flex-1 min-w-0"><div className="font-bold text-sm truncate flex items-center gap-1.5">{isAuto && <span className="bg-purple-500 text-white text-xs font-bold px-1 rounded shrink-0">自動</span>}{s.title}</div><p className="text-xs text-slate-500 truncate">{s.description}</p><div className="flex items-center gap-1 mt-1"><span className={`text-xs font-bold px-1.5 py-0.5 rounded ${resColor}`}>{isAuto ? '🤖 自動測定' : resLabel}</span></div></div><div className="flex flex-col gap-1"><button onClick={(e)=>{e.stopPropagation();const dup={...s,id:generateId(),title:s.title+' (コピー)'};setSteps(prev=>[...prev.slice(0,i+1),dup,...prev.slice(i+1)]);}} className="text-slate-300 hover:text-blue-500" title="複製"><Copy className="w-4 h-4"/></button><button onClick={(e)=>{e.stopPropagation();deleteStep(s.id)}} className="text-slate-300 hover:text-red-500" title="削除"><Trash2 className="w-4 h-4"/></button></div></div>);
+            return (<div key={s.id} className={`p-3 border rounded-lg flex gap-3 cursor-pointer ${editingStepId===s.id ? 'border-blue-500 bg-blue-50' : 'hover:border-slate-300'}`} onClick={() => editStep(s)}><div className="flex flex-col gap-1 justify-center"><button onClick={(e)=>{e.stopPropagation();moveStep(i,'up')}} disabled={i===0} className="text-slate-300 hover:text-slate-600"><ArrowUp className="w-4 h-4"/></button><span className="text-xs font-bold text-slate-400 text-center">{i+1}</span><button onClick={(e)=>{e.stopPropagation();moveStep(i,'down')}} disabled={i===steps.length-1} className="text-slate-300 hover:text-slate-600"><ArrowDown className="w-4 h-4"/></button></div><div className="flex-1 min-w-0"><div className="font-bold text-sm truncate flex items-center gap-1.5">{isAuto && <span className="bg-purple-500 text-white text-xs font-bold px-1 rounded shrink-0">自動</span>}{s.title}</div><p className="text-xs text-slate-500 truncate">{s.description}</p><div className="flex items-center gap-1 mt-1 flex-wrap"><span className={`text-xs font-bold px-1.5 py-0.5 rounded ${resColor}`}>{isAuto ? '🤖 自動測定' : resLabel}</span>{s.jigNo && <span className="fi-tap-text font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">🔧治具:{s.jigNo}</span>}{s.programNo && <span className="fi-tap-text font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">📐Prg:{s.programNo}</span>}</div></div><div className="flex flex-col gap-1"><button onClick={(e)=>{e.stopPropagation();const dup={...s,id:generateId(),title:s.title+' (コピー)'};setSteps(prev=>[...prev.slice(0,i+1),dup,...prev.slice(i+1)]);}} className="text-slate-300 hover:text-blue-500" title="複製"><Copy className="w-4 h-4"/></button><button onClick={(e)=>{e.stopPropagation();deleteStep(s.id)}} className="text-slate-300 hover:text-red-500" title="削除"><Trash2 className="w-4 h-4"/></button></div></div>);
           })}</div>
         </div>
         <div className="w-2/3 p-6 bg-slate-50 overflow-y-auto flex gap-6">
@@ -5604,6 +5624,23 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                 <div className="text-xs text-slate-500 mt-1.5 leading-relaxed">
                   💡 <b>機械独立</b> = 書類確認・準備など機械を使わない作業。他の台が自動測定中でも並行できる。<br/>
                   💡 <b>測定機を占有</b> = 測定準備・測定プログラム・自動測定本体など。同じ機械を共有する作業なので並行不可。
+                </div>
+              </div>
+            </div>
+            {/* 段取り情報: 治具番号・プログラム番号 (工程に直付けで保存。作業画面の工程にチップで出る) */}
+            <div className="bg-amber-50/40 border-2 border-amber-100 rounded-lg p-3">
+              <div className="text-xs font-bold text-amber-800 flex items-center gap-1.5 mb-2">
+                <Wrench className="w-3.5 h-3.5"/> 段取り情報
+                <span className="fi-tap-text font-normal text-amber-600 ml-1">(任意 — 登録すると作業画面の工程にチップで表示)</span>
+              </div>
+              <div className="flex gap-3 flex-wrap">
+                <div className="flex-1 min-w-[140px]">
+                  <label className="block fi-tap-text font-bold text-slate-500 mb-1">🔧 治具番号</label>
+                  <input value={jigNo} onChange={e => setJigNo(e.target.value)} placeholder="例: JG-102" className="w-full p-2 border rounded text-sm"/>
+                </div>
+                <div className="flex-1 min-w-[140px]">
+                  <label className="block fi-tap-text font-bold text-slate-500 mb-1">📐 プログラム番号</label>
+                  <input value={programNo} onChange={e => setProgramNo(e.target.value)} placeholder="例: PRG-3301" className="w-full p-2 border rounded text-sm"/>
                 </div>
               </div>
             </div>
@@ -12262,6 +12299,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                    </div>
                    <div className="space-y-4">
                       <div><label className="text-xs font-bold text-slate-500">作業名</label><div className="text-base font-bold text-slate-800">{displayStep.title}</div></div>
+                      <StepSetupChips step={displayStep}/>
                       <div>
                         <label className="text-xs font-bold text-slate-500 flex items-center justify-between">内容・注意点 <button onClick={() => { const el = document.getElementById('custom-desc-edit'); if(el) el.style.display = el.style.display === 'none' ? '' : 'none'; }} className="text-xs text-blue-500 hover:text-blue-700"><Pencil className="w-3 h-3 inline"/> 編集</button></label>
                         <div className="text-sm text-slate-600 bg-slate-50 p-3 rounded-lg whitespace-pre-wrap">{displayStep.description}</div>
@@ -12594,6 +12632,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                   {activeStep.description && (
                     <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
                       <div className="text-sm font-bold text-slate-500 mb-2">作業内容 / 注意事項</div>
+                      <StepSetupChips step={activeStep} className="mb-2"/>
                       <div className="text-xl text-slate-800 whitespace-pre-wrap leading-relaxed">{activeStep.description}</div>
                     </div>
                   )}
@@ -12740,6 +12779,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                };
                return (
                  <div className="flex flex-col gap-3">
+                   <StepSetupChips step={currentStep}/>
                    {currentStep.description && (
                      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-sm text-slate-700 whitespace-pre-wrap">
                        <div className="text-xs font-bold text-slate-500 mb-1">作業内容 / 注意事項</div>
