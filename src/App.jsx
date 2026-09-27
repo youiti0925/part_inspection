@@ -168,6 +168,12 @@ import { dueMsOfLot, bucketOfDue } from './domain/dueDefense.js';
 import LotDuplicatesPanel from './LotDuplicatesPanel.jsx';
 import { isWorkdayYmd, makeIsWorkday } from './domain/factoryCalendar.js';
 import { planProgressImport, normalizeSheetMap, DEFAULT_SHEET_MAP, isShippedGrayFills, colToIndex, PS_REASON, PENDING_MAX_ROWS, pendingRowsFromPlan, mergePendingRows, normalizeSheetProfiles, guessProfile, profilesToSettings, sheetMapProblems } from './domain/progressSheet.js';
+import { resolveModelEntry, findModelTemplate, modelTemplateDocId } from './domain/modelMaster.js';
+import { diffTemplate as tsDiff, syncPolicyOf as tsPolicy } from './domain/templateSync.js';
+import { planMasterChangeUpdates } from './domain/modelMasterPropagate.js';
+import TemplateSyncPanel from './TemplateSyncPanel.jsx';
+import ModelMasterPanel from './ModelMasterPanel.jsx';
+import MasterPropagateModal, { MasterPropagateBusy } from './MasterPropagateModal.jsx';
 import { DEFAULT_IMPORT_OPTIONS, planRowLots } from './domain/importPlan.js';
 import { dueConflict } from './domain/dueConflict.js';
 import { LOT_PRIORITY_CHOICES, normalizeLotPriority, priorityLabelOf, priorityFromImportText, priorityBadgeOf, priorityFilterStyleOf } from './domain/lotPriority.js';
@@ -1520,9 +1526,15 @@ const applyQualityStandardToSteps = (model, baseSteps, settings, templateId = nu
     });
   };
 
-  // 1) 品質規格マスタを優先
-  const qsId = settings?.modelStandardMap?.[model];
-  const qs = qsId ? settings?.qualityStandards?.[qsId] : null;
+  // 0) 📋 P064 品目マスタ(settings.modelMasters)を最優先(製品の型式マスタと同じ・resolveModelEntry は製品と1バイト同じ)。
+  //    見つかったら その1件だけを持つ「品質規格の形」に包んで、下の旧・品質規格と同じ焼き付けを通す(同じ式を2本持たない)。
+  const mmResolved = resolveModelEntry(settings, model, templateId);
+  // 1) 品質規格マスタ(旧・互換のため残す)
+  const qsId = mmResolved ? null : settings?.modelStandardMap?.[model];
+  const qs = mmResolved
+    ? { id: 'mm-' + model, standardNo: mmResolved.entry.standardNo || '', name: model, revision: mmResolved.entry.revision || '',
+        templates: [{ ...mmResolved.entry, templateId: templateId || mmResolved.entry.templateId || '' }] }
+    : (qsId ? settings?.qualityStandards?.[qsId] : null);
   if (qs) {
     // 規格内に対象テンプレートに一致するエントリがあるか探す
     const entries = getQsTemplateEntries(qs);
@@ -1594,7 +1606,7 @@ const applyQualityStandardToSteps = (model, baseSteps, settings, templateId = nu
         revision: qs.revision || '',
         templateId: entry.templateId,
         appliedAt: Date.now(),
-        source: 'qualityStandard',
+        source: mmResolved ? 'modelMaster' : 'qualityStandard',
       };
       return { steps: applyCalibratedTargets(steps), appliedStandard, naStepIds };
     }
@@ -5664,7 +5676,9 @@ const StepSetupChips = ({ step, className = '' }) => {
   );
 };
 
-const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSaveLayouts, comboPresets = [], builtInOverrides = {}, hiddenBuiltIns = [], skills = [], onSaveSkills = null, currentUserName = '' }) => {
+// P130 scopeLabel: 渡すと「この編集は◯◯にだけ保存される」帯を出し、テンプレ名を変えさせない(品目コード専用テンプレの編集で使う・製品と同じ)
+// initialEditStepId: 渡すと開いた瞬間にその工程を編集状態にする(品目マスタの「編集」から直行)
+const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSaveLayouts, comboPresets = [], builtInOverrides = {}, hiddenBuiltIns = [], skills = [], onSaveSkills = null, currentUserName = '', scopeLabel = null, initialEditStepId = null }) => {
   const [name, setName] = useState(template?.name || '');
   const [steps, setSteps] = useState(template?.steps || []);
   // 🎯 決まり17: このテンプレに要るスキル [{ skillId, stepIds:[] }](stepIds 空＝全工程)。保存は onSave の requiredSkills で一緒に。
@@ -5857,6 +5871,13 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
     setObsElements(Array.isArray(s.observationElements) ? s.observationElements.map(e => ({ ...e })) : []);
     setObsEnabled(s.observationEnabled !== false);
   };
+  // P130 initialEditStepId: 品目マスタの「編集」から来た時、その工程を最初から編集状態で開く
+  useEffect(() => {
+    if (!initialEditStepId) return;
+    const s0 = (template?.steps || []).find(x => x.id === initialEditStepId);
+    if (s0) editStep(s0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // マウント時に1回だけ
   const deleteStep = (id) => setSteps(steps.filter(s => s.id !== id));
   const moveStep = (index, direction) => { const newSteps = [...steps]; if (direction === 'up' && index > 0) { [newSteps[index-1], newSteps[index]] = [newSteps[index], newSteps[index-1]]; } else if (direction === 'down' && index < steps.length-1) { [newSteps[index+1], newSteps[index]] = [newSteps[index], newSteps[index+1]]; } setSteps(newSteps); };
   const handleSave = () => {
@@ -5903,6 +5924,12 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
            </div>
         </div>
       )}
+      {scopeLabel && (
+        <div data-tpl-scope="1" className="bg-orange-100 border-b-2 border-orange-300 px-4 py-2 text-sm font-bold text-orange-800 flex items-center gap-2 shrink-0">
+          <AlertTriangle className="w-4 h-4 shrink-0"/>
+          <span>⚠ この編集は「{scopeLabel}」にだけ保存されます。共通の工程テンプレートは変わりません</span>
+        </div>
+      )}
       <div className="bg-white p-4 border-b flex justify-between items-center">
         <div className="flex items-center gap-2 flex-1"><button onClick={() => {
           // 未保存変更があれば確認
@@ -5913,13 +5940,13 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
           const isDirty = (name !== initName) || (curSteps !== initSteps) || (JSON.stringify(reqSkills) !== initReq);
           if (isDirty && !confirm('保存していない変更があります。破棄して戻りますか？')) return;
           onCancel();
-        }} className="p-2 hover:bg-slate-100 rounded-full" title="戻る"><ArrowRight className="w-5 h-5 rotate-180"/></button><input value={name} onChange={e => setName(e.target.value)} placeholder="テンプレート名" className="text-lg font-bold border-none focus:ring-0 w-full"/></div>
+        }} className="p-2 hover:bg-slate-100 rounded-full" title="戻る"><ArrowRight className="w-5 h-5 rotate-180"/></button><input value={name} onChange={e => setName(e.target.value)} placeholder="テンプレート名" disabled={!!scopeLabel} title={scopeLabel ? '品目コード専用の編集ではテンプレート名は変えられません(共通テンプレの名前を使います)' : undefined} className={`text-lg font-bold border-none focus:ring-0 w-full ${scopeLabel ? 'bg-transparent text-slate-500' : ''}`}/></div>
         {/* Fixed: button type explicitly set to button */}
         <button type="button" onClick={handleSave} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 z-50 relative"><Save className="w-4 h-4"/> 保存</button>
       </div>
       {/* 🎯 決まり17: このテンプレに要るスキル(名前の下の1行)。チップ＝付いているスキル(全工程／◯工程)。「＋スキルを足す」で既存から選ぶか、名前だけで新しく作る。
           🚨 型式専用の編集(scopeLabel)では出さない(保存側が拾わない＝共通テンプレの物)。 */}
-      {(
+      {!scopeLabel && (
         <div className="bg-orange-50 border-b-2 border-orange-200 px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 relative" data-tpl="skills-row">
           <span className="text-xs font-black text-orange-800">このテンプレに要るスキル</span>
           {reqSkills.length === 0 && <span className="fi-tap-text text-slate-500">まだ付いていません（付けると、スキルマップの「このテンプレに要るスキル」と同じ物です）</span>}
@@ -30339,6 +30366,14 @@ const QuotaStoppedPanel = ({ until }) => (
      //   (最初の1回で lots だけ動いて終わり、掃除が一生走らない事になる)。
    }, [lots, lotsLoaded]);
    const [templates, setTemplates] = useState([]);
+   // 📋 P064/P130 品目マスタ: 品目コード専用テンプレ(model_templates・docId=mt_品目コード__テンプレID)と その編集中 { model, templateId, stepId } | null
+   const [modelTemplates, setModelTemplates] = useState([]);
+   const [modelTplEditing, setModelTplEditing] = useState(null);
+   // 🔄 P104 共通テンプレ → 専用テンプレ の差分パネル { templateId, templateName, baseSteps, targets } | null
+   const [tplSync, setTplSync] = useState(null);
+   // 📅 P106 品目マスタの日数を打ち替えた → 検査リストの納期/入庫も直すかの窓
+   const [masterPropagate, setMasterPropagate] = useState(null);
+   const [masterPropagateSaving, setMasterPropagateSaving] = useState('');
    const [workers, setWorkers] = useState([]);
    // ⚠logs / indirectWork / improvements は「開いた時だけ読む」へ移した(下の useLazyCollection)。
    // 工場の暦(祝日・全社休業・休日出勤)。null = まだ読めていない / 登録なし。
@@ -30488,9 +30523,10 @@ const QuotaStoppedPanel = ({ until }) => (
        { id: 'template-mgr', label: '工程テンプレート', icon: ClipboardList },
        { id: 'measurement-settings', label: '測定設定', icon: Ruler },
        { id: 'app-feedback', label: 'アプリへの要望', icon: Lightbulb },
+       { id: 'quality-standards', label: '品目マスタ', icon: ClipboardCheck }, // 📋 P064
      ],
    };
-   const TAB_PARENT = { inspection: 'inspection', history: 'inspection', analysis: 'analysis', optimize: 'analysis', templates: 'templates', 'template-mgr': 'templates', 'measurement-settings': 'templates', 'app-feedback': 'templates' };
+   const TAB_PARENT = { inspection: 'inspection', history: 'inspection', analysis: 'analysis', optimize: 'analysis', templates: 'templates', 'template-mgr': 'templates', 'measurement-settings': 'templates', 'app-feedback': 'templates', 'quality-standards': 'templates' };
    // 親タブ(検査リスト|完了履歴 / 分析|作業最適化 / マスタ設定|…)のボタン。
    // 🚨 2026-09-07: 分析・作業最適化の画面では、この帯を下の大分類の帯へ**合流**させて1本減らす。
    //    同じ物を出す為に作り方をここ1か所にまとめた。札の名前・順番・押した時の行き先は変えていない。
@@ -30850,6 +30886,8 @@ const QuotaStoppedPanel = ({ until }) => (
        watch('announcements', (rows) => setAnnouncements(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
        // ⚠observationPlans は作業画面(じっと見るモード)が使う。外すと現場が使えない。
        watch('observationPlans', (rows) => setObservationPlans(rows)),
+       // 📋 P130 品目コード専用テンプレ(品目マスタの「編集」で作る)。ロットを作る時に共通テンプレより先に使う。
+       watch('model_templates', (rows) => setModelTemplates(rows)),
        // 📐 P040 測定図の保管庫(ロットより前に届く保証は無い。届いたら画面用の合流をやり直す)
        watch(DIAGRAM_COLLECTION, (rows) => { const m = diagramMapOf(rows); stepDiagramsRef.current = m; setStepDiagrams(m); }),
        // 🚨 ここから外した物 → 下の「開いた時だけ読む」へ移した:
@@ -30877,6 +30915,7 @@ const QuotaStoppedPanel = ({ until }) => (
               measurementOverrides: data.measurementOverrides || {},
               qualityStandards: data.qualityStandards || {},
               modelStandardMap: data.modelStandardMap || {},
+              modelMasters: data.modelMasters || {}, // 📋 P064 品目マスタ(製品の型式マスタと同じ形)
               workStandards: data.workStandards || [],
               lotCardDisplay: data.lotCardDisplay || null, // null=デフォルト全表示
               fontSizes: data.fontSizes || {},
@@ -30899,7 +30938,7 @@ const QuotaStoppedPanel = ({ until }) => (
        P.watchCollection(CONTACT_SHARED_NS, NOTICE_COL, (rows) => setAppNotices(rows || []), { onError: readFailed(NOTICE_COL) })
      ];
      // 張った事は0件でも残す(「読んでいない」と「そもそも購読していない」を人が見分けられるように)。
-     ['templates', 'workers', 'notes', 'announcements', 'observationPlans', DIAGRAM_COLLECTION, 'settings/config', 'contact_shared/settings'].forEach(c => countReads(c, 0, { attach: true }));
+     ['templates', 'workers', 'notes', 'announcements', 'observationPlans', 'model_templates', DIAGRAM_COLLECTION, 'settings/config', 'contact_shared/settings'].forEach(c => countReads(c, 0, { attach: true }));
      if (stopped) stopAll(); // 張っている最中に枠切れが来た時の取りこぼし防止
      return () => { stopped = true; unsubs.forEach(u => { try { u(); } catch { /* 既に止まっていても構わない */ } }); };
    }, [user, db, countReads, noteReadError]);
@@ -32072,6 +32111,9 @@ const QuotaStoppedPanel = ({ until }) => (
      if (template && template.steps) {
        baseSteps = template.steps;
      }
+     // 📋 P130 品目コード専用テンプレ (model_templates) があれば、その steps をベースにする (共通テンプレより優先)
+     const mtDoc = findModelTemplate(modelTemplates, model, templateId);
+     if (mtDoc && Array.isArray(mtDoc.steps) && mtDoc.steps.length > 0) baseSteps = mtDoc.steps;
 
      // 品質規格 / 品目コードオーバーライドを適用 (共通ヘルパー)
      const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(model, baseSteps, settings, templateId);
@@ -32493,7 +32535,7 @@ const QuotaStoppedPanel = ({ until }) => (
    };
    const progressPlanCtx = () => ({
      lots,
-     modelMasters: {},
+     modelMasters: settings.modelMasters || {}, // 📋 P064 品目マスタを第一候補に(無ければ品質規格へ落ちる・純関数 resolveEntriesForModel の順)
      qualityStandards: settings.qualityStandards || {},
      modelStandardMap: settings.modelStandardMap || {},
      templates,
@@ -32520,7 +32562,11 @@ const QuotaStoppedPanel = ({ until }) => (
    const writeProgressCreates = async (createLots, { timestamp, tick }) => {
      for (const c of createLots) {
        const id = generateId();
-       const baseSteps = templates.find(t => t.id === c.templateId)?.steps || DEMO_STEPS;
+       // 📋 P130 品目コード専用テンプレ (model_templates) があれば、その steps をベースにする (共通テンプレより優先)
+       const mtDoc = findModelTemplate(modelTemplates, c.model, c.templateId);
+       const baseSteps = (mtDoc && Array.isArray(mtDoc.steps) && mtDoc.steps.length > 0)
+         ? mtDoc.steps
+         : (templates.find(t => t.id === c.templateId)?.steps || DEMO_STEPS);
        const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(c.model, baseSteps, settings, c.templateId);
        const serials = Array.from({ length: c.quantity }, (_, i) => `#${i + 1}`);
        const modelText = progressRowModelText(c);
@@ -32780,7 +32826,8 @@ const QuotaStoppedPanel = ({ until }) => (
    };
 
    // 🗂 P057 未登録リスト → 品質規格マスタに紐付けたら、その品目コードの行を検査リストへ(判定は取込と同じ純関数・書き手も同じ writeProgressCreates)
-   const registerPendingForModel = async (model) => {
+   // P032: 品目マスタでテンプレを割り当てた直後に呼ぶ時は、まだ settings に届いていない品目マスタを ctxOverride({ modelMasters }) で渡す(製品と同じ)
+   const registerPendingForModel = async (model, ctxOverride = null) => {
      const pend = settings && settings.progressImportPending;
      if (!pend || !Array.isArray(pend.rows)) return;
      const m = String(model || '').trim();
@@ -32793,11 +32840,11 @@ const QuotaStoppedPanel = ({ until }) => (
        alert('サーバに在るロットを確かめられなかったので、登録を止めました（何も作っていません）。');
        return;
      }
-     const plan = replanProgress(mine, { includeProvisional: !!(pend.opts && pend.opts.includeProvisional) }, smap, { lots: knownPend.lots });
+     const plan = replanProgress(mine, { includeProvisional: !!(pend.opts && pend.opts.includeProvisional) }, smap, { ...(ctxOverride && typeof ctxOverride === 'object' ? ctxOverride : {}), lots: knownPend.lots });
      const createLots = plan.createLots || [];
      const stillNoTpl = (plan.skipped || []).filter(x => x.reason === PS_REASON.NO_MASTER || String(x.reason || '').endsWith(PS_REASON.NO_TEMPLATE_ASSIGNED));
      if (stillNoTpl.length) {
-       alert(`品目コード「${m}」には まだ品質規格(テンプレート)が割り当てられていません。\n品質規格マスタで割り当ててから、もう一度「検査リストへ登録」を押してください。`);
+       alert(`品目コード「${m}」には まだ品目マスタ・品質規格(テンプレート)が割り当てられていません。\n品目マスタ(または品質規格マスタ)で割り当ててから、もう一度「検査リストへ登録」を押してください。`);
        return;
      }
      const otherSkipped = (plan.skipped || []).length;
@@ -32961,7 +33008,7 @@ const QuotaStoppedPanel = ({ until }) => (
        for (const r of rawRows) {
          const res = planRowLots(
            { model: String(r.model), orderNo: String(r.orderNo), qty: r.qty, dueYMD: r.dueDate, entryRaw: r.entryGiven ? msToYmdHm(r.entryAt) : '', templateIdFromExcel: r.templateIdRaw },
-           { modelMasters: {}, qualityStandards: settings.qualityStandards || {}, modelStandardMap: settings.modelStandardMap || {}, templates, options: { calendar: factoryCalendar || null } },
+           { modelMasters: settings.modelMasters || {}, qualityStandards: settings.qualityStandards || {}, modelStandardMap: settings.modelStandardMap || {}, templates, options: { calendar: factoryCalendar || null } },
          );
          for (const sk of res.skipped) expandSkipped.push(`⏭ ${r.orderNo} ${r.model} — ${sk.reason === '型式マスタにこの型式の登録がありません' ? '品質規格マスタに品目コードの紐付けがありません' : sk.reason === '型式マスタにテンプレートが割り当てられていません' ? '品質規格にテンプレートが割り当てられていません' : sk.reason}`);
          for (const l of res.lots) {
@@ -33012,6 +33059,9 @@ const QuotaStoppedPanel = ({ until }) => (
          let baseSteps = DEMO_STEPS;
          const template = templates.find(t => t.id === row.templateId);
          if (template?.steps) baseSteps = template.steps;
+         // 📋 P130 品目コード専用テンプレ (model_templates) があれば、その steps をベースにする (共通テンプレより優先)
+         const mtDoc = findModelTemplate(modelTemplates, row.model, row.templateId);
+         if (mtDoc && Array.isArray(mtDoc.steps) && mtDoc.steps.length > 0) baseSteps = mtDoc.steps;
          // 品質規格 / 品目コードオーバーライドを適用 (共通ヘルパー: ロット登録画面と同じ挙動)
          const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(row.model, baseSteps, settings, row.templateId);
          const stdLabel = appliedStandard?.source === 'qualityStandard' ? ` [${appliedStandard.standardNo} Rev.${appliedStandard.revision}]` : '';
@@ -33520,12 +33570,24 @@ const QuotaStoppedPanel = ({ until }) => (
        return;
      }
      setEditingTemplate(null);
+     // 🔄 P104 専用テンプレを持つ品目コードに「差ができた」ことを知らせる。⚠ここでは1バイトも書かない(差分パネルを開くだけ)。
+     if (Array.isArray(templateData.steps) && templateData.steps.length > 0) {
+       const mts = (modelTemplates || []).filter(d => d && d.templateId === id);
+       const withDiff = mts.filter(d => tsDiff(templateData.steps, Array.isArray(d.steps) ? d.steps : [], tsPolicy(d).stepMap).hasDiff);
+       if (withDiff.length > 0) {
+         setTplSync({ templateId: id, templateName: templateData.name || '', baseSteps: templateData.steps,
+           targets: withDiff.map(d => ({ model: d.model, templateId: id, doc: d })) });
+       }
+     }
      // テンプレ変更を「未着手」の既存ロットに反映する(任意・確認制)。作業中/完了は実測データを守るため触らない。
      //   未着手 = まだ一度も着手していない(workStartTime無し かつ どのタスクも firstStartTime 無し。規格の該当なしタスクは着手扱いにしない)。
      if (Array.isArray(templateData.steps) && templateData.steps.length > 0) {
        const isUntouched = (l) => !l.workStartTime && l.status !== 'completed' && l.location !== 'completed' && !Object.values(l.tasks || {}).some(t => t && t.firstStartTime);
-       const targets = (lots || []).filter(l => l.templateId === id && isUntouched(l));
-       if (targets.length > 0 && confirm(`このテンプレを使う「未着手」の検査ロット ${targets.length}件 にも、変更した工程を反映しますか？\n\n・反映する＝各ロットの工程が最新テンプレに更新されます\n・作業中／完了のロットは実測データを守るため反映しません`)) {
+       // 📋 P130 品目コード専用テンプレを持つ(品目コード×このテンプレ)のロットは対象外。専用は独立して管理する(製品と同じ)。
+       const untouchedAll = (lots || []).filter(l => l.templateId === id && isUntouched(l));
+       const targets = untouchedAll.filter(l => !findModelTemplate(modelTemplates, l.model, id));
+       const excludedCount = untouchedAll.length - targets.length;
+       if (targets.length > 0 && confirm(`このテンプレを使う「未着手」の検査ロット ${targets.length}件 にも、変更した工程を反映しますか？\n\n・反映する＝各ロットの工程が最新テンプレに更新されます\n・作業中／完了のロットは実測データを守るため反映しません${excludedCount > 0 ? `\n・品目コード専用テンプレを持つロット ${excludedCount}件 は対象外です（専用テンプレは共通と独立して管理されます）` : ''}`)) {
          // 🚨「✅反映しました」は保存を見届けてから言う(製品検査 2026-08-31 と同じ)。
          //   ⚠発行は全件続けて行い(awaitを挟まない)、そのあと settleSaveBriefly でまとめて見届ける。
          const saves = targets.map(l => {
@@ -33555,6 +33617,185 @@ const QuotaStoppedPanel = ({ until }) => (
      }
    };
    
+   // === 📋 P130 品目コード専用テンプレ(model_templates)の保存・戻す・登録を外す(製品の型式専用テンプレと同じ流儀) ===
+   const handleSaveModelTemplate = async (model, templateId, templateData) => {
+     const baseTpl = (templates || []).find(t => t.id === templateId);
+     const docId = modelTemplateDocId(model, templateId);
+     const docBody = {
+       id: docId, model, templateId,
+       baseName: baseTpl?.name || templateData.name || '', // 名前は共通テンプレ名を維持
+       steps: templateData.steps || [],
+       overview: templateData.overview ?? null,
+       updatedAt: Date.now(),
+     };
+     try {
+       await saveData('model_templates', docId, docBody);
+     } catch (e) {
+       alert(`🚨 品目コード専用テンプレを保存できませんでした。\n${e?.message || e}\n\n通信を確かめて、もう一度「保存」を押してください。（編集中の内容はこの画面に残しています）`);
+       return;
+     }
+     setModelTplEditing(null);
+     // 専用テンプレ保存後の再焼付: この(品目コード×テンプレ)の未着手ロットへ confirm 制で反映 (共通テンプレ保存時と同じ流儀)
+     if (Array.isArray(docBody.steps) && docBody.steps.length > 0) {
+       const isUntouched = (l) => !l.workStartTime && l.status !== 'completed' && l.location !== 'completed' && !Object.values(l.tasks || {}).some(t => t && t.firstStartTime);
+       const targets = (lots || []).filter(l => l.model === model && l.templateId === templateId && isUntouched(l));
+       if (targets.length > 0 && confirm(`品目コード「${model}」の専用テンプレを保存しました。\nこの品目コード・テンプレを使う「未着手」の検査ロット ${targets.length}件 にも、専用の工程を反映しますか？\n\n・反映する＝各ロットの工程がこの専用テンプレに更新されます\n・作業中／完了のロットは実測データを守るため反映しません`)) {
+         const saves = targets.map(l => {
+           const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(l.model, docBody.steps, settings, templateId);
+           const naSet = new Set(naStepIds || []);
+           // 🚨空なら tasks のキーごと送らない(profileSkippedPatch。`tasks: {}` を送ると merge で検査記録が丸ごと消える)
+           const p = saveData('lots', l.id, { steps, appliedStandard: appliedStandard ?? null, ...profileSkippedPatch(steps, naStepIds, l.quantity || 1) });
+           const removals = {};
+           Object.keys(l.tasks || {}).forEach(k => {
+             const t = (l.tasks || {})[k];
+             if (t && t.status === 'skipped' && t.profileSkipped) {
+               const sid = k.includes('-lot-') ? k.split('-lot-')[0] : k.slice(0, k.lastIndexOf('-'));
+               if (!naSet.has(sid)) removals[`tasks.${k}`] = DATA_DELETE;
+             }
+           });
+           if (Object.keys(removals).length) DATA(db).setFields(APP_DATA_ID, 'lots', l.id, removals).catch(() => {});
+           return p;
+         });
+         const r = await settleSaveBriefly(Promise.all(saves));
+         if (!mayCloseAfterSave(r)) { alert('🚨 反映の保存が拒否されました。一部または全部のロットに反映できていません。\n通信を確かめて、専用テンプレをもう一度保存し「反映」をやり直してください。'); return; }
+         alert(`✅ 未着手の ${targets.length}件 に専用テンプレを反映しました。`);
+       }
+     }
+   };
+
+   // 🔄 P104 差分パネルの「反映する」。⚠反映前の steps を必ず1世代しまってから書く(prevSteps・同じドキュメントの中)。
+   const applyTemplateSync = async (target, result, fields, losses) => {
+     const docId = modelTemplateDocId(target.model, target.templateId);
+     const before = Array.isArray(target.doc?.steps) ? target.doc.steps : [];
+     try {
+       await saveData('model_templates', docId, {
+         id: docId, model: target.model, templateId: target.templateId,
+         baseName: target.doc?.baseName || '',
+         steps: result.steps,
+         overview: target.doc?.overview ?? null,
+         prevSteps: before, // ⚠1世代だけ(積むと 1MB 上限に当たる)
+         prevAt: Date.now(),
+         prevBy: currentUserName || '',
+         syncPolicy: { ...tsPolicy(target.doc), fields, updatedAt: Date.now(), updatedBy: currentUserName || '' },
+         lastSync: { at: Date.now(), by: currentUserName || '', ...result.applied, lost: losses.length },
+         updatedAt: Date.now(),
+       });
+       alert(`✅ 品目コード「${target.model}」に反映しました。\n追加 ${result.applied.added} / 削除 ${result.applied.removed} / 変更 ${result.applied.changed}${losses.length ? `\n（${losses.length}件が上書き・削除されました）` : ''}\n\n※ 既存のロットは焼き付け済みなので変わりません。次に作るロットから効きます。\n※ 品目マスタの画面から「反映を取り消す」で1回だけ戻せます。`);
+       setTplSync(s => (s ? { ...s, targets: s.targets.filter(t => t.model !== target.model) } : s));
+     } catch (e) {
+       alert(`反映できませんでした。\n${(e && e.message) || e}\n\n通信状態を確かめて、もう一度お試しください。`);
+     }
+   };
+   // 🔄 品目マスタの「⚠共通と差あり」から、その1品目コードぶんだけ差分パネルを開く
+   const openTemplateSyncFor = (model, templateId) => {
+     const tpl = (templates || []).find(t => t.id === templateId);
+     const doc = findModelTemplate(modelTemplates, model, templateId);
+     if (!tpl || !doc) return;
+     setTplSync({ templateId, templateName: tpl.name || '', baseSteps: tpl.steps || [], targets: [{ model, templateId, doc }] });
+   };
+   // 🔄 直前の反映を1回だけ取り消す
+   const undoTemplateSync = async (model, templateId) => {
+     const doc = findModelTemplate(modelTemplates, model, templateId);
+     if (!doc || !Array.isArray(doc.prevSteps)) { alert('戻せる記録がありません。'); return; }
+     const when = doc.prevAt ? new Date(doc.prevAt).toLocaleString('ja-JP') : '';
+     if (!window.confirm(`品目コード「${model}」の専用テンプレを、${when} の反映を行う前の状態に戻します。\n工程 ${doc.steps?.length || 0}件 → ${doc.prevSteps.length}件。\n\n⚠戻せるのは1回だけです（戻すと、この控えは無くなります）。よろしいですか？`)) return;
+     try {
+       await saveData('model_templates', doc.id, { steps: doc.prevSteps, prevSteps: DATA_DELETE, prevAt: DATA_DELETE, prevBy: DATA_DELETE, updatedAt: Date.now() });
+       alert('✅ 反映前の状態に戻しました。');
+     } catch (e) {
+       alert(`戻せませんでした。\n${(e && e.message) || e}`);
+     }
+   };
+   // 「共通に戻す」= 品目コード専用テンプレの doc を削除する。既存ロットは焼き付け済みなので変わらない。
+   const revertModelTemplate = async (model, templateId, opts = {}) => {
+     const mtDoc = findModelTemplate(modelTemplates, model, templateId);
+     if (!mtDoc) return;
+     const tplName = (templates || []).find(t => t.id === templateId)?.name || mtDoc.baseName || templateId;
+     if (!opts.skipConfirm && !confirm(`品目コード「${model}」の専用テンプレ（${tplName}）を削除して、共通の工程テンプレートに戻しますか？\n・既存ロットは焼き付け済みなので変わりません\n・次に作るロットから共通テンプレの工程が使われます`)) return;
+     try {
+       await deleteData('model_templates', mtDoc.id);
+     } catch (e) {
+       alert('専用テンプレの削除に失敗しました: ' + ((e && e.message) || e) + '\n通信状態を確認して、もう一度お試しください。');
+     }
+   };
+   // 🗑 品目マスタから「この品目コードで このテンプレを使う」の登録を外す。専用テンプレの doc は聞いてから消す(製品 removeModelTemplateEntry と同じ)。
+   const removeModelTemplateEntry = async (model, templateId, opts = {}) => {
+     const m = String(model || '').trim();
+     const tid = String(templateId || '').trim();
+     if (!m || !tid) return false;
+     const master = (settings.modelMasters || {})[m];
+     const list = (master && Array.isArray(master.templates)) ? master.templates : [];
+     const idx = list.findIndex(e => e && String(e.templateId || '') === tid);
+     if (idx < 0) { alert(`「${m}」の品目マスタに このテンプレの登録がありません。`); return false; }
+     const tplName = (templates || []).find(t => t.id === tid)?.name || '(名前なし)';
+     const e = list[idx] || {};
+     const gone = [];
+     if (e.standardNo) gone.push(`品質規格番号 ${e.standardNo}${e.revision ? ` Rev.${e.revision}` : ''}`);
+     const naN = Object.values(e.stepProfile || {}).filter(v => v && v.enabled === false).length;
+     if (naN) gone.push(`工程の「該当なし」${naN}件`);
+     for (const [k, label] of [['shipDaysBefore', '出荷日の何日前'], ['dueDaysBefore', '納期のずらし'], ['entryDaysBefore', '入荷は納期の何日前'], ['daysBefore', '入荷の日からのずらし']]) {
+       if (e[k] !== null && e[k] !== undefined && e[k] !== '') gone.push(`${label} ${e[k]}日`);
+     }
+     const dedicated = findModelTemplate(modelTemplates, m, tid);
+     if (!opts.skipConfirm) {
+       const lines = [
+         `「${m}」から テンプレート「${tplName}」の登録を外します。`,
+         '',
+         gone.length ? `消えるもの:\n・${gone.join('\n・')}` : '消える中身はありません（登録だけの状態です）',
+         '',
+         '※ すでに作ってあるロットの工程は変わりません（焼き付け済み）。',
+         '※ この操作は取り消せません。',
+       ];
+       if (!window.confirm(lines.join('\n'))) return false;
+     }
+     const next = list.filter((_, i) => i !== idx);
+     await saveSettings({ modelMasters: { ...(settings.modelMasters || {}), [m]: { ...master, templates: next, updatedAt: Date.now() } } });
+     if (dedicated) {
+       if (window.confirm(`「${m}」には この品目コードだけの工程編集（専用テンプレ）も残っています。\nそちらも消して 共通の工程に戻しますか？\n\n※ 残すと、品目マスタに登録が無いのに 専用の工程が使われ続けます。`)) {
+         await revertModelTemplate(m, tid, { skipConfirm: true });
+       }
+     }
+     return true;
+   };
+   // === 📅 P106 品目マスタの日数を打ち替えた → 検査リストの関係するロットも直す(判定は純関数 planMasterChangeUpdates・製品と1バイト同じ) ===
+   //   🚨 0件なら窓を出さない。何件・どのロットが どう変わるかを押す前に全部見せる。
+   const openMasterPropagate = ({ model, templateId, before, after }) => {
+     const { profiles: psProfiles, activeId: psActive } = normalizeSheetProfiles(settings, DEFAULT_SHEET_MAP);
+     const psMap = ((psProfiles || []).find(p => p.id === psActive) || (psProfiles || [])[0] || {}).map || {};
+     const plan = planMasterChangeUpdates({
+       model, templateId, before, after, lots,
+       calendar: factoryCalendar || null,
+       defaultEntryDaysBefore: DEFAULT_IMPORT_OPTIONS.defaultEntryDaysBefore,
+       entryHHMM: DEFAULT_IMPORT_OPTIONS.entryHHMM,
+       defaultShipDaysBefore: psMap.shipDaysBefore,
+     });
+     if (!plan.updates.length) return;
+     setMasterPropagate({ model, templateId, ...plan });
+   };
+   const applyMasterPropagate = async () => {
+     if (!masterPropagate) return;
+     const list = masterPropagate.updates;
+     setMasterPropagate(null);
+     try {
+       let done = 0;
+       setMasterPropagateSaving(`検査リストを直しています… 0/${list.length}`);
+       for (const u of list) {
+         const patch = {};
+         if (u.dueChange) patch.dueDate = u.newDueDate;
+         if (u.entryChange && u.newEntryAt) patch.entryAt = u.newEntryAt;
+         if (Object.keys(patch).length) await saveData('lots', u.lotId, patch);
+         done++;
+         setMasterPropagateSaving(`検査リストを直しています… ${done}/${list.length}`);
+       }
+       alert(`✓ 検査リストの ${done}件 を直しました`);
+     } catch (err) {
+       console.error(err);
+       alert('検査リストの更新中にエラーが発生しました: ' + (err.message || err));
+     } finally {
+       setMasterPropagateSaving('');
+     }
+   };
+
    // --- Lot Edit Handlers ---
    const onEditLot = (lot) => {
      setEditingLot(lot);
@@ -34105,11 +34346,59 @@ const QuotaStoppedPanel = ({ until }) => (
              />
            </div>
          )}
+         {/* 📋 P064 品目マスタ(製品の型式マスタ)。上に重複ロットの札(P145・マスタ設定と同じ部品)。旧・品質規格マスタはマスタ設定に残す(読める・取り込みボタンはこちら)。 */}
+         {activeTab === 'quality-standards' && <div className="h-full overflow-y-auto p-4"><div data-qs-panel>
+           <LotDuplicatesPanel lots={lots} templates={templates} deleteData={deleteData} />
+           <ModelMasterPanel templates={templates} lots={lots} modelMasters={settings.modelMasters || {}} qualityStandards={settings.qualityStandards || {}} modelStandardMap={settings.modelStandardMap || {}} modelTemplates={modelTemplates} saveSettings={saveSettings} deleteSettingsFields={deleteSettingsFields} deleteData={deleteData}
+             onEditModelStep={(model, templateId, stepId) => setModelTplEditing({ model, templateId, stepId })} onRevertModelTemplate={revertModelTemplate} onRemoveEntry={removeModelTemplateEntry}
+             onOpenSync={openTemplateSyncFor} onUndoSync={undoTemplateSync} onEntryDaysChanged={openMasterPropagate}
+             pendingImport={settings.progressImportPending || null} onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel}
+             getQsTemplateEntries={getQsTemplateEntries} isAutoStep={isAutoStep} itemMaster={settings.itemMaster || null} />
+         </div></div>}
          {activeTab === 'measurement-settings' && <MeasurementSettingsView settings={settings} saveSettings={saveSettings} comboPresets={settings?.comboPresets || []} templates={templates} />}
          {activeTab === 'templates' && <TemplatesView onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel} editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
          </div>
        </main>
        
+       {/* 🔄 P104 共通テンプレを保存した直後に出る差分パネル。⚠開いただけでは何も書かない。targets が空になったら閉じる。 */}
+       {tplSync && tplSync.targets.length > 0 && (
+         <TemplateSyncPanel
+           templateName={tplSync.templateName}
+           baseSteps={tplSync.baseSteps}
+           targets={tplSync.targets.map(t => ({ ...t, doc: findModelTemplate(modelTemplates, t.model, t.templateId) || t.doc }))}
+           onApply={applyTemplateSync}
+           onClose={() => setTplSync(null)}
+         />
+       )}
+       {/* 📋 P130 品目コード専用テンプレの編集(品目マスタの「編集」から直接開く)。保存は model_templates へ = 共通の工程テンプレートは変わらない。 */}
+       {modelTplEditing && (() => {
+         const baseTpl = (templates || []).find(t => t.id === modelTplEditing.templateId);
+         const mtDoc = findModelTemplate(modelTemplates, modelTplEditing.model, modelTplEditing.templateId);
+         const tplForEdit = mtDoc
+           ? { id: modelTplEditing.templateId, name: baseTpl?.name || mtDoc.baseName || '', steps: Array.isArray(mtDoc.steps) ? mtDoc.steps : [], overview: mtDoc.overview || null }
+           : (baseTpl ? JSON.parse(JSON.stringify(baseTpl)) : null);
+         if (!tplForEdit) return null;
+         return (
+           <div className="fixed inset-0 z-50 bg-gray-50 overflow-y-auto">
+             <TemplateEditor
+               template={tplForEdit}
+               scopeLabel={`品目コード ${modelTplEditing.model} 専用`}
+               initialEditStepId={modelTplEditing.stepId || null}
+               onSave={(data) => handleSaveModelTemplate(modelTplEditing.model, modelTplEditing.templateId, data)}
+               onCancel={() => setModelTplEditing(null)}
+               customLayouts={settings?.customLayouts || {}}
+               onSaveLayouts={(layouts, deadKey) => saveSettings({ customLayouts: layouts, ...(deadKey ? { __deleteMapKeys: [['customLayouts', deadKey]] } : {}) })}
+               comboPresets={settings?.comboPresets || []}
+               builtInOverrides={settings?.builtInOverrides || {}}
+               hiddenBuiltIns={settings?.hiddenBuiltIns || []}
+               currentUserName={currentUserName}
+             />
+           </div>
+         );
+       })()}
+       {/* 📅 P106 品目マスタの日数を打ち替えた → 検査リストの関係するロットも直す */}
+       <MasterPropagateBusy text={masterPropagateSaving} />
+       <MasterPropagateModal plan={masterPropagate} onApply={applyMasterPropagate} onClose={() => setMasterPropagate(null)} />
        {/* Note Modal */}
        {/* Indirect Work Modal */}
        {showIndirectModal && <IndirectWorkModal

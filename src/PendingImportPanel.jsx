@@ -17,10 +17,10 @@ const PendingImportPanel = ({ settings = {}, onRegisterPending = null, onRemoveP
   const pend = settings && settings.progressImportPending;
   const rows = useMemo(() => (pend && Array.isArray(pend.rows) ? pend.rows : []), [pend]);
   const groups = useMemo(() => pendingGroupsOf(rows, {
-    modelMasters: {},
+    modelMasters: settings.modelMasters || {}, // P064 品目マスタに登録してテンプレを割り当てても「登録できる」になる
     qualityStandards: settings.qualityStandards || {},
     modelStandardMap: settings.modelStandardMap || {},
-  }), [rows, settings.qualityStandards, settings.modelStandardMap]);
+  }), [rows, settings.modelMasters, settings.qualityStandards, settings.modelStandardMap]);
   if (!groups.length) return null;
   return (
     <div data-parts-import-pending={rows.length} className="rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
@@ -39,7 +39,7 @@ const PendingImportPanel = ({ settings = {}, onRegisterPending = null, onRemoveP
               <div className="min-w-0 flex-1">
                 <div className="font-mono font-bold text-slate-800 truncate">{g.model}{name ? <span className="font-sans font-normal text-xs text-slate-600 ml-1">{name}</span> : null} <span className="font-sans font-normal text-xs text-slate-500">{g.rows.length}行 / {g.orders}指図</span></div>
                 <div className="text-xs text-slate-500 truncate">{g.rows.slice(0, 4).map((r) => r.orderNo).join('・')}{g.rows.length > 4 ? ' …' : ''}</div>
-                <div className="text-xs font-bold">{g.ready ? <span className="text-emerald-700">✓ 規格(テンプレ)割当済み — 登録できます</span> : <span className="text-rose-700">品質規格マスタに紐付けが無い</span>}</div>
+                <div className="text-xs font-bold">{g.ready ? <span className="text-emerald-700">✓ 規格(テンプレ)割当済み — 登録できます</span> : <span className="text-rose-700">品目マスタ・品質規格マスタに紐付けが無い</span>}</div>
               </div>
               {g.ready && typeof onRegisterPending === 'function'
                 ? <button type="button" onClick={() => onRegisterPending(g.model)} className="min-h-11 px-3 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold shadow">検査リストへ登録</button>

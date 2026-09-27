@@ -54,6 +54,7 @@ export const COLLECTION_AREA = Object.freeze({
   workers: 'inspection',
   worker_settings: 'inspection',
   templates: 'inspection',
+  model_templates: 'inspection', // P130 品目コード専用テンプレ(製品の型式専用テンプレと同じ形・部品の名前空間の中)
   target_time_history: 'inspection',
   notes: 'inspection',
   announcements: 'inspection',
@@ -134,6 +135,7 @@ export const COLLECTION_APPS = Object.freeze({
   workers: ['final', 'product', 'parts', 'overview'],
   worker_settings: ['final'],
   templates: ['product', 'parts', 'overview'],
+  model_templates: ['product', 'parts'],
   target_time_history: ['final', 'overview'],
   notes: ['final', 'product', 'parts', 'overview'],
   announcements: ['final', 'product', 'parts', 'overview'],
