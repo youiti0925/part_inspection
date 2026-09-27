@@ -109,6 +109,7 @@ import {
   PDCA_KPIS, PDCA_MIN_N, PDCA_THRESHOLD_PCT, PDCA_STALE_DAYS,
   pdcaWindowDays, pdcaKpiValue, computeVerdict
 } from './domain/goal/verdictEngine.js';
+import { SjhGuide, sjhInsert } from './SjhGuide.jsx';
 // ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
@@ -11081,7 +11082,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-slate-500 mb-1">詳細内容</label>
-                        <textarea className="w-full border rounded-lg p-2" rows={3} placeholder="不良の内容を入力（工程改善の提案は「気づき・改善」へ）..." value={complaintLabel} onChange={e=>setComplaintLabel(e.target.value)}/>
+                        <textarea className="w-full border rounded-lg p-2" rows={4} placeholder="状況: 何があったか / 対処: どうしたか / 判断: 最後どうなったか（工程改善の提案は「気づき・改善」へ）" value={complaintLabel} onChange={e=>setComplaintLabel(e.target.value)}/>
+                        <SjhGuide onInsert={() => setComplaintLabel(v => sjhInsert(v))} />
                       </div>
                     </div>
                     <div className="mt-4 p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-500">
