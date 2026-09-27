@@ -9875,7 +9875,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           } else if (isCancelCmd && isCancelCmd(cmd)) {
             // 取り消し (直近操作のundo窓内のみ実効)
             // 🖐 音声の輪は始めた時の写しを持ち続けるので、とうに消えた取り消しの控えで tasks を巻き戻していた → 最新を読む(製品 fb4a1bc)
-            const lu = voiceLatestRef.current;
+            const lu = voiceLatestRef.current || {};
             if ('pendingUndo' in lu ? lu.pendingUndo : pendingUndo) { (lu.handleUndo || handleUndo)(); await speakAsyncWithLog('取り消しました'); }
             else await speakAsyncWithLog('取り消せる操作がありません');
           }
