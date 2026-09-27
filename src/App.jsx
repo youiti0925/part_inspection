@@ -136,6 +136,11 @@ import {
   usageDayKey, ensureDeviceId, shouldSend as shouldSendUsage, buildUsageDoc,
 } from './domain/usageRollup.js';
 import { quotaWindowKey } from './domain/readBudget.js';
+// 🧮 P-L1・P-L2(2026-09-27 製品と同じ直し): 課金の見込みを数える別の帳面(画面には出さない。usage_daily の est / full にだけ載せる)
+import {
+  EST_LOG_KEY, PREV_LOG_KEY, BOOT_WINDOW_MS, pathColName, emptyEstDelta, estDeltaAdd, estDeltaEmpty, mergeEstDelta,
+  pushPrevLog, nextPrevToSend, markPrevSent, estSummary, buildPrevUsageDoc, listenerEstimate, oneShotEstimate, isLongGap,
+} from './domain/readEstimate.js';
 const USAGE_SEND_DELAY_MS = 90000;
 // 💾 「保存してから画面を閉じてよいか」(2026-08-17 の是正。製品検査と同一ファイル)
 import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './domain/settleSave.js';
@@ -216,6 +221,215 @@ import {
   pausedSummaryLabel, pausedSinceLabel,
 } from './domain/workerPause.js';
 const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDocsFromServer, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
+
+// ============================================================================
+// 🧮 P-L1・P-L2(2026-09-27 製品 App.jsx の EST と同じ直し): 課金の見込みの帳面(**画面には出さない**)
+// ----------------------------------------------------------------------------
+// 画面の読みメーター(countReads → readTally・「📖 読み取り」の窓)は1つも変えない。こちらは usage_daily の est / full にだけ載せる。
+// 数え方(中身は src/domain/readEstimate.js・製品と1バイト同じ・試験あり):
+//   ・つながり直し … 30分未満なら docChanges(変わった書類)だけ。30分以上(眠っていた・切れていた)なら
+//     その時に張っている購読を **全部**(includeMetadataChanges の無い購読も)全件と数える(Firestore の決まり)。
+//     眠っていたかは1分ごとの時計の飛び(タイマーが止まっていた長さ)で見る。
+//   ・開いた時 … この端末が30分以内に誰も開いていなければ全件、開いていれば控えの続き(変わった分)。
+//     開いてから2分より後に張った購読は全件(控えの続きか分からないので多い側)。
+//   ・getDocs / getDocsFromServer / getDoc / REST も数える(0件でも1件)。
+//   ・名前は置き場所ごと('parts-inspection-v1/lots' など)。
+//   ・帳面は足し算で書く(タブ同士で消し合わない)。日が変わったら前の日を締めて取っておき、送り直す。
+// ⚠ 部品の画面の帳面は置き場所ごとの購読の中で数えている(製品のような Firestore の覆いは無い)。
+//   なのでこちらは **FS_API に数えるだけの覆い(FS_EST)を着せ、窓口(DATA)へはそれを渡す**。
+//   覆いは同じ Firestore の関数を同じ引数で呼ぶだけ(読む中身・失敗の投げ方・外し方は今までと同じ)。
+// ⚠ 数えるために通信しない。数える所で例外を外へ出さない(画面を壊さない)。
+// ============================================================================
+/** 🧮 P-L2: 日が変わって作り直す直前の(前の日の)画面の帳面。締まった日の送り直しに「今までの数え方の値」として添える(比べる為・覚えるだけ)。 */
+let _oldPrevTally = null;
+/** 画面の帳面の day(枠が戻る日 = quotaDayKeyOf・UTC の日付)を、推定の帳面の key(米国西部の今日 = quotaWindowKey)へ直す。
+ *  枠が戻るのは米国西部の0時 = UTC では同じ暦の日の 07:00/08:00 なので、枠が戻る日の1日前が米国西部の「その日」。 */
+const tallyDayToWindowKey = (day) => {
+  try {
+    const t = Date.parse(`${day}T00:00:00Z`);
+    return Number.isFinite(t) ? new Date(t - 86400000).toISOString().slice(0, 10) : null;
+  } catch { return null; }
+};
+/** 締まった推定の日(key)と同じ日の画面の帳面を、pushPrevLog が受け取る形にする。
+ *  ⚠ 部品の画面の帳面は開いた回数を数えていない(opens は持たない = 送り直しの old.opens は 0 になるが「数えていない」の意味)。 */
+const oldTallyFor = (key) => {
+  const cands = [_oldPrevTally, EST.tallyNow ? EST.tallyNow() : null];
+  for (const t of cands) {
+    if (t && typeof t.day === 'string' && tallyDayToWindowKey(t.day) === key) return { key, total: t.total, byCol: t.byCol || {} };
+  }
+  return null;
+};
+const EST = {
+  started: false, bootAt: 0, bootLong: true, openKey: null,
+  delta: emptyEstDelta(), timer: null, aliveAt: 0, persistedAt: 0,
+  offlineSince: null, lastBillAt: 0, subs: new Set(), onPrev: null, lastLog: null,
+  tallyNow: null,   // 画面の帳面(readTallyRef)を覗く口。App が付ける(読むだけ)
+};
+const estStart = () => {
+  if (EST.started) return;
+  EST.started = true;
+  const now = Date.now();
+  EST.bootAt = now;
+  EST.openKey = usageDayKey(now);
+  let stored = null;
+  try { stored = JSON.parse(window.localStorage.getItem(EST_LOG_KEY) || 'null'); } catch { stored = null; }
+  const lastAlive = stored && typeof stored.aliveAt === 'number' ? stored.aliveAt : 0;
+  // この端末で30分以内に誰も開いていなければ、控えの続きからは再開できない(= 開いた時の購読は全件)
+  EST.bootLong = !lastAlive || isLongGap(lastAlive, now);
+  EST.aliveAt = now;
+  try { setInterval(estTick, 60000); } catch { /* 時計が無くても数え以外は動く */ }
+};
+/** 帳面へ書く(足し算)。日が変わっていたら前の日を締めて並びへ入れる。 */
+const estFlushNow = () => {
+  try {
+    const now = Date.now();
+    let stored = null;
+    try { stored = JSON.parse(window.localStorage.getItem(EST_LOG_KEY) || 'null'); } catch { stored = null; }
+    const { log, prev } = mergeEstDelta(stored, { ...EST.delta, aliveAt: EST.aliveAt || null }, now, { openKey: EST.openKey });
+    EST.delta = emptyEstDelta();
+    EST.lastLog = log;
+    try { window.localStorage.setItem(EST_LOG_KEY, JSON.stringify(log)); EST.persistedAt = now; } catch { /* 書けない端末は数えないだけ */ }
+    if (prev) {
+      // 今までの数え方(画面の帳面)の、同じ日の締めの値(比べる為)。
+      const oldFor = oldTallyFor(prev.key);
+      try {
+        const list = JSON.parse(window.localStorage.getItem(PREV_LOG_KEY) || '[]');
+        window.localStorage.setItem(PREV_LOG_KEY, JSON.stringify(pushPrevLog(list, prev, oldFor)));
+      } catch { /* noop */ }
+      try { if (EST.onPrev) EST.onPrev(); } catch { /* noop */ }
+    }
+  } catch { /* 数えるためだけ。画面を壊さない */ }
+  return EST.lastLog;
+};
+const estFlushSoon = () => {
+  if (EST.timer) return;
+  EST.timer = setTimeout(() => { EST.timer = null; estFlushNow(); }, 500);
+};
+/** 30分以上の空白: いま張っている購読を全部、全件として数える(Firestore は新しい問い合わせとして読み直す)。 */
+const estBillAll = (now, gapMs) => {
+  for (const s of EST.subs) {
+    if (s.first) { s.fresh = true; continue; }   // まだ1回も届いていない購読は、届いた時に全件で数える
+    EST.delta = estDeltaAdd(EST.delta, s.name, Math.max(1, s.size || 0));
+    s.skip = true;                               // 次のサーバの合図は数えない(二重に数えない)
+  }
+  EST.delta = { ...EST.delta, long: EST.delta.long + 1, longGapsMin: [...EST.delta.longGapsMin, Math.round(gapMs / 60000)] };
+  EST.lastBillAt = now;
+  estFlushSoon();
+};
+/** 時計の飛びを見る(眠っていた・タブが凍っていた)。 */
+const estAlive = (now) => {
+  if (EST.aliveAt && isLongGap(EST.aliveAt, now)) estBillAll(now, now - EST.aliveAt);
+  EST.aliveAt = now;
+};
+function estTick() {
+  try {
+    const now = Date.now();
+    estAlive(now);
+    // 生きている印は5分に1回だけ書く(他のタブ・次に開いた時が「30分以内に開いていたか」を見る)
+    if (!estDeltaEmpty(EST.delta) || now - EST.persistedAt >= 5 * 60000) estFlushNow();
+  } catch { /* noop */ }
+}
+const estRead = (name, n) => {
+  try { estStart(); estAlive(Date.now()); EST.delta = estDeltaAdd(EST.delta, name, n); estFlushSoon(); } catch { /* noop */ }
+};
+const estNoteOpen = () => {
+  try { estStart(); EST.delta = { ...EST.delta, opens: EST.delta.opens + 1 }; estFlushSoon(); } catch { /* noop */ }
+};
+/** REST(項目を選ぶ読み)の件数を足す。0件でも1件。 */
+const estCountRest = (name, rows) => estRead(name, oneShotEstimate(rows));
+const estSubStart = (name, meta) => {
+  try {
+    estStart();
+    const now = Date.now();
+    // 開いた時(2分以内)に張った購読で、この端末が30分以内に開いていた時だけ「控えの続きから再開」とみなす
+    const fresh = EST.bootLong || (now - EST.bootAt > BOOT_WINDOW_MS);
+    const sub = { name, meta: !!meta, first: true, fresh, size: 0, skip: false, wasCache: false };
+    EST.subs.add(sub);
+    return sub;
+  } catch { return null; }
+};
+const estSubEnd = (sub) => { try { if (sub) EST.subs.delete(sub); } catch { /* noop */ } };
+const estOnSnapshot = (sub, snap) => {
+  if (!sub) return;
+  try {
+    const now = Date.now();
+    estAlive(now);
+    const fromCache = !!(snap && snap.metadata && snap.metadata.fromCache);
+    const isQuery = !!(snap && typeof snap.docChanges === 'function');
+    const size = isQuery ? (snap.size || (snap.docs ? snap.docs.length : 0)) : 1;
+    const changes = fromCache ? 0 : (isQuery ? snap.docChanges().length : 1);
+    // 切れて戻った合図は includeMetadataChanges の付いた購読にだけ届く(SDK の決まり)。これで空白の長さを測る。
+    if (sub.meta && !sub.first) {
+      if (fromCache) {
+        if (EST.offlineSince == null) EST.offlineSince = now;
+        sub.wasCache = true;
+      } else if (sub.wasCache) {
+        sub.wasCache = false;
+        if (EST.offlineSince != null) {
+          const since = EST.offlineSince;
+          const gap = now - since;
+          EST.offlineSince = null;
+          // 眠っていた分を時計の飛びで既に全件と数えていれば(この空白の始まり頃より後に数えた)、二重に数えない
+          const billedDuring = EST.lastBillAt >= since - 60000;
+          if (isLongGap(0, gap)) { if (!billedDuring) estBillAll(now, gap); }
+          else if (!billedDuring) EST.delta = { ...EST.delta, short: EST.delta.short + 1 };
+        }
+      }
+    }
+    const r = listenerEstimate({ first: sub.first, fresh: sub.fresh, fromCache, size, changes, skip: sub.skip });
+    sub.first = false;
+    sub.skip = r.skipNext;
+    sub.size = size;
+    if (r.add > 0) EST.delta = estDeltaAdd(EST.delta, sub.name, r.add);
+    estFlushSoon();
+  } catch { /* 数えるためだけ。画面を壊さない */ }
+};
+/** 参照/クエリ → 置き場所ごとの名前(課金の見込みの帳面だけが使う)。 */
+const _estPath = new WeakMap();
+const tagEstPath = (r, name) => { try { if (r && typeof r === 'object') _estPath.set(r, name); } catch { /* noop */ } return r; };
+const estPathOf = (r) => { try { return _estPath.get(r) || '(不明)'; } catch { return '(不明)'; } };
+/** 数えるだけの覆い。⚠呼ぶ Firestore の関数・引数・戻り値・投げる失敗は今までと同じ。 */
+const estMeter = (api) => {
+  const out = { ...api };
+  const SNAP = 'onSnapshot', DOCS = 'getDocs', ONE = 'getDoc';   // 窓口の見張り(routes R19)は「直に呼ぶ」字を探す。覆いは窓口の一部なので名前で引く(製品の meterReads と同じ書き方)
+  out.collection = (...a) => tagEstPath(api.collection(...a), pathColName(a.slice(1), false));
+  out.doc = (...a) => tagEstPath(api.doc(...a), pathColName(a.slice(1), true));
+  out.query = (base, ...cons) => tagEstPath(api.query(base, ...cons), estPathOf(base));
+  out[SNAP] = (ref, ...rest) => {
+    // Firestore は (ref, next[, onError]) と (ref, options, next[, onError]) の2通り。
+    const hasOpts = rest.length > 0 && typeof rest[0] === 'object' && rest[0] !== null && typeof rest[0] !== 'function';
+    const next = hasOpts ? rest[1] : rest[0];
+    const onErr = hasOpts ? rest[2] : rest[1];
+    const estSub = estSubStart(estPathOf(ref), !!(hasOpts && rest[0] && rest[0].includeMetadataChanges));
+    const counted = (snap) => { estOnSnapshot(estSub, snap); return next(snap); };
+    // ⚠エラー用の関数は **渡された時だけ** 着ける(渡されていない時の Firestore の動きを変えない)。
+    const errArgs = typeof onErr === 'function' ? [(e) => { estSubEnd(estSub); return onErr(e); }] : [];
+    const unsub = hasOpts ? api[SNAP](ref, rest[0], counted, ...errArgs) : api[SNAP](ref, counted, ...errArgs);
+    // 🧮 外した購読は数えない。⚠外す動きそのものは今までと同じ(同じ関数を呼ぶだけ)。
+    return () => { estSubEnd(estSub); return unsub(); };
+  };
+  const sizeOf = (s) => (s ? (s.size || (s.docs ? s.docs.length : 0)) : 0);
+  out[DOCS] = async (q) => {
+    const s = await api[DOCS](q);
+    try { if (!(s && s.metadata && s.metadata.fromCache)) estRead(estPathOf(q), oneShotEstimate(sizeOf(s))); } catch { /* noop */ }
+    return s;
+  };
+  out[ONE] = async (ref) => {
+    const s = await api[ONE](ref);
+    try { if (!(s && s.metadata && s.metadata.fromCache)) estRead(estPathOf(ref), 1); } catch { /* noop */ }
+    return s;
+  };
+  if (typeof api.getDocsFromServer === 'function') {
+    out.getDocsFromServer = async (q) => {
+      const s = await api.getDocsFromServer(q);
+      try { if (!(s && s.metadata && s.metadata.fromCache)) estRead(estPathOf(q), oneShotEstimate(sizeOf(s))); } catch { /* noop */ }
+      return s;
+    };
+  }
+  return out;
+};
+/** 窓口へ渡すのはこちら(数えるだけの覆いを着せた物)。⚠鍵の一覧は FS_API と同じ。 */
+const FS_EST = estMeter(FS_API);
 // ---- どの保管庫へ書くか(切替の入口・製品 App.jsx:222-261 と同じ形) ----
 // ⚠ 既定は必ず Firebase。保存された行き先に enabled === true と接続先がはっきり入っている時だけ切り替わる。
 let _routeProviders = DEFAULT_PROVIDERS;
@@ -245,7 +459,7 @@ const ensureDataRoute = () => {
     if (saved && saved.enabled === true && saved.url) applyDataRoute(saved);
   } catch { /* 読めなければ Firebase のまま(安全側) */ }
 };
-const DATA = (db) => { ensureDataRoute(); return providerFor(db, FS_API, _routeProviders, _routePbConfig); };
+const DATA = (db) => { ensureDataRoute(); return providerFor(db, FS_EST, _routeProviders, _routePbConfig); };   // 🧮 P-L1: 数えるだけの覆い(FS_EST)
 import {
   getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject
 } from "firebase/storage";
@@ -31863,6 +32077,8 @@ const INITIAL_READ_TALLY = (() => {
     const raw = localStorage.getItem(READ_TALLY_STORAGE_KEY);
     const t = raw ? JSON.parse(raw) : null;
     if (t && t.day === day && typeof t.total === 'number') return t;
+    // 🧮 P-L2: 前の日の帳面は画面では捨てる(今までどおり)。締まった日の送り直しに添える為だけに覚えておく。
+    if (t && typeof t.day === 'string' && typeof t.total === 'number') _oldPrevTally = t;
   } catch { /* シークレットモード等で読めなくても本業は止めない */ }
   return emptyTally(day);
 })();
@@ -31955,7 +32171,10 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    const countReads = useCallback((col, n, opts = {}) => {
      const add = Math.max(0, Math.round(Number(n) || 0));
      if (add <= 0 && !opts.attach) return;
-     readTallyRef.current = tallyAdd(readTallyRef.current, quotaDayKeyOf(Date.now()), col, add, { ...opts, at: opts.at ?? Date.now() });
+     const dayNow = quotaDayKeyOf(Date.now());
+     // 🧮 P-L2: 日が変わって作り直す直前の帳面を覚える(締まった日の送り直しに添える為だけ。画面の帳面の動きは同じ)
+     { const cur = readTallyRef.current; if (cur && cur.day !== dayNow && typeof cur.day === 'string') _oldPrevTally = cur; }
+     readTallyRef.current = tallyAdd(readTallyRef.current, dayNow, col, add, { ...opts, at: opts.at ?? Date.now() });
      readTallyDirtyRef.current = true;
    }, []);
    useEffect(() => {
@@ -31976,8 +32195,49 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
   useEffect(() => {
     if (!user || !db) return;
     let dead = false;
+    // ==========================================================================
+    // 🧮 P-L2(2026-09-27 製品と同じ直し): 締まった前の日(昼の分まで入った1日ぶん)を、その日の同じ書類(<日>__<端末>)へ送り直す。
+    //   今までは「開いて90秒後の写し」しか送らず、そのあと読んだ分は日が変わると帳面ごと捨てていた。
+    //   ⚠ 書くのは入れ子の `full` だけ(merge:true)。上の段(reads・byCol …)は1つも書かない
+    //     = ③の使用量の画面に出る数字は変わらない(写しが無い日の書類は dayKey が無いので③は読まない)。
+    //   ⚠ 書き込みは 1端末1日 +1回(送れなかった日が溜まっていたら1分あけて1日ずつ)。
+    //   ⚠⚠(製品の反証4・知らせるだけ・③の画面は別件で承認待ち)
+    //     ・③の使用量の画面の注意文「使用量を送る事自体が、この日 N回の書き込み(1端末・1アプリ・1日で1回)」
+    //       (factory-overview-app/src/domain/usageRollup.js)は、この送り直しを数えていない = 実際の書き込みは **最大その2倍**。画面の数字は同じ。
+    //     ・写しを送っていない日(埋め込みの端末も含む)は、full だけの書類(dayKey が無い)ができる。
+    //       ③には出ないが、usage_daily を手元で全部落として調べる時は **形の違う行が混ざる**(dayKey の無い行は full だけを見る事)。
+    //   ⚠ 書きに行く前に「送った」と覚える(枠切れで書き込みが永久に返らない時に、開くたびに書き込みを重ねない)。
+    // ==========================================================================
+    let prevTimer = null;
+    const sendPrevUsage = () => {
+      prevTimer = null;
+      if (dead) return;
+      try {
+        const ls = window.localStorage;
+        const deviceId = ensureDeviceId((k) => ls.getItem(k), (k, v) => ls.setItem(k, v));
+        if (!deviceId) return;
+        estFlushNow();   // 日が変わっていれば、ここで前の日が締まって並びに入る
+        let list = [];
+        try { list = JSON.parse(ls.getItem(PREV_LOG_KEY) || '[]'); } catch { list = []; }
+        const prev = nextPrevToSend(list, usageDayKey(Date.now()));
+        if (!prev) return;
+        const built = buildPrevUsageDoc({ appId: APP_DATA_ID, deviceId, prev, nowMs: Date.now() });
+        try { ls.setItem(PREV_LOG_KEY, JSON.stringify(markPrevSent(list, prev.key, true))); } catch { return; }
+        if (!built) return;   // 送れない形の物は「送った」にして進める(同じ物で止まり続けない)
+        DATA(db).save(APP_DATA_ID, USAGE_COL, built.docId, built.data, { merge: true })
+          .then(() => { if (!dead) schedulePrevUsage(60000); })   // まだ残っていれば1分あけて次の1日
+          .catch(() => {
+            try { const l2 = JSON.parse(ls.getItem(PREV_LOG_KEY) || '[]'); ls.setItem(PREV_LOG_KEY, JSON.stringify(markPrevSent(l2, prev.key, false))); } catch { /* noop */ }
+          });
+      } catch { /* 🚨黙って諦める。現場の作業を止めない */ }
+    };
+    const schedulePrevUsage = (ms) => { if (prevTimer || dead) return; prevTimer = setTimeout(sendPrevUsage, ms); };
+    // 開いたまま日が変わった時(帳面が締まった時)も送る。端末ごとに待ちをずらす。
+    const onPrevClosed = () => schedulePrevUsage(30000 + Math.floor(Math.random() * 60000));
+    EST.onPrev = onPrevClosed;
     const timer = setTimeout(() => {
       if (dead) return;
+      schedulePrevUsage(15000);   // 🧮 前に締まって まだ送れていない日があれば(写しの15秒後)
       try {
         const now = Date.now();
         const ls = window.localStorage;
@@ -31992,12 +32252,25 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
         const built = buildUsageDoc({ appId: APP_DATA_ID, deviceId, readLog: snap, writeLog: null, nowMs: now });
         if (!built) return;
         try { ls.setItem(USAGE_LAST_SENT_KEY, built.data.dayKey); } catch { return; }
-        DATA(db).save(APP_DATA_ID, USAGE_COL, built.docId, built.data, { merge: false })
+        // 🧮 P-L1・P-L2: 同じ写しに「課金の見込み」(est)を添える。⚠上の段の数字(reads・byCol)は今までと同じ物。
+        //   ③の使用量の画面は上の段しか読まないので、画面に出る数字は変わらない。同じ日の帳面の時だけ添える。
+        let data = built.data;
+        try {
+          const estLog = estFlushNow();
+          if (estLog && estLog.key === built.data.dayKey) data = { ...built.data, est: estSummary(estLog) };
+        } catch { data = built.data; }
+        DATA(db).save(APP_DATA_ID, USAGE_COL, built.docId, data, { merge: false })
           .catch(() => { try { ls.removeItem(USAGE_LAST_SENT_KEY); } catch { /* noop */ } });
       } catch { /* 黙って諦める。現場の作業を止めない */ }
     }, USAGE_SEND_DELAY_MS);
-    return () => { dead = true; clearTimeout(timer); };
+    return () => {
+      dead = true; clearTimeout(timer);
+      if (prevTimer) { clearTimeout(prevTimer); prevTimer = null; }
+      if (EST.onPrev === onPrevClosed) EST.onPrev = null;
+    };
   }, [user, db]);
+  // 🧮 P-L2: 推定の帳面が日を締めた時に、同じ日の画面の帳面(今までの数え方)を覗けるようにする(読むだけ・画面は変えない)
+  useEffect(() => { EST.tallyNow = () => readTallyRef.current; return () => { EST.tallyNow = null; }; }, []);
 
   // 🚨 枠切れ(429)。**自動で何度も読みに行かない**(枠を更に食う)。人が押すまで止めたままにする。
    const [quotaBlock, setQuotaBlock] = useState(null); // { at, until, cols: string[] }
@@ -32740,6 +33013,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      const P = DATA(db);
      // 🚨 枠切れの後、この effect が張り直されても **もう読みに行かない**(枠を更に食う)。
      if (quotaBlockRef.current) return;
+     // 🧮 P-L1: 課金の見込みの帳面に「開いた回数」を1つ足す(画面の帳面は今までどおり開いた回数を数えない。通信は起きない)
+     estNoteOpen();
      const firstSeen = new Set();
      // 🚨 枠切れの時に、張った購読を **その場で全部止める** ための受け皿。
      //   ⚠止めないと Firestore が裏で繋ぎ直し続け、枠が戻った瞬間にまた全部読む。
@@ -35370,6 +35645,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          const r = await DATA(db).getPageFields(OPSIM_SHELF_NS, 'plan_versions',
            ['app', 'revision', 'id', 'committedAt', 'committedBy', 'parentId', 'chunkCount', 'evidence.version'],
            { where: [['app', '==', 'parts']], getToken: async () => { const u = getAuth().currentUser; return u ? u.getIdToken() : ''; } });
+         // 🧮 P-L2: REST(項目を選ぶ読み)で読めた件数も課金の見込みの帳面に数える(全件読みへ落ちた時は getDocs が数える)
+         if (r && r.projected) estCountRest(`${OPSIM_SHELF_NS}/plan_versions`, (r.rows || []).length);
          return r.rows;
        },
        commitVersion: (args) => DATA(db).commitVersion(OPSIM_SHELF_NS, { headCol: 'plan_control', headId: 'parts', versionCol: 'plan_versions', ...args }),

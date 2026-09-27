@@ -268,6 +268,10 @@ const PAIRS = [
   { file: 'KnowledgeCourses.jsx', product: 'product-inspection-app/src/KnowledgeCourses.jsx', md5: '4c79dbce66ef2a6324aa0fbcb9d1a129' },
   // 試験の写し(2026-09-27): completeSplit の試験は1バイト同じ。completeWindowOpen は読み先だけ部品向け(ContactHub.jsx)なので対に入れない
   { file: 'domain/__tests__/completeSplit.test.mjs', product: 'product-inspection-app/src/domain/__tests__/completeSplit.test.mjs', md5: '83be3d97ee446097186d9d97d5ecaf16' },
+  // 2026-09-27 P-L1・P-L2: 課金の見込みの帳面(画面に出さない・usage_daily の est / full だけ)。純関数と試験は1バイト同じ
+  //   (読むのは readBudget の quotaWindowKey だけ=部品の readBudget にも製品と同じ中身で在る)
+  { file: 'domain/readEstimate.js', product: 'product-inspection-app/src/domain/readEstimate.js', md5: '7aba927b9ffa88d9e93dd2ec512c202e' },
+  { file: 'domain/__tests__/readEstimate.test.mjs', product: 'product-inspection-app/src/domain/__tests__/readEstimate.test.mjs', md5: '4948bcb98251deeb9617e7de75bb03d2' },
 ];
 
 for (const p of PAIRS) {
