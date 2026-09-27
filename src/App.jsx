@@ -125,6 +125,7 @@ import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStar
 //   この部品検査アプリは **読むだけ**(登録する画面は製品検査/最終検査にある)。
 import { isWorkdayYmd } from './domain/factoryCalendar.js';
 import { dueMsOfLot, bucketOfDue } from './domain/dueDefense.js';
+import LotDuplicatesPanel from './LotDuplicatesPanel.jsx';
 import { LOT_PRIORITY_CHOICES, normalizeLotPriority, priorityLabelOf, priorityFromImportText, priorityBadgeOf, priorityFilterStyleOf } from './domain/lotPriority.js';
 // 🛌 作業者の休止/復帰(2026-08-31 清水さんの要望)。消すのではなく一旦しまう。復帰したら元どおり。
 //   🚨 使ってよいのは「これから割り当てる先」を絞る所だけ。
@@ -22815,6 +22816,9 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          {/* 🏷 品目名簿 (品目コード → 品名)。品質規格マスタより先に置く:
              品目コードに名前が付いていないと、その下の規格マッピングが読めないため。 */}
          <ItemMasterPanel lots={lots} itemMaster={settings.itemMaster || {}} saveSettings={saveSettings} />
+
+         {/* 🧯 重複ロット(同じ指図×品目コード×テンプレの未完了)。記録の無い方だけ消す口(P071・製品と同じ判定) */}
+         <LotDuplicatesPanel lots={lots} templates={templates} deleteData={deleteData} />
 
          {/* 品質規格マスタ (新方式: 品目コード → 品質規格 → 公差/測定条件) */}
          <div data-qs-panel>
