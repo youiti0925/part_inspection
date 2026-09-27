@@ -104,7 +104,7 @@ test('UD4 🚨 札の名前・順番・押した時の行き先が1つも変わ�
     '改善PDCA（重点工程→対策→効果）', 'AI洞察・乖離アラート',
     '目標時間・厳密モードへ',
     '作業者評価', '直間分析',
-    '月次レポート', '点検・バックアップ', 'データ書き出し',
+    '月次レポート', '点検・バックアップ', 'データ書き出し', '分割測定結果',
   ], '小分類の札の名前か順番が変わっている');
   assert.deepEqual(keys, [
     'anomaly',
@@ -112,7 +112,7 @@ test('UD4 🚨 札の名前・順番・押した時の行き先が1つも変わ�
     'pdca', 'improvement',
     'standardize',
     'worker-eval', 'direct-indirect',
-    'monthly', 'audit', 'export',
+    'monthly', 'audit', 'export', 'rotary',
   ], '札を押した時の行き先が変わっている');
   // 親タブ(分析 | 作業最適化)も同じく
   const t = app.indexOf('const TAB_GROUPS = {');
