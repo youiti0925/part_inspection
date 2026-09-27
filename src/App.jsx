@@ -113,6 +113,9 @@ import { SjhGuide } from './SjhGuide.jsx';
 // 中断(不具合・軽微不良・気づき)は1件ずつ鍵つきで書く(製品と同じ純関数)
 import { intKeyOf, withInterruptionLog, intWritePatch, intDeletePatch, stopIntEntry, mergePendingInts, dropSettledPending } from './domain/interruptionLog.js';
 import { sjhInsert } from './sjhText.js';
+import ReworkKindEditor from './ReworkKindEditor.jsx';
+import { UNKNOWN_KIND, UNKNOWN_CAUSE } from './domain/reworkAnalysis.js';
+import { DEFAULT_REWORK_KIND_OPTIONS } from './reworkKinds.js';
 // ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
@@ -22058,6 +22061,15 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
   const [localZones, setLocalZones] = useState(mapZones || INITIAL_MAP_ZONES);
   const [localBreakAlerts, setLocalBreakAlerts] = useState(settings?.breakAlerts || []);
   const [complaintOptionsText, setComplaintOptionsText] = useState((settings?.complaintOptions || DEFAULT_COMPLAINT_OPTIONS).join('\n'));
+  // 🔁 不良項目ごとの「種別」(やり直しの分析で使う)。⚠決めるのは現場。既定は必ず「未分類」で、中身から推測して付けない。
+  const [localComplaintKinds, setLocalComplaintKinds] = useState(settings?.complaintKinds || {});
+  // 設定が後から届いた/他端末で変わった時は手元を合わせる(描画中に前の値と比べる形・effect で setState しない)
+  const [kindsSrc, setKindsSrc] = useState(settings?.complaintKinds);
+  if (kindsSrc !== settings?.complaintKinds) { setKindsSrc(settings?.complaintKinds); setLocalComplaintKinds(settings?.complaintKinds || {}); }
+  // 🔁 種別として選べる言葉(語彙)。「未分類」は reworkKindOptions が必ず最後に付ける。
+  const [reworkKindOptionsText, setReworkKindOptionsText] = useState(
+    (Array.isArray(settings?.reworkKindOptions) && settings.reworkKindOptions.length ? settings.reworkKindOptions : DEFAULT_REWORK_KIND_OPTIONS).join('\n')
+  );
   const [localComboPresets, setLocalComboPresets] = useState(settings?.comboPresets || []);
   const [expandedPresetId, setExpandedPresetId] = useState(null);
 
@@ -22152,7 +22164,20 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
   const handleDeleteZone = (id) => { if (confirm('このエリアを削除しますか？')) setLocalZones(localZones.filter(z => z.id !== id)); };
   const handleSaveZoneSettings = () => {
     const newComplaintOptions = complaintOptionsText.split('\n').map(s => s.trim()).filter(Boolean);
-    saveSettings({ mapZones: localZones, breakAlerts: localBreakAlerts, complaintOptions: newComplaintOptions, comboPresets: localComboPresets, voiceSettings: localVoiceSettings, voiceCommands: localVoiceCommands });
+    // 🔁 種別の語彙。「未分類」「原因不明」は語彙ではないので保存しない。空にした時は空配列=既定に戻る。
+    const newReworkKindOptions = reworkKindOptionsText.split('\n').map(s => s.trim())
+      .filter(s => s && s !== UNKNOWN_KIND && s !== UNKNOWN_CAUSE);
+    // 🔁 種別は「いま残っている項目の分」だけ保存する。「未分類」は入れない(入れないこと自体が未分類の意味)。
+    const newComplaintKinds = {};
+    newComplaintOptions.forEach(opt => {
+      const k = localComplaintKinds[opt];
+      if (k && k !== UNKNOWN_KIND) newComplaintKinds[opt] = k;
+    });
+    // ⚠「未分類に戻した」「項目ごと消した」は送らないだけでは消えない(merge:true)。消す印を明示する。
+    const deadKinds = Object.keys(settings?.complaintKinds || {})
+      .filter(k => !(k in newComplaintKinds))
+      .map(k => ['complaintKinds', k]);
+    saveSettings({ mapZones: localZones, breakAlerts: localBreakAlerts, complaintOptions: newComplaintOptions, complaintKinds: newComplaintKinds, reworkKindOptions: newReworkKindOptions, comboPresets: localComboPresets, voiceSettings: localVoiceSettings, voiceCommands: localVoiceCommands, ...(deadKinds.length ? { __deleteMapKeys: deadKinds } : {}) });
     alert('設定を保存しました');
   };
 
@@ -22297,6 +22322,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
              className="w-full border rounded p-3 text-sm h-32"
              placeholder="作業しづらい&#10;工具が不足&#10;手順が不明確"
            />
+           <ReworkKindEditor complaintOptionsText={complaintOptionsText} reworkKindOptionsText={reworkKindOptionsText} setReworkKindOptionsText={setReworkKindOptionsText} localComplaintKinds={localComplaintKinds} setLocalComplaintKinds={setLocalComplaintKinds} />
          </div>
 
          {/* コンボボックスプリセット管理 */}
