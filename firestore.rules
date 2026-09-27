@@ -27,7 +27,8 @@ service cloud.firestore {
         'parts-inspection-v1',     // 部品検査
         'overview-app-v1',         // 司令塔(工場全体)
         'goal-shared-v1',          // 年間目標 (3アプリ共有)
-        'contact-shared-v1'        // 連絡の宛先グループ (アプリ間共有)
+        'contact-shared-v1',       // 連絡の宛先グループ (アプリ間共有)
+        'capacity-shared-v1'       // 日ごとの負荷・保存計画 (製品↔最終↔部品で共有・2026-09-27 部品へ移植)
       ];
     }
 

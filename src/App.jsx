@@ -69,6 +69,11 @@ import { providerFor, ROW_DATA_WINS } from './data/provider.js';
 //   PocketBase は読み込んでも切り替わらない。切り替わるのは保存された行き先が enabled:true の時だけ。
 import { DEFAULT_PROVIDERS, providersFromSettings } from './data/routes.js';
 import './data/connectPocketbase.js';
+// 🏭 2026-09-27 製品→部品 移植: 操業シミュレーションの画面と共有棚の書類を作る純関数(製品と同じ)
+import { OperationsSimulationPanel } from './OperationsSimulationPanel.jsx';
+import { StackBar as VizStackBar } from './opsim/vizKit.jsx';
+import { useOperationsSimulation as useOpsimForOverview, makeScopeFilter as makeOpsimScopeFilter } from './useOperationsSimulation.js';
+import { buildWeeklyRule as opsimBuildWeeklyRule, weeklyRuleDocId as opsimWeeklyRuleDocId, shouldRefreshDailyLoad as opsimShouldRefreshDailyLoad } from './domain/operationsSimulation/sharedWorkerPlan.js';
 import { DATA_DELETE, DATA_SERVER_NOW, withDeletions } from './data/sentinels.js';
 // 🚨🚨 作業時間が「保存で消える」のを止める見張り(2026-08-17 最終検査の事故と同じ形を部品でも塞ぐ)。
 //   ⚠このファイルは最終検査/製品検査と **1バイトも同じ**。片方だけ直すと静かに巻き戻る。
@@ -157,7 +162,7 @@ import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from 
 import { isAutoStep as isAutoStepShared, buildStepMasterIndex } from './domain/workExecution.js';
 import { annualOccurrencesOf, laborSecOf, machineSecOf } from './domain/goal/occurrence.js';
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
-import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGuide.js';
+import { juggleCandidates, autoLimitSecOf, autoCatchUp, manualRunningOn } from './domain/juggleGuide.js';
 import { setEstimatedSession } from './domain/workSessions.js';
 import ZoneTravelSettings from './ZoneTravelSettings.jsx';
 import { taskTimeQualityOf, hasUsableInterval } from './domain/taskTimeQuality.js';
@@ -172,7 +177,7 @@ import { seqTaskKeyOf, seqTaskOf, seqMovesOf, seqStatusGridOf, seqNextOf, seqWhi
 // 🖐 順序実行の作業画面の部品(製品検査 src/workscreen/SeqParts.jsx と1バイト同じ写し)
 import { SeqPresetSwitch, SeqTimeBand, SeqOrderStrip, SeqOrderSheet, SeqPanel, SeqUpcoming, SeqZoom, SeqWaitCard } from './workscreen/SeqParts.jsx';
 // 🚦 全ロットを見る開始ガード(1人の手作業は同時に1つ・自動測定は別。製品検査 src/domain/lotStartGuard.js と md5 一致の写し)
-import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStartGuard.js';
+import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY, stepForTask } from './domain/lotStartGuard.js';
 // 工場の暦(祝日・全社休業・休日出勤)。4アプリで同じ物(md5 一致)。
 //   🚨 登録が空なら 月〜金 = 今までと1ミリも同じ挙動。
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
@@ -4004,7 +4009,7 @@ const VideoToPhotosModal = ({ contextLabel = '', existingDescription = '', onApp
   );
 };
 
-const WorkerSummaryCard = ({ worker, lots, colorTone = null }) => {
+const WorkerSummaryCard = ({ worker, lots, colorTone = null, dayMaxSec = null }) => {
   // 進行中ロットがあれば 5秒毎に再描画 (live workStartTime 加算用)
   const [, setTick] = useState(0);
   const hasProcessing = lots.some(l => l.workerId === worker.id && l.status === 'processing' && l.workStartTime);
@@ -4027,6 +4032,8 @@ const WorkerSummaryCard = ({ worker, lots, colorTone = null }) => {
            </div>
            )}
            <span className="font-bold text-lg text-slate-800">{worker.name}</span>
+           {/* 🎨 2026-09-27 P055 持っているロット数を点で(製品と同じ)。数字は右の札に残す */}
+           <VizDots count={inProgressCount} cap={6} tone="plain" size="w-2 h-2" title={`進行中 ${inProgressCount}件`} />
          </div>
          {inProgressCount > 0 && (
            <span className={`text-xs font-bold px-1.5 py-0.5 rounded inline-flex items-center gap-1 ${processingCount > 0 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`} title="着手中のロット件数">
@@ -4035,6 +4042,18 @@ const WorkerSummaryCard = ({ worker, lots, colorTone = null }) => {
            </span>
          )}
       </div>
+      {/* 🎨 2026-09-27 P055 1本の帯(長さ=その人の今日の実績+予定の残。目盛りは並ぶ人で共通)。製品 WorkerSummaryCard と同じ。
+           既定: 下の数字の札2枚は消さずに残す(足すだけ)。dayMaxSec が渡されない時は帯を出さない。 */}
+      {dayMaxSec != null && (
+        <VizStackBar
+          height="h-5"
+          total={dayMaxSec}
+          segments={[
+            { key: 'done', value: actualDoneSec, tone: 'ahead', title: '本日実績' },
+            { key: 'rest', value: plannedRemainingSec, tone: 'plain', title: '予定(残)' },
+          ]}
+        />
+      )}
       <div className="grid grid-cols-2 gap-2 text-center">
          <div className="bg-blue-50 rounded p-2">
             <div className="text-xs text-blue-500 font-bold mb-1">予定(残)</div>
@@ -10185,8 +10204,21 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const [isClosing, setIsClosing] = useState(false);
   const handleSafeClose = async () => {
       if (isClosing) return;
+      let result = 'ok';
+      let keepOpen = false; // 保存に失敗した時だけ閉じない(製品 25370c7 と同じ)
       try {
           setIsClosing(true);
+          // 🖐 2026-09-27 製品 25370c7 と同じ: 手作業が1つも動いておらず自動測定だけが動いている時は「動かしたまま閉じる」を選べる。
+          //   手作業が動いている時は今までどおり(一時停止して閉じる)。
+          const liveLot = { ...lot, tasks: tasksRef.current || tasks || lot.tasks || {} };
+          const autoRunning = Object.keys(liveLot.tasks).some((k) => { const t = liveLot.tasks[k]; if (!t || t.status !== 'processing') return false; const st = stepForTask(liveLot.steps || [], k); return !!st && isAutoStep(st); });
+          if (autoRunning && !manualRunningOn(liveLot, isAutoStep)) {
+              if (confirm('自動測定が動いています。\n動かしたまま閉じますか？(時間は進み続け、開き直すと続きから)\n\n［キャンセル］で「一時停止して閉じる / やめる」を選べます')) {
+                  result = await settleSaveBriefly(onSave({ measurementResults }));
+                  if (result === 'error') { keepOpen = true; alert('🚨 保存ができませんでした。画面は閉じません。\n\n画面上の赤い帯の内容を確認してください。入力はそのまま残っています。'); return; }
+                  return;
+              }
+          }
           if (isTimerRunning) {
               if (!confirm('作業中です。一時停止して閉じますか？\n（測定値や経過時間は保存されます）')) {
                   setIsClosing(false);
@@ -10209,7 +10241,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           }
       } finally {
           setIsClosing(false);
-          onClose();
+          if (!keepOpen) onClose();
       }
   };
 
@@ -14383,8 +14415,9 @@ const DashboardView = ({ onSetMode, lots, workers, handleMoveLot, saveData, setD
         {(currentUserName && !['フリー','管理者'].includes(currentUserName)
           ? workers.filter(w => w.name === currentUserName)
           : laneWorkersOf(workers, lots)
-        ).map(worker => (
-          <WorkerSummaryCard key={worker.id} worker={worker} lots={lots} colorTone={workerToneOf(workers, worker.name)} />
+        ).map((worker, _i, shown) => (
+          <WorkerSummaryCard key={worker.id} worker={worker} lots={lots} colorTone={workerToneOf(workers, worker.name)}
+            dayMaxSec={shown.reduce((m, w) => { const t = computeWorkerTimes(lots, w.id, w.name); return Math.max(m, (t.actualDoneSec || 0) + (t.plannedRemainingSec || 0)); }, 0)} />
         ))}
         {workers.length === 0 && <div className="text-center text-slate-400 p-4">作業者が登録されていません</div>}
       </ZoneList>
@@ -28490,6 +28523,23 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
   // カテゴリ別表示モード: 'all' = 全体, 'split' = 中間 vs 完品
   const [splitMode, setSplitMode] = useState('all');
 
+  // 🧮 2026-09-27 P139 全体進捗の仕事量を操業シミュレーションと同じ物差しにする(製品 ProgressOverviewView と同じ)。
+  //   仕事量はシミュの Worker が返す demandByLot(残りの工程だけ・実績があれば実績)を読む。1日の分数も sim.monthly.dayMinutes。
+  //   既定: 計算が終わるまでは今までの calculateLotEstimatedTime で出す(画面を空にしない)。間接係数(P151)は今のまま。
+  //   🚨 hooks はガードより上。基準時刻は開いた時に1回だけ。
+  const [simNowMs] = useState(() => Date.now());
+  const simScope = useMemo(() => makeOpsimScopeFilter('all', simNowMs), [simNowMs]);
+  const sim = useOpsimForOverview({ lots, templates, workers, settings, factoryCalendar, enabled: true, scopeFilter: simScope, now: simNowMs });
+  const simMonthly = (sim.result && sim.result.monthly && sim.result.monthly.ok) ? sim.result.monthly : null;
+  const demandByLot = simMonthly && simMonthly.demandByLot ? simMonthly.demandByLot : null;
+  const simReady = !!demandByLot;
+  const simDayMinutes = simMonthly && Number(simMonthly.dayMinutes) > 0 ? Number(simMonthly.dayMinutes) : null;
+  const lotSecOf = (lot) => {
+    if (!simReady || !lot) return calculateLotEstimatedTime(lot);
+    const d = demandByLot[String(lot.id)];
+    return d && Number.isFinite(d.minutes) ? d.minutes * 60 : 0;
+  };
+
   // ロットを「中間 / 完品」に分類
   //   テンプレート名に「中間」が含まれていれば中間検査、それ以外は完品検査
   const categorizeLot = (lot) => {
@@ -28512,7 +28562,7 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
   // 勤務スケジュールから 1 日の実働時間を算出 (設定で休憩・定時・残業をカスタマイズ可能)
   const workHours = useMemo(() => computeWorkHours(settings?.workSchedule), [settings?.workSchedule]);
   const includeOT = settings?.workSchedule?.includeOvertimeInCapacity ?? false;
-  const HOURS_PER_DAY = settings?.workloadHoursPerDay ?? (includeOT ? workHours.totalHours : workHours.regularHours);
+  const HOURS_PER_DAY = simDayMinutes != null ? simDayMinutes / 60 : (settings?.workloadHoursPerDay ?? (includeOT ? workHours.totalHours : workHours.regularHours));
   const DAYS_PER_WEEK = settings?.workloadDaysPerWeek || settings?.workSchedule?.daysPerWeek || 5;
   const DAYS_PER_MONTH = settings?.workloadDaysPerMonth || settings?.workSchedule?.daysPerMonth || 20;
   const HOURS_PER_WEEK = HOURS_PER_DAY * DAYS_PER_WEEK;     // 40h
@@ -28583,11 +28633,11 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
 
   // 未割当ロット (workerId なし)
   const unassignedLots = useMemo(() => activeLots.filter(l => !l.workerId), [activeLots]);
-  const unassignedSec = unassignedLots.reduce((a, l) => a + calculateLotEstimatedTime(l), 0);
+  const unassignedSec = unassignedLots.reduce((a, l) => a + lotSecOf(l), 0);
 
   // 入荷待ち (location='arrival')
   const arrivalLots = useMemo(() => activeLots.filter(l => l.location === 'arrival'), [activeLots]);
-  const arrivalSec = arrivalLots.reduce((a, l) => a + calculateLotEstimatedTime(l), 0);
+  const arrivalSec = arrivalLots.reduce((a, l) => a + lotSecOf(l), 0);
 
   // 週次仕事量 (納期ベース): 今週から 8週先まで
   const weeklyWorkload = useMemo(() => {
@@ -28627,9 +28677,9 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
     };
 
     activeLots.forEach(lot => {
-      if (!lot.dueDate) { noDueCount++; noDueSec += calculateLotEstimatedTime(lot); return; }
+      if (!lot.dueDate) { noDueCount++; noDueSec += lotSecOf(lot); return; }
       const due = new Date(lot.dueDate); due.setHours(0,0,0,0);
-      const sec = calculateLotEstimatedTime(lot);
+      const sec = lotSecOf(lot);
       const wk = weeks.find(w => due >= w.start && due <= w.end);
       if (wk) pushToWeek(wk, lot, sec);
       else if (due < weeks[0].start) {
@@ -28641,7 +28691,7 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
     });
 
     return { weeks, noDueCount, noDueSec, overdueCount, overdueSec };
-  }, [activeLots, tickN, templates]);
+  }, [activeLots, tickN, templates, demandByLot]); // demandByLot: シミュの答えが来たら数え直す(P139)
 
   // 月次仕事量 (納期ベース): 今月から 6ヶ月先まで
   const monthlyWorkload = useMemo(() => {
@@ -28659,7 +28709,7 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
     activeLots.forEach(lot => {
       if (!lot.dueDate) return;
       const due = new Date(lot.dueDate); due.setHours(0,0,0,0);
-      const sec = calculateLotEstimatedTime(lot);
+      const sec = lotSecOf(lot);
       const mo = months.find(m => due >= m.start && due <= m.end);
       if (mo) { mo.lots.push(lot); mo.totalSec += sec; }
       else if (due < months[0].start) {
@@ -28668,7 +28718,7 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
     });
 
     return months;
-  }, [activeLots, tickN]);
+  }, [activeLots, tickN, demandByLot]);
 
   // 負荷計算で使う「想定作業者数」
   //   登録された全作業者がいつもいるとは限らないため、マスタ設定で人数を上書き可能
@@ -29011,7 +29061,7 @@ ${measuredFactor.factorNote}` : ''}`}>
                       }
                     });
                   }
-                  const sec = dayLots.reduce((a, l) => a + calculateLotEstimatedTime(l), 0);
+                  const sec = dayLots.reduce((a, l) => a + lotSecOf(l), 0);
                   days.push({ ds, dayLots, sec });
                 }
                 const weekDayMaxSec = Math.max(teamDayCapH * 3600, ...days.map(d => d.sec));
@@ -29131,7 +29181,7 @@ ${measuredFactor.factorNote}` : ''}`}>
                               const dayCatAgg = { intermediate: { sec: 0, qty: 0, count: 0 }, final: { sec: 0, qty: 0, count: 0 } };
                               d.dayLots.forEach(l => {
                                 const cat = categorizeLot(l);
-                                const lotSec = calculateLotEstimatedTime(l);
+                                const lotSec = lotSecOf(l);
                                 dayCatAgg[cat].sec += lotSec;
                                 dayCatAgg[cat].qty += (l.quantity || 1);
                                 dayCatAgg[cat].count += 1;
@@ -29183,7 +29233,7 @@ ${measuredFactor.factorNote}` : ''}`}>
                                   {d.dayLots.length > 0 && (
                                     <div className="mt-1 space-y-1 max-h-48 overflow-y-auto">
                                       {d.dayLots.map(l => {
-                                        const sec = calculateLotEstimatedTime(l);
+                                        const sec = lotSecOf(l);
                                         const tplName = l.templateId === 'demo' ? '詳細デモ手順' : (templates.find(t => t.id === l.templateId)?.name || '');
                                         const cat = categorizeLot(l);
                                         const catC = CATEGORY_COLORS[cat];
@@ -33863,6 +33913,89 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    }, [lots, templates, settings.strictModeRules, strictMaturityUnits]);
    const [showStrictManager, setShowStrictManager] = useState(false);
    const [optimizeView, setOptimizeView] = useState('target'); // 作業最適化タブ: 'target'(目標時間) | 'strict'(厳密)
+   /* 🏭 2026-09-27 製品→部品 移植: 操業シミュレーション(製品の OperationsSimulationPanel をそのまま)の入口。
+      共有棚 capacity-shared-v1 は 4アプリ共通の区画。部品は daily_load/parts・placement_rules・plan_control/parts を使う。
+      🚨 部品に無い土台(到着予定・工程連絡・相手工場の名簿/負荷)は渡さない(null)= 画面は「分からない/まだ届いていません」と出す。0 で埋めない。 */
+   const OPSIM_SHELF_NS = 'capacity-shared-v1';
+   // 休止中を外した名簿(毎描画で新しい配列を作ると計算がやり直しになるので1回だけ)
+   const opsimWorkers = useMemo(() => activeWorkersOf(workers || []), [workers]);
+   const [ownDailyLoad, setOwnDailyLoad] = useState(null);
+   const [placementRules, setPlacementRules] = useState(null);
+   // 共有棚を読み終えた印。false の間は棚へ書かない(読む前に書くと決めた配置の無い書類で丸ごと上書きする)。読めなかった時も true。
+   const [capacityShelfLoaded, setCapacityShelfLoaded] = useState(false);
+   useEffect(() => {
+     if (!db) return undefined;
+     let alive = true;
+     Promise.all([
+       DATA(db).getOne(OPSIM_SHELF_NS, 'daily_load', 'parts').catch((e) => { console.warn('[共有棚] daily_load/parts が読めていません', e); return null; }),
+       DATA(db).getAll(OPSIM_SHELF_NS, 'placement_rules').catch((e) => { console.warn('[共有棚] placement_rules が読めていません', e); return null; }),
+     ]).then(([own, rules]) => {
+       if (!alive) return;
+       setOwnDailyLoad(own || null);
+       setPlacementRules(Array.isArray(rules) ? rules : null);
+       setCapacityShelfLoaded(true);
+     });
+     return () => { alive = false; };
+   }, [db]);
+   const publishDailyLoad = useCallback((doc) => {
+     if (!db || !doc) return Promise.resolve(false);
+     return DATA(db).save(OPSIM_SHELF_NS, 'daily_load', 'parts', doc, { merge: false }).then(() => true);
+   }, [db]);
+   const savePlacementRule = useCallback((rule) => {
+     if (!db) return Promise.resolve(false);
+     const doc = opsimBuildWeeklyRule({ name: rule && rule.name, weekly: rule && rule.weekly, days: rule && rule.days, updatedBy: 'parts', nowMs: Date.now() });
+     if (!doc) return Promise.resolve(false);
+     return DATA(db).save(OPSIM_SHELF_NS, 'placement_rules', opsimWeeklyRuleDocId(doc.name), doc, { merge: false })
+       .then(() => { setPlacementRules((prev) => [...(prev || []).filter((r) => r && r.name !== doc.name), doc]); return true; });
+   }, [db]);
+   // 司令塔の工場の図を読むだけ(並列作業の道具が区画の距離に使う)。書かない。
+   const readOverviewMap = useCallback(() => (db ? DATA(db).getOne('overview-app-v1', 'config', 'mapConfig') : Promise.resolve(null)), [db]);
+   // 📋 2026-09-27 保存計画の共有棚 capacity-shared-v1/plan_control/parts(製品と同じ形)。data/provider.js に commitVersion・createOnce を足してつないだ。
+   //   🚨 head は控えを見ずサーバから読む。端末の中へ逃がさない。
+   const planShelf = useMemo(() => {
+     if (!db) return null;
+     return {
+       readHead: () => DATA(db).getOne(OPSIM_SHELF_NS, 'plan_control', 'parts', { source: 'server' }),
+       readVersion: (id) => DATA(db).getOne(OPSIM_SHELF_NS, 'plan_versions', id),
+       listVersions: async () => {
+         const r = await DATA(db).getPageFields(OPSIM_SHELF_NS, 'plan_versions',
+           ['app', 'revision', 'id', 'committedAt', 'committedBy', 'parentId', 'chunkCount', 'evidence.version'],
+           { where: [['app', '==', 'parts']], getToken: async () => { const u = getAuth().currentUser; return u ? u.getIdToken() : ''; } });
+         return r.rows;
+       },
+       commitVersion: (args) => DATA(db).commitVersion(OPSIM_SHELF_NS, { headCol: 'plan_control', headId: 'parts', versionCol: 'plan_versions', ...args }),
+       watchHead: (cb, onError) => DATA(db).watchDoc(OPSIM_SHELF_NS, 'plan_control', 'parts', cb, { onError: (e) => { console.warn('[plan_control 購読] 読めていません(部品)', e); if (typeof onError === 'function') onError(e); } }),
+       readReview: (id) => DATA(db).getOne(OPSIM_SHELF_NS, 'plan_reviews', id, { source: 'server' }),
+       appendReview: (id, record, fallback, opts) => DATA(db).appendCapped(OPSIM_SHELF_NS, 'plan_reviews', id, 'history', record, { fallback, ...(opts || {}) }),
+       actor: currentUserName || '',
+       isApprover: currentUserName === '管理者',
+       readHeadOf: (area) => DATA(db).getOne(OPSIM_SHELF_NS, 'plan_control', area, { source: 'server' }),
+       readRoute: (id) => DATA(db).getOne(OPSIM_SHELF_NS, 'route_drafts', id, { source: 'server' }),
+       saveRoute: async (id, doc, expectRevision) => {
+         if (!expectRevision) {
+           const c = await DATA(db).createOnce(OPSIM_SHELF_NS, 'route_drafts', id, doc);
+           return { ok: !!c.acquired, reason: c.acquired ? '' : String(c.reason || '') };
+         }
+         const r = await DATA(db).claimOnce(OPSIM_SHELF_NS, 'route_drafts', id, { revision: expectRevision }, doc);
+         return { ok: !!r.acquired, reason: r.acquired ? '' : String(r.reason || '') };
+       },
+     };
+   }, [db, currentUserName]);
+   // 自分のぶんが古ければ、開いた時に画面を出さず1回だけ計算して書き直す(製品と同じ。判定は純関数 shouldRefreshDailyLoad だけ)。
+   const opsimScreenOpen = activeTab === 'optimize' && optimizeView === 'opsim';
+   const wantDailyLoadRefresh = useMemo(
+     () => opsimShouldRefreshDailyLoad({ ownDoc: ownDailyLoad, nowMs: Date.now(), shelfLoaded: capacityShelfLoaded, simScreenOpen: opsimScreenOpen }),
+     [ownDailyLoad, capacityShelfLoaded, opsimScreenOpen],
+   );
+   const [bgLoadArmed, setBgLoadArmed] = useState(false);
+   const bgLoadOnceRef = useRef(false);
+   useEffect(() => {
+     if (!wantDailyLoadRefresh || bgLoadOnceRef.current) return undefined;
+     bgLoadOnceRef.current = true;
+     // 端末ごとに待ち時間をずらす(同じ時刻に何台も計算しない)。
+     const t = setTimeout(() => setBgLoadArmed(true), 3000 + Math.floor(Math.random() * 60000));
+     return () => clearTimeout(t);
+   }, [wantDailyLoadRefresh]);
    const [analysisCombo, setAnalysisCombo] = useState(null); // 実データ分析モーダルの対象コンボ {model, templateId, templateName}
    const [strictModeHistory, setStrictModeHistory] = useState([]);
    const strictPanelActive = showStrictManager || (activeTab === 'optimize' && optimizeView === 'strict');
@@ -34873,6 +35006,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                  <button onClick={() => setOptimizeView('star')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'star' ? 'bg-white shadow text-amber-600' : 'text-slate-500 hover:text-slate-700'}`}><Award className="w-4 h-4" /> ⭐星取表</button>
                  <button onClick={() => setOptimizeView('solo')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'solo' ? 'bg-white shadow text-rose-600' : 'text-slate-500 hover:text-slate-700'}`}><Users className="w-4 h-4" /> 一人しかできない工程</button>
                  <button onClick={() => setOptimizeView('tskip')} data-optimize-tab="tskip" className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'tskip' ? 'bg-white shadow text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 抜取/スキップ</button>
+                 <button onClick={() => setOptimizeView('opsim')} data-optimize-tab="opsim" className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'opsim' ? 'bg-white shadow text-cyan-600' : 'text-slate-500 hover:text-slate-700'}`}><Activity className="w-4 h-4" /> 操業シミュレーション</button>
                </div>
                {/* 🚨 説明文は消していない。？ を押すと全文が出る(畳んだだけ)。
                    🚨 2026-09-08 直し2件:
@@ -34896,7 +35030,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                  </div>
                </details>
              </div>
-             <div className="flex-1 min-h-0 overflow-hidden w-full max-w-[1100px] mx-auto">
+             <div className={`flex-1 min-h-0 overflow-hidden w-full ${optimizeView === 'opsim' ? 'max-w-none mx-auto' : 'max-w-[1100px] mx-auto'}`}>
                {(quotaBlock || !lotsHistoryReady) && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : <DataLoadingPanel what="過去のロット" />)}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'target' && <ProcessInsightsTab lots={lots} workers={workers} customTargetTimes={settings.customTargetTimes || {}} onSaveSettings={saveSettings} targetTimeHistory={settings.targetTimeHistory || []} settings={settings} saveData={saveData} currentUserName={currentUserName} />}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'strict' && (currentUserName === '管理者' ? <StrictModeManagerModal embedded lots={lots} templates={templates} rules={settings.strictModeRules || {}} history={strictModeHistory} currentUserName={currentUserName} maturityUnits={strictMaturityUnits} onSetMaturity={(n) => saveSettings({ strictMaturityUnits: n })} onDecide={handleStrictDecide} optimalByCombo={optimalByCombo} onDecideOptimal={handleOptimalDecide} onOpenAnalysis={(row) => setAnalysisCombo({ model: row.model, templateId: row.templateId, templateName: row.templateName })} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">厳密モードの管理は管理者のみです。ヘッダー左上で「管理者」を選択してください。</div>)}
@@ -34904,6 +35038,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                {/* 🧾 品目×テンプレ単位の抜取／スキップ。決めるのは管理者。数字は domain/templateSkip.js が実測から出す。 */}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'solo' && <SoloErrorBoundary><SoloDependencyPanel lots={lots} templates={templates} workers={workers} /></SoloErrorBoundary>}
               {!quotaBlock && lotsHistoryReady && optimizeView === 'star' && <StarChartView lots={lots} workers={workers} templates={templates} settings={settings} skillMarks={skillMarks || []} canEdit={currentUserName === '管理者'} currentUserName={currentUserName} onSaveMark={(doc) => saveData('skill_marks', doc.id, doc)} />}
+               {/* 🏭 操業シミュレーション(製品から移植)。到着予定・工程連絡・相手工場の名簿/負荷は部品に無いので渡さない=画面は「分からない」と出す */}
+               {!quotaBlock && lotsHistoryReady && optimizeView === 'opsim' && <OperationsSimulationPanel planShelf={planShelf} isAdmin={currentUserName === '管理者'} readOverviewMap={readOverviewMap} lots={lots} templates={templates} workers={opsimWorkers} settings={settings} factoryCalendar={factoryCalendar} ownDailyLoad={ownDailyLoad} publishDailyLoad={publishDailyLoad} capacityShelfLoaded={capacityShelfLoaded} placementRules={placementRules} saveSettings={saveSettings} canEdit={!!currentUserName} savePlacementRule={savePlacementRule} />}
               {!quotaBlock && lotsHistoryReady && optimizeView === 'tskip' && <TemplateSkipPanel unitLabel="品目" lots={lots} templates={templates} settings={settings} saveSettings={saveSettings} canEdit={currentUserName === '管理者'} currentUserName={currentUserName} />}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'modelgroup' && (currentUserName === '管理者' ? <ModelGroupManager lots={lots} settings={settings} saveSettings={saveSettings} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">品目グループの管理は管理者のみです。</div>)}
              </div>
@@ -35087,7 +35223,15 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        {/* Announcement Modal */}
        {showAnnouncementModal && <AnnouncementModal announcements={announcements} workers={workers} saveData={saveData} deleteData={deleteData} loadImage={loadNoteImage} onClose={() => setShowAnnouncementModal(false)} currentUserName={currentUserName} />}
 
-       {/* 異常値検出パネル */}
+       {/* 📦🔄 共有棚 daily_load/parts の書き直し(画面は出ない)。古い時だけ・1回だけ・操業シミュを開いている時は出さない(製品と同じ) */}
+      {bgLoadArmed && wantDailyLoadRefresh && (
+        <OperationsSimulationPanel publishOnly planShelf={planShelf} isAdmin={currentUserName === '管理者'} readOverviewMap={readOverviewMap}
+          lots={lots} templates={templates} workers={opsimWorkers} settings={settings}
+          canEdit={false} saveSettings={null} savePlacementRule={null} factoryCalendar={factoryCalendar}
+          ownDailyLoad={ownDailyLoad} publishDailyLoad={publishDailyLoad} capacityShelfLoaded={capacityShelfLoaded} placementRules={placementRules}
+        />
+      )}
+      {/* 異常値検出パネル */}
        {/* 厳密モードは「作業最適化」タブに内蔵（モーダルは廃止） */}
 
        {showAnomalyPanel && !lotsHistoryReady && (

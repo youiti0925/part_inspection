@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'src/opsim/parallelLab/ui.js']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -33,6 +33,8 @@ export default defineConfig([
     files: [
       'src/SkillMap.jsx', 'src/StrictModeManager.jsx', 'src/TemplateSkipPanel.jsx', 'src/RotaryMeasurements.jsx',
       'src/HelpManual.jsx', 'src/ErrorBoundary.jsx', 'src/workscreen/**/*.jsx',
+      // 2026-09-27 製品から移した操業シミュレーションの画面(製品と同じ対象・ui.js は build.py が大域名を注入する見本なので上で除外)
+      'src/OperationsSimulationPanel.jsx', 'src/opsim/**/*.jsx', 'src/opsim/**/*.js',
     ],
     rules: {
       'no-use-before-define': ['error', { functions: false, classes: false, variables: true, allowNamedExports: true }],

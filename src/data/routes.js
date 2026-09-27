@@ -29,6 +29,7 @@ export const NS = Object.freeze({
   overview: 'overview-app-v1',
   goals: 'goal-shared-v1',
   contact: 'contact-shared-v1',
+  capacity: 'capacity-shared-v1', // 📦 共有棚(日ごとの負荷・保存計画)。製品と同じ・2026-09-27 部品へ
 });
 
 /** 検査アプリ自身の名前空間(= APP_DATA_ID になりうる値)。 */
@@ -107,6 +108,15 @@ export const COLLECTION_AREA = Object.freeze({
 
   // --- 年間目標の棚の中身(goal-shared-v1 にしか無い) ------------------------
   weekly_briefs: 'goals',
+
+  // --- 共有棚 capacity-shared-v1(操業シミュ・2026-09-27 部品へ移植)。docId = parts ----------
+  daily_load: 'analytics',
+  placement_rules: 'analytics',
+  // 📋 2026-09-27 保存計画(head/版/審査)と別エリアへ移す案(製品と同じ・docId = parts)
+  plan_control: 'analytics',
+  plan_versions: 'analytics',
+  plan_reviews: 'analytics',
+  route_drafts: 'analytics',
 });
 
 // ----------------------------------------------------------------------------
@@ -174,6 +184,12 @@ export const COLLECTION_APPS = Object.freeze({
   app_feedback: ['final', 'product', 'parts'],
   app_notices: ['final', 'product', 'parts'],
   weekly_briefs: ['final', 'product'],
+  daily_load: ['final', 'product', 'parts'],
+  placement_rules: ['final', 'product', 'parts'],
+  plan_control: ['final', 'product', 'parts'],
+  plan_versions: ['final', 'product', 'parts'],
+  plan_reviews: ['final', 'product', 'parts'],
+  route_drafts: ['final', 'product', 'parts'],
 });
 
 /**

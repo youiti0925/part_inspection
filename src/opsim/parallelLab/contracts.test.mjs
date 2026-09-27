@@ -1,0 +1,17 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {buildInspectionCatalog,selectRegisteredJobs} from './inspectionInput.mjs';
+import {fieldView} from './fieldMode.mjs';
+const base={snapshotId:'s1',templateLabels:{t:'精度測定'},normalized:{lots:[{lotId:'L',model:'MODEL',templateId:'t',quantity:6,orderNo:'ORDER',steps:[{stepId:'S',index:0,title:'測定',estimateSource:'model-step',estimateSampleCount:7,estimateConfidence:'high'}]}],jobs:[0,1].map(i=>({jobId:'j'+i,lotId:'L',stepId:'S',stepIndex:0,unitIndex:i,durationMs:60000,durationKnown:true,arrivalMs:i===0?100:null,dueLineMs:10000}))}};
+test('6台を複製せず登録ジョブ2件を使う・実測根拠保持',()=>{const c=buildInspectionCatalog(base);assert.equal(c.length,2);assert.equal(c[0].lotQuantity,6);assert.equal(c[0].estimate.sampleCount,7);assert.equal(c[0].templateName,'精度測定');});
+test('総時間を自動時間へ流用しない',()=>assert.equal(buildInspectionCatalog(base)[0].phase,null));
+test('部分入荷未定を残す',()=>assert.ok(buildInspectionCatalog(base)[1].issues.includes('この台の到着未定')));
+test('違う固定入力の自動時間を使わない',()=>{const p={snapshotId:'old',jobId:'j0',autoRemainingMs:200,finishWorkMs:50,mayLeave:true,source:{kind:'measured',ref:'r1'}};assert.equal(buildInspectionCatalog({...base,phaseProfiles:{j0:p}})[0].phase,null);});
+test('台・工程の重複選択禁止',()=>assert.throws(()=>selectRegisteredJobs(buildInspectionCatalog(base),['j0','j0'])));
+test('登録された工程を選んでも本番適用しない',()=>assert.equal(selectRegisteredJobs(buildInspectionCatalog(base),['j0','j1']).productionEligible,false));
+const plan={kind:'parallel-field-plan',id:'p1',revision:2,inputSnapshotId:'s1',validationId:'v1',productionEligible:true,validFromMs:0,validUntilMs:1000,workerEvents:[{workerId:'w',jobId:'j0',lotId:'L',kind:'work',startMs:100,endMs:200}]};
+const args={plan,approval:{status:'approved',planId:'p1',revision:2},workerId:'w',atMs:150,headRevision:3};
+test('承認した版を表示し新しい版で勝手に差替えない',()=>{const r=fieldView(args);assert.equal(r.revision,2);assert.equal(r.newerAvailable,true);assert.equal(r.current.jobId,'j0');});
+test('別の版の承認は不可',()=>assert.equal(fieldView({...args,approval:{...args.approval,revision:1}}).status,'unavailable'));
+test('実験は現場指示にできない',()=>assert.equal(fieldView({...args,plan:{...plan,productionEligible:false}}).status,'unavailable'));
+test('人の重複指示を拒否',()=>assert.equal(fieldView({...args,plan:{...plan,workerEvents:[...plan.workerEvents,{...plan.workerEvents[0],jobId:'j1'}]}}).status,'unavailable'));
+test('適用時間外は指示しない',()=>assert.equal(fieldView({...args,atMs:1000}).status,'unavailable'));
