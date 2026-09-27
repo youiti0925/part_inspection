@@ -112,6 +112,7 @@ import { isAutoStep as isAutoStepShared, buildStepMasterIndex } from './domain/w
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
 import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGuide.js';
 import { setEstimatedSession } from './domain/workSessions.js';
+import ZoneTravelSettings from './ZoneTravelSettings.jsx';
 import { taskTimeQualityOf, hasUsableInterval } from './domain/taskTimeQuality.js';
 import { intKeyOf, withInterruptionLog, intWritePatch, intDeletePatch, stopIntEntry, mergePendingInts, dropSettledPending } from './domain/interruptionLog.js';
 // 🚶 掛け持ち案内の枠(製品検査 src/workscreen/JuggleGuide.jsx と md5 一致の写し。描くだけ)
@@ -9705,7 +9706,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   // 🚶 掛け持ち案内(製品検査 2026-09-26 と同じ): この自動測定の残りの間に、別のロットへ行って何ができるか。計算は domain/juggleGuide.js。
   //   残りは 自動終了の秒(テンプレも見る) → 目標時間 の順。
   //   me: 端末で選んだ名前の作業者。フリー・管理者は担当で絞らない(見るだけ)。
-  //   ⚠部品には操業シミュの「区画どうしの表」が無いので travelCfg は null。片道は区画の名前の目安(中間・完品 10秒 等)だけ・無ければ「不明」。
+  //   travelCfg = settings.opsim.zoneTravel(マスタ設定の作業エリアの下で入れる区画どうしの片道・2分の決まり)。空なら区画の名前の目安(中間・完品 10秒 等)・無ければ「不明」。
   const juggle = useMemo(() => {
     const ra = liveParallelGuide && liveParallelGuide.runningAuto;
     if (!ra) return null;
@@ -23032,6 +23033,9 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
            </div>
          </div>
 
+         {/* 🚶 区画どうしの片道・掛け持ちの決まり(settings.opsim.zoneTravel・作業画面の掛け持ち案内が読む) */}
+         <ZoneTravelSettings settings={settings} saveSettings={saveSettings} zones={localZones} />
+
          {/* 音声アシスタント設定 */}
          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
            <h3 className="font-bold text-base mb-2 flex items-center gap-2"><Mic className="w-5 h-5 text-blue-500" /> 音声アシスタント設定</h3>
@@ -32366,8 +32370,8 @@ const QuotaStoppedPanel = ({ until }) => (
            itemMaster={settings?.itemMaster || null}
            // 🚶 掛け持ち案内の「移る」「↩ 戻る」: 作業画面が保存を見届けてから、開くロットを替える(key で画面を作り直す)
            onSwitchLot={(id) => setExecutionLotId(id)}
-           // 部品には操業シミュの区画どうしの表が無い → 片道は区画の名前の目安だけ(無ければ「不明」)
-           travelCfg={null}
+           // 🚶 区画どうしの片道・2分の決まり(マスタ設定の作業エリアの下で誰でも変えられる)。空なら区画の名前の目安だけ
+           travelCfg={settings?.opsim?.zoneTravel || null}
            onClose={() => setExecutionLotId(null)}
            // 🚨🚨 作業画面の onSave は **投げっぱなし(await も catch も無い)が61箇所**ある。
            //   61箇所を書き換えるのではなく、**入口を1つにして**そこで面倒を見る
