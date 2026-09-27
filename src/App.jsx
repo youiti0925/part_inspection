@@ -86,6 +86,9 @@ import {
   reconcileValueMap, noteEditedKeys, recentlyEditedKeys, pruneEditedKeys, unsentPatch,
   reconcileTasks, runningTaskKeys,
 } from './domain/saveOrder.js';
+// 📐 P040 測定図は本体の外(step_diagrams)へ出し、同じ図は1枚をみんなで指す(製品と同じ純関数・md5 一致)
+import { hydrateLot, diagramMapOf, dehydrateSteps, lotsNeedingDiagramOffload, isDiagramRef, DIAGRAM_PREFIX, DIAGRAM_COLLECTION } from './domain/diagramOffload.js';
+import { restoreFailedRefs, describeWriteOrder } from './domain/saveOrder.js';
 // 🚨🚨 読み取り(read)の予算。2026-08-17 に最終検査が **枠切れ(429)で 14:36〜15:59 止まった**。
 //   無料枠 50,000件/日 は **4アプリで1つ**。部品検査が食った分だけ他アプリの枠が減る。
 //   ⚠数の決め方・合体の仕方・いつ枠が戻るかは、全部 domain/readBudget.js に置いて試験で固定してある
@@ -28571,6 +28574,9 @@ const QuotaStoppedPanel = ({ until }) => (
    const lotsLoadedRef = useRef(false);
    // 保存の見張りが突き合わせる「いまサーバに在るロット」。描き直しに巻き込まれない ref で持つ。
    const rawLotsRef = useRef([]);
+   // 📐 P040 保管庫の測定図 { id: dataUrl }。ref は保存・巡回が再描画を待たずに読む用
+   const stepDiagramsRef = useRef({});
+   const [stepDiagrams, setStepDiagrams] = useState({});
    // 購読が死んだ事を人に見せる。名指しで出す(どのコレクションが読めていないか)。
    const [readErrors, setReadErrors] = useState({});
 
@@ -28699,11 +28705,14 @@ const QuotaStoppedPanel = ({ until }) => (
    // ⚠過去(historyLots)は **今までの購読そのもの**(新しい方から500件)なので、
    //   届いた後は普段の窓(liveLots)を混ぜない。混ぜると、窓の購読を止めた後に
    //   **古い姿で新しい姿を上書き**してしまう。過去 ⊇ 窓 なので混ぜる必要も無い。
-   const lots = useMemo(() => {
+   // 📐 P040 lotsRaw = 保管庫にあるままの姿(測定図は札のまま)。見張り・容量の関所・巡回はこちらを見る。
+   const lotsRaw = useMemo(() => {
      if (lotsWindowWhole) return liveLots;                       // 全部読めている = 今までと同一
      if (historyLots !== null) return mergeLotsById(historyLots, openLots);
      return mergeLotsById(liveLots, openLots);
    }, [lotsWindowWhole, historyLots, openLots, liveLots]);
+   // 画面用だけ札を絵に戻す(届いていない札は札のまま=保存で消えない)
+   const lots = useMemo(() => (Object.keys(stepDiagrams).length ? lotsRaw.map(l => hydrateLot(l, stepDiagrams)) : lotsRaw), [lotsRaw, stepDiagrams]);
    // 過去まで揃っているか。🚨**揃っていない状態で過去の数字を出さない**(黙って減るのが一番まずい)。
    const historyLoaded = historyLots !== null;
    const lotsHistoryReady = lotsWindowWhole || historyLoaded;
@@ -29228,6 +29237,8 @@ const QuotaStoppedPanel = ({ until }) => (
        watch('announcements', (rows) => setAnnouncements(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
        // ⚠observationPlans は作業画面(じっと見るモード)が使う。外すと現場が使えない。
        watch('observationPlans', (rows) => setObservationPlans(rows)),
+       // 📐 P040 測定図の保管庫(ロットより前に届く保証は無い。届いたら画面用の合流をやり直す)
+       watch(DIAGRAM_COLLECTION, (rows) => { const m = diagramMapOf(rows); stepDiagramsRef.current = m; setStepDiagrams(m); }),
        // 🚨 ここから外した物 → 下の「開いた時だけ読む」へ移した:
        //   logs(バックアップ画面だけ) / indirectWork(達成率・分析・日次集計だけ) / improvements(分析だけ)
        P.watchDoc(APP_DATA_ID, 'settings', 'config', (data0, snap) => {
@@ -29271,7 +29282,7 @@ const QuotaStoppedPanel = ({ until }) => (
        }, { onError: readFailed('contact_shared/settings') })
      ];
      // 張った事は0件でも残す(「読んでいない」と「そもそも購読していない」を人が見分けられるように)。
-     ['templates', 'workers', 'notes', 'announcements', 'observationPlans', 'settings/config', 'contact_shared/settings'].forEach(c => countReads(c, 0, { attach: true }));
+     ['templates', 'workers', 'notes', 'announcements', 'observationPlans', DIAGRAM_COLLECTION, 'settings/config', 'contact_shared/settings'].forEach(c => countReads(c, 0, { attach: true }));
      if (stopped) stopAll(); // 張っている最中に枠切れが来た時の取りこぼし防止
      return () => { stopped = true; unsubs.forEach(u => { try { u(); } catch { /* 既に止まっていても構わない */ } }); };
    }, [user, db, countReads, noteReadError]);
@@ -29335,7 +29346,7 @@ const QuotaStoppedPanel = ({ until }) => (
    }, [historyLots, lots, lotsWindowWhole]);
 
    // 念のための後追い(購読の中の同期更新が本体。ここは取りこぼしの保険)。
-   useEffect(() => { rawLotsRef.current = lots; }, [lots]);
+   useEffect(() => { rawLotsRef.current = lotsRaw; }, [lotsRaw]);
 
    // --- 過去のロットを「開いた時だけ」読む -------------------------------------
    // 🚨🚨 完了履歴 / 分析 / 作業最適化 / 達成率 / 完了一覧 / 日次集計 / 引き継ぎ は
@@ -29561,7 +29572,30 @@ const QuotaStoppedPanel = ({ until }) => (
      }
    };
 
-   const saveData = async (col, id, data) => {
+   // 📐 P040 保存前に「どの測定図を外へ出すか」を集めるだけ(通信しない)。札に替えた steps と、書く絵の一覧を返す。
+   //   ⚠書けなかった時・上限(6枚)を超えた絵は札に替えず絵のまま(90秒ごとの巡回が後で片付ける)。
+   const collectDiagramWrites = async (steps) => {
+     const writes = [];
+     const out = await dehydrateSteps(steps, async (fid, body) => { writes.push({ id: fid, body }); },
+       { known: new Set(Object.keys(stepDiagramsRef.current)), max: 6 });
+     return { steps: out, writes };
+   };
+   // 📐 P040 保管庫が受け取らなかった絵は、札を元の絵へ戻して steps だけ書き直す(札は在るのに図が無い状態を残さない)。
+   //   ⚠tasks は1バイトも触らない(関所 saveData は通さない。書くのは steps だけ)。
+   const restoreFailedDiagrams = (col, id, stepsAfter, stepsBefore, failedIds) => {
+     const next = { ...stepDiagramsRef.current };
+     failedIds.forEach(fid => { delete next[fid]; });
+     stepDiagramsRef.current = next;
+     if (!stepsAfter || !stepsBefore) return;
+     const restored = restoreFailedRefs(stepsAfter, stepsBefore, failedIds,
+       (st) => (st && st.measurementConfig && isDiagramRef(st.measurementConfig.diagramImage)
+         ? st.measurementConfig.diagramImage.slice(DIAGRAM_PREFIX.length) : null));
+     if (restored === stepsAfter) return;
+     DATA(db).save(APP_DATA_ID, col, id, { steps: restored, updatedAt: DATA_SERVER_NOW })
+       .catch(e2 => { console.error('[測定図] 札の戻しにも失敗', e2); setErrorMsg('測定図の保存に失敗しました。図が出ない工程があるかもしれません（作業の記録は保存されています）。'); });
+   };
+
+   const saveData = async (col, id, data, saveOpts = {}) => {
      // 🚨🚨🚨 2026-08-23: サインインが終わっていない間の保存を **黙って捨てない**。
      //   前はここで無言 return していたので `await` した側には正常に返り、
      //   画面だけ先へ進んで Firestore には何も行かなかった(2026-08-17 の事故と同じ形)。
@@ -29577,32 +29611,65 @@ const QuotaStoppedPanel = ({ until }) => (
      }
      // ⚠関所は try の **外**。中で投げると下の catch が飲み込み、
      //   「止めたつもりの保存」が失敗扱いで再試行キューに入ってしまう。
+     // 📐 P040 測定図は本体に入れない。絵は step_diagrams へ逃がし、工程には札だけ置く(製品と同じ)。
+     //   ⚠ここでは書かない。何を書くか集めるだけ(通信しない)。書くのは下の saveInOrder(記録が先・絵が後)。
+     //   ⚠書けなかった絵・上限(6枚)を超えた絵は札に替えず絵のまま残す。90秒ごとの巡回が後で片付ける。
+     //   ⚠関所(guardLotSave)は札に替えた後の姿で測る(保管庫の姿=rawLotsRef と同じ物差し)。
+     const rawData = data;
+     let diagramWrites = [];
+     let stepsBeforeOffload = null;
+     if (col === 'lots' && data && Array.isArray(data.steps)) {
+       try {
+         stepsBeforeOffload = data.steps;
+         const off = await collectDiagramWrites(data.steps);
+         diagramWrites = off.writes;
+         if (off.steps !== data.steps) data = { ...data, steps: off.steps };
+       } catch (e) {
+         console.warn('測定図の別置きの下ごしらえに失敗したので、絵を本体に入れたまま保存します(次の巡回でやり直します)', e);
+         diagramWrites = [];
+         stepsBeforeOffload = null;
+         data = rawData;
+       }
+     }
      guardLotSave(col, id, data);
-     const rec = { kind: 'doc', col, id, data };
+     const rec = { kind: 'doc', col, id, data: rawData };
+     // ⚠裏の処理(測定図の巡回)は画面の同期表示を動かさない
+     const quiet = saveOpts.background === true;
      bumpInflight(+1);
      try {
-       setSyncStatus('syncing');
-       setErrorMsg(null);
+       if (!quiet) {
+         setSyncStatus('syncing');
+         setErrorMsg(null);
+       }
 
        // 🚨🚨 2026-08-17 の事故対策の関所(domain/saveOrder.js)。
-       //   **記録を先に待ち行列へ入れ、別置き(写真)は後ろへ回し、その間に await を挟まない。**
-       //   ⚠待つ回数は前と同じ1回(記録の1回)だけ。現場の検査動線に await は1つも足していない。
-       //   ⚠部品検査は写真をロット本体に持つ(別置き先が無い)ので blobs は今は必ず空。
-       //     別置きを足す時は **blobs へ入れる**。そうすれば record の後ろに並ぶ事が
-       //     この1本(orderWrites)で保証され、8/17 の形へは戻せなくなる。
+       //   **記録を先に待ち行列へ入れ、別置き(写真)は後ろへ回し、その間に待たない。**
+       //   ⚠待つのは前と同じ1回(記録の1回)だけ。
+       //   📐 P040 別置き(測定図)は blobs へ入れる。record の後ろに並ぶ事がこの1本(orderWrites)で保証される。
+       //     上の collectDiagramWrites の max:6 と同じ数(両方直す事)。
+       const diagramBlobs = diagramWrites.slice(0, 6).map(d => ({ id: d.id, col: DIAGRAM_COLLECTION, body: d.body, opts: { merge: false } }));
+       // 手元の索引は待ち行列へ入れる時に更新する(電波が無い間に自分の画面から図が消えない)
+       if (diagramBlobs.length) stepDiagramsRef.current = { ...stepDiagramsRef.current, ...Object.fromEntries(diagramBlobs.map(b => [b.id, b.body.data])) };
        const h = saveInOrder({
-         record: { id, body: { ...cleanUndefined(data), updatedAt: DATA_SERVER_NOW } },
-         blobs: [],
-         write: (w) => DATA(db).save(APP_DATA_ID, col, w.id, w.body),
+         record: { id, col, body: cleanUndefined(data) },
+         blobs: diagramBlobs,
+         write: (w) => DATA(db).save(APP_DATA_ID, w.col, w.id, { ...w.body, updatedAt: DATA_SERVER_NOW }, w.opts),
        });
+       if (diagramWrites.length) console.info('[保存の順番]', describeWriteOrder(h.order));
        // ⚠別置きの結果(h.blobs)は **必ず resolve する**(saveOrder.js の約束)。
-       //   いまは空なので何も起きないが、握り潰しにならないよう名指しで受けておく。
-       h.blobs.then((r) => { if (r && r.failedIds && r.failedIds.length) console.error('🚨 別置きの保存に失敗', col, id, r.failedIds, r.errors); });
+       //   拒否された絵は札だけ残さない: 札を元の絵へ戻して steps だけ書き直す(tasks は触らない)。
+       const stepsAfterOffload = Array.isArray(data.steps) ? data.steps : null;
+       h.blobs.then((r) => {
+         if (!(r && r.failedIds && r.failedIds.length)) return;
+         console.error('🚨 別置き(測定図)の保存に失敗', col, id, r.failedIds, r.errors);
+         restoreFailedDiagrams(col, id, stepsAfterOffload, stepsBeforeOffload, r.failedIds);
+       });
        await h.record;
-       setSyncStatus('idle');
+       if (!quiet) setSyncStatus('idle');
        forgetFailed(rec);
      } catch (e) {
          console.error(e);
+         if (quiet) throw e; // 表示は動かさない。ただし握り潰さない
          setSyncStatus('error');
          setErrorMsg(e.message || "Unknown error during save");
          rememberFailed(rec);
@@ -29617,6 +29684,41 @@ const QuotaStoppedPanel = ({ until }) => (
        bumpInflight(-1);
      }
    };
+
+   // 📐 P040 関所は ref 越しに呼ぶ(巡回の効果を描画のたびに張り直さない)
+   const saveDataRef = useRef(null);
+   useEffect(() => { saveDataRef.current = saveData; });
+   // 📐 P040 既にあるロットの測定図を少しずつ外へ出す巡回(製品と同じ: 90秒ごと・一度に3件)。
+   //   ⚠見るのは保管庫の姿(rawLotsRef)。選ぶ側と動かす側は同じ isOffloadableDiagram。変わらない物は書かない。
+   //   ⚠関所(saveData)を通す。渡すのは絵のままの steps だけ(tasks は渡さない)。
+   const diagramSweepBusy = useRef(false);
+   useEffect(() => {
+     if (!user || !db) return;
+     const tick = async () => {
+       if (diagramSweepBusy.current) return;
+       if (!lotsLoadedRef.current) return; // 読めていない間は自動で書かない
+       const raw = rawLotsRef.current || [];
+       const targets = lotsNeedingDiagramOffload(raw).slice(0, 3);
+       if (!targets.length) return;
+       diagramSweepBusy.current = true;
+       try {
+         for (const t of targets) {
+           const cur = (rawLotsRef.current || []).find(l => l && l.id === t.id);
+           if (!cur) continue;
+           const probe = await dehydrateSteps(cur.steps, async () => {}, { known: new Set(Object.keys(stepDiagramsRef.current)) });
+           if (probe === cur.steps) continue;
+           const save = saveDataRef.current;
+           if (!save) break;
+           await save('lots', t.id, { steps: cur.steps }, { background: true });
+         }
+       } catch (e) {
+         console.warn('測定図の片付けに失敗(次の巡回でやり直します)', e);
+       } finally { diagramSweepBusy.current = false; }
+     };
+     const timer = setInterval(tick, 90000);
+     const first = setTimeout(tick, 15000);
+     return () => { clearInterval(timer); clearTimeout(first); };
+   }, [user, db]);
 
    const retryLastSave = async () => {
      const p = lastFailedPayloadRef.current;
