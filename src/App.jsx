@@ -118,6 +118,8 @@ import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGu
 import { JuggleGuide } from './workscreen/JuggleGuide.jsx';
 // 📷 P074「小さくしました。この画像でいいですか？」(製品・最終と md5 一致の写し)
 import ShrinkConfirm from './ShrinkConfirm.jsx';
+// ✍ P112 不具合写真に印を描く(描く道具は製品と md5 一致の写し)
+import { DefectPhotoMarkEditor, MarkedPhoto } from './workscreen/DefectPhotoMarks.jsx';
 import { budgetOf, pickStep, shouldConfirm, shrinkNote } from './domain/imageBudget.js';
 // ⏱ 終わっていない工程を「該当なし」で閉じる時、時間・NG・写真を落とさない(製品検査 src/domain/skipKeepingRecord.js と md5 一致の写し)
 import { skipTaskKeepingRecord } from './domain/skipKeepingRecord.js';
@@ -7470,6 +7472,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const [defectPhotos, setDefectPhotos] = useState([]);
   // 📷 P074 小さくした時だけ「この画像でいいですか？」を出す(上限内なら黙って通す・実物を大きく見せる)
   const [shrinkAsk, setShrinkAsk] = useState(null); // { src, info, label, onOk, onRetake }
+  // ✍ P112 不具合写真の印(写真と同じ並びの配列)と、いま描いている写真の番号
+  const [defectPhotoMarks, setDefectPhotoMarks] = useState([]);
+  const [markEditIdx, setMarkEditIdx] = useState(-1);
   const defectPhotoRef = useRef(null);
 
   // Complaint (軽微不良 = 品質の不良) state
@@ -7880,6 +7885,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           stepInfo: curStep ? { stepId: curStep.id, title: curStep.title } : null,
           causeProcess: causeProcess || '',
           photos: photos || [],
+          // ✍ P112 印は写真と同じ並び。印が1つも無ければ持たない(今までの形のまま)
+          ...(type === 'defect' && Array.isArray(photos) && photos.length && defectPhotoMarks.some(m => Array.isArray(m) && m.length)
+            ? { photoMarks: photos.map((_, i) => (Array.isArray(defectPhotoMarks[i]) ? defectPhotoMarks[i] : [])) } : {}),
           ...(meta || {}) // 気づき・改善用: { improvementKind, targetStepTitle } 等
       };
       const updated = [...interruptions, newInt];
@@ -7890,6 +7898,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         setDefectLabel('');
         setDefectCauseProcess('');
         setDefectPhotos([]);
+        setDefectPhotoMarks([]);
       }
   };
 
@@ -11174,9 +11183,13 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                         <label className="block text-xs font-bold text-slate-500 mb-1">写真添付</label>
                         <div className="flex gap-2 flex-wrap">
                           {defectPhotos.map((p, i) => (
-                            <div key={i} className="w-16 h-16 border rounded overflow-hidden relative group/ph">
-                              <img src={p} className="w-full h-full object-cover"/>
-                              <button onClick={()=>setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i))} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
+                            <div key={i} className="flex flex-col items-center gap-0.5">
+                              <div className="w-16 h-16 border rounded overflow-hidden relative group/ph">
+                                <img src={p} className="w-full h-full object-cover"/>
+                                {(defectPhotoMarks[i] || []).length > 0 && <span className="absolute bottom-0 left-0 bg-violet-600 text-white text-[10px] px-1 rounded-tr">✍{defectPhotoMarks[i].length}</span>}
+                                <button onClick={()=>{setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i)); setDefectPhotoMarks(prev=>prev.filter((_,idx)=>idx!==i));}} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
+                              </div>
+                              <button onClick={()=>setMarkEditIdx(i)} className="text-[11px] font-bold text-violet-700 bg-violet-50 border border-violet-200 rounded px-1.5 min-h-[28px]">✍ 印</button>
                             </div>
                           ))}
                           <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
@@ -11184,6 +11197,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                           </button>
                           <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); const info=lastShrinkInfo(); if(info&&info.confirm){setShrinkAsk({src:img,info,label:'不具合の写真',onOk:()=>{setDefectPhotos(prev=>[...prev, img]); setShrinkAsk(null);},onRetake:()=>setShrinkAsk(null)});} else {setDefectPhotos(prev=>[...prev, img]);}} e.target.value='';}}/>
                           <ShrinkConfirm open={!!shrinkAsk} src={shrinkAsk?.src} info={shrinkAsk?.info} label={shrinkAsk?.label} onOk={() => shrinkAsk?.onOk?.()} onRetake={() => shrinkAsk?.onRetake?.()} />
+                          {markEditIdx >= 0 && defectPhotos[markEditIdx] && <DefectPhotoMarkEditor src={defectPhotos[markEditIdx]} marks={defectPhotoMarks[markEditIdx] || []} onCancel={() => setMarkEditIdx(-1)} onDone={(m) => { const at = markEditIdx; setDefectPhotoMarks(prev => { const n = [...prev]; while (n.length <= at) n.push([]); n[at] = m; return n; }); setMarkEditIdx(-1); }} />}
                         </div>
                       </div>
                     </div>
@@ -11193,7 +11207,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                       <div><span className="font-bold">対応開始</span>: 今すぐ対処開始。作業時間を分離して計測</div>
                     </div>
                     <div className="flex justify-end gap-2 mt-4 flex-wrap">
-                        <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
+                        <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);setDefectPhotoMarks([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
                         <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, true)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold min-h-[44px] disabled:opacity-40">📋 報告のみ</button>
                         <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, false)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">🚨 対応開始</button>
                     </div>
@@ -12768,9 +12782,13 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                 <label className="block text-xs font-bold text-slate-500 mb-1">写真添付</label>
                 <div className="flex gap-2 flex-wrap">
                   {defectPhotos.map((p, i) => (
-                    <div key={i} className="w-16 h-16 border rounded overflow-hidden relative group/ph">
-                      <img src={p} className="w-full h-full object-cover"/>
-                      <button onClick={()=>setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i))} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
+                    <div key={i} className="flex flex-col items-center gap-0.5">
+                      <div className="w-16 h-16 border rounded overflow-hidden relative group/ph">
+                        <img src={p} className="w-full h-full object-cover"/>
+                        {(defectPhotoMarks[i] || []).length > 0 && <span className="absolute bottom-0 left-0 bg-violet-600 text-white text-[10px] px-1 rounded-tr">✍{defectPhotoMarks[i].length}</span>}
+                        <button onClick={()=>{setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i)); setDefectPhotoMarks(prev=>prev.filter((_,idx)=>idx!==i));}} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
+                      </div>
+                      <button onClick={()=>setMarkEditIdx(i)} className="text-[11px] font-bold text-violet-700 bg-violet-50 border border-violet-200 rounded px-1.5 min-h-[28px]">✍ 印</button>
                     </div>
                   ))}
                   <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
@@ -12778,6 +12796,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                   </button>
                   <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); const info=lastShrinkInfo(); if(info&&info.confirm){setShrinkAsk({src:img,info,label:'不具合の写真',onOk:()=>{setDefectPhotos(prev=>[...prev, img]); setShrinkAsk(null);},onRetake:()=>setShrinkAsk(null)});} else {setDefectPhotos(prev=>[...prev, img]);}} e.target.value='';}}/>
                           <ShrinkConfirm open={!!shrinkAsk} src={shrinkAsk?.src} info={shrinkAsk?.info} label={shrinkAsk?.label} onOk={() => shrinkAsk?.onOk?.()} onRetake={() => shrinkAsk?.onRetake?.()} />
+                          {markEditIdx >= 0 && defectPhotos[markEditIdx] && <DefectPhotoMarkEditor src={defectPhotos[markEditIdx]} marks={defectPhotoMarks[markEditIdx] || []} onCancel={() => setMarkEditIdx(-1)} onDone={(m) => { const at = markEditIdx; setDefectPhotoMarks(prev => { const n = [...prev]; while (n.length <= at) n.push([]); n[at] = m; return n; }); setMarkEditIdx(-1); }} />}
                 </div>
               </div>
             </div>
@@ -12787,7 +12806,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
               <div><span className="font-bold">対応開始</span>: 今すぐ対処開始。作業時間を分離して計測</div>
             </div>
             <div className="flex justify-end gap-2 mt-4 flex-wrap">
-              <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
+              <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);setDefectPhotoMarks([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
               <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, true)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold min-h-[44px] disabled:opacity-40">📋 報告のみ</button>
               <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, false)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">🚨 対応開始</button>
             </div>
@@ -19397,8 +19416,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
          <div className="fixed inset-0 z-[80] bg-black/90 flex flex-col p-4 items-center justify-center cursor-pointer" onClick={() => setExpandedDefectImage(null)}>
            <div className="absolute top-4 right-4 text-white hover:text-slate-300"><X className="w-10 h-10" /></div>
            <div className="flex gap-4 flex-wrap justify-center items-center max-w-full max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-             {(Array.isArray(expandedDefectImage) ? expandedDefectImage : [expandedDefectImage]).map((src, idx) => (
-               <img key={idx} src={src} className="max-h-[80vh] max-w-[45vw] object-contain rounded-lg shadow-lg" />
+             {/* ✍ P112 印つきの写真は { photos, marks }。印を写真の上に重ねる */}
+             {(Array.isArray(expandedDefectImage) ? expandedDefectImage : (expandedDefectImage && Array.isArray(expandedDefectImage.photos) ? expandedDefectImage.photos : [expandedDefectImage])).map((src, idx) => (
+               <MarkedPhoto key={idx} src={src} marks={(expandedDefectImage && Array.isArray(expandedDefectImage.marks) && expandedDefectImage.marks[idx]) || []} imgClassName="max-h-[80vh] max-w-[45vw] object-contain rounded-lg shadow-lg" />
              ))}
            </div>
          </div>
@@ -19874,7 +19894,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <td className="p-3 text-xs">{d.stepInfo?.title || '全体'}</td>
                            <td className="p-3 text-rose-600 font-bold whitespace-pre-wrap">{d.label || ''}</td>
                            <td className="p-3 text-xs font-bold whitespace-nowrap">{d.causeProcess ? <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded">{d.causeProcess}</span> : '-'}</td>
-                           <td className="p-3 text-center">{d.photos && d.photos.length > 0 ? <button onClick={() => setExpandedDefectImage(d.photos)} className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold hover:bg-blue-200">{d.photos.length}枚</button> : '-'}</td>
+                           <td className="p-3 text-center">{d.photos && d.photos.length > 0 ? <button onClick={() => setExpandedDefectImage(Array.isArray(d.photoMarks) ? { photos: d.photos, marks: d.photoMarks } : d.photos)} className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold hover:bg-blue-200">{d.photos.length}枚</button> : '-'}</td>
                            <td className="p-3 text-xs text-slate-600 whitespace-nowrap">{d.workerName || ''}</td>
                            <td className="p-3 text-center">
                              <div className="flex items-center justify-center gap-1">

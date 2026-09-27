@@ -146,6 +146,9 @@ const PAIRS = [
   { file: 'domain/workerPlan.js', product: 'product-inspection-app/src/domain/workerPlan.js', md5: '813226cf8606115a270a27cf07181b5f' },
   // P074: 画面部品。製品・最終と md5 一致(d7ca21de…)
   { file: 'ShrinkConfirm.jsx', product: 'product-inspection-app/src/ShrinkConfirm.jsx', md5: 'd7ca21dec7173fad2662b68a54a4bf0a' },
+  // P112: 印を描く道具(画面部品)。描き方は製品と同じ
+  { file: 'MarkCanvas.jsx', product: 'product-inspection-app/src/MarkCanvas.jsx', md5: '8845eaaf8481df33679e06b52259ef8b' },
+  { file: 'RecipeMarks.jsx', product: 'product-inspection-app/src/RecipeMarks.jsx', md5: '30c5884e352229a0f896ca4fb6474f2c' },
 ];
 
 for (const p of PAIRS) {
