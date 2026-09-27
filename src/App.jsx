@@ -218,6 +218,12 @@ import { normalizeRequiredSkills, requiredSkillIdsForStep, toggleSkillOnStep, at
 import { FeedbackButton, FeedbackModal, FeedbackList, feedbackDeviceId } from './AppFeedback.jsx';
 import { FEEDBACK_COL, openFeedbackCount, feedbackConfigOf, toggleAgreePatch } from './domain/appFeedback.js';
 import { NoticePopup } from './AppNotice.jsx';
+import { LotImportOptionsPanel, LotImportPreviewModal } from './LotImportPanels.jsx'; // 📥 P034/P035
+import { QsDaysPropagateModal } from './QsDaysPropagate.jsx';
+import { planQsDaysChange } from './domain/qsDaysPropagate.js'; // 🧾➡📋 P109
+import { Bar as VizBar, Dots as VizDots } from './opsim/vizKit.jsx'; // 📊 P107 台数の点・進捗の棒
+// 📱 P108 PC/スマホの切替1本(製品と同じ layoutMode.js)。layoutInfo() は { wide, narrow, short } を返す。short(スマホ横)は narrow の仲間
+import { layoutInfo, nextLayoutMode, readLayoutMode, saveLayoutMode, layoutModeLabel } from './domain/layoutMode.js';
 import { NOTICE_COL, noticeConfigOf } from './domain/appNotices.js';
 
 // --- 一度だけ実行: 管理者未承認の厳密モード(localStorageの古い残骸)を全消去して既定OFFに戻す ---
@@ -14840,7 +14846,13 @@ const WorkScheduleSettingsPanel = ({ workSchedule, saveSettings, workloadEffecti
     );
 };
 
-const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandardMap, saveSettings, deleteSettingsFields }) => {
+const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandardMap, saveSettings, deleteSettingsFields, onEntryDaysChanged = null }) => {
+    // 🧾➡📋 P109 日数の欄に入った時の値を控え、出た時に変わっていれば親へ知らせる(検査リストの波及の窓)
+    const daysSnapRef = useRef(null);
+    const pickDays = (e) => ({ daysBefore: e?.daysBefore ?? null, shipDaysBefore: e?.shipDaysBefore ?? null, entryDaysBefore: e?.entryDaysBefore ?? null });
+    const daysFocus = (entry) => { daysSnapRef.current = { standardId: selectedQsId, templateId: entry?.templateId || '', before: pickDays(entry), after: pickDays(entry) }; };
+    const daysEdit = (patch) => { if (daysSnapRef.current) daysSnapRef.current.after = { ...daysSnapRef.current.after, ...patch }; };
+    const daysBlur = () => { const sn = daysSnapRef.current; daysSnapRef.current = null; if (!sn || !onEntryDaysChanged) return; if (JSON.stringify(sn.before) !== JSON.stringify(sn.after)) onEntryDaysChanged(sn); };
     const [selectedQsId, setSelectedQsId] = useState('');
     const [showCreate, setShowCreate] = useState(false);
     const [newStandardNo, setNewStandardNo] = useState('');
@@ -15330,7 +15342,9 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                 onChange={e => {
                                                     const v = e.target.value === '' ? null : parseInt(e.target.value) || 0;
                                                     setEntryDaysBefore(entryIdx, v);
+                                                    daysEdit({ daysBefore: v });
                                                 }}
+                                                onFocus={() => daysFocus(entry)} onBlur={daysBlur}
                                                 className="w-12 border rounded p-0.5 text-xs text-center font-mono bg-white"
                                             />
                                             <span className="text-xs text-emerald-700">日</span>
@@ -15339,7 +15353,8 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                         <label className="flex items-center gap-1 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5" title="進捗管理表の出荷日(AD列)の何日前を納期にするか。空なら取込の既定(1日前)">
                                             <span className="text-xs text-rose-700 font-bold">出荷日の</span>
                                             <input type="number" value={entry.shipDaysBefore ?? ''} placeholder="1"
-                                                onChange={e => setEntryField(entryIdx, { shipDaysBefore: e.target.value === '' ? null : parseInt(e.target.value) || 0 })}
+                                                onChange={e => { const v = e.target.value === '' ? null : parseInt(e.target.value) || 0; setEntryField(entryIdx, { shipDaysBefore: v }); daysEdit({ shipDaysBefore: v }); }}
+                                                onFocus={() => daysFocus(entry)} onBlur={daysBlur}
                                                 className="w-12 border rounded p-0.5 text-xs text-center font-mono bg-white" />
                                             <span className="text-xs text-rose-700">日前</span>
                                         </label>
@@ -15347,7 +15362,8 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                         <label className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title="入荷の日が表に無い時、入荷は納期の何日前とするか。空なら取込の既定(3日前)">
                                             <span className="text-xs text-amber-700 font-bold">入荷は納期の</span>
                                             <input type="number" value={entry.entryDaysBefore ?? ''} placeholder="3"
-                                                onChange={e => setEntryField(entryIdx, { entryDaysBefore: e.target.value === '' ? null : parseInt(e.target.value) || 0 })}
+                                                onChange={e => { const v = e.target.value === '' ? null : parseInt(e.target.value) || 0; setEntryField(entryIdx, { entryDaysBefore: v }); daysEdit({ entryDaysBefore: v }); }}
+                                                onFocus={() => daysFocus(entry)} onBlur={daysBlur}
                                                 className="w-12 border rounded p-0.5 text-xs text-center font-mono bg-white" />
                                             <span className="text-xs text-amber-700">日前</span>
                                         </label>
@@ -23621,7 +23637,41 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
    saveData('workers', w.id, resumePatch(Date.now()));
  };
 
- const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onRegisterPending = null, onRemovePending = null, onOpenStrictManager = null, currentUserName = '', parentTabs = null }) => {
+ const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onRegisterPending = null, onRemovePending = null, onOpenStrictManager = null, currentUserName = '', factoryCalendar = null, parentTabs = null }) => {
+  // 🧾➡📋 P109 品質規格の日数を直した → 検査リストの関係するロットの納期・入庫も直す(押す前に全部見せる・0件なら出さない)
+  const [qsPropagate, setQsPropagate] = useState(null);
+  const [qsPropagateBusy, setQsPropagateBusy] = useState('');
+  const openQsPropagate = ({ standardId, templateId, before, after }) => {
+    const { profiles, activeId } = normalizeSheetProfiles(settings || {}, DEFAULT_SHEET_MAP);
+    const smap = (profiles.find(p => p.id === activeId) || profiles[0] || {}).map || {};
+    const plan = planQsDaysChange({ standardId, templateId, before, after, lots, modelStandardMap: (settings && settings.modelStandardMap) || {},
+      calendar: factoryCalendar || null, defaultEntryDaysBefore: DEFAULT_IMPORT_OPTIONS.defaultEntryDaysBefore, entryHHMM: DEFAULT_IMPORT_OPTIONS.entryHHMM, defaultShipDaysBefore: smap.shipDaysBefore });
+    if (!plan.updates.length) return;
+    setQsPropagate({ ...plan, standardNo: (settings && settings.qualityStandards && settings.qualityStandards[standardId] && settings.qualityStandards[standardId].standardNo) || '' });
+  };
+  const applyQsPropagate = async () => {
+    if (!qsPropagate) return;
+    const list = qsPropagate.updates;
+    try {
+      let done = 0;
+      setQsPropagateBusy(`検査リストを直しています… 0/${list.length}`);
+      for (const u of list) {
+        const patch = {};
+        if (u.dueChange) patch.dueDate = u.newDueDate;
+        if (u.entryChange && u.newEntryAt) patch.entryAt = u.newEntryAt;
+        if (Object.keys(patch).length) await saveData('lots', u.lotId, patch);
+        done++;
+        setQsPropagateBusy(`検査リストを直しています… ${done}/${list.length}`);
+      }
+      setQsPropagate(null);
+      alert(`✓ 検査リストの ${done}件 を直しました`);
+    } catch (err) {
+      console.error(err);
+      alert('検査リストの更新中にエラーが発生しました: ' + (err.message || err));
+    } finally {
+      setQsPropagateBusy('');
+    }
+  };
   // 🏅 P117 卒業の直後に開く「独り立ちの記録」(SignoffModal)の相手。hooks は関数の先頭
   const [signoffFor, setSignoffFor] = useState(null);
   const [newProcessOpt, setNewProcessOpt] = useState('');
@@ -24311,7 +24361,9 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
              modelStandardMap={settings.modelStandardMap || {}}
              saveSettings={saveSettings}
              deleteSettingsFields={deleteSettingsFields}
+             onEntryDaysChanged={openQsPropagate}
            />
+           <QsDaysPropagateModal plan={qsPropagate} busy={qsPropagateBusy} onApply={applyQsPropagate} onCancel={() => { if (!qsPropagateBusy) setQsPropagate(null); }} />
          </div>
 
          {/* ロットカード表示項目設定 */}
@@ -25129,6 +25181,52 @@ const OrderGroupCard = ({ group, workers, templates, onOpen, onEdit = null, onDe
   );
 };
 
+// 📱 P108 見せ方(PC/スマホ)の購読者。製品 App.jsx 1165-1170・1215-1244 の写し
+const layoutSubscribers = new Set();
+let layoutModeValue = null;                       // 最初に使われた時だけ localStorage を読む
+const layoutModeNow = () => (layoutModeValue === null ? (layoutModeValue = readLayoutMode()) : layoutModeValue);
+const setLayoutModeGlobal = (m) => { layoutModeValue = saveLayoutMode(m); layoutSubscribers.forEach(f => { try { f(); } catch { /* 1つ壊れても他は起こす */ } }); };
+const viewportNow = () => {
+  try { return { w: window.innerWidth || 1280, h: window.innerHeight || 800 }; } catch { return { w: 1280, h: 800 }; }
+};
+/**
+ * いまの見せ方。戻り値 = layoutInfo() + 操作。
+ *   wide   : 広い版(今までのPCの見た目)でよい
+ *   narrow : 縦1列側。**short を含む**
+ *   short  : 縦が足りない(スマホ横 844×390)
+ *   cycle(): 自動 → PC → スマホ → 自動
+ */
+const useLayout = () => {
+  const [, setTick] = useState(0);
+  const [vp, setVp] = useState(viewportNow);
+  useEffect(() => {
+    const bump = () => setTick(t => t + 1);
+    const onResize = () => setVp(viewportNow());
+    layoutSubscribers.add(bump);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    onResize();   // 初回描画と実寸がズレる端末(アドレスバーの伸縮)へ念のため
+    return () => {
+      layoutSubscribers.delete(bump);
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, []);
+  const mode = layoutModeNow();
+  const info = layoutInfo(mode, vp.w, vp.h);
+  return {
+    ...info,
+    vw: vp.w, vh: vp.h,
+    // 端末そのものが狭いか(人の指定を無視した素の判定)。
+    // ⚠手で「PC」を選んだせいで閉じ込められた人に、戻る道を出す為だけに使う。
+    deviceNarrow: !layoutInfo('auto', vp.w, vp.h).wide,
+    label: layoutModeLabel(mode, info.layout),
+    cycle: () => setLayoutModeGlobal(nextLayoutMode(layoutModeNow())),
+    setMode: setLayoutModeGlobal,
+  };
+};
+
+
 /**
  * 📦 狭い時だけ「畳む」入れ物。(製品アプリ product-inspection-app の NarrowFold と同じ物)
  * ⚠⚠ fold=false(=PC) の時は **子をそのまま返すだけ**。囲いも増えないので、
@@ -25163,12 +25261,9 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
   // 担当者絞り込み (管理者/代理作業者向け): '' = 全員, 'me' = 自分のみ, workerId = 指定作業者
   const [workerFilter, setWorkerFilter] = useState('');
   // 🖥 狭い画面(1024px以下)かどうか。狭い時だけ絞り込み帯を畳む(NarrowFold)。広い画面は今まで通り。
-  const [narrow, setNarrow] = useState(() => { try { return window.innerWidth <= 1024; } catch { return false; } });
-  useEffect(() => {
-    const f = () => { try { setNarrow(window.innerWidth <= 1024); } catch { /* noop */ } };
-    window.addEventListener('resize', f);
-    return () => window.removeEventListener('resize', f);
-  }, []);
+  // 📱 P108 自分で幅を測るのをやめ、切替1本(useLayout)に揃える。狭い = PC 以外(スマホ・スマホ横)
+  const LY = useLayout();
+  const narrow = !LY.wide;
 
   // 詳細フィルタ (multi-select)
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
@@ -25320,6 +25415,8 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           畳んだ中に入れると「完了履歴へ行く道」が閉じている間 押せなくなるので、その時だけ今までどおり行の上に出す。
           広い画面(現場の 1366px)では下の行の左端に入り、帯は1本減る。 */}
       {narrow && parentTabsEl && <div data-band="inspection-tabs-narrow" className="shrink-0 flex items-center gap-1">{parentTabsEl}</div>}
+      {/* 📱 P108 見せ方の切替1本(自動→PC→スマホ→自動)。端末ごとに覚える */}
+      <div className="shrink-0 flex justify-end"><button type="button" onClick={LY.cycle} data-layout-toggle className={`text-xs font-bold text-slate-600 bg-white border rounded px-2 ${narrow ? 'min-h-[44px]' : 'py-1'}`} title="画面の見せ方を切り替えます（自動 → PC → スマホ → 自動）">🖥/📱 表示: {LY.label}</button></div>
       <NarrowFold
         fold={narrow}
         summary={<>
@@ -25340,14 +25437,14 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           {!narrow && parentTabsEl && (<>{parentTabsEl}<div className="h-7 w-px bg-slate-300 shrink-0" /></>)}
           <div className="flex items-center gap-2 text-sm font-bold text-slate-600">
             <MapPin className="w-4 h-4" /> エリア:
-            <select value={selectedZoneFilter} onChange={(e) => setSelectedZoneFilter(e.target.value)} className="border rounded px-2 py-1 bg-slate-50 text-slate-800 max-w-[10rem] md:max-w-[12rem] truncate">
+            <select value={selectedZoneFilter} onChange={(e) => setSelectedZoneFilter(e.target.value)} className={`border rounded px-2 py-1 bg-slate-50 text-slate-800 max-w-[10rem] md:max-w-[12rem] truncate ${narrow ? 'min-h-[44px]' : ''}`}>
               <option value="all">すべて</option>
               {mapZones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
             </select>
           </div>
           <div className="flex items-center gap-2 text-sm font-bold text-slate-600">
             <ArrowUpDown className="w-4 h-4" /> 並び替え:
-            <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} className="border rounded px-2 py-1 bg-slate-50 text-slate-800">
+            <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} className={`border rounded px-2 py-1 bg-slate-50 text-slate-800 ${narrow ? 'min-h-[44px]' : ''}`}>
               <option value="entry_asc">入荷日時 (早い順)</option>
               <option value="entry_desc">入荷日時 (遅い順)</option>
               <option value="due_asc">納期 (近い順)</option>
@@ -25419,7 +25516,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
             </datalist>
           </div>
           {/* 担当者絞り込み: 自分のみ / 全員 / 指定作業者 を選択可能 (管理者・代理作業向け) */}
-          <select value={workerFilter || (onlyMine ? 'me' : '')} onChange={(e) => { setWorkerFilter(e.target.value); setOnlyMine(e.target.value === 'me'); }} className="bg-white border rounded-lg px-2 py-1.5 text-sm font-bold text-slate-700 shadow-sm">
+          <select value={workerFilter || (onlyMine ? 'me' : '')} onChange={(e) => { setWorkerFilter(e.target.value); setOnlyMine(e.target.value === 'me'); }} className={`bg-white border rounded-lg px-2 py-1.5 text-sm font-bold text-slate-700 shadow-sm ${narrow ? 'min-h-[44px]' : ''}`}>
             <option value="">担当: 全員</option>
             {myWorkerId && <option value="me">自分のみ ({currentUserName})</option>}
             <optgroup label="作業者で絞り込み">
@@ -25618,7 +25715,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
               ))}
             </div>
           ) : viewMode === 'grid' ? (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 items-start pb-10">
+            <div className={`grid ${LY.wide ? 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4' : LY.short ? 'grid-cols-2 gap-2' : 'grid-cols-1 sm:grid-cols-2 gap-3'} items-start pb-10`}>
               {sortedLots.map(lot => {
                 const isPaused = Object.values(lot.tasks || {}).some(t => t.status === 'paused');
                 const zoneName = mapZones.find(z => z.id === lot.mapZoneId)?.name || '';
@@ -25654,7 +25751,11 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                           <div className="text-xs text-slate-600 leading-tight truncate" data-list-grid-model-text title={itemName}>{itemName}</div>
                         ) : null}
                       </div>
-                      <span className="text-xs font-bold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 shrink-0">{lot.quantity}台</span>
+                      {/* 🔢 P107 台数は「札」＋「点の並び」(製品と同じ)。数字の札は消さない */}
+                      <span className="shrink-0 inline-flex flex-col items-end gap-0.5" title={`${lot.quantity}台`}>
+                        <span className="text-xs font-bold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{lot.quantity}台</span>
+                        <VizDots count={lot.quantity} cap={10} tone="quiet" size="w-1.5 h-1.5" title={`${lot.quantity}台`} />
+                      </span>
                     </div>
                     {/* テンプレート名 */}
                     {templateName && (
@@ -25697,26 +25798,19 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                         {workerName && <WorkerBadge id={lot.workerId} workers={workers} />}
                       </div>
                     )}
-                    {/* 進捗バー */}
-                    {totalTasks > 0 && (
-                      <div>
-                        <div className="flex items-center justify-between text-xs mb-0.5">
-                          <span className="text-slate-500">進捗</span>
-                          <span className="font-mono font-bold text-slate-700">{completedCount}/{totalTasks} ({progressPct}%)</span>
-                        </div>
-                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-all ${
-                              progressPct >= 100 ? 'bg-emerald-500' :
-                              delayLevel === 'critical' ? 'bg-rose-500' :
-                              delayLevel === 'warning' ? 'bg-amber-500' :
-                              lot.status === 'processing' ? 'bg-blue-500' : 'bg-slate-400'
-                            }`}
-                            style={{ width: `${Math.min(100, progressPct)}%` }}
-                          />
-                        </div>
+                    {/* 📊 P107 進捗の棒は必ず出す(工程が読めない時は点線の枠=0 と別の絵)・h-3・遅れ気味は amber でなく lateSoon(製品と同じ) */}
+                    <div>
+                      <div className="flex items-center justify-between text-xs mb-0.5">
+                        <span className="text-slate-500">進捗</span>
+                        <span className="font-mono font-bold text-slate-700">{totalTasks > 0 ? `${completedCount}/${totalTasks} (${progressPct}%)` : '工程が読めていません'}</span>
                       </div>
-                    )}
+                      <VizBar
+                        value={totalTasks > 0 ? completedCount : null}
+                        max={totalTasks > 0 ? totalTasks : null}
+                        height="h-3"
+                        tone={progressPct >= 100 ? 'ahead' : delayLevel === 'critical' ? 'late' : delayLevel === 'warning' ? 'lateSoon' : lot.status === 'processing' ? 'plain' : 'quiet'}
+                        title={totalTasks > 0 ? `${completedCount}/${totalTasks}（${progressPct}%）` : '工程が読めていません'} />
+                    </div>
                     <div className="mt-1 flex items-center justify-between">
                       <span className={`px-2 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1 ${lot.status === 'processing' ? (isPaused ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700 ring-2 ring-blue-300 animate-pulse') : 'bg-slate-100 text-slate-500'}`}>
                         {lot.status === 'processing' && !isPaused && <span className="w-2 h-2 bg-blue-500 rounded-full animate-ping"/>}
@@ -25834,17 +25928,9 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                                 <span className="font-mono font-bold text-slate-700">{completedCount}/{totalTasks}</span>
                                 <span className="font-mono font-bold text-slate-700">{progressPct}%</span>
                               </div>
-                              <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full transition-all ${
-                                    progressPct >= 100 ? 'bg-emerald-500' :
-                                    delayLevel === 'critical' ? 'bg-rose-500' :
-                                    delayLevel === 'warning' ? 'bg-amber-500' :
-                                    lot.status === 'processing' ? 'bg-blue-500' : 'bg-slate-400'
-                                  }`}
-                                  style={{ width: `${Math.min(100, progressPct)}%` }}
-                                />
-                              </div>
+                              <VizBar value={completedCount} max={totalTasks} height="h-3"
+                                tone={progressPct >= 100 ? 'ahead' : delayLevel === 'critical' ? 'late' : delayLevel === 'warning' ? 'lateSoon' : lot.status === 'processing' ? 'plain' : 'quiet'}
+                                title={`${completedCount}/${totalTasks}（${progressPct}%）`} />
                               {prog?.isProcessing && delayLevel && delayLevel !== 'ontime' && delayLevel !== 'completed' && (
                                 <div className={`text-xs font-bold mt-0.5 ${
                                   delayLevel === 'critical' ? 'text-rose-700' :
@@ -30595,7 +30681,16 @@ const QuotaStoppedPanel = ({ until }) => (
    const allTplInputRef = useRef(null);
    const backupInputRef = useRef(null);
    const progressMgmtInputRef = useRef(null);
-   const [progressImportPreview, setProgressImportPreview] = useState(null);  // 工機進捗管理表 取込プレビュー結果
+   // 📥 P035 入荷登録Excel取込の自動化スイッチ(既定は importPlan.js の DEFAULT_IMPORT_OPTIONS がただ1つの持ち主)
+  const [lotImportOpts, setLotImportOpts] = useState(() => ({
+    useModelTemplates: DEFAULT_IMPORT_OPTIONS.useModelTemplates,
+    useDueOffset: DEFAULT_IMPORT_OPTIONS.useDueOffset,
+    useEntryOffset: DEFAULT_IMPORT_OPTIONS.useEntryOffset,
+    defaultEntryDaysBefore: DEFAULT_IMPORT_OPTIONS.defaultEntryDaysBefore,
+  }));
+  const [lotImportPreview, setLotImportPreview] = useState(null); // 📥 P034 入荷登録Excel 取込プレビュー(押す前に必ず見せる)
+  const [lotImportBusy, setLotImportBusy] = useState(false);
+  const [progressImportPreview, setProgressImportPreview] = useState(null);  // 工機進捗管理表 取込プレビュー結果
    const [progressImportBusy, setProgressImportBusy] = useState(false);       // ⏳ P097 進捗管理表を読んでいる最中(大きい表は20秒ほどかかる。黙って待たせない)
    const [progressImportSaving, setProgressImportSaving] = useState('');      // ⏳ P097 確定の書き込み中「N/M」
  
@@ -33005,11 +33100,13 @@ const QuotaStoppedPanel = ({ until }) => (
        const msToYmdHm = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad2x(d.getMonth() + 1)}-${pad2x(d.getDate())} ${pad2x(d.getHours())}:${pad2x(d.getMinutes())}`; };
        const rows = [];
        const expandSkipped = [];
+       let weekendCount = 0;
        for (const r of rawRows) {
          const res = planRowLots(
            { model: String(r.model), orderNo: String(r.orderNo), qty: r.qty, dueYMD: r.dueDate, entryRaw: r.entryGiven ? msToYmdHm(r.entryAt) : '', templateIdFromExcel: r.templateIdRaw },
-           { modelMasters: settings.modelMasters || {}, qualityStandards: settings.qualityStandards || {}, modelStandardMap: settings.modelStandardMap || {}, templates, options: { calendar: factoryCalendar || null } },
+           { modelMasters: settings.modelMasters || {}, qualityStandards: settings.qualityStandards || {}, modelStandardMap: settings.modelStandardMap || {}, templates, options: { ...lotImportOpts, entryHHMM: DEFAULT_IMPORT_OPTIONS.entryHHMM, calendar: factoryCalendar || null } },
          );
+         weekendCount += Number(res.entryOnWeekendCount) || 0;
          for (const sk of res.skipped) expandSkipped.push(`⏭ ${r.orderNo} ${r.model} — ${sk.reason === '型式マスタにこの型式の登録がありません' ? '品質規格マスタに品目コードの紐付けがありません' : sk.reason === '型式マスタにテンプレートが割り当てられていません' ? '品質規格にテンプレートが割り当てられていません' : sk.reason}`);
          for (const l of res.lots) {
            rows.push({ model: r.model, modelText: r.modelText, orderNo: r.orderNo, qty: r.qty, templateId: l.templateId, priority: r.priority,
@@ -33082,9 +33179,21 @@ const QuotaStoppedPanel = ({ until }) => (
        }
 
        // ===== 確認(この時点ではまだ何も書き込んでいない) =====
-       const msg = [`取込内容の確認:`, `  新規: ${newCount}件`, `  上書き: ${updateCount}件`, `  無視: ${skipCount}件`, '', ...details].join('\n');
-       if (!confirm(msg + '\n\nOKで書き込みます（キャンセルすると何も変更しません）')) return;
+       // 📥 P034 confirm() の文字ではなく表の窓で見せる。「取込み確定」を押すまで何も書かない(confirmLotImport)。
+       setLotImportPreview({ plan, newCount, updateCount, skipCount, skipRows: details.filter(d => d.startsWith('⏭')), weekendCount,
+         dataRowCount: rawRows.length, fileName: file.name || '', options: { ...lotImportOpts } });
+     } catch (err) {
+       console.error(err);
+       alert('Excelファイルの読み込みに失敗しました: ' + err.message);
+     }
+   };
 
+   // 📥 P034 窓の「取込み確定」で初めて書く(中身は旧 handleLotExcelUpload のパス2そのまま)
+   const confirmLotImport = async () => {
+     if (!lotImportPreview || lotImportBusy) return;
+     const { plan, newCount, updateCount, skipCount } = lotImportPreview;
+     setLotImportBusy(true);
+     try {
        // ===== パス2: 書き込み =====
        for (const p of plan) {
          if (p.type === 'update') {
@@ -33121,6 +33230,7 @@ const QuotaStoppedPanel = ({ until }) => (
              serialNo: row.orderNo, quantity: row.qty, unitSerialNumbers: row.serials,
              templateId: row.templateId, priority: row.priority, dueDate: row.dueDate,
              entryAt: row.entryAt, status: 'waiting', location: 'arrival',
+             importedFromExcel: true, importSource: 'arrival-excel', // 📥 P034 取込の印(P124 と揃える)
              mapZoneId: null, x: 0, y: 0, workerId: null, createdAt: Date.now(),
              currentStepIndex: 0, steps, totalWorkTime: 0, workStartTime: null,
              // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。読む側は lot.stepTimes || {}。
@@ -33132,9 +33242,12 @@ const QuotaStoppedPanel = ({ until }) => (
          }
        }
        alert(`✅ 完了 — 新規${newCount}件 / 上書き${updateCount}件 / 無視${skipCount}件`);
+       setLotImportPreview(null);
      } catch (err) {
        console.error(err);
-       alert('Excelファイルの読み込みに失敗しました: ' + err.message);
+       alert('取込の書き込みに失敗しました（途中まで書けている事があります）: ' + err.message);
+     } finally {
+       setLotImportBusy(false);
      }
    };
 
@@ -34356,7 +34469,7 @@ const QuotaStoppedPanel = ({ until }) => (
              getQsTemplateEntries={getQsTemplateEntries} isAutoStep={isAutoStep} itemMaster={settings.itemMaster || null} />
          </div></div>}
          {activeTab === 'measurement-settings' && <MeasurementSettingsView settings={settings} saveSettings={saveSettings} comboPresets={settings?.comboPresets || []} templates={templates} />}
-         {activeTab === 'templates' && <TemplatesView onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel} editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
+         {activeTab === 'templates' && <TemplatesView onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel} editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} factoryCalendar={factoryCalendar} />}
          </div>
        </main>
        
@@ -34619,6 +34732,7 @@ const QuotaStoppedPanel = ({ until }) => (
                  </label>
                </div>
              </div>
+             {!editingLot && <LotImportOptionsPanel opts={lotImportOpts} setOpts={setLotImportOpts} />}
              <form onSubmit={(e) => {
                e.preventDefault();
                handleAddLot(Object.fromEntries(new FormData(e.target)));
@@ -34765,7 +34879,8 @@ const QuotaStoppedPanel = ({ until }) => (
          <div data-progress-import-busy="1" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] bg-indigo-700 text-white px-4 py-3 rounded-xl shadow-xl text-sm font-bold flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin"/> {progressImportSaving || '進捗管理表を読んでいます…（大きい表だと20秒ほどかかります）'}</div>
        )}
        {/* 工機進捗管理表 取込プレビュー モーダル */}
-       {progressImportPreview && (
+       <LotImportPreviewModal preview={lotImportPreview} templates={templates} busy={lotImportBusy} onCancel={() => { if (!lotImportBusy) setLotImportPreview(null); }} onConfirm={confirmLotImport} />
+      {progressImportPreview && (
          <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
            <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden">
              <div className="bg-indigo-600 text-white p-4 flex justify-between items-center shrink-0">
