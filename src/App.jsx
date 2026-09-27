@@ -28158,13 +28158,14 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
       if (csvRows.length < 2) { alert("CSVのデータがありません。"); return; }
       const hdrs = csvRows[0].map(h => h.replace(/^"|"$/g, '').trim());
       if (hdrs[0] && hdrs[0].charCodeAt(0) === 0xFEFF) hdrs[0] = hdrs[0].substring(1);
-      const idxOrderNo = hdrs.indexOf('指図番号'), idxUnitNo = hdrs.indexOf('ユニットNo'), idxTitle = hdrs.indexOf('検査項目'), idxCategory = hdrs.indexOf('カテゴリ'), idxDuration = hdrs.indexOf('実績時間(秒)'), idxWorker = hdrs.indexOf('作業者');
+      const idxOrderNo = hdrs.indexOf('指図番号'), idxUnitNo = hdrs.indexOf('ユニットNo'), idxTitle = hdrs.indexOf('検査項目'), idxCategory = hdrs.indexOf('カテゴリ'), idxDuration = hdrs.indexOf('実績時間(秒)'), idxWorker = hdrs.indexOf('作業者'), idxResult = hdrs.indexOf('結果');
       if (idxOrderNo === -1 || idxUnitNo === -1 || idxTitle === -1) { alert("CSV形式が正しくありません。必須列（指図番号、ユニットNo、検査項目）が見つかりません。"); return; }
       const updates = {};
       for (let i = 1; i < csvRows.length; i++) {
         const row = csvRows[i]; if (row.length < hdrs.length) continue;
         const getVal = (idx) => idx !== -1 && row[idx] ? row[idx].replace(/^"|"$/g, '').trim() : '';
         const orderNo = getVal(idxOrderNo), unitNo = getVal(idxUnitNo), title = getVal(idxTitle), category = getVal(idxCategory), duration = parseInt(getVal(idxDuration), 10) || 0, workerName = getVal(idxWorker);
+        const isSkip = getVal(idxResult) === 'N/A'; // P080: 結果=N/A は『該当なし(対象外)』由来 → completed に戻さない
         if (!orderNo || !unitNo || !title) continue;
         const matchLot = completedLots.find(l => l.orderNo === orderNo); if (!matchLot) continue;
         if (!updates[matchLot.id]) updates[matchLot.id] = { tasks: JSON.parse(JSON.stringify(matchLot.tasks || {})) };
@@ -28178,8 +28179,10 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
           if (isNaN(occ) || occ < 0) continue;
           const loKey = `${step.id}-lot-${occ}`;
           const ex = updates[matchLot.id].tasks[loKey];
+          const loSkip = isSkip || ex?.status === 'skipped';
           updates[matchLot.id].tasks[loKey] = {
-            ...(ex || { startTime: null }), status: 'completed', duration,
+            ...(ex || { startTime: null }), status: loSkip ? 'skipped' : 'completed', duration,
+            ...(loSkip ? { skipReason: ex?.skipReason || '該当なし(対象外)', skipAt: ex?.skipAt || importEndTs } : {}),
             workerName: workerName !== '-' ? workerName : (ex?.workerName || ''),
             firstStartTime: ex?.firstStartTime || ex?.startTime || (duration > 0 ? importEndTs - duration * 1000 : importEndTs),
             endTime: ex?.endTime || importEndTs,
@@ -28193,10 +28196,12 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
         const actualKey = updates[matchLot.id].tasks[taskKey1] ? taskKey1 : taskKey2;
         // CSV取込で時刻情報がない場合は、ロットの completedAt or updatedAt を流用
         const importEnd = (typeof matchLot.completedAt === 'number' ? matchLot.completedAt : null) || Date.now();
+        const nSkip = isSkip || existingTask?.status === 'skipped';
         updates[matchLot.id].tasks[actualKey] = {
           ...(existingTask || { startTime: null }),
-          status: 'completed',
+          status: nSkip ? 'skipped' : 'completed',
           duration,
+          ...(nSkip ? { skipReason: existingTask?.skipReason || '該当なし(対象外)', skipAt: existingTask?.skipAt || importEnd } : {}),
           workerName: workerName !== '-' ? workerName : (existingTask?.workerName || ''),
           // CSV から復元したタスクには時刻が無い → 既存値があれば優先、無ければ ロット完了時刻ベースで埋める
           firstStartTime: existingTask?.firstStartTime || existingTask?.startTime || (duration > 0 ? importEnd - duration * 1000 : importEnd),
@@ -28206,10 +28211,17 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
       const updateLotIds = Object.keys(updates);
       if (updateLotIds.length === 0) { alert("更新対象のデータが見つかりませんでした。"); return; }
       if (confirm(`${updateLotIds.length}件のロットの実績を更新します。よろしいですか？`)) {
-        for (const lotId of updateLotIds) await saveData('lots', lotId, { tasks: updates[lotId].tasks });
-        alert("更新が完了しました。");
+        // P081: 1件失敗しても残りを続け、何件入って何件落ちたかを出す
+        let okN = 0; const failed = [];
+        for (const lotId of updateLotIds) {
+          try { await saveData('lots', lotId, { tasks: updates[lotId].tasks }); okN++; }
+          catch (err) { failed.push(lotId); console.error('CSV実績取込の保存に失敗', lotId, err); }
+        }
+        alert(failed.length
+          ? `更新: 成功 ${okN}件 / 失敗 ${failed.length}件\n\n失敗したロット: ${failed.slice(0, 5).join(', ')}${failed.length > 5 ? ' ほか' : ''}\n通信を確認して、同じCSVでもう一度取り込んでください（成功済みは上書きされるだけです）。`
+          : `更新が完了しました。（${okN}件）`);
       }
-      e.target.value = '';
+      e.target.value = ''; // ⚠同じファイルを選び直せるよう必ず空にする(失敗時も)
     };
     reader.readAsText(file);
   };
