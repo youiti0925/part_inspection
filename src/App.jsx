@@ -28325,6 +28325,11 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
                   </div>
                 </div>
                 <div className="text-sm text-slate-600">指図: <span className="font-bold">{lot.orderNo}</span> | <span className="bg-slate-100 px-1.5 rounded">{lot.quantity}台</span></div>
+                {/* P082: どのテンプレで検査したか(製品 App.jsx:43955 と同じ札) */}
+                <div className="flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-1 w-fit max-w-full" title={templates?.find(t => t.id === lot.templateId)?.name || ''} data-history-card-template>
+                  <ClipboardList className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">{templates?.find(t => t.id === lot.templateId)?.name || '(テンプレ不明)'}</span>
+                </div>
                 <div className="text-xs text-slate-500 flex items-center gap-1"><User className="w-3 h-3" /> {workers.find(w => w.id === lot.workerId)?.name || '未割当'}</div>
                 <div className="text-xs font-mono text-slate-600 flex items-center gap-1">
                   <Clock className="w-3 h-3" /> {formatTime(lot.tasks ? Object.values(lot.tasks).reduce((s, t) => s + (t.status === 'completed' ? (t.duration || 0) : 0), 0) : Math.floor((lot.totalWorkTime || 0) / 1000))}
@@ -28354,7 +28359,7 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
           <div className="bg-white rounded-lg shadow border overflow-hidden">
             <table className="w-full text-left border-collapse">
               <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm text-xs text-slate-500 uppercase">
-                <tr><th className="p-3 font-bold border-b">完了日時</th><th className="p-3 font-bold border-b">指図番号</th><th className="p-3 font-bold border-b">品目コード</th><th className="p-3 font-bold border-b text-center">台数</th><th className="p-3 font-bold border-b">作業者</th><th className="p-3 font-bold border-b">実績時間</th><th className="p-3 font-bold border-b text-right">操作</th></tr>
+                <tr><th className="p-3 font-bold border-b">完了日時</th><th className="p-3 font-bold border-b">指図番号</th><th className="p-3 font-bold border-b">品目コード</th><th className="p-3 font-bold border-b">テンプレート</th><th className="p-3 font-bold border-b text-center">台数</th><th className="p-3 font-bold border-b">作業者</th><th className="p-3 font-bold border-b">実績時間</th><th className="p-3 font-bold border-b text-right">操作</th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
                 {sortedCompletedLots.map(lot => {
@@ -28370,6 +28375,7 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
                         <div className="text-xs font-normal text-slate-500 truncate max-w-[14rem]" data-history-table-model-text title={resolveItemName(lot.model, lot.modelText, settings?.itemMaster)}>{resolveItemName(lot.model, lot.modelText, settings?.itemMaster)}</div>
                       ) : null}
                     </td>
+                    <td className="p-3"><span className="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5" title={templates?.find(t => t.id === lot.templateId)?.name || ''} data-history-table-template><ClipboardList className="w-3 h-3 shrink-0" />{templates?.find(t => t.id === lot.templateId)?.name || '(不明)'}</span></td>
                     <td className="p-3 text-center"><span className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">{lot.quantity}台</span></td>
                     <td className="p-3 text-xs text-slate-600">{workers.find(w => w.id === lot.workerId)?.name || '未割当'}</td>
                     <td className="p-3 font-mono text-sm">{formatTime(totalActual)}</td>
@@ -28392,7 +28398,7 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
                   </tr>
                   );
                 })}
-                {sortedCompletedLots.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-slate-400">表示するデータがありません</td></tr>}
+                {sortedCompletedLots.length === 0 && <tr><td colSpan="8" className="p-8 text-center text-slate-400">表示するデータがありません</td></tr>}
               </tbody>
             </table>
           </div>
