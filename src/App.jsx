@@ -8385,8 +8385,10 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
         // --- キャンセル（取り消し）コマンド ---
         if (matchCancel(cmd) || matchCancel(rawCmd)) {
-          handleUndo();
-          await speakAsyncWithLog('取り消しました');
+          // 🖐 最新の控えを読む(無ければそう言う・製品 c45a481)
+          const lu = voiceLatestRef.current || {};
+          if ('pendingUndo' in lu ? lu.pendingUndo : pendingUndo) { (lu.handleUndo || handleUndo)(); await speakAsyncWithLog('取り消しました'); }
+          else await speakAsyncWithLog('取り消せる操作がありません');
           continue;
         }
 
@@ -8810,8 +8812,10 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
       // キャンセル（取り消し）
       if (matchCancel(norm) || matchCancel(cmd)) {
-        handleUndo();
-        await speakAsyncWithLog('取り消しました');
+        // 🖐 最新の控えを読む(無ければそう言う・製品 c45a481)
+        const lu = voiceLatestRef.current || {};
+        if ('pendingUndo' in lu ? lu.pendingUndo : pendingUndo) { (lu.handleUndo || handleUndo)(); await speakAsyncWithLog('取り消しました'); }
+        else await speakAsyncWithLog('取り消せる操作がありません');
         continue;
 
       } else if (matchComplete(norm) || matchComplete(cmd)) {
@@ -8915,7 +8919,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             // 取り消し (直近操作のundo窓内のみ実効)
             // 🖐 音声の輪は始めた時の写しを持ち続けるので、とうに消えた取り消しの控えで tasks を巻き戻していた → 最新を読む(製品 fb4a1bc)
             const lu = voiceLatestRef.current;
-            if (lu.pendingUndo ?? pendingUndo) { (lu.handleUndo || handleUndo)(); await speakAsyncWithLog('取り消しました'); }
+            if ('pendingUndo' in lu ? lu.pendingUndo : pendingUndo) { (lu.handleUndo || handleUndo)(); await speakAsyncWithLog('取り消しました'); }
             else await speakAsyncWithLog('取り消せる操作がありません');
           }
         }
