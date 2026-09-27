@@ -213,6 +213,7 @@ import { FeedbackButton, FeedbackModal, FeedbackList, feedbackDeviceId } from '.
 import { FEEDBACK_COL, openFeedbackCount, feedbackConfigOf, toggleAgreePatch } from './domain/appFeedback.js';
 import { NoticePopup } from './AppNotice.jsx';
 import { LotImportOptionsPanel, LotImportPreviewModal } from './LotImportPanels.jsx'; // 📥 P034/P035
+import { Bar as VizBar, Dots as VizDots } from './opsim/vizKit.jsx'; // 📊 P107 台数の点・進捗の棒
 import { NOTICE_COL, noticeConfigOf } from './domain/appNotices.js';
 
 // --- 一度だけ実行: 管理者未承認の厳密モード(localStorageの古い残骸)を全消去して既定OFFに戻す ---
@@ -25628,7 +25629,11 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                           <div className="text-xs text-slate-600 leading-tight truncate" data-list-grid-model-text title={itemName}>{itemName}</div>
                         ) : null}
                       </div>
-                      <span className="text-xs font-bold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 shrink-0">{lot.quantity}台</span>
+                      {/* 🔢 P107 台数は「札」＋「点の並び」(製品と同じ)。数字の札は消さない */}
+                      <span className="shrink-0 inline-flex flex-col items-end gap-0.5" title={`${lot.quantity}台`}>
+                        <span className="text-xs font-bold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{lot.quantity}台</span>
+                        <VizDots count={lot.quantity} cap={10} tone="quiet" size="w-1.5 h-1.5" title={`${lot.quantity}台`} />
+                      </span>
                     </div>
                     {/* テンプレート名 */}
                     {templateName && (
@@ -25671,26 +25676,19 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                         {workerName && <WorkerBadge id={lot.workerId} workers={workers} />}
                       </div>
                     )}
-                    {/* 進捗バー */}
-                    {totalTasks > 0 && (
-                      <div>
-                        <div className="flex items-center justify-between text-xs mb-0.5">
-                          <span className="text-slate-500">進捗</span>
-                          <span className="font-mono font-bold text-slate-700">{completedCount}/{totalTasks} ({progressPct}%)</span>
-                        </div>
-                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-all ${
-                              progressPct >= 100 ? 'bg-emerald-500' :
-                              delayLevel === 'critical' ? 'bg-rose-500' :
-                              delayLevel === 'warning' ? 'bg-amber-500' :
-                              lot.status === 'processing' ? 'bg-blue-500' : 'bg-slate-400'
-                            }`}
-                            style={{ width: `${Math.min(100, progressPct)}%` }}
-                          />
-                        </div>
+                    {/* 📊 P107 進捗の棒は必ず出す(工程が読めない時は点線の枠=0 と別の絵)・h-3・遅れ気味は amber でなく lateSoon(製品と同じ) */}
+                    <div>
+                      <div className="flex items-center justify-between text-xs mb-0.5">
+                        <span className="text-slate-500">進捗</span>
+                        <span className="font-mono font-bold text-slate-700">{totalTasks > 0 ? `${completedCount}/${totalTasks} (${progressPct}%)` : '工程が読めていません'}</span>
                       </div>
-                    )}
+                      <VizBar
+                        value={totalTasks > 0 ? completedCount : null}
+                        max={totalTasks > 0 ? totalTasks : null}
+                        height="h-3"
+                        tone={progressPct >= 100 ? 'ahead' : delayLevel === 'critical' ? 'late' : delayLevel === 'warning' ? 'lateSoon' : lot.status === 'processing' ? 'plain' : 'quiet'}
+                        title={totalTasks > 0 ? `${completedCount}/${totalTasks}（${progressPct}%）` : '工程が読めていません'} />
+                    </div>
                     <div className="mt-1 flex items-center justify-between">
                       <span className={`px-2 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1 ${lot.status === 'processing' ? (isPaused ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700 ring-2 ring-blue-300 animate-pulse') : 'bg-slate-100 text-slate-500'}`}>
                         {lot.status === 'processing' && !isPaused && <span className="w-2 h-2 bg-blue-500 rounded-full animate-ping"/>}
@@ -25808,17 +25806,9 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                                 <span className="font-mono font-bold text-slate-700">{completedCount}/{totalTasks}</span>
                                 <span className="font-mono font-bold text-slate-700">{progressPct}%</span>
                               </div>
-                              <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full transition-all ${
-                                    progressPct >= 100 ? 'bg-emerald-500' :
-                                    delayLevel === 'critical' ? 'bg-rose-500' :
-                                    delayLevel === 'warning' ? 'bg-amber-500' :
-                                    lot.status === 'processing' ? 'bg-blue-500' : 'bg-slate-400'
-                                  }`}
-                                  style={{ width: `${Math.min(100, progressPct)}%` }}
-                                />
-                              </div>
+                              <VizBar value={completedCount} max={totalTasks} height="h-3"
+                                tone={progressPct >= 100 ? 'ahead' : delayLevel === 'critical' ? 'late' : delayLevel === 'warning' ? 'lateSoon' : lot.status === 'processing' ? 'plain' : 'quiet'}
+                                title={`${completedCount}/${totalTasks}（${progressPct}%）`} />
                               {prog?.isProcessing && delayLevel && delayLevel !== 'ontime' && delayLevel !== 'completed' && (
                                 <div className={`text-xs font-bold mt-0.5 ${
                                   delayLevel === 'critical' ? 'text-rose-700' :
