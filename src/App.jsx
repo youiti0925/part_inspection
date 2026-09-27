@@ -2162,10 +2162,13 @@ const DEFAULT_LOT_CARD_DISPLAY = {
   timeRange: true,     // 予測時間範囲 (開始〜ETA)
   delayStatus: true,   // 遅延ラベル
   progressBar: true,   // 下部の進捗バー
+  modelText: true,     // 品名(品目テキスト)。部品だけ。既定ON(清水さんの判断待ち Q6)
 };
 
 // アプリ全体で共有: 各 LotCard が個別に display を渡さなくても済む
 const LotCardDisplayContext = React.createContext(DEFAULT_LOT_CARD_DISPLAY);
+// 📒 品目名簿(settings.itemMaster)。LotCard がロットに品名が無い時に名簿から補うため(resolveItemName)。
+const ItemMasterContext = React.createContext(null);
 // 勤務スケジュール (停止理由などの経過時間を勤務時間内だけでカウントするため)
 const WorkScheduleContext = React.createContext(DEFAULT_WORK_SCHEDULE);
 
@@ -2241,6 +2244,7 @@ const PriorityBadge = ({ priority, className = '' }) => {
 const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData, setDraggedLotId, draggedLotId, variant = 'full', onEdit, onDelete, onMove, display: displayProp }) => {
   const workSchedule = React.useContext(WorkScheduleContext);
   const ctxDisplay = React.useContext(LotCardDisplayContext);
+  const ctxItemMaster = React.useContext(ItemMasterContext);
   const display = { ...DEFAULT_LOT_CARD_DISPLAY, ...(ctxDisplay || {}), ...(displayProp || {}) };
   const touchRef = useRef({ timer: null, dragging: false, ghost: null, startX: 0, startY: 0 });
   const cardRef = useRef(null);
@@ -2615,6 +2619,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
             {display.orderNo && <span className="font-black text-base text-slate-800">{lot.orderNo}</span>}
             <PriorityBadge priority={lot.priority} />
             {display.model && <span className="font-bold text-base text-slate-700">{lot.model}</span>}
+            {display.modelText && (() => { const nm = resolveItemName(lot.model, lot.modelText, ctxItemMaster); return nm ? <span data-lot-card-model-text="1" className="text-xs font-bold text-slate-500 truncate">{nm}</span> : null; })()}
             {display.quantity && <span className="text-sm font-bold text-slate-500 shrink-0 ml-auto">{lot.quantity}台</span>}
           </div>
         )}
@@ -22772,7 +22777,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
              <div className="flex gap-2 shrink-0">
                <button
                  type="button"
-                 onClick={() => saveSettings({ lotCardDisplay: { orderNo: true, model: true, quantity: true, workerBadge: true, progressBar: true, templateName: false, entryTime: false, elapsedTime: false, progressPct: false, nextStep: false, timeRange: false, delayStatus: false } })}
+                 onClick={() => saveSettings({ lotCardDisplay: { orderNo: true, model: true, quantity: true, workerBadge: true, progressBar: true, templateName: false, entryTime: false, elapsedTime: false, progressPct: false, nextStep: false, timeRange: false, delayStatus: false, modelText: false } })}
                  className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded font-bold"
                >
                  最小表示 (5項目)
@@ -22804,6 +22809,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                { key: 'timeRange', label: '予測時間範囲 (開始〜ETA)' },
                { key: 'delayStatus', label: '遅延ラベル' },
                { key: 'progressBar', label: '下部の進捗バー' },
+               { key: 'modelText', label: '品名(品目テキスト)' },
              ];
              return (
                <>
@@ -31533,6 +31539,7 @@ const QuotaStoppedPanel = ({ until }) => (
    return (
      <WorkScheduleContext.Provider value={workScheduleWithCalendar}>
      <LotCardDisplayContext.Provider value={settings.lotCardDisplay || DEFAULT_LOT_CARD_DISPLAY}>
+     <ItemMasterContext.Provider value={settings.itemMaster || null}>
      {/* グローバル CSS: 作業中ロット用の強い点滅アニメーション (Tailwind animate-pulse より強力) */}
      <style>{`
        @keyframes lotBlink {
@@ -32556,6 +32563,7 @@ const QuotaStoppedPanel = ({ until }) => (
        )}
 
      </div>
+     </ItemMasterContext.Provider>
      </LotCardDisplayContext.Provider>
      </WorkScheduleContext.Provider>
    );
