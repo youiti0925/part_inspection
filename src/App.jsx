@@ -18815,6 +18815,19 @@ const ProfitDetailModal = ({ row, lots = [], settings = {}, rate = 0, onClose, o
 };
 
 // 改善PDCA パネル: 重点工程→カルテ化、カンバンボード(計画/実施中/効果測定中/完了)、検索
+// 🚦 P148 進行中の改善カルテの上限(製品 GOAL_ENGINE_DEFAULTS.maxActive=3 と同じ既定)。
+//   既定: 部品では止めずに確かめるだけ(上限以上なら「それでも作るか」を聞く)。値は settings.improvementMaxActive(無ければ3)。
+const IMPROVEMENT_ACTIVE_STATUSES = ['plan', 'doing', 'measuring'];
+const improvementCapOk = (improvements, settings) => {
+  const active = (improvements || []).filter(c => c && IMPROVEMENT_ACTIVE_STATUSES.includes(c.status)).length;
+  const raw = Number(settings && settings.improvementMaxActive);
+  const maxActive = Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 3;
+  if (active < maxActive) return true;
+  return window.confirm(`進行中のカルテが ${active}件 で上限(${maxActive}件)です。
+新しく始めるより、止まっているカルテを先に進めるか閉じるのがおすすめです。
+
+それでも新しいカルテを作りますか？`);
+};
 const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, saveData, deleteData, customTargetTimes = {}, modelGroups = [], currentUserName = '', templates = [] }) => {
   const [openId, setOpenId] = useState(null);
   const [detailRow, setDetailRow] = useState(null);
@@ -18873,6 +18886,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
   const stepOptions = useMemo(() => enumerateModelSteps(lots).filter(m => m.model === newModel), [lots, newModel]);
 
   const createCard = (model, stepKey, stepTitle, category, source) => {
+    if (!improvementCapOk(improvements, settings)) return; // 🚦 P148
     const startMs = nowMs - WIN;
     const baseStat = measureWindow(lots, { model, stepKey, customTargetTimes, modelGroups, startMs, endMs: nowMs });
     const baseline = { ...baseStat, startMs, endMs: nowMs };
@@ -19847,6 +19861,7 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
   const makeCard = () => {
     // 連打の重複起票を本体でもガード(UIボタン差し替えはonSnapshot反映までラグがあるため)。category は行が持つ正しい値を使う(_含み対策)。
     if (!sel || !saveData || cardedKeys.has(`${model}||${sel.stepKey}`)) return;
+    if (!improvementCapOk(improvements, settings)) return; // 🚦 P148
     const card = makeImprovementCard(lots, { model, stepKey: sel.stepKey, stepTitle: sel.stepTitle, category: sel.category || '', source: { kind: 'process-analysis', label: '工程分析から' }, customTargetTimes, modelGroups, currentUserName, nowMs });
     // 問題文は凍結baseline(=PDCAの証拠表と同じ値)から組み立て、ユーザーが見た数字と保存値を一致させる(監査是正)。年間合計は直近1年の参考値。
     const b = card.baseline || {};
