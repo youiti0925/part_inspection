@@ -148,6 +148,11 @@ const PAIRS = [
   { file: 'domain/timeIntervals.js', product: 'product-inspection-app/src/domain/timeIntervals.js', md5: 'addcd2103b26b2ca667e2261e6d96b5f' },
   { file: 'domain/autoOpportunity.js', product: 'product-inspection-app/src/domain/autoOpportunity.js', md5: 'a4e9cad00dcd48bf5b49e17c03bf85f9' },
   { file: 'domain/autoOpportunityReport.js', product: 'product-inspection-app/src/domain/autoOpportunityReport.js', md5: '2f36d0be599423c13d967907c506f702' },
+  // 2026-09-27 a6 P047: 絵の部品(帯・信号・点)。idleTone が読む idleReason.js は土台で写し済み
+  { file: 'opsim/vizKit.jsx', product: 'product-inspection-app/src/opsim/vizKit.jsx', md5: 'ea1bfb4913579d73584f868fa64d2c3a' },
+  { file: 'opsim/workloadMeter.js', product: 'product-inspection-app/src/opsim/workloadMeter.js', md5: '6140214a2e71cb9af59498e5ac0d520e' },
+  { file: 'opsim/lateTone.js', product: 'product-inspection-app/src/opsim/lateTone.js', md5: 'df1660970b56c8f5cfd84e4942d5b70f' },
+  { file: 'opsim/idleTone.js', product: 'product-inspection-app/src/opsim/idleTone.js', md5: 'dbf0cac2986233260059fe4b1384abde' },
 ];
 
 for (const p of PAIRS) {
