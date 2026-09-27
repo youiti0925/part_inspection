@@ -3066,7 +3066,8 @@ const nextOptimalMove = (steps, tasks, quantity, analysis, opts = {}) => {
     for (let si = 0; si < steps.length; si++) {
       if (steps[si]?.lotOnce) continue;
       const st = statusOf(si, u);
-      if (isAutoStep(steps[si]) && st === 'processing') { busy = true; break; } // 機械占有 → この台は停止
+      // 自動の台は NG再測定待ち(ng)・再測定中(reworking)も機械に載っている(製品と同じ)
+      if (isAutoStep(steps[si]) && (st === 'processing' || st === 'reworking' || st === 'ng')) { busy = true; break; } // 機械占有 → この台は停止
       if (st === 'waiting' || st === 'paused') { next = si; break; }
       // completed/skipped/ng → 次へ
     }
@@ -9510,7 +9511,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       return { sIdx: mv.stepIdx, unitIdx: mv.unitIdx, isAuto: mv.type === 'auto-start' };
     }
     // 各台が「機械占有中 (自動測定 processing)」かどうか
-    const unitHasRunningAuto = (u) => localSteps.some((step, si) => !step?.lotOnce && isAutoStepFn(step) && statusOf(step, si, u) === 'processing');
+    const unitHasRunningAuto = (u) => localSteps.some((step, si) => !step?.lotOnce && isAutoStepFn(step) && ['processing', 'reworking', 'ng'].includes(statusOf(step, si, u)));
     // 3) 台順 × テンプレ順で最初の未着手を探す (通常工程のみ)。機械占有中の台はスキップ。
     for (let u = 0; u < qty; u++) {
       if (unitHasRunningAuto(u)) continue; // この台は自動測定中 → 作業者は触れない
