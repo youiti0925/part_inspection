@@ -111,6 +111,7 @@ import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from 
 import { isAutoStep } from './domain/workExecution.js';
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
 import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGuide.js';
+import { setEstimatedSession } from './domain/workSessions.js';
 // 🚶 掛け持ち案内の枠(製品検査 src/workscreen/JuggleGuide.jsx と md5 一致の写し。描くだけ)
 import { JuggleGuide } from './workscreen/JuggleGuide.jsx';
 // ⏱ 終わっていない工程を「該当なし」で閉じる時、時間・NG・写真を落とさない(製品検査 src/domain/skipKeepingRecord.js と md5 一致の写し)
@@ -9776,7 +9777,12 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       // endTime=now のままだと壁時計幅が duration と無関係になり、ガント/並列分析の窓が手入力値とずれる。
       const fst = Number(t.firstStartTime) || now;
       const dur = Math.round(totalSec);
-      newTasks[key] = { ...t, status: 'completed', duration: dur, startTime: null, firstStartTime: fst, endTime: fst + dur * 1000, manualTime: true, workerName: inspectorName || t.workerName };
+      // batchOwner/batchStartedAt は完了時に必ず外す(残すと後日の同工程バッチ完了に巻き込まれる)
+      // 時間の直接入力は打刻ではないので、区間は「推定(estimated)」として1本置く(確定と混ぜない・製品と同じ)
+      newTasks[key] = setEstimatedSession(
+        { ...t, status: 'completed', duration: dur, startTime: null, firstStartTime: fst, endTime: fst + dur * 1000, manualTime: true, workerName: inspectorName || t.workerName, batchOwner: null, batchStartedAt: null },
+        { startTime: fst, durationSec: dur, workerId: lot.workerId || null, workerName: inspectorName || t.workerName || '' }
+      );
     });
     setTasks(newTasks);
     onSave({ tasks: newTasks, status: 'processing' });
