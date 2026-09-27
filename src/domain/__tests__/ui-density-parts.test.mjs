@@ -103,7 +103,7 @@ test('UD4 🚨 札の名前・順番・押した時の行き先が1つも変わ�
     '工程分析（データを見る）', '達成率', '不具合分析', '軽微不良・改善提案', 'ダッシュボード', '経営分析',
     '改善PDCA（重点工程→対策→効果）', 'AI洞察・乖離アラート',
     '目標時間・厳密モードへ',
-    '作業者評価', '直間分析',
+    '作業者評価', '🎓 教育・伸び（新人の級・検定）', '直間分析', // 🎓 E32 で教育・伸びを足した(製品と同じ位置)
     '月次レポート', '点検・バックアップ', 'データ書き出し', '分割測定結果',
   ], '小分類の札の名前か順番が変わっている');
   assert.deepEqual(keys, [
@@ -111,7 +111,7 @@ test('UD4 🚨 札の名前・順番・押した時の行き先が1つも変わ�
     'process-analysis', 'achievement', 'defects', 'complaints', 'dashboard', 'kpi',
     'pdca', 'improvement',
     'standardize',
-    'worker-eval', 'direct-indirect',
+    'worker-eval', 'growth', 'direct-indirect',
     'monthly', 'audit', 'export', 'rotary',
   ], '札を押した時の行き先が変わっている');
   // 親タブ(分析 | 作業最適化)も同じく

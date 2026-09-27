@@ -94,7 +94,7 @@ export const CHECKS = {
     assert.ok(b2.includes('setTimeout(() => pw.print(), 500)'), 'PDF の行き先(印刷)が消えている');
     assert.ok(b2.includes('const ExcelJS = await loadExcelJS();'), 'Excel の行き先が消えている');
     // 出す条件(この11個のタブでは出さない)も元のまま
-    assert.ok(b2.includes(`{!['monthly', 'dashboard', 'export', 'kpi', 'audit', 'achievement', 'rotary', 'pdca', 'process-analysis', 'anomaly', 'standardize'].includes(activeMode) && (`),
+    assert.ok(b2.includes(`{!['monthly', 'dashboard', 'export', 'kpi', 'audit', 'achievement', 'rotary', 'pdca', 'process-analysis', 'anomaly', 'standardize', 'growth'].includes(activeMode) && (`),
       '出力を出す条件(タブの一覧)が変わっている');
     // 絞り込み(月単位/期間指定)の **すぐ後ろ** に居る = 詰めて置いてある
     const iFilt = b2.indexOf('{renderDefectFilterUI()}');
