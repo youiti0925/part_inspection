@@ -568,6 +568,8 @@ const toMsAny = (raw) => {
   const t = new Date(raw).getTime();
   return isNaN(t) ? null : t;
 };
+// 統計(目標時間の提案・乖離アラート・達成率)に入れる台か。抜取スキップ(0秒扱い)と教育中を外す(製品 App.jsx と同じ1行)。
+const isStatTask = (t) => !!t && !t.samplingSkipped && t.trainee !== true;
 // CSVセルのエスケープ。カンマ/引用符/改行を含む値(品名・指図名のユーザー入力や toLocaleString のカンマ)を
 // 正しく引用し、列ずれ・破損を防ぐ。RFC4180準拠(" は "" にエスケープ)。
 const csvCell = (v) => { const s = String(v ?? ''); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -15353,6 +15355,8 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
     });
     const [showHistory, setShowHistory] = useState(false);
     const [alertsOpen, setAlertsOpen] = useState(false); // 乖離アラートは既定で折りたたみ (場所を取らない)
+    // 乖離アラートの並べ方(端末の見た目だけ): 'impact' = 今の仕事への影響順(既定) / 'ratio' = 外れの割合順(製品 70de730)
+    const [driftSortMode, setDriftSortMode] = useState('impact');
     const [focusStepKey, setFocusStepKey] = useState(null); // 「開く」で選んだ工程をハイライト+スクロール
     const cardRefs = useRef({});
     useEffect(() => {
@@ -15381,25 +15385,36 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
     };
 
     const availableModels = useMemo(() => {
+        // 🚨 2026-08-26 是正: 「完了したロットの品目コード」だけを並べていたので、
+        //   作業中ロットにしか記録が無い品目コードは **選ぶ事すらできなかった**（提案の絞りと同じ穴）。
+        //   提案の標本と同じ「完了した台の記録が1件でも有る品目コード」を並べる。
         const models = new Set();
-        lots.filter(l => l.status === 'completed' || l.location === 'completed').forEach(l => {
-            if (l.model) models.add(l.model);
+        lots.forEach(l => {
+            if (!l || !l.model) return;
+            const tasks = Object.values(l.tasks || {});
+            if (tasks.some(t => t && t.status === 'completed' && t.duration > 0 && isStatTask(t))) models.add(l.model);
         });
         return Array.from(models).sort();
     }, [lots]);
 
-    const insightsData = useMemo(() => {
-        if (!targetValue) return [];
+    /**
+     * 1つの品目コードの提案を計算する。🚨 画面（選んだ品目コード）と「おすすめで一括設定」（全品目コード）の
+     *   **両方がこの1本を呼ぶ**。別々に書くと必ず答えが2本になって片方が腐る。
+     */
+    const computeProposalsFor = (mv) => {
+        if (!mv) return [];
         const { start: startDate, end: endDate } = getPeriodDates();
 
-        const targetLots = lots.filter(l => {
-            if (l.status !== 'completed' && l.location !== 'completed') return false;
-            if (l.model !== targetValue) return false;
-            // 完了時刻を最優先(updatedAtは編集の度に動き標本が揺れる, Timestampは数値化)。
-            const ts = toMsAny(l.completedAt) || toMsAny(l.updatedAt) || toMsAny(l.createdAt) || 0;
-            if (ts < startDate || ts > endDate) return false;
-            return true;
-        });
+        // 🚨 2026-08-26 是正（清水さんの指摘で発覚）: ここは「ロットが completed」で絞っていた。
+        //   その結果、**作業中ロットの中の完了済みの台の記録**（実測: 製品56件・最終497件）を
+        //   見ずに捨てていて、台の記録が有るのに「提案が1件も作れない」品目コードが両アプリに7種ずつあった
+        //   （例: TLH-135 は台の完了記録98件が有るのにロットが検査中なので丸ごと対象外）。
+        //   達成率分析は台単位で数えるので、同じデータなのに提案側だけ空になり、
+        //   「データが有るのに材料が無い」という矛盾した説明を生んでいた。
+        //   → 絞りは **台単位** にする。期間の窓も達成率分析(measureWindow)と同じ
+        //     「台の endTime、無ければロットの時刻」で切る。ロットの完了は要求しない。
+        //   ⚠ 台の status==='completed' は今までどおり要求する（やりかけの時間は入れない）。
+        const targetLots = lots.filter(l => l.model === mv);
 
         if (targetLots.length === 0) return [];
 
@@ -15407,10 +15422,12 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
         const workerTimesByStep = {};
 
         targetLots.forEach(lot => {
+            // 台に endTime が無い時の予備の時刻（完了時刻を最優先。updatedAtは編集の度に動く）
+            const lotMs = toMsAny(lot.completedAt) || toMsAny(lot.updatedAt) || toMsAny(lot.createdAt) || 0;
             (lot.steps || []).forEach((step, idx) => {
                 const stepKey = `${step.category || ''}_${step.title}`;
                 if (!stepTimes[stepKey]) {
-                    stepTimes[stepKey] = { title: step.title, category: step.category || '', times: [], originalTarget: step.targetTime };
+                    stepTimes[stepKey] = { title: step.title, category: step.category || '', times: [], recs: [], originalTarget: step.targetTime };
                     workerTimesByStep[stepKey] = {};
                 }
 
@@ -15419,8 +15436,16 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                     ? lotOnceKeysOf(lot.tasks || {}, step).map(k => lot.tasks?.[k])
                     : Array.from({ length: lot.quantity || 1 }, (_, i) => lot.tasks?.[`${step.id}-${i}`] || lot.tasks?.[`${idx}-${i}`]);
                 taskList.forEach(task => {
-                    if (task && task.status === 'completed' && task.duration > 0) {
+                    // 🎓ここは「目標時間そのもの」を決める元データ。教育中(新人)の遅い時間を混ぜると
+                    //   標準時間が緩み、以降の達成率・改善効果・必要人数まで全部が甘くなる。
+                    //   抜取スキップ(0秒扱いの台)も同じ理由で外す(今まで見ていなかった既存の穴)。
+                    if (task && task.status === 'completed' && task.duration > 0 && isStatTask(task)) {
+                        // 期間の窓は台単位（達成率分析と同じ: endTime 優先、無ければロットの時刻）
+                        const taskMs = toMsAny(task.endTime) || lotMs;
+                        if (taskMs < startDate || taskMs > endDate) return;
                         stepTimes[stepKey].times.push(task.duration);
+                        // チャンピオン用に生の記録も持つ (aiAutoCompleted = AI判定だけで閉じ時間を測っていない印)
+                        stepTimes[stepKey].recs.push({ d: task.duration, ai: task.aiAutoCompleted === true });
                         const worker = task.workerName || workers.find(w => w.id === task.workerId)?.name || '不明';
                         if (!workerTimesByStep[stepKey][worker]) workerTimesByStep[stepKey][worker] = [];
                         workerTimesByStep[stepKey][worker].push(task.duration);
@@ -15447,7 +15472,7 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
 
             const insights = [];
             const coeffVariation = stats.stdDev / stats.mean;
-            const savedKey = `model_${targetValue}`;
+            const savedKey = `model_${mv}`;
             const currentTarget = customTargetTimes[savedKey]?.[key] || data.originalTarget;
 
             if (coeffVariation > 0.4) {
@@ -15475,6 +15500,27 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                 { id: 'aggressive', name: effFromWorker != null ? `効率型 (${bestWorker}基準)` : '効率追求型 (速い25%)', desc: effFromWorker != null ? `${bestWorker}さんの速いペースを基準` : '実績の速い25%(p25)を基準', value: efficientValue, color: 'text-emerald-800 bg-emerald-50 border-emerald-200 hover:bg-emerald-100' },
                 { id: 'conservative', name: '余裕確保型', desc: 'バラつきを考慮した余裕あるペース。', value: conservativeValue, color: 'text-amber-800 bg-amber-50 border-amber-200 hover:bg-amber-100' }
             ];
+            // === チャンピオンタイム (2026-08-25 清水さん「チャンピオンタイムと平均値の達成率を見える化してほしい」) ===
+            //   🚨 生の最速1件は使わない。押し間違い・誤動作の疑いがある記録が実測で混ざっている
+            //     (例: 中央値353秒の工程に63秒 / 中央値2897秒に360秒)。除外は2つだけ:
+            //     ・aiAutoCompleted … AI判定だけで閉じ、時間を一度も測っていない印
+            //     ・疑わしく速い … その工程の中央値の20%未満 (中央値30秒以上の工程のみ。
+            //       確認系は1〜2秒のタップが本当の速さなので、短い工程では除外しない)
+            //   ⚠ 20%・30秒 は仮置きのしきい値。実測では 製品119件・最終246件 がこれに当たった。
+            const champRecs = data.recs || [];
+            const champAll = champRecs.map(r => r.d).sort((a, b) => a - b);
+            const champMedian = champAll.length ? champAll[Math.floor(champAll.length / 2)] : 0;
+            const champFloor = champMedian >= 30 ? Math.max(3, Math.round(champMedian * 0.2)) : 1;
+            const champCands = champRecs.filter(r => !r.ai && r.d >= champFloor);
+            const champSuspicious = champRecs.filter(r => !r.ai && r.d < champFloor).length;
+            const champAiOnly = champRecs.filter(r => r.ai).length;
+            // 候補が全滅したら生の最速に落ちる(0は作らない)。落ちた事は画面で白状する。
+            const championValue = champCands.length ? Math.min(...champCands.map(r => r.d)) : (champAll[0] || 0);
+            const champion = { value: championValue, suspicious: champSuspicious, aiOnly: champAiOnly, fellBack: !champCands.length && champAll.length > 0, floor: champFloor, median: champMedian };
+            if (championValue > 0) {
+                strategies.push({ id: 'champion', name: 'チャンピオン型 (信頼できる最速)', desc: `いちばん速い1件${(champSuspicious + champAiOnly) > 0 ? `。疑わしく速い${champSuspicious}件${champAiOnly ? `・AI自動完了${champAiOnly}件` : ''}は除外済み` : ''}。全員が届く前提ではなく「目指す的」。`, value: championValue, color: 'text-rose-800 bg-rose-50 border-rose-200 hover:bg-rose-100' });
+            }
+
             // データが少ない / ばらつきが小さいと3案がほぼ同値になる (バグではない)。その旨を伝えるフラグ。
             const stratVals = [stats.mean, efficientValue, conservativeValue];
             const strategiesSimilar = (Math.max(...stratVals) - Math.min(...stratVals)) <= Math.max(1, Math.round(stats.mean * 0.05));
@@ -15488,11 +15534,51 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
             else if (n >= 5 && cv < 0.5) confidence = 'mid';
             const confidenceLabel = confidence === 'high' ? '高' : confidence === 'mid' ? '中' : '低';
 
-            results.push({ key, ...data, stats, currentTarget, insights, strategies, strategiesSimilar, confidence, confidenceLabel, cv });
+            results.push({ key, ...data, stats, currentTarget, insights, strategies, strategiesSimilar, confidence, confidenceLabel, cv, champion });
         });
 
         return results.sort((a, b) => b.stats.mean - a.stats.mean);
-    }, [lots, targetValue, customTargetTimes, period, customStartDate, customEndDate, workers]);
+    };
+    const insightsData = useMemo(() => computeProposalsFor(targetValue),
+        [lots, targetValue, customTargetTimes, period, customStartDate, customEndDate, workers]);
+
+    // === 達成率プレビュー (2026-08-25 清水さん「チャンピオンタイムと平均値の達成率を見える化してほしい」) ===
+    //   この品目コードの全ロット(達成率分析と同じ標本条件: completed/ng・抜取除く・教育中除く・duration>0)で、
+    //   「いま / 標準(平均)を全部押した後 / チャンピオンを全部押した後」の達成率を並べる。
+    //   🚨 式は達成率分析と同じ Σ目標÷Σ実績×100。ここで新しい式を作らない(答えが2本になる)。
+    //   ⚠ 提案が無い工程は、いまの目標のまま(置き換わらない工程まで動かして見せない)。
+    const calibrationPreview = useMemo(() => {
+        if (!targetValue || !insightsData.length) return null;
+        const meanMap = {}; const champMap = {};
+        insightsData.forEach(d => {
+            meanMap[d.key] = d.stats.mean;
+            if (d.champion && d.champion.value > 0) champMap[d.key] = d.champion.value;
+        });
+        const acc = { before: [0, 0], mean: [0, 0], champ: [0, 0] }; let n = 0;
+        lots.forEach(l => {
+            if (!l || l.model !== targetValue) return;
+            (l.steps || []).forEach((step, idx) => {
+                const cur = getEffectiveTargetTime(step, l.model, customTargetTimes, settings?.modelGroups);
+                const key = targetTimeStepKey(step);
+                const keys = step.lotOnce
+                    ? lotOnceKeysOf(l.tasks || {}, step)
+                    : Array.from({ length: l.quantity || 1 }, (_, i) => ((l.tasks || {})[`${step.id}-${i}`] !== undefined ? `${step.id}-${i}` : `${idx}-${i}`));
+                keys.forEach(k => {
+                    const t = (l.tasks || {})[k];
+                    if (!t) return;
+                    if (t.status !== 'completed' && t.status !== 'ng') return;
+                    if (t.samplingSkipped || !isStatTask(t)) return;
+                    const d = t.duration || 0; if (d <= 0) return;
+                    n += 1;
+                    acc.before[0] += cur; acc.before[1] += d;
+                    acc.mean[0] += (meanMap[key] !== undefined ? meanMap[key] : cur); acc.mean[1] += d;
+                    acc.champ[0] += (champMap[key] !== undefined ? champMap[key] : cur); acc.champ[1] += d;
+                });
+            });
+        });
+        const rate = (pair) => (pair[0] > 0 && pair[1] > 0) ? Math.round(pair[0] / pair[1] * 1000) / 10 : null;
+        return { n, before: rate(acc.before), mean: rate(acc.mean), champ: rate(acc.champ) };
+    }, [insightsData, lots, targetValue, customTargetTimes, settings]);
 
     // === 【E】乖離検知: 全品目コードを走査し、現在の目標時間と実績平均が乖離している工程を抽出 ===
     // 較正→承認→監視 ループの「監視」部分。再較正すべき箇所を管理者に提示する。
@@ -15518,7 +15604,8 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                     ? lotOnceKeysOf(l.tasks || {}, step).map(k => l.tasks?.[k])
                     : Array.from({ length: l.quantity || 1 }, (_, i) => l.tasks?.[`${step.id}-${i}`] || l.tasks?.[`${idx}-${i}`]);
                 tList.forEach(t => {
-                    if (t && (t.status === 'completed' || t.status === 'ng') && t.duration > 0) byModelStep[mapKey].times.push(t.duration);
+                    // 🎓乖離アラートは「目標が実態と合っているか」の判定。教育中の遅い時間で目標を緩めさせない。
+                    if (t && (t.status === 'completed' || t.status === 'ng') && t.duration > 0 && isStatTask(t)) byModelStep[mapKey].times.push(t.duration);
                 });
             });
         });
@@ -15539,6 +15626,36 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
         });
         return alerts.sort((a, b) => Math.abs(b.ratio - 1) - Math.abs(a.ratio - 1));
     }, [lots, customTargetTimes, period, customStartDate, customEndDate]);
+    /* 🧹 2026-09-23 ChatGPT の観察(e)「差の割合順だけでなく、今月の計画に影響する順へ」
+         未完了ロットに残っている その品目コード×工程の台数(まだ済んでいない台)を数え、影響 = (実績−目標)×残りの台数(秒)。
+         🚨 実績の平均・目標は driftAlerts の物をそのまま使う。ここで数えるのは「残りの台数」だけ。 */
+    const driftRemainByKey = useMemo(() => {
+        const m = new Map();
+        lots.forEach(l => {
+            if (l.status === 'completed' || l.location === 'completed' || !l.model) return;
+            (l.steps || []).forEach((step, idx) => {
+                const key = `${l.model}||${step.category || ''}_${step.title}`;
+                const units = step.lotOnce ? 1 : (l.quantity || 1);
+                let left = 0;
+                for (let u = 0; u < units; u++) {
+                    const t = step.lotOnce ? null : (l.tasks?.[`${step.id}-${u}`] || l.tasks?.[`${idx}-${u}`]);
+                    const done = step.lotOnce ? lotOnceKeysOf(l.tasks || {}, step).length > 0 : (t && (t.status === 'completed' || t.status === 'ng' || t.status === 'skipped' || t.status === 'na'));
+                    if (!done) left += 1;
+                }
+                if (left > 0) { const c = m.get(key) || { units: 0, lots: 0 }; c.units += left; c.lots += 1; m.set(key, c); }
+            });
+        });
+        return m;
+    }, [lots]);
+    const driftRows = useMemo(() => {
+        const rows = driftAlerts.map(a => {
+            const r = driftRemainByKey.get(`${a.model}||${a.stepKey}`) || { units: 0, lots: 0 };
+            return { ...a, remainUnits: r.units, remainLots: r.lots, impactSec: (a.mean - a.target) * r.units };
+        });
+        if (driftSortMode === 'impact') rows.sort((x, y) => Math.abs(y.impactSec) - Math.abs(x.impactSec) || Math.abs(y.ratio - 1) - Math.abs(x.ratio - 1));
+        return rows;
+    }, [driftAlerts, driftRemainByKey, driftSortMode]);
+    const mmss = (sec) => { const v = Math.round(Math.abs(Number(sec) || 0)); const h = Math.floor(v / 3600); const mi = Math.floor((v % 3600) / 60); const se = v % 60; return h > 0 ? `${h}時間${mi}分` : `${mi}:${String(se).padStart(2, '0')}`; };
 
     const applySuggestedTarget = (itemKey, strat, data) => {
         const savedKey = `model_${targetValue}`;
@@ -15579,6 +15696,74 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
         onSaveSettings({ customTargetTimes: newCustomTimes, targetTimeHistory: newHistory });
         alert(`表示されている全項目に「${bulkStrategy === 'standard' ? '標準バランス型' : bulkStrategy === 'aggressive' ? '効率追求型' : '余裕確保型'}」の目標時間を適用しました。`);
     };
+    /**
+     * 🤖 全品目コードに「おすすめ」で一括設定（2026-08-26 清水さん「アプリ側で操作して良い感じに設定
+     *   できそうなしてもらいたいな、俺がひとつひとつすると時間かかるからね。変更に伴い履歴とか
+     *   エビデンス残せるならいいな」）。
+     * 決めごと:
+     *   ・値は「標準バランス型」＝外れ値(IQR)を落とした平均。
+     *   ・🚨 信頼度「高」(標本10件以上・バラつき小)の工程 **だけ**。中・低は見送って件数を白状する。
+     *     （実測の前後比較: この押し方で品目コードごとの100%からのズレが 58.9pt→5.9pt。
+     *      効率型を全部に押すと全体68%になり「全員未達」の見た目になるので既定にしない）
+     *   ・履歴とエビデンス(期間・標本数・平均・σ・信頼度)を targetTimeHistory に品目コードごとに残す。
+     *   ・適用前に件数を見せて confirm。黙って書き換えない。
+     */
+    const [recommendBusy, setRecommendBusy] = useState(false);
+    const applyRecommendedAll = () => {
+        if (recommendBusy) return;
+        setRecommendBusy(true);
+        try {
+            const periodLabel = period === 'custom' ? `${customStartDate}~${customEndDate}` : period === '1m' ? '過去1ヶ月' : period === '3m' ? '過去3ヶ月' : period === '6m' ? '過去6ヶ月' : '全期間';
+            const plans = [];
+            let skippedMidLow = 0;
+            availableModels.forEach(m => {
+                const rows = computeProposalsFor(m);
+                const ups = [];
+                rows.forEach(d => {
+                    const v = d.stats.mean;
+                    if (!(v > 0)) return;
+                    if (d.confidence !== 'high') { skippedMidLow += 1; return; }
+                    if (d.currentTarget === v) return;
+                    ups.push({
+                        key: d.key, category: d.category, title: d.title,
+                        oldTime: d.currentTarget, newTime: v,
+                        strategyName: '標準バランス型（おすすめ一括・信頼度高のみ）',
+                        evidence: { periodLabel, validCount: d.stats.validCount, mean: d.stats.mean, stdDev: d.stats.stdDev, confidence: '高' },
+                    });
+                });
+                if (ups.length) plans.push({ model: m, ups });
+            });
+            const totalUps = plans.reduce((a, p) => a + p.ups.length, 0);
+            if (!totalUps) { alert(`設定できる工程がありません（信頼度「高」に届く工程が無いか、すでに同じ値です。信頼度が中・低で見送った工程 ${skippedMidLow}件）。`); return; }
+            const ok = window.confirm(
+                `${plans.length}品目コード・${totalUps}工程の目標時間を「標準バランス型」で設定します。
+
+` +
+                `・対象は信頼度「高」(標本10件以上・バラつき小)の工程だけです
+` +
+                `・信頼度が中・低で見送る工程: ${skippedMidLow}件
+` +
+                `・期間: ${periodLabel} ／ 変更はすべて履歴に残ります
+
+実行しますか？`);
+            if (!ok) return;
+            const newCT = { ...customTargetTimes };
+            const now = Date.now();
+            const historyAdd = plans.map(pl => ({
+                timestamp: now, by: currentUserName || '?', targetType: 'model', targetValue: pl.model,
+                updates: pl.ups,
+            }));
+            plans.forEach(pl => {
+                newCT[`model_${pl.model}`] = { ...(newCT[`model_${pl.model}`] || {}), ...Object.fromEntries(pl.ups.map(u => [u.key, u.newTime])) };
+            });
+            onSaveSettings({ customTargetTimes: newCT, targetTimeHistory: [...(targetTimeHistory || []), ...historyAdd] });
+            alert(`✅ ${plans.length}品目コード・${totalUps}工程を設定しました（履歴に残しています）。
+信頼度が中・低で見送った工程: ${skippedMidLow}件`);
+        } finally {
+            setRecommendBusy(false);
+        }
+    };
+
 
     return (
         <div className="flex flex-col h-full gap-4">
@@ -15616,6 +15801,16 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                         title="作成済みの進行中ロットにも較正済み目標時間を反映する"
                       >
                         {reapplyStatus === 'applying' ? '適用中...' : '🔄 進行中ロットに再適用'}
+                      </button>
+                    )}
+                    {currentUserName === '管理者' && (
+                      <button
+                        onClick={applyRecommendedAll}
+                        disabled={recommendBusy}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white text-xs font-bold rounded shadow flex items-center gap-1"
+                        title="全品目コードを走査し、信頼度「高」(標本10件以上・バラつき小)の工程だけを標準バランス型(外れ値を落とした平均)で設定します。実行前に件数を確認でき、変更は全部履歴に残ります。"
+                      >
+                        {recommendBusy ? '計算中...' : '🤖 全品目コードにおすすめで一括設定'}
                       </button>
                     )}
                     <button onClick={() => setShowHistory(false)} className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${!showHistory ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
@@ -15683,14 +15878,24 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                             </button>
                             {alertsOpen && (
                             <div className="max-h-52 overflow-y-auto space-y-1 px-3 pb-3">
-                                {driftAlerts.slice(0, 30).map((a, i) => (
-                                    <div key={i} className="bg-white border border-rose-200 rounded px-2 py-1.5 flex items-center gap-2 text-xs">
+                                <div className="flex flex-wrap items-center gap-1 pt-1" data-drift-sort={driftSortMode}>
+                                    <span className="fi-tap-text text-slate-500">並べ方:</span>
+                                    {[['impact', '今の仕事への影響順'], ['ratio', '外れの割合順']].map(([k, label]) => (
+                                      <button key={k} type="button" onClick={() => setDriftSortMode(k)}
+                                        className={`min-h-11 px-3 rounded-lg fi-tap-text font-bold border ${driftSortMode === k ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
+                                        title={k === 'impact' ? '(実績−目標)×未完了ロットに残っている台数 の大きい順' : '目標からの外れ(%)の大きい順'}>{label}</button>
+                                    ))}
+                                    <span className="fi-tap-text text-slate-500 basis-full">影響＝(実績−目標)×残りの台数＝このまま目標で計画すると足りなくなる時間(赤＝足りない／青＝余る)。</span>
+                                </div>
+                                {driftRows.slice(0, 30).map((a, i) => (
+                                    <div key={i} className="bg-white border border-rose-200 rounded px-2 py-1.5 flex items-center gap-2 text-xs" data-drift-row={a.remainUnits}>
                                         <span className={`text-xs font-black px-1.5 py-0.5 rounded shrink-0 ${a.direction === 'over' ? 'bg-rose-100 text-rose-700' : 'bg-blue-100 text-blue-700'}`}>
                                             {a.direction === 'over' ? `${Math.round((a.ratio-1)*100)}% 超過` : `${Math.round((1-a.ratio)*100)}% 短縮`}
                                         </span>
+                                        <span className={`font-mono font-black shrink-0 w-24 text-right ${a.remainUnits ? (a.impactSec >= 0 ? 'text-rose-700' : 'text-blue-700') : 'text-slate-300'}`} title={`(実績${mmss(a.mean)}−目標${mmss(a.target)})×残り${a.remainUnits}台`}>{a.remainUnits ? `${a.impactSec >= 0 ? '+' : '−'}${mmss(a.impactSec)}` : '残り0台'}</span>
                                         <span className="font-bold text-slate-700 shrink-0">{a.model}</span>
                                         <span className="text-slate-500 truncate">/ {a.title}</span>
-                                        <span className="ml-auto font-mono text-slate-600 shrink-0">目標{a.target}s→実績{a.mean}s</span>
+                                        <span className="ml-auto font-mono text-slate-600 shrink-0">目標{mmss(a.target)}→実績{mmss(a.mean)}{a.remainUnits ? ` ・残り${a.remainUnits}台/${a.remainLots}ロット` : ''}</span>
                                         <span className="text-xs text-slate-400 shrink-0">n={a.n}{a.calibrated ? ' ✓' : ''}</span>
                                         <button
                                             onClick={() => { setTargetValue(a.model); setFocusStepKey(a.stepKey); }}
@@ -15706,6 +15911,16 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                     )}
 
                     {/* 🧹 2026-09-07: ここに在った「品目コード ・ 集計」の帯は、上の見出しの箱の中へ移した。中身は1つも減っていない。 */}
+
+                    {calibrationPreview && (
+                        <div className="mb-3 bg-white border rounded-xl p-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
+                            <span className="font-bold text-slate-600">この品目コードの達成率プレビュー<span className="fi-tap-text text-slate-400 font-normal">（全期間・標本{calibrationPreview.n}件・Σ目標÷Σ実績）</span>:</span>
+                            <span>いま <b className="font-mono text-lg">{calibrationPreview.before ?? '—'}%</b></span>
+                            <span>→ 標準(平均)を全部押すと <b className="font-mono text-lg text-blue-700">{calibrationPreview.mean ?? '—'}%</b></span>
+                            <span>→ チャンピオンを全部押すと <b className="font-mono text-lg text-rose-700">{calibrationPreview.champ ?? '—'}%</b></span>
+                            <span className="fi-tap-text text-slate-400 leading-tight basis-full">⚠ チャンピオン基準は「全員がいちばん速い人の速さ」なので、100%を切るのが正常です。ものさし(目標)は平均基準にして、チャンピオンとの差は伸びしろとして見るのが安全です。</span>
+                        </div>
+                    )}
 
                     {targetValue ? (
                         <div className="flex-1 overflow-y-auto min-h-0 space-y-4 pr-2">
@@ -15747,6 +15962,13 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                                                 </div>
                                             ))}
                                         </div>
+                                        {data.champion && (data.champion.suspicious > 0 || data.champion.aiOnly > 0 || data.champion.fellBack) && (
+                                            <div className="mt-1.5 fi-tap-text text-rose-700 bg-rose-50 border border-rose-200 rounded px-1.5 py-1 leading-tight">
+                                                {data.champion.fellBack
+                                                    ? '⚠ 信頼できる記録が残らず、チャンピオンは生の最速に落ちています(疑わしい可能性があります)'
+                                                    : `疑わしく速い記録 ${data.champion.suspicious}件${data.champion.aiOnly ? `・AI自動完了 ${data.champion.aiOnly}件` : ''} はチャンピオンの元にしていません(この工程の中央値${data.champion.median}秒の20%未満)`}
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="p-4 flex-1 flex flex-col">

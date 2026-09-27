@@ -16,3 +16,8 @@
 }
 *::-webkit-scrollbar-thumb:hover { background: #64748b; }
 *::-webkit-scrollbar-thumb:active { background: #475569; }
+
+/* 押す物 44px の床と 押す物の文字 12px の床(製品 index.css と同じ・文字サイズ設定を95%にしても割らない)。
+   ⚠ @tailwind utilities より後ろに置く事で min-h-11 / text-xs に勝つ。 */
+.min-h-11 { min-height: max(2.75rem, 44px); }
+.fi-tap-text { font-size: max(0.75rem, 12px); }
