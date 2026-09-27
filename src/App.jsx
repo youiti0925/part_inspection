@@ -20231,6 +20231,48 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
   const [defectFilterMode, setDefectFilterMode] = useState('month');
   const [defectFilterStart, setDefectFilterStart] = useState(localYMD(new Date()).slice(0, 8) + '01');
   const [defectFilterEnd, setDefectFilterEnd] = useState(localYMD(new Date()));
+  // ===== 🔎 P043 期間のほかの絞り込み(製品 32567〜 を写した)。端末ローカルの表示条件(人の判断ではない)
+  //   ⚠センチネルは 'all'。dimText だけは空文字が「未指定」。
+  const [dimModel, setDimModel] = useState('all');   // 値=品目コード
+  const [dimStep, setDimStep] = useState('all');
+  const [dimCause, setDimCause] = useState('all');   // 原因工程。不具合タブのみ
+  const [dimLabel, setDimLabel] = useState('all');   // 内容カテゴリ(完全一致)
+  const [dimText, setDimText] = useState('');        // 内容のフリーワード(部分一致)
+  const [dimSrc, setDimSrc] = useState('all');       // 出所 'all'|'interruption'|'ng'|'minor'
+  const clearDims = () => { setDimModel('all'); setDimStep('all'); setDimCause('all'); setDimLabel('all'); setDimText(''); setDimSrc('all'); };
+  // ⚠正規化はここ1か所。集計のバケツ名とフィルタの比較値を同じ文字列にする
+  const normModel = (v) => (v && String(v).trim()) || '不明';
+  const normStep = (v) => (v && String(v).trim()) || '全体';
+  const normCause = (v) => (v && String(v).trim()) || '未指定';
+  const mainLabelOf = (v) => (String(v || '').split(' : ')[0].trim()) || 'その他';
+  const normText = (v) => String(v || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  const dimTextQ = normText(dimText);
+  // ⚠絞るのはソースの入口(当期・前期間・月別推移を同時に絞る)
+  const matchesDefectDim = (row) => {
+    if (dimSrc !== 'all' && (row._src || 'interruption') !== dimSrc) return false;
+    if (dimModel !== 'all' && normModel(row.model) !== dimModel) return false;
+    if (dimStep !== 'all' && normStep(row.stepTitle) !== dimStep) return false;
+    if (dimCause !== 'all' && normCause(row.causeProcess) !== dimCause) return false;
+    if (dimLabel !== 'all' && mainLabelOf(row.label) !== dimLabel) return false;
+    if (dimTextQ && !normText(row.label).includes(dimTextQ)) return false;
+    return true;
+  };
+  const matchesSoftDim = (row) => {
+    if (dimSrc !== 'all' && (row._src || 'interruption') !== dimSrc) return false;
+    if (dimModel !== 'all' && normModel(row.model) !== dimModel) return false;
+    if (dimStep !== 'all' && normStep(row.stepTitle) !== dimStep) return false;
+    if (dimLabel !== 'all' && mainLabelOf(row.label) !== dimLabel) return false;
+    if (dimTextQ && !normText(row.label).includes(dimTextQ)) return false;
+    return true;
+  };
+  // 気づき・改善: 内容カテゴリは当てない(区切りが全角「：」で mainLabelOf と一致しない)
+  const matchesImproveDim = (row) => {
+    if (dimSrc !== 'all' && (row._src || 'interruption') !== dimSrc) return false;
+    if (dimModel !== 'all' && normModel(row.model) !== dimModel) return false;
+    if (dimStep !== 'all' && normStep(row.stepTitle) !== dimStep) return false;
+    if (dimTextQ && !normText(row.label).includes(dimTextQ)) return false;
+    return true;
+  };
   const isInDefectPeriod = (timestamp) => {
     if (!timestamp) return false;
     const d = new Date(timestamp);
@@ -20422,7 +20464,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
       // 完了時刻を最優先(updatedAtはserverTimestampで編集の度に動く+Firestore Timestampは要数値化)。
       const lotTime = toMsAny(lot.completedAt) || toMsAny(lot.updatedAt) || toMsAny(lot.entryAt) || toMsAny(lot.createdAt);
       // 前期間カウント (件数比較用) + 月別推移用の全期間カウント (期間フィルタに依存しない)
-      const lotDefectsAll = (lot.interruptions || []).filter(i => i.type === 'defect');
+      const lotDefectsAll = (lot.interruptions || []).filter(i => i.type === 'defect' && matchesDefectDim({ _src: 'interruption', model: lot.model, stepTitle: i.stepInfo ? i.stepInfo.title : '', causeProcess: i.causeProcess, label: i.label })); // 🔎 P043
       lotDefectsAll.forEach(d => {
         if (isInPrev(d.timestamp)) prevCount++;
         if (d.timestamp) { const dd = new Date(d.timestamp); const ym = `${dd.getFullYear()}-${String(dd.getMonth()+1).padStart(2,'0')}`; monthlyCountsAll[ym] = (monthlyCountsAll[ym] || 0) + 1; }
@@ -20430,7 +20472,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
       // 率の分母(完了ロット数)はロット完了月で数える。※不具合自体は下で「不具合のtimestamp」で期間を絞る。
       const isCompletedLot = (lot.status === 'completed' || lot.location === 'completed');
       const lotInPeriod = isInDefectPeriod(lotTime);
-      if (lotInPeriod && isCompletedLot) totalCompletedLots++;
+      if (lotInPeriod && isCompletedLot && (dimModel === 'all' || normModel(lot.model) === dimModel)) totalCompletedLots++; // 🔎 P043 分母は品目コードでだけ絞れる
       // 不具合は「不具合自身の発生時刻」で期間フィルタする (ロットの updatedAt で丸ごと落とさない=登録したのに出ないバグの根本対策。complaintStats と対称)。
       const lotDefects = lotDefectsAll.filter(d => isInDefectPeriod(d.timestamp));
       if (lotDefects.length > 0) {
@@ -20473,8 +20515,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     }
     const diff = defects.length - prevCount;
     const diffRate = prevCount > 0 ? ((diff / prevCount) * 100) : (defects.length > 0 ? 100 : 0);
-    return { totalCompletedLots, defectLotCount, defectCompletedLotCount, totalDefects: defects.length, defectRate, defects: defects.sort((a, b) => b.timestamp - a.timestamp), models: sortObj(modelCounts), steps: sortObj(stepCounts), workers: sortObj(workerCounts), processes: sortObj(processCounts), trendMonths, prevCount, diff, diffRate };
-  }, [lots, workers, defectFilterMonth, defectFilterMode, defectFilterStart, defectFilterEnd]);
+    return { totalCompletedLots, defectLotCount, defectCompletedLotCount, totalDefects: defects.length, defectRate, defects: defects.sort((a, b) => b.timestamp - a.timestamp), models: sortObj(modelCounts), steps: sortObj(stepCounts), workers: sortObj(workerCounts), processes: sortObj(processCounts), trendMonths, prevCount, diff, diffRate, srcSeen: ['interruption'] };
+  }, [lots, workers, defectFilterMonth, defectFilterMode, defectFilterStart, defectFilterEnd, dimModel, dimStep, dimCause, dimLabel, dimText, dimSrc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const complaintStats = useMemo(() => {
     const complaints = [];
@@ -20488,6 +20530,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     let minTs = Infinity, maxTs = -Infinity;
     let prevCount = 0;
     const isInPrev = getPrevPeriodChecker();
+    const complaintSrcSeen = new Set(); // 🔎 P043 実際に合流した出所
 
     lots.forEach(lot => {
       const lotComplaints = (lot.interruptions || []).filter(i => i.type === 'complaint').map(i => ({ ...i, _src: 'interruption' }));
@@ -20499,6 +20542,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
         .filter(([, t]) => t && typeof t.ngReason === 'string' && t.ngReason.trim())
         .map(([key, t]) => ({ id: `ng:${lot.id}:${key}`, type: 'complaint', _src: 'ng', source: 'NG判定', label: t.ngReason.trim(), timestamp: toMsAny(t.ngAt) || toMsAny(t.endTime) || null, stepInfo: { title: _titleForKey(key) }, workerName: t.workerName || '' }));
       [...lotComplaints, ...ngComplaints].forEach(c => {
+        complaintSrcSeen.add(c._src || 'interruption');
+        if (!matchesSoftDim({ _src: c._src, model: lot.model, stepTitle: c.stepInfo ? c.stepInfo.title : '', label: c.label })) return; // 🔎 P043
         // 月別推移用の全期間カウント (期間フィルタに依存しない)
         if (c.timestamp) { const d0 = new Date(c.timestamp); const ym0 = `${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,'0')}`; monthlyCountsAll[ym0] = (monthlyCountsAll[ym0] || 0) + 1; }
         if (isInDefectPeriod(c.timestamp)) {
@@ -20530,6 +20575,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     (minorReports || []).filter(r => r && r.type === 'complaint').forEach(r => {
       const lot = { id: r.id, model: r.model || '不明', modelText: r.modelText || '', orderNo: r.orderNo || '' };
       const c = { id: r.id, _src: 'minor', type: 'complaint', label: r.content || '', timestamp: toMsAny(r.timestamp), stepInfo: r.stepTitle ? { title: r.stepTitle } : null, workerName: r.workerName || '', source: '台帳', sample: !!r.sample };
+      complaintSrcSeen.add('minor');
+      if (!matchesSoftDim({ _src: 'minor', model: r.model, stepTitle: r.stepTitle, label: c.label })) return; // 🔎 P043
       if (c.timestamp) { const d0 = new Date(c.timestamp); const ym0 = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}`; monthlyCountsAll[ym0] = (monthlyCountsAll[ym0] || 0) + 1; }
       if (isInDefectPeriod(c.timestamp)) {
         const wname = (workers.find(x => x.id === c.workerName)?.name) || c.workerName || '不明';
@@ -20577,8 +20624,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
       prevCount,
       diff,
       diffRate,
+      srcSeen: [...complaintSrcSeen],
     };
-  }, [lots, workers, defectFilterMonth, defectFilterMode, defectFilterStart, defectFilterEnd, minorReports]);
+  }, [lots, workers, defectFilterMonth, defectFilterMode, defectFilterStart, defectFilterEnd, minorReports, dimModel, dimStep, dimLabel, dimText, dimSrc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 気づき・改善(type='improvement') の集計。タブ名「軽微不良・改善提案」の“改善”側。
   //   軽微不良(complaint)とは別概念(工程の提案)なので complaintStats とは分けて集計し、同タブ内に別セクションで出す。
@@ -20589,6 +20637,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     lots.forEach(lot => {
       (lot.interruptions || []).filter(i => i.type === 'improvement').forEach(im => {
         if (!isInDefectPeriod(im.timestamp)) return;
+        if (!matchesImproveDim({ _src: 'interruption', model: lot.model, stepTitle: im.stepInfo?.title || im.targetStepTitle || '', label: im.label })) return; // 🔎 P043
         const wname = (workers.find(x => x.id === im.workerName)?.name) || im.workerName || '不明';
         const kindLabel = IMPROVE_LABELS[im.improvementKind] || 'その他';
         const st = im.stepInfo?.title || im.targetStepTitle || '全体';
@@ -20606,10 +20655,110 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
       items: items.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)),
       kinds: sortObj(kindCounts), steps: sortObj(stepCounts), models: sortObj(modelCounts), workers: sortObj(workerCounts),
     };
-  }, [lots, workers, defectFilterMonth, defectFilterMode, defectFilterStart, defectFilterEnd]);
+  }, [lots, workers, defectFilterMonth, defectFilterMode, defectFilterStart, defectFilterEnd, dimModel, dimStep, dimText, dimSrc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const defectFilterLabel = defectFilterMode === 'month' ? defectFilterMonth : `${defectFilterStart} ~ ${defectFilterEnd}`;
   const defectFilterSuffix = defectFilterMode === 'month' ? defectFilterMonth : `${defectFilterStart}_${defectFilterEnd}`;
+  // ===== 🔎 P043 絞り込みの選択肢(全期間の実データから)・見出し・率を出してよいか(製品 33120〜33195)
+  const SRC_LABELS = { interruption: '検査中の記録', ng: 'NG判定', minor: '台帳' };
+  const dimOptions = useMemo(() => {
+    const models = new Set(), stepsD = new Set(), stepsC = new Set(), causes = new Set(), labelsD = new Set(), labelsC = new Set();
+    (lots || []).forEach(lot => {
+      (lot.interruptions || []).forEach(i => {
+        if (!i) return;
+        models.add(normModel(lot.model));
+        if (i.type === 'defect') { stepsD.add(normStep(i.stepInfo?.title)); causes.add(normCause(i.causeProcess)); labelsD.add(mainLabelOf(i.label)); }
+        else if (i.type === 'complaint') { stepsC.add(normStep(i.stepInfo?.title)); labelsC.add(mainLabelOf(i.label)); }
+        else if (i.type === 'improvement') { stepsC.add(normStep(i.stepInfo?.title || i.targetStepTitle)); }
+      });
+      Object.values(lot.tasks || {}).forEach(t => {
+        if (t && typeof t.ngReason === 'string' && t.ngReason.trim()) { models.add(normModel(lot.model)); labelsC.add(mainLabelOf(t.ngReason)); }
+      });
+    });
+    (minorReports || []).forEach(r => {
+      if (!r) return;
+      models.add(normModel(r.model));
+      if (r.type === 'complaint') { stepsC.add(normStep(r.stepTitle)); labelsC.add(mainLabelOf(r.content)); }
+    });
+    (settings?.defectProcessOptions || []).forEach(c => causes.add(normCause(c)));
+    (settings?.complaintOptions || []).forEach(c => labelsC.add(mainLabelOf(c)));
+    const TAIL = ['不明', '全体', '未指定', 'その他'];
+    const srt = (set) => [...set].filter(Boolean).sort((a, b) => {
+      const ta = TAIL.includes(a), tb = TAIL.includes(b);
+      if (ta !== tb) return ta ? 1 : -1;
+      return String(a).localeCompare(String(b), 'ja');
+    });
+    return { models: srt(models), stepsD: srt(stepsD), stepsC: srt(stepsC), causes: srt(causes), labelsD: srt(labelsD), labelsC: srt(labelsC) };
+  }, [lots, minorReports, settings?.defectProcessOptions, settings?.complaintOptions]);
+  // 品目コードの表示 = 「品目コード｜品名」(値は品目コードのまま)
+  const itemLabelOf = (code) => { if (!code || code === '不明') return code; const nm = resolveItemName(code, '', settings?.itemMaster); return nm ? `${code}｜${nm}` : code; };
+  const dimParts = [];
+  if (dimModel !== 'all') dimParts.push(`品目コード=${dimModel}`);
+  if (dimStep !== 'all') dimParts.push(`工程=${dimStep}`);
+  if (dimCause !== 'all') dimParts.push(`原因工程=${dimCause}`);
+  if (dimLabel !== 'all') dimParts.push(`内容=${dimLabel}`);
+  if (dimText.trim()) dimParts.push(`内容に「${dimText.trim()}」を含む`);
+  if (dimSrc !== 'all') dimParts.push(`出所=${SRC_LABELS[dimSrc] || dimSrc}`);
+  const isDimActive = dimParts.length > 0;
+  const dimSummaryLabel = dimParts.join(' / ');
+  // 率カードを出してよいか。⚠分母(完了ロット)を絞れるのは品目コードだけ
+  const rateScope = {
+    modelScoped: dimModel !== 'all',
+    otherDimActive: dimStep !== 'all' || dimCause !== 'all' || dimLabel !== 'all' || !!dimText.trim() || dimSrc !== 'all',
+  };
+  // 🔎 期間以外の絞り込み(品目コード・工程・原因工程・内容・出所)。不具合分析/軽微不良タブでだけ出す
+  const renderDefectDimensionUI = () => {
+    const isDefectTab = activeMode === 'defects';
+    const steps = isDefectTab ? dimOptions.stepsD : dimOptions.stepsC;
+    const labels = isDefectTab ? dimOptions.labelsD : dimOptions.labelsC;
+    const seen = (isDefectTab ? defectStats.srcSeen : complaintStats.srcSeen) || [];
+    const srcIds = ['interruption', 'ng', 'minor'].filter(id => seen.includes(id) || dimSrc === id);
+    const sel = 'border rounded px-2 min-h-11 text-xs font-bold bg-white text-slate-700 max-w-[14rem]';
+    const cap = (v) => (String(v).length > 28 ? String(v).slice(0, 28) + '…' : v);
+    return (
+      <div className="flex flex-col gap-1.5 bg-white p-2 rounded-lg border shadow-sm">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-black text-slate-500 flex items-center gap-1"><Filter className="w-3.5 h-3.5" />しぼり込み</span>
+          <select value={dimModel} onChange={e => setDimModel(e.target.value)} className={sel} title="品目コード">
+            <option value="all">品目コード: すべて</option>
+            {dimOptions.models.map(m => <option key={m} value={m}>{cap(itemLabelOf(m))}</option>)}
+          </select>
+          <select value={dimStep} onChange={e => setDimStep(e.target.value)} className={sel} title="工程">
+            <option value="all">工程: すべて</option>
+            {steps.map(m => <option key={m} value={m}>{cap(m)}</option>)}
+          </select>
+          {isDefectTab && (
+            <select value={dimCause} onChange={e => setDimCause(e.target.value)} className={sel} title="原因工程">
+              <option value="all">原因工程: すべて</option>
+              {dimOptions.causes.map(m => <option key={m} value={m}>{cap(m)}</option>)}
+            </select>
+          )}
+          {!isDefectTab && (
+            <select value={dimLabel} onChange={e => setDimLabel(e.target.value)} className={sel} title="内容(カテゴリ)">
+              <option value="all">内容: すべて</option>
+              {labels.map(m => <option key={m} value={m}>{cap(m)}</option>)}
+            </select>
+          )}
+          <input value={dimText} onChange={e => setDimText(e.target.value)} placeholder="内容に含む文字で探す"
+            className="border rounded px-2 min-h-11 text-xs w-44 outline-none focus:border-blue-400" />
+          {srcIds.length > 1 && (
+            <select value={dimSrc} onChange={e => setDimSrc(e.target.value)} className={sel} title="出所">
+              <option value="all">出所: すべて</option>
+              {srcIds.map(id => <option key={id} value={id}>{SRC_LABELS[id]}</option>)}
+            </select>
+          )}
+          {isDimActive && (
+            <button onClick={clearDims} className="px-2.5 min-h-11 rounded-full text-xs font-black bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200">解除</button>
+          )}
+        </div>
+        {isDimActive && (
+          <div className="fi-tap-text font-black text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+            絞り込み中: {dimSummaryLabel}{rateScope.otherDimActive && activeMode === 'defects' ? '(不具合率は分母=完了ロットを工程・内容では絞れないので「—」)' : ''}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // 🚨 中断(不具合・待ち)の削除は **ロットの記録そのもの** を書き換える。
   //   投げっぱなしにすると、届かなかった時に画面だけ消えた事になり、
@@ -20685,7 +20834,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     ws.getRow(R).getCell(1).font = { size: 14, bold: true };
     R += 2;
     // 🚨 2026-08-23: 率だけ分子が別の母集団だったので、分子(完了ロットのうち不具合有)も並べて出す。
-    [['完了ロット数', defectStats.totalCompletedLots], ['不具合発生ロット数(全状態)', defectStats.defectLotCount], ['不具合の出た完了ロット(率の分子)', defectStats.defectCompletedLotCount], ['不具合発生率', `${defectStats.defectRate}%`], ['不具合総数', defectStats.totalDefects]].forEach(([label, value]) => {
+    [['完了ロット数', defectStats.totalCompletedLots], ['不具合発生ロット数(全状態)', defectStats.defectLotCount], ['不具合の出た完了ロット(率の分子)', defectStats.defectCompletedLotCount], ['不具合発生率', rateScope.otherDimActive ? '—(分母=完了ロットは工程・内容では絞れません)' : `${defectStats.defectRate}%`], ['不具合総数', defectStats.totalDefects]].forEach(([label, value]) => {
       const r = ws.getRow(R); r.getCell(1).value = label; r.getCell(1).font = { bold: true }; r.getCell(1).border = allBorder; r.getCell(1).fill = headerFill;
       r.getCell(2).value = value; r.getCell(2).border = allBorder; R++;
     });
@@ -20832,6 +20981,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
             <div className="flex items-center gap-3 flex-wrap">
               {renderDefectFilterUI()}
             </div>
+            {(activeMode === 'defects' || activeMode === 'complaints') && <div className="w-full">{renderDefectDimensionUI()}</div>}
             {/* 🧹 2026-09-08 P3: 出力(Excel / PDF)を 帯1 の右端(ml-auto)から **この帯の中へ移した**(設計 決まり1「移す」)。
                 本番の写し・1366×768 の実測で 帯2 は 中身43%/50px(左に 552px・右に 732px の空き)だった。
                 ⚠ ml-auto は付けない(UG1: 右端へ飛ばすと真ん中が空く)。絞り込みのすぐ右へ **詰めて** 置く。
@@ -20861,7 +21011,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                     ws.columns.forEach(c => c.width = 18);
                     // サマリーシート
                     const sm = wb.addWorksheet('不具合サマリー');
-                    sm.addRow(['指標','値']); sm.addRow(['完了ロット数', defectStats.totalCompletedLots]); sm.addRow(['不具合発生ロット(全状態)', defectStats.defectLotCount]); sm.addRow(['不具合の出た完了ロット(率の分子)', defectStats.defectCompletedLotCount]); sm.addRow(['不具合率(%)', defectStats.defectRate]); sm.addRow(['総件数', defectStats.totalDefects]);
+                    sm.addRow(['指標','値']); sm.addRow(['完了ロット数', defectStats.totalCompletedLots]); sm.addRow(['不具合発生ロット(全状態)', defectStats.defectLotCount]); sm.addRow(['不具合の出た完了ロット(率の分子)', defectStats.defectCompletedLotCount]); sm.addRow(['不具合率(%)', rateScope.otherDimActive ? '—(分母は工程・内容では絞れません)' : defectStats.defectRate]); if (isDimActive) sm.addRow(['絞り込み', dimSummaryLabel]); sm.addRow(['総件数', defectStats.totalDefects]);
                     styleHeader(sm.getRow(1));
                     sm.addRow([]); sm.addRow(['品目別','件数']); defectStats.models.forEach(x => sm.addRow([x.name, x.count]));
                     sm.addRow([]); sm.addRow(['工程別','件数']); defectStats.steps.forEach(x => sm.addRow([x.name, x.count]));
@@ -21080,7 +21230,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                  </div>
                  <div className="bg-gradient-to-br from-amber-50 to-amber-100 border-2 border-amber-200 p-4 rounded-xl shadow-sm">
                    <div className="text-xs font-bold text-amber-700 mb-1">不具合率</div>
-                   <div className="text-3xl font-black text-amber-700">{ds.defectRate}<span className="text-sm font-normal ml-1">%</span></div>
+                   <div className="text-3xl font-black text-amber-700">{rateScope.otherDimActive ? '—' : <>{ds.defectRate}<span className="text-sm font-normal ml-1">%</span></>}</div>
+                   {rateScope.modelScoped && <div className="fi-tap-text text-amber-600 mt-0.5">分母＝品目コード「{dimModel}」の完了ロット</div>}
                    {/* 🚨 2026-08-23: 分子と分母を必ず添える(以前は分子だけ母集団が違い100%超えが出た) */}
                    <div className="text-xs text-amber-700/80 mt-0.5">完了ロット {ds.defectCompletedLotCount} / {ds.totalCompletedLots} 件</div>
                  </div>
