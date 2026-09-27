@@ -143,6 +143,7 @@ const PAIRS = [
   { file: 'domain/workClock.js', product: 'product-inspection-app/src/domain/workClock.js', md5: '67253d9ef3e0b53325ca6f146cf89049' },
   { file: 'domain/workSessions.js', product: 'product-inspection-app/src/domain/workSessions.js', md5: 'e03d0ca73c84520b58f4760bbc2dd192' },
   { file: 'domain/workerDailyActual.js', product: 'product-inspection-app/src/domain/workerDailyActual.js', md5: 'c2f19376c2a6608a1e4e1eb87ca091ea' },
+  { file: 'ShrinkConfirm.jsx', product: 'product-inspection-app/src/ShrinkConfirm.jsx', md5: 'd7ca21dec7173fad2662b68a54a4bf0a' },
   { file: 'domain/workerPlan.js', product: 'product-inspection-app/src/domain/workerPlan.js', md5: '813226cf8606115a270a27cf07181b5f' },
 ];
 

@@ -120,6 +120,9 @@ import { sjhInsert } from './sjhText.js';
 import ReworkKindEditor from './ReworkKindEditor.jsx';
 import ReworkAnalysisPanel from './ReworkAnalysisPanel.jsx';
 import MinorReportLedgerModal from './MinorReportLedgerModal.jsx';
+// 📷 縮めた事を撮った瞬間に見せて確かめる(製品と同じ画面・同じ純関数)
+import { ShrinkConfirm } from './ShrinkConfirm.jsx';
+import { budgetOf, laddersFor, dataUrlBytes, pickStep, shouldConfirm, shrinkNote } from './domain/imageBudget.js';
 // 不良・軽微不良・気づきを「どこから数えるか」の1本化(製品と同じ純関数・検査中/NG判定/台帳)
 import { collectQualityRows, filterQuality, sourceNote } from './domain/qualitySources.js';
 import { UNKNOWN_KIND, UNKNOWN_CAUSE } from './domain/reworkAnalysis.js';
@@ -518,24 +521,40 @@ const _resizeOnce = (file, MAX, Q) => new Promise((resolve) => {
 //   ⚠ **1段目(いままでの設定)で上限内なら、そのまま返る = 既存の見え方は1pxも変わらない。**
 //     段を降りるのは「今までなら重すぎた写真」だけ。
 //   ⚠縮める場所はここ1か所だけにする。カメラ側で先に縮めるとJPEGが二重に掛かって汚くなる。
-const IMG_BYTE_BUDGET = 260_000; // 1枚あたりの上限(base64込み)。1MBのロットに写真が積める枚数で決めた。
-const dataUrlBytes = (s) => (typeof s === 'string' ? s.length : 0);
+const IMG_BYTE_BUDGET = 260_000; // 部品の既定の上限(base64込み)。写真の別置き先が無いので、1MBのロットに写真が積める枚数で決めた。
+// ⚙ settings.imageBudget[用途] があればそれ(budgetOf)、無ければ部品の既定 260KB。⚠純関数(imageBudget.js)は製品のまま変えない。
+let _lastShrink = null;
+const lastShrinkInfo = () => _lastShrink;
+let SETTINGS_FOR_BUDGET = null;
+const syncImageBudget = (settings) => { SETTINGS_FOR_BUDGET = settings || null; };
+const partsBudgetOf = (use) => {
+  const cfg = SETTINGS_FOR_BUDGET && SETTINGS_FOR_BUDGET.imageBudget;
+  return (cfg && cfg[use || 'default'] != null) ? budgetOf(SETTINGS_FOR_BUDGET, use || 'default') : IMG_BYTE_BUDGET;
+};
 const resizeImage = async (file, typeOrOpts = 'default') => {
-  const o = (typeof typeOrOpts === 'object') ? typeOrOpts : (IMG_QUALITY[typeOrOpts] || IMG_QUALITY.default);
-  const MAX = o.maxDim || 900; const Q = (typeof o.quality === 'number') ? o.quality : 0.6;
+  const isObj = (typeof typeOrOpts === 'object');
+  const use = isObj ? '' : typeOrOpts;
+  const base = isObj ? typeOrOpts : (IMG_QUALITY[typeOrOpts] || IMG_QUALITY.default);
+  const budget = partsBudgetOf(use);
   // 段。1段目は **今までと同じ設定**。以降は px と画質を少しずつ落とす。
-  const steps = [
-    { maxDim: MAX,                    quality: Q },
-    { maxDim: Math.round(MAX * 0.85), quality: Math.max(0.4, Q - 0.1) },
-    { maxDim: Math.round(MAX * 0.7),  quality: Math.max(0.35, Q - 0.15) },
-    { maxDim: Math.round(MAX * 0.55), quality: 0.35 },
-  ];
+  const steps = laddersFor({ maxDim: base.maxDim || 900, quality: (typeof base.quality === 'number') ? base.quality : 0.6 });
+  const sizes = [];
   let out = '';
-  for (const s of steps) {
-    out = await _resizeOnce(file, s.maxDim, s.quality);
-    if (!out) break;                              // 読めなかった時はこれ以上試さない
-    if (dataUrlBytes(out) <= IMG_BYTE_BUDGET) break; // ⚠収まったらそこで止める(必要以上に落とさない)
+  for (let i = 0; i < steps.length; i++) {
+    out = await _resizeOnce(file, steps[i].maxDim, steps[i].quality);
+    sizes.push(dataUrlBytes(out));
+    if (!out) break;                 // 読めなかった時はこれ以上試さない
+    if (sizes[i] <= budget) break;   // ⚠収まったらそこで止める(必要以上に落とさない)
   }
+  const picked = pickStep(sizes, budget);
+  if (out && picked.index !== sizes.length - 1) out = await _resizeOnce(file, steps[picked.index].maxDim, steps[picked.index].quality);
+  const before = Number(file && file.size) || 0;
+  const after = dataUrlBytes(out);
+  _lastShrink = {
+    use, stepIndex: picked.index, withinBudget: picked.withinBudget, budget, before, after,
+    note: shrinkNote({ before, after, stepIndex: picked.index, withinBudget: picked.withinBudget, budget }),
+    confirm: !!out && shouldConfirm(picked.index),
+  };
   return out;
 };
 const getBase64 = (file) => new Promise((resolve) => { const r = new FileReader(); r.readAsDataURL(file); r.onload = () => resolve(r.result); r.onerror = () => resolve(""); });
@@ -7408,6 +7427,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const [checklistFullscreen, setChecklistFullscreen] = useState(false);
   const [detailsFullscreen, setDetailsFullscreen] = useState(false);
   const [showDefectModal, setShowDefectModal] = useState(false);
+  const [shrinkAsk, setShrinkAsk] = useState(null); // 📷 縮めた写真を見せて確かめる { src, info, label, onOk, onRetake }
+
   const [defectLabel, setDefectLabel] = useState('');
   const [defectCauseProcess, setDefectCauseProcess] = useState('');
   const [defectPhotos, setDefectPhotos] = useState([]);
@@ -11016,6 +11037,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             ⏰ {worstOverrun.over ? '目標時間オーバー！' : 'まもなく目標時間'}：{worstOverrun.title}{worstOverrun.isLot ? '' : ` #${worstOverrun.u + 1}`} — {formatTime(worstOverrun.sec)} / 目標{formatTime(worstOverrun.tgt)}{myOverruns.length > 1 ? ` （他${myOverruns.length - 1}件）` : ''}
           </div>
         )}
+        {/* 📷 縮めた写真を見せて確かめる(段が下がった時だけ) */}
+        <ShrinkConfirm open={!!shrinkAsk} src={shrinkAsk?.src} info={shrinkAsk?.info} label={shrinkAsk?.label} onOk={() => shrinkAsk?.onOk?.()} onRetake={() => shrinkAsk?.onRetake?.()} />
         {showDefectModal && (
             <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
@@ -11046,7 +11069,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                           <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
                             <Camera className="w-5 h-5"/>
                           </button>
-                          <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); setDefectPhotos(prev=>[...prev, img]);} e.target.value='';}}/>
+                          <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); const info=lastShrinkInfo(); if(info&&info.confirm){setShrinkAsk({src:img,info,label:'不具合の写真',onOk:()=>{setDefectPhotos(prev=>[...prev, img]); setShrinkAsk(null);},onRetake:()=>setShrinkAsk(null)});} else {setDefectPhotos(prev=>[...prev, img]);}} e.target.value='';}}/>
                         </div>
                       </div>
                     </div>
@@ -12610,6 +12633,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         </div>
       ) : null}
 
+      {/* 📷 縮めた写真を見せて確かめる(段が下がった時だけ) */}
+      <ShrinkConfirm open={!!shrinkAsk} src={shrinkAsk?.src} info={shrinkAsk?.info} label={shrinkAsk?.label} onOk={() => shrinkAsk?.onOk?.()} onRetake={() => shrinkAsk?.onRetake?.()} />
       {showDefectModal && (
         <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
@@ -12640,7 +12665,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                   <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
                     <Camera className="w-5 h-5"/>
                   </button>
-                  <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); setDefectPhotos(prev=>[...prev, img]);} e.target.value='';}}/>
+                  <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); const info=lastShrinkInfo(); if(info&&info.confirm){setShrinkAsk({src:img,info,label:'不具合の写真',onOk:()=>{setDefectPhotos(prev=>[...prev, img]); setShrinkAsk(null);},onRetake:()=>setShrinkAsk(null)});} else {setDefectPhotos(prev=>[...prev, img]);}} e.target.value='';}}/>
                 </div>
               </div>
             </div>
@@ -29448,6 +29473,10 @@ const QuotaStoppedPanel = ({ until }) => (
    useEffect(() => {
      syncImageQuality(settings.imageQuality);
    }, [settings.imageQuality]);
+   // 📷 写真の容量の上限(settings.imageBudget)を resizeImage へ渡す。走り直すのは上限が変わった時だけ。
+   useEffect(() => {
+     syncImageBudget(settings);
+   }, [settings.imageBudget]); // eslint-disable-line react-hooks/exhaustive-deps
 
    // --- Break Alert Timer ---
    useEffect(() => {
