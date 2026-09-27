@@ -26341,7 +26341,7 @@ const rosterAdjustedAvailable = (settings, names, fromMs, toMs, baseline, factor
   }
   return days > 0 ? { avg: sum / days, days, anyEntry } : { avg: baseline, days: 0, anyEntry: false };
 };
-const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, days = 7 }) => {
+const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, days = 7, factoryCalendar = null }) => {
   const names = useMemo(() => [...new Set((workers || []).map(w => w.name).filter(Boolean))], [workers]);
   const today0 = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }, []);
   const cols = useMemo(() => Array.from({ length: days }, (_, i) => today0 + i * 86400000), [today0, days]);
@@ -26360,7 +26360,8 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
     saveSettings && saveSettings({ workerRoster: roster, ...(dead.length ? { __deleteMapKeys: dead } : {}) });
   };
   const DOW = ['日', '月', '火', '水', '木', '金', '土'];
-  const cellOf = (s) => s === 'off' ? { t: '休', c: 'bg-slate-200 text-slate-500' } : s === 'other' ? { t: '他', c: 'bg-amber-100 text-amber-700' } : { t: '出', c: 'bg-emerald-100 text-emerald-700' };
+  // 工場の暦で休みの日は「出」でなく「休業」(製品 0a4021b)
+  const cellOf = (s, factoryOff = false) => s === 'off' ? { t: '休', c: 'bg-slate-200 text-slate-500' } : s === 'other' ? { t: '他', c: 'bg-amber-100 text-amber-700' } : factoryOff ? { t: '休業', c: 'bg-slate-100 text-slate-400' } : { t: '出', c: 'bg-emerald-100 text-emerald-700' };
   if (names.length === 0) return null;
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -26383,12 +26384,12 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
             {names.map(w => (
               <tr key={w} className="border-t border-slate-50">
                 <td className="px-2 py-1 font-bold text-slate-700 sticky left-0 bg-white whitespace-nowrap z-10">{w}</td>
-                {cols.map(ms => { const ymd = rymd(ms); const cd = cellOf(rosterStatusOf(settings, ymd, w)); return <td key={ms} className="px-1 py-1 text-center"><button onClick={() => cycle(ymd, w)} className={`w-7 h-6 rounded font-bold ${cd.c} hover:opacity-80`}>{cd.t}</button></td>; })}
+                {cols.map(ms => { const ymd = rymd(ms); const cd = cellOf(rosterStatusOf(settings, ymd, w), !isWorkdayYmd(ymd, factoryCalendar)); return <td key={ms} className="px-1 py-1 text-center"><button onClick={() => cycle(ymd, w)} className={`min-w-11 h-11 px-1 rounded font-bold ${cd.c} hover:opacity-80`}>{cd.t}</button></td>; })}
               </tr>
             ))}
             <tr className="border-t-2 border-slate-200 font-bold">
               <td className="px-2 py-1 text-slate-500 sticky left-0 bg-white z-10">在席</td>
-              {cols.map(ms => { const st = rosterDayStats(settings, names, rymd(ms)); return <td key={ms} className="px-1 py-1 text-center"><span className="text-emerald-700">{st.present}</span>{(st.off + st.other) > 0 && <span className="text-xs text-slate-400">/{st.total}</span>}</td>; })}
+              {cols.map(ms => { const st = rosterDayStats(settings, names, rymd(ms)); if (!isWorkdayYmd(rymd(ms), factoryCalendar)) return <td key={ms} className="px-1 py-1 text-center text-slate-300">—</td>; return <td key={ms} className="px-1 py-1 text-center"><span className="text-emerald-700">{st.present}</span>{(st.off + st.other) > 0 && <span className="text-xs text-slate-400">/{st.total}</span>}</td>; })}
             </tr>
           </tbody>
         </table>
@@ -26458,6 +26459,7 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
   }, [lots]);
 
   // 各作業者の現在の状況
+  const factoryOffToday = !worksOnCal(Date.now());
   const workerStatuses = useMemo(() => {
     // 🛌 「空いています → 次のロットを割当できます」を出す所なので、休止中の人は外す。
     //   ただし作業が残っている間は残す(その人のロットが盤から消えない為)。
@@ -26467,6 +26469,8 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
       const paused = myLots.find(l => l.status === 'paused' && (!processing || l.id !== processing.id));
       const activeLot = processing || paused;
       const queued = myLots.filter(l => l !== activeLot);
+      const rs = rosterStatusOf(settings, rymd(Date.now()), w.name);
+      const away = rs === 'off' ? { code: 'off', text: '休み' } : rs === 'other' ? { code: 'other', text: '他工場' } : null;
 
       // 残り推定時間: 終わっていないタスクの目標時間から数える(個数×平均60秒はやめた・製品と同じ lotRemainingSec)
       const remainingSec = myLots.reduce((acc, lot) => {
@@ -26479,6 +26483,9 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
 
       let state, stateLabel, stateColor;
       if (processing) { state = 'processing'; stateLabel = '作業中'; stateColor = 'emerald'; }
+      // 👥 ロスターで今日「休」「他」の人・工場の暦で休業の日は「空いています」と出さない(一時停止のロットが在る事は消さない・製品 0a4021b)
+      else if (away) { state = 'away'; stateLabel = paused ? `${away.text}・一時停止中` : away.text; stateColor = away.code === 'off' ? 'slate' : 'amber'; }
+      else if (factoryOffToday) { state = 'factoryOff'; stateLabel = paused ? '休業・一時停止中' : '休業'; stateColor = 'slate'; }
       else if (paused) { state = 'paused'; stateLabel = '一時停止'; stateColor = 'amber'; }
       else if (queued.length > 0) { state = 'waiting'; stateLabel = '待機'; stateColor = 'blue'; }
       else { state = 'idle'; stateLabel = 'アイドル'; stateColor = 'slate'; }
@@ -26487,7 +26494,9 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
 
       // 推奨アクション (UI ヒント)
       let hint = '';
-      if (state === 'idle') hint = '空いています → 次のロットを割当できます';
+      if (state === 'away') hint = `今日は${away.text} → この工場では割り当てない${queued.length ? `（待ち ${queued.length} 件はそのまま）` : ''}`;
+      else if (state === 'factoryOff') hint = '今日は工場の暦で休業 → 次の勤務日に割り当てる';
+      else if (state === 'idle') hint = '空いています → 次のロットを割当できます';
       else if (state === 'waiting') hint = `待ち ${queued.length} 件 → 作業開始を促せます`;
       else if (state === 'paused') hint = '一時停止中 → 再開を促しましょう';
       else if (activeProgress?.delayLevel === 'critical') hint = '⚠ 大幅遅延中 → サポートが必要かも';
@@ -26495,7 +26504,7 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
 
       return { worker: w, state, stateLabel, stateColor, processing, paused, queued, myLots, remainingSec, activeProgress, hint, activeLot };
     });
-  }, [activeLots, workers, tickN]);
+  }, [activeLots, workers, tickN, settings, factoryOffToday]);
 
   // 未割当ロット (workerId なし)
   const unassignedLots = useMemo(() => activeLots.filter(l => !l.workerId), [activeLots]);
@@ -26823,7 +26832,7 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
       />
 
       {/* 作業者ロスター（日次の在席）— 下のキャパ計算の作業者数に反映 */}
-      <WorkerRosterPanel workers={workers} settings={settings} saveSettings={saveSettings} days={7} />
+      <WorkerRosterPanel workers={workers} settings={settings} saveSettings={saveSettings} days={7} factoryCalendar={factoryCalendar} />
 
       {/* セクション 2: 週次仕事量 (納期ベース) */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
