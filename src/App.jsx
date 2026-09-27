@@ -133,6 +133,7 @@ import { MascotFx, MascotSettingsPanel } from './MascotFx.jsx'; // P156 ケン�
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
 // 🤖 自動工程の判定・開始ガードの唯一の正(製品検査 src/domain/workExecution.js と md5 一致の写し)
 import { isAutoStep as isAutoStepShared, buildStepMasterIndex } from './domain/workExecution.js';
+import { annualOccurrencesOf, laborSecOf, machineSecOf } from './domain/goal/occurrence.js';
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
 import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGuide.js';
 import { setEstimatedSession } from './domain/workSessions.js';
@@ -704,18 +705,38 @@ const toMsAny = (raw) => {
   const t = new Date(raw).getTime();
   return isNaN(t) ? null : t;
 };
+// 統計(目標時間の提案・乖離アラート・達成率)に入れる台か。抜取スキップ(0秒扱い)と教育中を外す(製品 App.jsx と同じ1行)。
+const isStatTask = (t) => !!t && !t.samplingSkipped && t.trainee !== true;
 // CSVセルのエスケープ。カンマ/引用符/改行を含む値(品名・指図名のユーザー入力や toLocaleString のカンマ)を
 // 正しく引用し、列ずれ・破損を防ぐ。RFC4180準拠(" は "" にエスケープ)。
 const csvCell = (v) => { const s = String(v ?? ''); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 // P083: 印刷窓へ document.write する時の文字の逃がし(製品 App.jsx:1454 と同じ)
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGroups = [], startMs = 0, endMs = Infinity } = {}) => {
+// PDCA_MIN_N / PDCA_THRESHOLD_PCT / PDCA_STALE_DAYS は src/domain/goal/verdictEngine.js へ(製品と同じ・import済)
+// traineeMode: 'exclude'(既定=ものさし) / 'only'(教育の伸び画面) / 'all'(教育中も込みで見たい時)
+const statTaskFilterOf = (traineeMode = 'exclude') => {
+  if (traineeMode === 'only') return (t) => !!t && !t.samplingSkipped && t.trainee === true;
+  if (traineeMode === 'all') return (t) => !!t && !t.samplingSkipped;
+  return isStatTask;
+};
+
+// workerName: 指定するとその人の記録だけで時間統計を出す (🎓伸び画面の月別推移で使う)。
+//   ⚠既定は null = 今までどおり全員。不具合件数(defectCount)は作業者を持たないので絞らない。
+const measureWindow = (lots, { model, stepKey, templateId, customTargetTimes = {}, modelGroups = [], startMs = 0, endMs = Infinity, traineeMode = 'exclude', workerName = null } = {}) => {
+  const statOk = statTaskFilterOf(traineeMode);
   const samples = []; // {d, tgt}
+  // 🎓「速さ(中央値)」と「回数」は別の母集団で数える (あら探し#3)。
+  //   中央値は教育中を外す(ものさしなので)が、**回数は実際にやった全部**でなければならない。
+  //   n(=教育中を外した件数)を年間回数の分子に使うと、新人が入った工程ほど年間人件費・削減見込(円)が
+  //   目減りする = 改善を何もしていないのに「新人を入れた/外した」だけで金額と順位が動く。
+  let execCountAll = 0;
   let defectCount = 0, unitsSeen = 0, lotsSeen = 0;
   const titlePart = stepKey ? (stepKey.includes('_') ? stepKey.slice(stepKey.indexOf('_') + 1) : stepKey) : null;
   (lots || []).forEach(l => {
     if (!l) return;
     if (model && l.model !== model) return;
+    // テンプレ指定時はそのテンプレのロットだけに絞る (同名工程でも検査の種類が違えば別作業=混ぜると中央値が嘘になる)
+    if (templateId && l.templateId !== templateId) return;
     // 不具合件数: 不具合自身の timestamp で窓を切る。完了/作業中に関係なく数える
     // (defectStatsと対称=saveDataがupdatedAtを更新する作業中ロットの不具合を落とさない。完了ゲートより前で数える)
     (l.interruptions || []).filter(i => i.type === 'defect').forEach(dft => {
@@ -739,14 +760,17 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
         const t = (l.tasks || {})[k];
         if (!t) return;
         if (t.status !== 'completed' && t.status !== 'ng') return;
-        if (t.samplingSkipped || t.trainee === true) return; // 🎓教育中の記録はものさしから外す(製品 isStatTask)
+        if (t.samplingSkipped) return; // 抜取でスキップした台は実際に作業していない(回数にも入れない)
+        if (workerName && (t.workerName || '') !== workerName) return; // 指定があればその人の記録だけ
         const d = t.duration || 0; if (d <= 0) return;
         const ms = toMsAny(t.endTime) || lotMs;
         if (ms == null || ms < startMs || ms > endMs) return;
+        execCountAll++;                 // 🎓回数は教育中も込みで数える(実際にやった回数)
+        if (!statOk(t)) return; // 🎓教育中は「ものさし(速さ)」から外す
         samples.push({ d, tgt: effTarget });
       });
     });
-    // 検査機会: 窓内に完了した該当ロットの台数(抜取でスキップした台も分母に入る)
+    // 検査機会: 窓内に完了した該当ロットの台数(抜取でスキップした台も分母に入る=実施率の分母)
     if (lotHasStep && lotMs != null && lotMs >= startMs && lotMs <= endMs) { lotsSeen++; unitsSeen += (l.quantity || 1); }
   });
   const ds = samples.map(x => x.d).sort((a, b) => a - b);
@@ -763,37 +787,68 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
     cv: mean > 0 ? Math.round((sigma / mean) * 1000) / 1000 : 0,
     min: n ? ds[0] : 0, max: n ? ds[n - 1] : 0,
     achievementRate: sum > 0 && sumTgt > 0 ? Math.round((sumTgt / sum) * 1000) / 10 : null,
-    within, sumTgt, sumAct: sum, defectCount, unitsSeen, lotsSeen,
+    within, sumTgt, sumAct: sum, defectCount, unitsSeen, lotsSeen, execCountAll,
     avgTarget: n ? Math.round(sumTgt / n) : 0, // 1台(1回)あたりの実効目標秒 (儲けどころの短縮余地算出に使う)
     startMs, endMs, days: (isFinite(endMs) && startMs > 0) ? Math.max(1, (endMs - startMs) / 86400000) : null,
   };
 };
-// 儲けどころランキング: 品目×工程ごとに「年間台数 × 実績中央値 × 時給」で年間人件費・年間削減見込(円)を出す純関数。
+// 儲けどころランキング: 品目コード×工程ごとに「年間台数 × 実績中央値 × 時給」で年間人件費・年間削減見込(円)を出す純関数。
 // reductionPerUnit = max(0, 実績中央値 − 目標)。年間台数は窓内標本を365日換算。低頻度(年lowFreq台未満)は flag。
-const profitRanking = (lots, settings, { startMs = 0, endMs = Infinity, ratePerHour = 0, lowFreq = 10, annualUnitsByModel = null } = {}) => {
+const profitRanking = (lots, settings, { startMs = 0, endMs = Infinity, ratePerHour = 0, lowFreq = 10, annualUnitsByModel = null, byTemplate = false, templates = null, autoLaborPct = 100 } = {}) => {
   const customTargetTimes = settings?.customTargetTimes || {};
   const modelGroups = modelGroupsOf(settings);
   const rate = ratePerHour || settings?.laborCostPerHour || 0;
+  const tplNameOf = (id) => (id && (templates || []).find(t => t.id === id)?.name) || '';
   const rows = [];
-  enumerateModelSteps(lots).forEach(ms => {
-    const stat = measureWindow(lots, { model: ms.model, stepKey: ms.stepKey, customTargetTimes, modelGroups, startMs, endMs });
+  // byTemplate: 集計単位を「品目コード×テンプレ×工程」に分ける。同じ品目コードでも検査の種類(テンプレ)が違えば
+  //   同名工程の中身は別作業(実測: RTT-311,ZD 傾斜分割測定はテンプレ間で中央値8.2倍差) — 混ぜると中央値も目標乖離も嘘になる。
+  const pre = [];
+  const items = byTemplate ? enumerateModelTplSteps(lots) : enumerateModelSteps(lots);
+  items.forEach(ms => {
+    const stat = measureWindow(lots, { model: ms.model, stepKey: ms.stepKey, templateId: byTemplate ? ms.templateId : undefined, customTargetTimes, modelGroups, startMs, endMs });
     if (stat.n < 1) return;
+    pre.push({ ms, stat });
+  });
+  // 登録年間台数(品目コード単位)の扱い(仕様4.3): 台数をそのまま回数にしない。
+  //   年間実施回数 = 登録台数 × 窓内実施率(実施回数÷対象台数)。抜取1/10なら1/10回、ロット1回工程はロット回数になる。
+  //   テンプレ分割時は同じ品目コード×工程の全テンプレ行の対象台数合計で割る=二重計上の物理的防止。
+  const unitsByModelStep = {};
+  if (byTemplate) pre.forEach(p => { const k = `${p.ms.model}||${p.ms.stepKey}`; unitsByModelStep[k] = (unitsByModelStep[k] || 0) + (p.stat.unitsSeen || 0); });
+  pre.forEach(({ ms, stat }) => {
     const days = pdcaWindowDays(stat) || 365;
-    // 年間台数: ユーザーが入力した実際の年間生産台数を優先。無ければ測定台数を365日換算した推定。
-    const measuredAnnual = Math.round(stat.n * (365 / days));
+    // 🎓回数は「実際にやった全部」で数える (あら探し#3)。
+    //   ⚠stat.n は教育中を除いた**速さの標本数**。分子だけ教育中を落として分母(unitsSeen=全台)と割ると、
+    //     実施率が新人比率のぶん下がり、年間人件費も削減見込(円)も丸ごと過少になる
+    //     (例: 100台中40台を新人 → 実施率0.6 → 年間1200台なら 720回として計算 = 4割の取りこぼし)。
+    //     改善は新人がやる回にも効くので、掛ける回数は全実施回数が正しい。
+    const execAll = Number.isFinite(stat.execCountAll) ? stat.execCountAll : stat.n;
+    const measuredAnnual = Math.round(execAll * (365 / days)); // 実測回数の年換算(未登録時の既定・回数ベースなので工程タイプに依らず正しい)
     const inputAnnual = annualUnitsByModel ? annualUnitsByModel[ms.model] : null;
     const useActual = typeof inputAnnual === 'number' && inputAnnual > 0;
-    const annualUnits = useActual ? inputAnnual : measuredAnnual;
-    const annualUnitsSource = useActual ? 'actual' : 'estimated';
+    const windowUnits = byTemplate ? (unitsByModelStep[`${ms.model}||${ms.stepKey}`] || 0) : (stat.unitsSeen || 0);
+    const { occ, source: occSource } = annualOccurrencesOf({ useActual, inputAnnualUnits: inputAnnual || 0, windowExecs: execAll, windowUnits, measuredAnnualExecs: measuredAnnual });
+    const annualUnits = occ; // フィールド名は互換のため維持(意味は「年間実施回数」)
+    const annualUnitsSource = occSource;
     const median = stat.median || 0;
     const target = stat.avgTarget || 0;
     const reductionPerUnit = target > 0 ? Math.max(0, median - target) : 0; // 目標未設定は削減見込0(過大評価しない)
-    const annualCostYen = Math.round(annualUnits * median / 3600 * rate);
-    const annualSaveYen = Math.round(annualUnits * reductionPerUnit / 3600 * rate);
+    // 🤖自動運転の分離: 自動工程は拘束率(autoLaborPct%)分だけ人件費、全時間は機械時間として別集計(混ぜない)。
+    const workKind = ms.auto ? 'auto' : 'manual';
+    const costSecRaw = annualUnits * median, saveSecRaw = annualUnits * reductionPerUnit;
+    const annualCostSec = Math.round(laborSecOf({ workKind, sec: costSecRaw, autoLaborPct }));
+    const annualSaveSec = Math.round(laborSecOf({ workKind, sec: saveSecRaw, autoLaborPct }));
+    const machineCostSec = Math.round(machineSecOf({ workKind, sec: costSecRaw }));
+    const machineSaveSec = Math.round(machineSecOf({ workKind, sec: saveSecRaw }));
     rows.push({
-      ...ms, n: stat.n, annualUnits, measuredAnnual, annualUnitsSource, median, target, sigma: stat.sigma, cv: stat.cv,
-      reductionPerUnit, annualCostSec: annualUnits * median, annualSaveSec: annualUnits * reductionPerUnit,
-      annualCostYen, annualSaveYen, hasTarget: target > 0, lowFreq: annualUnits < lowFreq,
+      ...ms, templateId: ms.templateId || '', templateName: tplNameOf(ms.templateId),
+      // ⚠画面に式を出すために、年換算の**実際の分子**(execAll)と窓の日数を行に持たせる (2026-08-09 是正)。
+      //   n は「速さの標本数(教育中を除く)」で年換算の分子ではない。画面に n を式として書くと
+      //   読んだ人が電卓を叩いても合わない = 金額を出す画面の「出どころと実数の式を必ず添える」に反する。
+      n: stat.n, execAll, traineeN: Math.max(0, execAll - (stat.n || 0)), windowDays: Math.round(days * 10) / 10,
+      annualUnits, measuredAnnual, annualUnitsSource, median, target, sigma: stat.sigma, cv: stat.cv,
+      reductionPerUnit, workKind, annualCostSec, annualSaveSec, machineCostSec, machineSaveSec,
+      annualCostYen: Math.round(annualCostSec / 3600 * rate), annualSaveYen: Math.round(annualSaveSec / 3600 * rate),
+      hasTarget: target > 0, lowFreq: annualUnits < lowFreq,
     });
   });
   // 削減見込(¥)優先、同値や時給未設定なら年間コスト(=工数の山=割合が多い所)でソート
@@ -809,24 +864,28 @@ const profitRanking = (lots, settings, { startMs = 0, endMs = Infinity, ratePerH
     totalSaveSec: rows.reduce((s, r) => s + r.annualSaveSec, 0),
     totalCostYen: rows.reduce((s, r) => s + r.annualCostYen, 0),
     totalCostSec: totalCost,
+    // 🤖機械時間(設備能力・納期効果): 人件費とは別枠で報告する(混ぜない)
+    totalMachineSec: rows.reduce((s, r) => s + (r.machineCostSec || 0), 0),
+    totalMachineSaveSec: rows.reduce((s, r) => s + (r.machineSaveSec || 0), 0),
+    autoLaborPct,
   };
 };
-// 共通工程 横断改善: profitRanking の「品目×工程」行を、工程タイトルで品目横断にまとめ直す純関数。
+// 共通工程 横断改善: profitRanking の「品目コード×工程」行を、工程タイトルで品目コード横断にまとめ直す純関数。
 //   「この工程は何品目コードに共通か」「全品目コード合計で年いくらかかっているか」と、3つの改善余地を出す:
 //   ① 最速の品目コードに揃える(実証済み=現に一番速い品目コードの中央値まで全品目コードを揃えたら) ② ◯%短縮の仮定(レイアウト改善等の大改善)
 //   ③ 目標まで詰める(堅実な下限)。狙い=共通ポイントを1つ直すと全品目コードに効く=大きい、を可視化する。
-const crossStepRanking = (lots, settings, { startMs = 0, endMs = Infinity, ratePerHour = 0, reductionPct = 0.5, annualUnitsByModel = null } = {}) => {
-  const base = profitRanking(lots, settings, { startMs, endMs, ratePerHour, lowFreq: 0, annualUnitsByModel });
+const crossStepRanking = (lots, settings, { startMs = 0, endMs = Infinity, ratePerHour = 0, reductionPct = 0.5, annualUnitsByModel = null, byTemplate = false, templates = null, autoLaborPct = 100 } = {}) => {
+  const base = profitRanking(lots, settings, { startMs, endMs, ratePerHour, lowFreq: 0, annualUnitsByModel, byTemplate, templates, autoLaborPct });
   const rate = base.rate;
   const groups = {};
   base.rows.forEach(r => {
-    // 工程タイトル(category_title の title 部分)でまとめる。profitDetail の品目横断比較と同じ粒度。
+    // 工程タイトル(category_title の title 部分)でまとめる。profitDetail の品目コード横断比較と同じ粒度。
     const title = r.stepTitle || (r.stepKey && r.stepKey.includes('_') ? r.stepKey.slice(r.stepKey.indexOf('_') + 1) : r.stepKey) || '(不明)';
     (groups[title] = groups[title] || { title, rows: [] }).rows.push(r);
   });
   const out = Object.values(groups).map(g => {
     const rows = g.rows.slice().sort((a, b) => a.median - b.median); // 速い順(先頭=最速品目コード)
-    const modelCount = rows.length;
+    const modelCount = new Set(rows.map(r => r.model)).size; // byTemplate時は同品目コードが複数行になるためユニーク品目コード数で数える
     const actualModels = rows.filter(r => r.annualUnitsSource === 'actual').length; // 実際の年間台数を入力済の品目コード数
     const annualUnits = rows.reduce((s, r) => s + r.annualUnits, 0);
     const annualCostSec = rows.reduce((s, r) => s + r.annualCostSec, 0);
@@ -976,6 +1035,20 @@ const findObsPlan = (plans, templateId, stepKey, model) => {
   const ps = (plans || []).filter(p => p.enabled && p.templateId === templateId && p.stepKey === stepKey && Array.isArray(p.elements) && p.elements.length);
   return ps.find(p => p.model && p.model === model) || ps.find(p => !p.model) || null;
 };
+// 工程(step)に直付けした要素(じっと見る)。工程テンプレ編集で常設設定したもの → 旧 observationPlans コレクションより優先。
+//   明示OFF(observationEnabled===false)は {enabled:false} を返し、旧プランへのフォールバックを止める。
+const stepObsPlan = (step) => {
+  if (!step || !Array.isArray(step.observationElements)) return null;
+  if (step.observationEnabled === false) return { enabled: false, elements: [] };
+  const els = step.observationElements.filter(e => e && (e.label || '').trim() !== '').slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+  if (els.length < 2) return null;
+  return { source: 'step', enabled: true, model: '', elements: els };
+};
+// 旧 observationPlans の「品目コード専用(model一致)」プランのみを返す。step直付け(全品目コード)より優先させて品目コード別プランの黙殺を防ぐ。
+const findObsPlanModel = (plans, templateId, stepKey, model) => {
+  if (!templateId || !stepKey || !model) return null;
+  return (plans || []).find(p => p.enabled && p.templateId === templateId && p.stepKey === stepKey && p.model === model && Array.isArray(p.elements) && p.elements.length) || null;
+};
 // 要素別の実績集計: 完了タスクの elementDurations を要素IDごとに集める→中央値/n
 const obsElementStats = (lots, { model, templateId, stepKey, plan }) => {
   const byEl = {};
@@ -990,7 +1063,7 @@ const obsElementStats = (lots, { model, templateId, stepKey, plan }) => {
         const t = (l.tasks || {})[`${step.id}-${u}`] || (l.tasks || {})[`${idx}-${u}`];
         // 該当なし(skipped)/抜取スキップ/未完了の台は時間統計(stepBreakdown/measureWindow)と対称に除外。
         // 完了→該当なし変換しても elementDurations が残るため、status を見ないと内訳に古い値が居座る。
-        if (!t || t.status !== 'completed' || t.samplingSkipped || t.trainee === true || !t.elementDurations) continue;
+        if (!t || t.status !== 'completed' || !isStatTask(t) || !t.elementDurations) continue; // 抜取スキップ・教育中は除外(製品と同じ)
         const entries = Object.entries(t.elementDurations).filter(([, sec]) => sec > 0);
         if (!entries.length) continue;
         observedUnits++; // この台は内訳ありの1観測
@@ -1016,6 +1089,7 @@ const histogramOf = (durations, bins = 8) => {
   durations.forEach(d => { let bi = Math.floor((d - min) / width); if (bi >= bins) bi = bins - 1; if (bi < 0) bi = 0; buckets[bi].count++; });
   return { buckets, min, max, width };
 };
+// pdcaWindowDays / PDCA_KPIS / pdcaKpiValue / computeVerdict は src/domain/goal/verdictEngine.js へ(製品と同じ・import済)。
 // 改善テーマ候補: 完了ロットに現れる 品目×工程 を列挙 (カルテ化の入口・乖離候補算出に使う)
 const enumerateModelSteps = (lots) => {
   const map = new Map();
@@ -1024,7 +1098,22 @@ const enumerateModelSteps = (lots) => {
     (l.steps || []).forEach(step => {
       const sk = targetTimeStepKey(step);
       const key = `${l.model}||${sk}`;
-      if (!map.has(key)) map.set(key, { model: l.model, stepKey: sk, stepTitle: step.title, category: step.category || '' });
+      if (!map.has(key)) map.set(key, { model: l.model, stepKey: sk, stepTitle: step.title, category: step.category || '', auto: isAutoStep(step) });
+    });
+  });
+  return [...map.values()];
+};
+// 品目コード×テンプレ×工程 の列挙 (🎯目標レイヤー用)。実測: 68品目コード中23品目コードが複数テンプレで流れており、
+// 品目コード×工程だけで束ねると検査種類の違う作業が混ざる(混在の実害16件・中央値差 最大15.6倍)。
+const enumerateModelTplSteps = (lots) => {
+  const map = new Map();
+  (lots || []).forEach(l => {
+    if (l.status !== 'completed' && l.location !== 'completed') return;
+    const tpl = l.templateId || '';
+    (l.steps || []).forEach(step => {
+      const sk = targetTimeStepKey(step);
+      const key = `${l.model}||${tpl}||${sk}`;
+      if (!map.has(key)) map.set(key, { model: l.model, templateId: tpl, stepKey: sk, stepTitle: step.title, category: step.category || '', auto: isAutoStep(step) });
     });
   });
   return [...map.values()];
@@ -5359,6 +5448,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
   const [type, setType] = useState('normal');
   // 確認チェック項目 (type 不問で工程に添付できる)
   const [checklistItems, setChecklistItems] = useState([]);
+  const [obsEnabled, setObsEnabled] = useState(true);      // じっと見る(要素作業) ON/OFF
+  const [obsElements, setObsElements] = useState([]);       // [{id,label,order}]
   const [targetTime, setTargetTime] = useState(0);
   // 段取り情報: 治具番号・プログラム番号 (工程に直付けで保存。空なら保存しない)
   const [jigNo, setJigNo] = useState('');
@@ -5489,6 +5580,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
   const addStep = () => {
     if (!title) return alert('工程名入力');
     const validChecklistItems = (checklistItems || []).filter(i => i.label?.trim());
+    const validObsElements = (obsElements || []).filter(e => (e.label || '').trim()).map((e, i) => ({ id: e.id || generateId(), label: e.label.trim(), order: i }));
     const newStep = {
       id: editingStepId || generateId(),
       title, description, type, targetTime, images, pdfData,
@@ -5503,12 +5595,14 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
       ...(rotaryLink && !lotOnce && executionMode !== 'batch' ? { rotaryLink: true, rotaryRole, rotaryMode } : {}),  // 分割測定アプリ連携(準備/測定開始の指令送信+測定モード)。lotOnce/batchとは併用不可(workId採番が噛み合わない)
       ...(type === 'measurement' && measurementConfig ? { measurementConfig } : {}),
       // checklistItems は type 問わず保存可能 (測定 + チェックの併用OK)
-      ...(validChecklistItems.length > 0 ? { checklistItems: validChecklistItems } : {})
+      ...(validChecklistItems.length > 0 ? { checklistItems: validChecklistItems } : {}),
+      // じっと見る(要素作業分割): 2要素以上で常設。ONで作業画面に区切りボタンが出る。
+      ...(validObsElements.length >= 2 ? { observationElements: validObsElements, observationEnabled: obsEnabled } : {})
     };
     if (editingStepId) { setSteps(steps.map(s => s.id === editingStepId ? newStep : s)); } else { setSteps([...steps, newStep]); }
     resetInput();
   };
-  const resetInput = () => { setTitle(''); setDescription(''); setType('normal'); setTargetTime(0); setJigNo(''); setProgramNo(''); setImages([]); setPdfData(null); setEditingStepId(null); setMeasurementConfig(null); setChecklistItems([]); setExecutionMode('manual'); setWorkResource(''); setAutoEndEnabled(false); setAutoEndSec(0); setLotOnce(false); setRotaryLink(false); setRotaryRole('capture'); setRotaryMode('回転分割'); };
+  const resetInput = () => { setTitle(''); setDescription(''); setType('normal'); setTargetTime(0); setJigNo(''); setProgramNo(''); setImages([]); setPdfData(null); setEditingStepId(null); setMeasurementConfig(null); setChecklistItems([]); setExecutionMode('manual'); setWorkResource(''); setAutoEndEnabled(false); setAutoEndSec(0); setLotOnce(false); setRotaryLink(false); setRotaryRole('capture'); setRotaryMode('回転分割'); setObsEnabled(true); setObsElements([]); };
   const editStep = (s) => {
     setEditingStepId(s.id);
     setTitle(s.title);
@@ -5530,6 +5624,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
     setRotaryRole(s.rotaryRole || (s.type === 'measurement' ? 'capture' : 'prepare'));
     setRotaryMode(s.rotaryMode || '回転分割');
     setChecklistItems(Array.isArray(s.checklistItems) ? s.checklistItems : []);
+    setObsElements(Array.isArray(s.observationElements) ? s.observationElements.map(e => ({ ...e })) : []);
+    setObsEnabled(s.observationEnabled !== false);
   };
   const deleteStep = (id) => setSteps(steps.filter(s => s.id !== id));
   const moveStep = (index, direction) => { const newSteps = [...steps]; if (direction === 'up' && index > 0) { [newSteps[index-1], newSteps[index]] = [newSteps[index], newSteps[index-1]]; } else if (direction === 'down' && index < steps.length-1) { [newSteps[index+1], newSteps[index]] = [newSteps[index], newSteps[index+1]]; } setSteps(newSteps); };
@@ -5887,6 +5983,45 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                   )}
                 </div>
               </div>
+
+            {/* じっと見る（要素作業分割）— 工程をさらに小さな要素に分けて内訳時間を観測する。テンプレに常設。 */}
+            <div className="bg-blue-50/30 border-2 border-blue-100 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-bold text-blue-800 flex items-center gap-1">
+                  <Eye className="w-4 h-4"/> じっと見る（要素作業）{obsElements.length > 0 ? `（${obsElements.length}要素）` : ''}
+                  <span className="fi-tap-text font-normal text-blue-500 ml-1">(任意 — 工程を要素に分けて内訳時間を観測)</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  {obsElements.length >= 2 && (
+                    <label className="flex items-center gap-1 fi-tap-text font-bold text-slate-600 cursor-pointer" title="作業画面で区切りボタンを出す">
+                      <input type="checkbox" checked={obsEnabled} onChange={e => setObsEnabled(e.target.checked)} className="w-3.5 h-3.5 accent-blue-600"/>ON
+                    </label>
+                  )}
+                  <button type="button" onClick={() => setObsElements(p => [...(p || []), { id: generateId(), label: '', order: (p || []).length }])} className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded font-bold flex items-center gap-1"><Plus className="w-3 h-3"/> 要素追加</button>
+                </div>
+              </div>
+              {obsElements.length > 0 && obsElements.length < 2 && <p className="fi-tap-text text-amber-600">要素は2つ以上で有効になります（1つでは分割になりません）。</p>}
+              {obsElements.length >= 2 && <p className="fi-tap-text text-blue-700">作業者がこの工程を計測すると、要素ごとの「区切り」ボタンが出ます。<b>合計は工程時間のまま</b>、要素ごとの内訳も取れます（1要素6秒以上が目安）。</p>}
+              <div className="space-y-1.5">
+                {(obsElements || []).map((el, idx) => {
+                  const setLabel = (v) => setObsElements(obsElements.map((x, j) => j === idx ? { ...x, label: v } : x));
+                  const move = (d) => setObsElements(p => { const a = [...p]; const j = idx + d; if (j < 0 || j >= a.length) return a; [a[idx], a[j]] = [a[j], a[idx]]; return a.map((x, k) => ({ ...x, order: k })); });
+                  const remove = () => setObsElements(obsElements.filter((_, j) => j !== idx).map((x, k) => ({ ...x, order: k })));
+                  return (
+                    <div key={el.id || idx} className="bg-white border border-blue-200 rounded p-2 flex items-center gap-1.5">
+                      <span className="fi-tap-text font-bold text-blue-500 w-5 text-center">{idx + 1}</span>
+                      <input value={el.label || ''} onChange={e => setLabel(e.target.value)} placeholder={idx === 0 ? '例: 治具に取り付け' : (idx === 1 ? '例: 測定' : '例: 取り外し・記録')} className="flex-1 border rounded px-2 py-1 text-sm"/>
+                      <button type="button" onClick={() => move(-1)} disabled={idx === 0} className="text-slate-300 hover:text-slate-600 disabled:opacity-30"><ArrowUp className="w-4 h-4"/></button>
+                      <button type="button" onClick={() => move(1)} disabled={idx === obsElements.length - 1} className="text-slate-300 hover:text-slate-600 disabled:opacity-30"><ArrowDown className="w-4 h-4"/></button>
+                      <button type="button" onClick={remove} className="text-rose-400 hover:text-rose-600"><X className="w-4 h-4"/></button>
+                    </div>
+                  );
+                })}
+                {obsElements.length === 0 && (
+                  <div className="text-center text-blue-400 text-xs py-3 bg-white rounded border border-dashed border-blue-200">「要素追加」で工程を小分けにして観測できます（任意）。</div>
+                )}
+              </div>
+            </div>
 
             {type === 'measurement' && measurementConfig && (() => {
               const mcCalcs = measurementConfig.calculations || [{ id: 'default', label: '計算結果', method: measurementConfig.calculation || 'max-min', formula: measurementConfig.formula || '', inputIds: [], toleranceUpper: measurementConfig.toleranceUpper ?? 0.05, toleranceLower: measurementConfig.toleranceLower ?? -0.05, unit: measurementConfig.unit || 'mm' }];
@@ -9858,6 +9993,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   //   ・最適の次の一手 以外の waiting タップ → ブロック(データ最適順を強制)
   const optimalGate = (sIdx, uIdx) => {
     if (!optimalNextMove || !strictOrderMode) return null;
+    // 順番を強制するのは「これから始める台(未着手 waiting / 一時停止 paused の再開)」だけ(製品 e7d6e49 と同じ)。
+    //   作業中・完了・NG・修正中などの台は toggleTask(完了/メニュー)へ通す。
+    {
+      const gStep = localSteps[sIdx];
+      const gTask = (gStep?.id && tasks[`${gStep.id}-${uIdx}`]) || tasks[`${sIdx}-${uIdx}`];
+      const gSt = gTask?.status || 'waiting';
+      if (gSt !== 'waiting' && gSt !== 'paused') return null;
+    }
     const gnt = globalNextTask;
     if (!gnt) return null; // 次が無い(手動進行中など)は通常処理へ委ねる
     if (gnt.isLot) return null; // 次がロット1回ゲート(準備/片付け)のときは台タップを強制ブロックしない (バッジで案内・台はタップ可)
@@ -10226,7 +10369,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     const key = step.id ? `${step.id}-${unitIdx}` : `${stepIdx}-${unitIdx}`;
     const t = tasks[key];
     if (!t || t.status !== 'processing') return null;
-    const plan = findObsPlan(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model);
+    const plan = findObsPlanModel(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model) || stepObsPlan(step) || findObsPlan(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model);
     if (!plan || plan.enabled === false || !(plan.elements || []).length) return null;
     return { key, step, stepIdx, unitIdx, plan, els: plan.elements };
   }, [activeCustomTaskKey, localSteps, tasks, observationPlans, lot.templateId, lot.model]);
@@ -10268,7 +10411,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     // プラン要素(完了時に再解決)
     const { stepIdx } = parseActiveTaskKey(key);
     const step = localSteps[stepIdx];
-    const plan = step ? findObsPlan(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model) : null;
+    const plan = step ? (findObsPlanModel(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model) || stepObsPlan(step) || findObsPlan(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model)) : null;
     const els = plan?.elements || [];
     const t0 = taskObj.firstStartTime || laps[0].atMs;
     const wallSpanSec = (endMs - t0) / 1000;
@@ -15735,6 +15878,8 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
     });
     const [showHistory, setShowHistory] = useState(false);
     const [alertsOpen, setAlertsOpen] = useState(false); // 乖離アラートは既定で折りたたみ (場所を取らない)
+    // 乖離アラートの並べ方(端末の見た目だけ): 'impact' = 今の仕事への影響順(既定) / 'ratio' = 外れの割合順(製品 70de730)
+    const [driftSortMode, setDriftSortMode] = useState('impact');
     const [focusStepKey, setFocusStepKey] = useState(null); // 「開く」で選んだ工程をハイライト+スクロール
     const cardRefs = useRef({});
     useEffect(() => {
@@ -15763,25 +15908,36 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
     };
 
     const availableModels = useMemo(() => {
+        // 🚨 2026-08-26 是正: 「完了したロットの品目コード」だけを並べていたので、
+        //   作業中ロットにしか記録が無い品目コードは **選ぶ事すらできなかった**（提案の絞りと同じ穴）。
+        //   提案の標本と同じ「完了した台の記録が1件でも有る品目コード」を並べる。
         const models = new Set();
-        lots.filter(l => l.status === 'completed' || l.location === 'completed').forEach(l => {
-            if (l.model) models.add(l.model);
+        lots.forEach(l => {
+            if (!l || !l.model) return;
+            const tasks = Object.values(l.tasks || {});
+            if (tasks.some(t => t && t.status === 'completed' && t.duration > 0 && isStatTask(t))) models.add(l.model);
         });
         return Array.from(models).sort();
     }, [lots]);
 
-    const insightsData = useMemo(() => {
-        if (!targetValue) return [];
+    /**
+     * 1つの品目コードの提案を計算する。🚨 画面（選んだ品目コード）と「おすすめで一括設定」（全品目コード）の
+     *   **両方がこの1本を呼ぶ**。別々に書くと必ず答えが2本になって片方が腐る。
+     */
+    const computeProposalsFor = (mv) => {
+        if (!mv) return [];
         const { start: startDate, end: endDate } = getPeriodDates();
 
-        const targetLots = lots.filter(l => {
-            if (l.status !== 'completed' && l.location !== 'completed') return false;
-            if (l.model !== targetValue) return false;
-            // 完了時刻を最優先(updatedAtは編集の度に動き標本が揺れる, Timestampは数値化)。
-            const ts = toMsAny(l.completedAt) || toMsAny(l.updatedAt) || toMsAny(l.createdAt) || 0;
-            if (ts < startDate || ts > endDate) return false;
-            return true;
-        });
+        // 🚨 2026-08-26 是正（清水さんの指摘で発覚）: ここは「ロットが completed」で絞っていた。
+        //   その結果、**作業中ロットの中の完了済みの台の記録**（実測: 製品56件・最終497件）を
+        //   見ずに捨てていて、台の記録が有るのに「提案が1件も作れない」品目コードが両アプリに7種ずつあった
+        //   （例: TLH-135 は台の完了記録98件が有るのにロットが検査中なので丸ごと対象外）。
+        //   達成率分析は台単位で数えるので、同じデータなのに提案側だけ空になり、
+        //   「データが有るのに材料が無い」という矛盾した説明を生んでいた。
+        //   → 絞りは **台単位** にする。期間の窓も達成率分析(measureWindow)と同じ
+        //     「台の endTime、無ければロットの時刻」で切る。ロットの完了は要求しない。
+        //   ⚠ 台の status==='completed' は今までどおり要求する（やりかけの時間は入れない）。
+        const targetLots = lots.filter(l => l.model === mv);
 
         if (targetLots.length === 0) return [];
 
@@ -15789,10 +15945,12 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
         const workerTimesByStep = {};
 
         targetLots.forEach(lot => {
+            // 台に endTime が無い時の予備の時刻（完了時刻を最優先。updatedAtは編集の度に動く）
+            const lotMs = toMsAny(lot.completedAt) || toMsAny(lot.updatedAt) || toMsAny(lot.createdAt) || 0;
             (lot.steps || []).forEach((step, idx) => {
                 const stepKey = `${step.category || ''}_${step.title}`;
                 if (!stepTimes[stepKey]) {
-                    stepTimes[stepKey] = { title: step.title, category: step.category || '', times: [], originalTarget: step.targetTime };
+                    stepTimes[stepKey] = { title: step.title, category: step.category || '', times: [], recs: [], originalTarget: step.targetTime };
                     workerTimesByStep[stepKey] = {};
                 }
 
@@ -15801,8 +15959,16 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                     ? lotOnceKeysOf(lot.tasks || {}, step).map(k => lot.tasks?.[k])
                     : Array.from({ length: lot.quantity || 1 }, (_, i) => lot.tasks?.[`${step.id}-${i}`] || lot.tasks?.[`${idx}-${i}`]);
                 taskList.forEach(task => {
-                    if (task && task.status === 'completed' && task.duration > 0) {
+                    // 🎓ここは「目標時間そのもの」を決める元データ。教育中(新人)の遅い時間を混ぜると
+                    //   標準時間が緩み、以降の達成率・改善効果・必要人数まで全部が甘くなる。
+                    //   抜取スキップ(0秒扱いの台)も同じ理由で外す(今まで見ていなかった既存の穴)。
+                    if (task && task.status === 'completed' && task.duration > 0 && isStatTask(task)) {
+                        // 期間の窓は台単位（達成率分析と同じ: endTime 優先、無ければロットの時刻）
+                        const taskMs = toMsAny(task.endTime) || lotMs;
+                        if (taskMs < startDate || taskMs > endDate) return;
                         stepTimes[stepKey].times.push(task.duration);
+                        // チャンピオン用に生の記録も持つ (aiAutoCompleted = AI判定だけで閉じ時間を測っていない印)
+                        stepTimes[stepKey].recs.push({ d: task.duration, ai: task.aiAutoCompleted === true });
                         const worker = task.workerName || workers.find(w => w.id === task.workerId)?.name || '不明';
                         if (!workerTimesByStep[stepKey][worker]) workerTimesByStep[stepKey][worker] = [];
                         workerTimesByStep[stepKey][worker].push(task.duration);
@@ -15829,7 +15995,7 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
 
             const insights = [];
             const coeffVariation = stats.stdDev / stats.mean;
-            const savedKey = `model_${targetValue}`;
+            const savedKey = `model_${mv}`;
             const currentTarget = customTargetTimes[savedKey]?.[key] || data.originalTarget;
 
             if (coeffVariation > 0.4) {
@@ -15857,6 +16023,27 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                 { id: 'aggressive', name: effFromWorker != null ? `効率型 (${bestWorker}基準)` : '効率追求型 (速い25%)', desc: effFromWorker != null ? `${bestWorker}さんの速いペースを基準` : '実績の速い25%(p25)を基準', value: efficientValue, color: 'text-emerald-800 bg-emerald-50 border-emerald-200 hover:bg-emerald-100' },
                 { id: 'conservative', name: '余裕確保型', desc: 'バラつきを考慮した余裕あるペース。', value: conservativeValue, color: 'text-amber-800 bg-amber-50 border-amber-200 hover:bg-amber-100' }
             ];
+            // === チャンピオンタイム (2026-08-25 清水さん「チャンピオンタイムと平均値の達成率を見える化してほしい」) ===
+            //   🚨 生の最速1件は使わない。押し間違い・誤動作の疑いがある記録が実測で混ざっている
+            //     (例: 中央値353秒の工程に63秒 / 中央値2897秒に360秒)。除外は2つだけ:
+            //     ・aiAutoCompleted … AI判定だけで閉じ、時間を一度も測っていない印
+            //     ・疑わしく速い … その工程の中央値の20%未満 (中央値30秒以上の工程のみ。
+            //       確認系は1〜2秒のタップが本当の速さなので、短い工程では除外しない)
+            //   ⚠ 20%・30秒 は仮置きのしきい値。実測では 製品119件・最終246件 がこれに当たった。
+            const champRecs = data.recs || [];
+            const champAll = champRecs.map(r => r.d).sort((a, b) => a - b);
+            const champMedian = champAll.length ? champAll[Math.floor(champAll.length / 2)] : 0;
+            const champFloor = champMedian >= 30 ? Math.max(3, Math.round(champMedian * 0.2)) : 1;
+            const champCands = champRecs.filter(r => !r.ai && r.d >= champFloor);
+            const champSuspicious = champRecs.filter(r => !r.ai && r.d < champFloor).length;
+            const champAiOnly = champRecs.filter(r => r.ai).length;
+            // 候補が全滅したら生の最速に落ちる(0は作らない)。落ちた事は画面で白状する。
+            const championValue = champCands.length ? Math.min(...champCands.map(r => r.d)) : (champAll[0] || 0);
+            const champion = { value: championValue, suspicious: champSuspicious, aiOnly: champAiOnly, fellBack: !champCands.length && champAll.length > 0, floor: champFloor, median: champMedian };
+            if (championValue > 0) {
+                strategies.push({ id: 'champion', name: 'チャンピオン型 (信頼できる最速)', desc: `いちばん速い1件${(champSuspicious + champAiOnly) > 0 ? `。疑わしく速い${champSuspicious}件${champAiOnly ? `・AI自動完了${champAiOnly}件` : ''}は除外済み` : ''}。全員が届く前提ではなく「目指す的」。`, value: championValue, color: 'text-rose-800 bg-rose-50 border-rose-200 hover:bg-rose-100' });
+            }
+
             // データが少ない / ばらつきが小さいと3案がほぼ同値になる (バグではない)。その旨を伝えるフラグ。
             const stratVals = [stats.mean, efficientValue, conservativeValue];
             const strategiesSimilar = (Math.max(...stratVals) - Math.min(...stratVals)) <= Math.max(1, Math.round(stats.mean * 0.05));
@@ -15870,11 +16057,51 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
             else if (n >= 5 && cv < 0.5) confidence = 'mid';
             const confidenceLabel = confidence === 'high' ? '高' : confidence === 'mid' ? '中' : '低';
 
-            results.push({ key, ...data, stats, currentTarget, insights, strategies, strategiesSimilar, confidence, confidenceLabel, cv });
+            results.push({ key, ...data, stats, currentTarget, insights, strategies, strategiesSimilar, confidence, confidenceLabel, cv, champion });
         });
 
         return results.sort((a, b) => b.stats.mean - a.stats.mean);
-    }, [lots, targetValue, customTargetTimes, period, customStartDate, customEndDate, workers]);
+    };
+    const insightsData = useMemo(() => computeProposalsFor(targetValue),
+        [lots, targetValue, customTargetTimes, period, customStartDate, customEndDate, workers]);
+
+    // === 達成率プレビュー (2026-08-25 清水さん「チャンピオンタイムと平均値の達成率を見える化してほしい」) ===
+    //   この品目コードの全ロット(達成率分析と同じ標本条件: completed/ng・抜取除く・教育中除く・duration>0)で、
+    //   「いま / 標準(平均)を全部押した後 / チャンピオンを全部押した後」の達成率を並べる。
+    //   🚨 式は達成率分析と同じ Σ目標÷Σ実績×100。ここで新しい式を作らない(答えが2本になる)。
+    //   ⚠ 提案が無い工程は、いまの目標のまま(置き換わらない工程まで動かして見せない)。
+    const calibrationPreview = useMemo(() => {
+        if (!targetValue || !insightsData.length) return null;
+        const meanMap = {}; const champMap = {};
+        insightsData.forEach(d => {
+            meanMap[d.key] = d.stats.mean;
+            if (d.champion && d.champion.value > 0) champMap[d.key] = d.champion.value;
+        });
+        const acc = { before: [0, 0], mean: [0, 0], champ: [0, 0] }; let n = 0;
+        lots.forEach(l => {
+            if (!l || l.model !== targetValue) return;
+            (l.steps || []).forEach((step, idx) => {
+                const cur = getEffectiveTargetTime(step, l.model, customTargetTimes, settings?.modelGroups);
+                const key = targetTimeStepKey(step);
+                const keys = step.lotOnce
+                    ? lotOnceKeysOf(l.tasks || {}, step)
+                    : Array.from({ length: l.quantity || 1 }, (_, i) => ((l.tasks || {})[`${step.id}-${i}`] !== undefined ? `${step.id}-${i}` : `${idx}-${i}`));
+                keys.forEach(k => {
+                    const t = (l.tasks || {})[k];
+                    if (!t) return;
+                    if (t.status !== 'completed' && t.status !== 'ng') return;
+                    if (t.samplingSkipped || !isStatTask(t)) return;
+                    const d = t.duration || 0; if (d <= 0) return;
+                    n += 1;
+                    acc.before[0] += cur; acc.before[1] += d;
+                    acc.mean[0] += (meanMap[key] !== undefined ? meanMap[key] : cur); acc.mean[1] += d;
+                    acc.champ[0] += (champMap[key] !== undefined ? champMap[key] : cur); acc.champ[1] += d;
+                });
+            });
+        });
+        const rate = (pair) => (pair[0] > 0 && pair[1] > 0) ? Math.round(pair[0] / pair[1] * 1000) / 10 : null;
+        return { n, before: rate(acc.before), mean: rate(acc.mean), champ: rate(acc.champ) };
+    }, [insightsData, lots, targetValue, customTargetTimes, settings]);
 
     // === 【E】乖離検知: 全品目コードを走査し、現在の目標時間と実績平均が乖離している工程を抽出 ===
     // 較正→承認→監視 ループの「監視」部分。再較正すべき箇所を管理者に提示する。
@@ -15900,7 +16127,8 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                     ? lotOnceKeysOf(l.tasks || {}, step).map(k => l.tasks?.[k])
                     : Array.from({ length: l.quantity || 1 }, (_, i) => l.tasks?.[`${step.id}-${i}`] || l.tasks?.[`${idx}-${i}`]);
                 tList.forEach(t => {
-                    if (t && (t.status === 'completed' || t.status === 'ng') && t.duration > 0) byModelStep[mapKey].times.push(t.duration);
+                    // 🎓乖離アラートは「目標が実態と合っているか」の判定。教育中の遅い時間で目標を緩めさせない。
+                    if (t && (t.status === 'completed' || t.status === 'ng') && t.duration > 0 && isStatTask(t)) byModelStep[mapKey].times.push(t.duration);
                 });
             });
         });
@@ -15921,6 +16149,36 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
         });
         return alerts.sort((a, b) => Math.abs(b.ratio - 1) - Math.abs(a.ratio - 1));
     }, [lots, customTargetTimes, period, customStartDate, customEndDate]);
+    /* 🧹 2026-09-23 ChatGPT の観察(e)「差の割合順だけでなく、今月の計画に影響する順へ」
+         未完了ロットに残っている その品目コード×工程の台数(まだ済んでいない台)を数え、影響 = (実績−目標)×残りの台数(秒)。
+         🚨 実績の平均・目標は driftAlerts の物をそのまま使う。ここで数えるのは「残りの台数」だけ。 */
+    const driftRemainByKey = useMemo(() => {
+        const m = new Map();
+        lots.forEach(l => {
+            if (l.status === 'completed' || l.location === 'completed' || !l.model) return;
+            (l.steps || []).forEach((step, idx) => {
+                const key = `${l.model}||${step.category || ''}_${step.title}`;
+                const units = step.lotOnce ? 1 : (l.quantity || 1);
+                let left = 0;
+                for (let u = 0; u < units; u++) {
+                    const t = step.lotOnce ? null : (l.tasks?.[`${step.id}-${u}`] || l.tasks?.[`${idx}-${u}`]);
+                    const done = step.lotOnce ? lotOnceKeysOf(l.tasks || {}, step).length > 0 : (t && (t.status === 'completed' || t.status === 'ng' || t.status === 'skipped' || t.status === 'na'));
+                    if (!done) left += 1;
+                }
+                if (left > 0) { const c = m.get(key) || { units: 0, lots: 0 }; c.units += left; c.lots += 1; m.set(key, c); }
+            });
+        });
+        return m;
+    }, [lots]);
+    const driftRows = useMemo(() => {
+        const rows = driftAlerts.map(a => {
+            const r = driftRemainByKey.get(`${a.model}||${a.stepKey}`) || { units: 0, lots: 0 };
+            return { ...a, remainUnits: r.units, remainLots: r.lots, impactSec: (a.mean - a.target) * r.units };
+        });
+        if (driftSortMode === 'impact') rows.sort((x, y) => Math.abs(y.impactSec) - Math.abs(x.impactSec) || Math.abs(y.ratio - 1) - Math.abs(x.ratio - 1));
+        return rows;
+    }, [driftAlerts, driftRemainByKey, driftSortMode]);
+    const mmss = (sec) => { const v = Math.round(Math.abs(Number(sec) || 0)); const h = Math.floor(v / 3600); const mi = Math.floor((v % 3600) / 60); const se = v % 60; return h > 0 ? `${h}時間${mi}分` : `${mi}:${String(se).padStart(2, '0')}`; };
 
     const applySuggestedTarget = (itemKey, strat, data) => {
         const savedKey = `model_${targetValue}`;
@@ -15961,6 +16219,74 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
         onSaveSettings({ customTargetTimes: newCustomTimes, targetTimeHistory: newHistory });
         alert(`表示されている全項目に「${bulkStrategy === 'standard' ? '標準バランス型' : bulkStrategy === 'aggressive' ? '効率追求型' : '余裕確保型'}」の目標時間を適用しました。`);
     };
+    /**
+     * 🤖 全品目コードに「おすすめ」で一括設定（2026-08-26 清水さん「アプリ側で操作して良い感じに設定
+     *   できそうなしてもらいたいな、俺がひとつひとつすると時間かかるからね。変更に伴い履歴とか
+     *   エビデンス残せるならいいな」）。
+     * 決めごと:
+     *   ・値は「標準バランス型」＝外れ値(IQR)を落とした平均。
+     *   ・🚨 信頼度「高」(標本10件以上・バラつき小)の工程 **だけ**。中・低は見送って件数を白状する。
+     *     （実測の前後比較: この押し方で品目コードごとの100%からのズレが 58.9pt→5.9pt。
+     *      効率型を全部に押すと全体68%になり「全員未達」の見た目になるので既定にしない）
+     *   ・履歴とエビデンス(期間・標本数・平均・σ・信頼度)を targetTimeHistory に品目コードごとに残す。
+     *   ・適用前に件数を見せて confirm。黙って書き換えない。
+     */
+    const [recommendBusy, setRecommendBusy] = useState(false);
+    const applyRecommendedAll = () => {
+        if (recommendBusy) return;
+        setRecommendBusy(true);
+        try {
+            const periodLabel = period === 'custom' ? `${customStartDate}~${customEndDate}` : period === '1m' ? '過去1ヶ月' : period === '3m' ? '過去3ヶ月' : period === '6m' ? '過去6ヶ月' : '全期間';
+            const plans = [];
+            let skippedMidLow = 0;
+            availableModels.forEach(m => {
+                const rows = computeProposalsFor(m);
+                const ups = [];
+                rows.forEach(d => {
+                    const v = d.stats.mean;
+                    if (!(v > 0)) return;
+                    if (d.confidence !== 'high') { skippedMidLow += 1; return; }
+                    if (d.currentTarget === v) return;
+                    ups.push({
+                        key: d.key, category: d.category, title: d.title,
+                        oldTime: d.currentTarget, newTime: v,
+                        strategyName: '標準バランス型（おすすめ一括・信頼度高のみ）',
+                        evidence: { periodLabel, validCount: d.stats.validCount, mean: d.stats.mean, stdDev: d.stats.stdDev, confidence: '高' },
+                    });
+                });
+                if (ups.length) plans.push({ model: m, ups });
+            });
+            const totalUps = plans.reduce((a, p) => a + p.ups.length, 0);
+            if (!totalUps) { alert(`設定できる工程がありません（信頼度「高」に届く工程が無いか、すでに同じ値です。信頼度が中・低で見送った工程 ${skippedMidLow}件）。`); return; }
+            const ok = window.confirm(
+                `${plans.length}品目コード・${totalUps}工程の目標時間を「標準バランス型」で設定します。
+
+` +
+                `・対象は信頼度「高」(標本10件以上・バラつき小)の工程だけです
+` +
+                `・信頼度が中・低で見送る工程: ${skippedMidLow}件
+` +
+                `・期間: ${periodLabel} ／ 変更はすべて履歴に残ります
+
+実行しますか？`);
+            if (!ok) return;
+            const newCT = { ...customTargetTimes };
+            const now = Date.now();
+            const historyAdd = plans.map(pl => ({
+                timestamp: now, by: currentUserName || '?', targetType: 'model', targetValue: pl.model,
+                updates: pl.ups,
+            }));
+            plans.forEach(pl => {
+                newCT[`model_${pl.model}`] = { ...(newCT[`model_${pl.model}`] || {}), ...Object.fromEntries(pl.ups.map(u => [u.key, u.newTime])) };
+            });
+            onSaveSettings({ customTargetTimes: newCT, targetTimeHistory: [...(targetTimeHistory || []), ...historyAdd] });
+            alert(`✅ ${plans.length}品目コード・${totalUps}工程を設定しました（履歴に残しています）。
+信頼度が中・低で見送った工程: ${skippedMidLow}件`);
+        } finally {
+            setRecommendBusy(false);
+        }
+    };
+
 
     return (
         <div className="flex flex-col h-full gap-4">
@@ -15998,6 +16324,16 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                         title="作成済みの進行中ロットにも較正済み目標時間を反映する"
                       >
                         {reapplyStatus === 'applying' ? '適用中...' : '🔄 進行中ロットに再適用'}
+                      </button>
+                    )}
+                    {currentUserName === '管理者' && (
+                      <button
+                        onClick={applyRecommendedAll}
+                        disabled={recommendBusy}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white text-xs font-bold rounded shadow flex items-center gap-1"
+                        title="全品目コードを走査し、信頼度「高」(標本10件以上・バラつき小)の工程だけを標準バランス型(外れ値を落とした平均)で設定します。実行前に件数を確認でき、変更は全部履歴に残ります。"
+                      >
+                        {recommendBusy ? '計算中...' : '🤖 全品目コードにおすすめで一括設定'}
                       </button>
                     )}
                     <button onClick={() => setShowHistory(false)} className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${!showHistory ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
@@ -16065,14 +16401,24 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                             </button>
                             {alertsOpen && (
                             <div className="max-h-52 overflow-y-auto space-y-1 px-3 pb-3">
-                                {driftAlerts.slice(0, 30).map((a, i) => (
-                                    <div key={i} className="bg-white border border-rose-200 rounded px-2 py-1.5 flex items-center gap-2 text-xs">
+                                <div className="flex flex-wrap items-center gap-1 pt-1" data-drift-sort={driftSortMode}>
+                                    <span className="fi-tap-text text-slate-500">並べ方:</span>
+                                    {[['impact', '今の仕事への影響順'], ['ratio', '外れの割合順']].map(([k, label]) => (
+                                      <button key={k} type="button" onClick={() => setDriftSortMode(k)}
+                                        className={`min-h-11 px-3 rounded-lg fi-tap-text font-bold border ${driftSortMode === k ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
+                                        title={k === 'impact' ? '(実績−目標)×未完了ロットに残っている台数 の大きい順' : '目標からの外れ(%)の大きい順'}>{label}</button>
+                                    ))}
+                                    <span className="fi-tap-text text-slate-500 basis-full">影響＝(実績−目標)×残りの台数＝このまま目標で計画すると足りなくなる時間(赤＝足りない／青＝余る)。</span>
+                                </div>
+                                {driftRows.slice(0, 30).map((a, i) => (
+                                    <div key={i} className="bg-white border border-rose-200 rounded px-2 py-1.5 flex items-center gap-2 text-xs" data-drift-row={a.remainUnits}>
                                         <span className={`text-xs font-black px-1.5 py-0.5 rounded shrink-0 ${a.direction === 'over' ? 'bg-rose-100 text-rose-700' : 'bg-blue-100 text-blue-700'}`}>
                                             {a.direction === 'over' ? `${Math.round((a.ratio-1)*100)}% 超過` : `${Math.round((1-a.ratio)*100)}% 短縮`}
                                         </span>
+                                        <span className={`font-mono font-black shrink-0 w-24 text-right ${a.remainUnits ? (a.impactSec >= 0 ? 'text-rose-700' : 'text-blue-700') : 'text-slate-300'}`} title={`(実績${mmss(a.mean)}−目標${mmss(a.target)})×残り${a.remainUnits}台`}>{a.remainUnits ? `${a.impactSec >= 0 ? '+' : '−'}${mmss(a.impactSec)}` : '残り0台'}</span>
                                         <span className="font-bold text-slate-700 shrink-0">{a.model}</span>
                                         <span className="text-slate-500 truncate">/ {a.title}</span>
-                                        <span className="ml-auto font-mono text-slate-600 shrink-0">目標{a.target}s→実績{a.mean}s</span>
+                                        <span className="ml-auto font-mono text-slate-600 shrink-0">目標{mmss(a.target)}→実績{mmss(a.mean)}{a.remainUnits ? ` ・残り${a.remainUnits}台/${a.remainLots}ロット` : ''}</span>
                                         <span className="text-xs text-slate-400 shrink-0">n={a.n}{a.calibrated ? ' ✓' : ''}</span>
                                         <button
                                             onClick={() => { setTargetValue(a.model); setFocusStepKey(a.stepKey); }}
@@ -16088,6 +16434,16 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                     )}
 
                     {/* 🧹 2026-09-07: ここに在った「品目コード ・ 集計」の帯は、上の見出しの箱の中へ移した。中身は1つも減っていない。 */}
+
+                    {calibrationPreview && (
+                        <div className="mb-3 bg-white border rounded-xl p-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
+                            <span className="font-bold text-slate-600">この品目コードの達成率プレビュー<span className="fi-tap-text text-slate-400 font-normal">（全期間・標本{calibrationPreview.n}件・Σ目標÷Σ実績）</span>:</span>
+                            <span>いま <b className="font-mono text-lg">{calibrationPreview.before ?? '—'}%</b></span>
+                            <span>→ 標準(平均)を全部押すと <b className="font-mono text-lg text-blue-700">{calibrationPreview.mean ?? '—'}%</b></span>
+                            <span>→ チャンピオンを全部押すと <b className="font-mono text-lg text-rose-700">{calibrationPreview.champ ?? '—'}%</b></span>
+                            <span className="fi-tap-text text-slate-400 leading-tight basis-full">⚠ チャンピオン基準は「全員がいちばん速い人の速さ」なので、100%を切るのが正常です。ものさし(目標)は平均基準にして、チャンピオンとの差は伸びしろとして見るのが安全です。</span>
+                        </div>
+                    )}
 
                     {targetValue ? (
                         <div className="flex-1 overflow-y-auto min-h-0 space-y-4 pr-2">
@@ -16129,6 +16485,13 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
                                                 </div>
                                             ))}
                                         </div>
+                                        {data.champion && (data.champion.suspicious > 0 || data.champion.aiOnly > 0 || data.champion.fellBack) && (
+                                            <div className="mt-1.5 fi-tap-text text-rose-700 bg-rose-50 border border-rose-200 rounded px-1.5 py-1 leading-tight">
+                                                {data.champion.fellBack
+                                                    ? '⚠ 信頼できる記録が残らず、チャンピオンは生の最速に落ちています(疑わしい可能性があります)'
+                                                    : `疑わしく速い記録 ${data.champion.suspicious}件${data.champion.aiOnly ? `・AI自動完了 ${data.champion.aiOnly}件` : ''} はチャンピオンの元にしていません(この工程の中央値${data.champion.median}秒の20%未満)`}
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="p-4 flex-1 flex flex-col">
@@ -16726,6 +17089,7 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
           lotOnceKeysOf(tasks, st).forEach(k => {
             const t = tasks[k];
             if (!t || (t.status !== 'completed' && t.status !== 'ng')) return;
+            if (!isStatTask(t)) return; // 抜取スキップ(0秒扱い)・教育中はロット1回工程でも入れない(製品と同じ)
             const d = t.duration || 0; if (d <= 0) return;
             const ms = toMs(t.endTime) || lotMs; if (!ms) return;
             out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt });
@@ -16735,7 +17099,7 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
         for (let u = 0; u < qty; u++) {
           const t = tasks[st.id ? `${st.id}-${u}` : `${si}-${u}`] || tasks[`${si}-${u}`];
           if (!t || (t.status !== 'completed' && t.status !== 'ng')) continue;
-          if (t.samplingSkipped || t.trainee === true) continue;
+          if (!isStatTask(t)) continue; // 抜取スキップ/教育中は除外
           const d = t.duration || 0; if (d <= 0) continue;
           const ms = toMs(t.endTime) || lotMs; if (!ms) continue;
           out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt });
@@ -16805,7 +17169,8 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
 
   return (
     <div className="h-full overflow-auto p-1 space-y-3">
-      <div className="flex items-center gap-2 flex-wrap">
+      {/* この行は relative が要る(下の ？ の吹き出しの位置の土台・製品と同じ) */}
+      <div className="relative flex items-center gap-2 flex-wrap">
         <div className="flex bg-slate-200 rounded-lg p-1">
           <button onClick={() => setMode('model')} className={`px-4 py-1.5 rounded-md text-sm font-bold ${mode === 'model' ? 'bg-white shadow text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}>品目別（期間指定）</button>
           <button onClick={() => setMode('trend')} className={`px-4 py-1.5 rounded-md text-sm font-bold ${mode === 'trend' ? 'bg-white shadow text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}>全体推移（週・月）</button>
@@ -16823,10 +17188,13 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
             <button onClick={() => setBucket('week')} className={`px-3 py-1 rounded-md text-xs font-bold ${bucket === 'week' ? 'bg-white shadow text-emerald-700' : 'text-slate-500'}`}>週毎</button>
           </div>
         )}
-      </div>
-
-      <div className="text-xs text-slate-500 bg-emerald-50 border border-emerald-200 rounded-lg p-2">
-        <b>達成率(能率) = 目標時間の合計 ÷ 実績時間の合計 ×100</b>。100%超 = 目標より速く作業できている。目標時間は較正済みの品目別値（無ければ工程の既定値）。抜取で省略した工程・目標未設定・時間0は集計から除外。
+        {/* 式の説明の帯を <details> に畳み、上の行へ合流(製品 PU6 と同じ)。文は1文字も消していない。押す所は44pxの床・吹き出しは right-0。 */}
+        <details className="fi-tap-text text-slate-500" data-band="achievement-formula">
+          <summary style={{ minHeight: 'max(2.75rem, 44px)' }} className="cursor-pointer list-none select-none text-xs font-bold text-emerald-800 flex items-center px-2 rounded-lg bg-emerald-50 border border-emerald-200 hover:bg-emerald-100">？ 達成率(能率) の計算方法 ▾</summary>
+          <div className="z-30 absolute top-full right-0 mt-1 max-w-full w-[420px] bg-white border border-emerald-200 rounded-lg shadow-lg p-3">
+            <b>達成率(能率) = 目標時間の合計 ÷ 実績時間の合計 ×100</b>。100%超 = 目標より速く作業できている。目標時間は較正済みの品目別値（無ければ工程の既定値）。抜取で省略した工程・目標未設定・時間0は集計から除外。
+          </div>
+        </details>
       </div>
 
       {mode === 'model' ? (
@@ -16937,8 +17305,8 @@ const AdminLiveAlerts = ({ lots = [], customTargetTimes = {}, modelGroups = [], 
       if (im.status !== 'measuring' || !im.actionDate || !im.baseline) return;
       const days = Math.floor((now - im.actionDate) / 86400000);
       if (days < PDCA_STALE_DAYS) return;
-      const a = measureWindow(lots, { model: im.model, stepKey: im.stepKey, customTargetTimes, modelGroups, startMs: im.actionDate, endMs: now });
-      const v = computeVerdict(im.baseline, a, im.kpi || 'time');
+      const a = measureWindow(lots, { model: im.model, stepKey: im.stepKey, templateId: im.templateId || undefined, customTargetTimes, modelGroups, startMs: im.actionDate, endMs: now });
+      const v = computeVerdict(im.actionBaseline || im.baseline, a, im.kpi || 'time');
       if (v.result === 'improved') return; // 効いていれば放置ではない
       stales.push({ id: im.id, model: im.model, title: im.stepTitle || im.stepKey, days, verdict: v });
     });
@@ -17053,15 +17421,136 @@ const KpiDetailView = ({ lots = [], settings = {}, saveSettings = null, currentU
   const [editYear, setEditYear] = useState(new Date().getFullYear());
   const [prodDraft, setProdDraft] = useState({});
   useEffect(() => { setProdDraft({ ...((settings.annualProduction || {})[editYear] || {}) }); }, [editYear, settings.annualProduction]);
-  // 記録上の台数(参考): 直近365日に完了したロットの quantity 合計を品目別に。実生産台数の目安。
+  // 記録上の台数(参考): 直近365日に完了した台数を品目コード別に(製品と同じ・指図で名寄せ)。
+  // ⚠⚠ **指図ごとに1回だけ数える。ロットの quantity を全部足してはいけない。**
+  //   清水さん(2026-08-01):「一台毎にテンプレ毎に仕事してるからそれを合計してるからじゃ？
+  //   RTT-215は一台で4個テンプレあるよ」→ そのとおりだった。
+  //   1つの指図は **テンプレの数だけロットに分かれる**(実測: 268指図中99指図が複数ロット)。
+  //   足し算にすると RTT-215 が 104台(実際は29台)、全体で 1,315台(実際は943台)と
+  //   **39%も多く**出ていた。ここは実績表と見比べる欄なので、水増しは致命的。
+  //
+  // ⚠同じ指図なのにロットごとに台数が違う場合がある(実測2件)。どれが正しいか機械には
+  //   決められないので **一番大きい値**を採る。少なく見積もる方が危ないため。
+  // ⚠同じ指図の中で品目コードが違うことがある(例「RTT-215回転」と「RTT-215,AB傾斜」= 同じ1台の別工程)。
+  //   1台を2品目コードで数えないよう **代表を1つだけ選ぶ**。選び方は 台数が多い → 名前順 の順で決め打ち
+  //   (毎回同じ答えになるように。ロットの並び順に依存させない)。
   const measuredByModel = useMemo(() => {
-    const m = {}; const cutoff = Date.now() - 365 * 86400000;
-    (lots || []).forEach(l => { if (!isCompleted(l)) return; const cm = compMs(l); if (cm == null || cm < cutoff) return; const k = l.model || '不明'; m[k] = (m[k] || 0) + (l.quantity || 1); });
+    const cutoff = Date.now() - 365 * 86400000;
+    const perOrder = new Map(); // 指図 → { model, qty }
+    (lots || []).forEach(l => {
+      if (!isCompleted(l)) return;
+      const cm = compMs(l); if (cm == null || cm < cutoff) return;
+      const model = l.model || '不明';
+      const qty = Number(l.quantity) || 1;
+      // 指図番号が無いロット(手入力など)は、ロット自身を1件として数える
+      const key = String(l.orderNo || '').trim() ? `o:${String(l.orderNo).trim()}` : `l:${l.id}`;
+      const cur = perOrder.get(key);
+      if (!cur) { perOrder.set(key, { model, qty }); return; }
+      const better = qty > cur.qty || (qty === cur.qty && model < cur.model);
+      perOrder.set(key, { model: better ? model : cur.model, qty: Math.max(qty, cur.qty) });
+    });
+    const m = {};
+    perOrder.forEach(({ model, qty }) => { m[model] = (m[model] || 0) + qty; });
     return m;
   }, [lots]);
   const prodModels = useMemo(() => { const s = new Set(Object.keys(measuredByModel)); Object.keys(prodDraft).forEach(k => s.add(k)); return [...s].filter(Boolean).sort(); }, [measuredByModel, prodDraft]);
   const prodYearOpts = useMemo(() => { const y0 = new Date().getFullYear(); const ys = new Set([y0, y0 - 1, y0 - 2]); Object.keys(settings.annualProduction || {}).forEach(y => ys.add(Number(y))); return [...ys].filter(Boolean).sort((a, b) => b - a); }, [settings.annualProduction]);
   const saveProd = () => { const clean = {}; Object.entries(prodDraft).forEach(([k, v]) => { const n = Number(v); if (n > 0) clean[k] = Math.round(n); }); saveSettings && saveSettings({ annualProduction: { ...(settings.annualProduction || {}), [editYear]: clean } }); };
+  // 品名(Excel の参考の列だけ): ロットの名乗る品名 → 品目名簿。合算・取込の鍵は品目コードのまま。
+  const lotTextByModel = useMemo(() => { const m = {}; (lots || []).forEach(l => { if (l?.model && l.modelText && !m[l.model]) m[l.model] = l.modelText; }); return m; }, [lots]);
+  // 年間生産台数をExcelで一括(全品目コード×全年のマトリクス): ダウンロードで現状が丸見え→各年の列を編集→取込で該当年を一括更新(取込は確認後すぐ保存)。
+  const exportProdExcel = async () => {
+    try {
+      const ExcelJS = await loadExcelJS();
+      const ap = settings.annualProduction || {};
+      const years = [...new Set([Number(editYear), ...prodYearOpts.map(Number), ...Object.keys(ap).map(Number)])].filter(Boolean).sort((a, b) => a - b);
+      const modelSet = new Set(prodModels);
+      Object.values(ap).forEach(obj => Object.keys(obj || {}).forEach(m => modelSet.add(m)));
+      const models = [...modelSet].filter(Boolean).sort();
+      const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('年間生産台数');
+      ws.addRow(['年間生産台数（各年の列に台数を入れてアップロード＝その年を更新。空欄はそのまま・記録上の台数列は編集不要）']); ws.mergeCells(1, 1, 1, 3 + years.length); ws.getRow(1).font = { bold: true };
+      const head = ws.addRow(['品目コード', '品名(参考・編集不要)', '記録上の台数(参考・編集不要)', ...years.map(y => `${y}年`)]); head.font = { bold: true };
+      const nameOf = (m) => resolveItemName(m, lotTextByModel[m] || '', settings.itemMaster) || '';
+      models.forEach(m => ws.addRow([m, nameOf(m), measuredByModel[m] || 0, ...years.map(y => { const v = Number((ap[y] || {})[m]); return v > 0 ? v : ''; })]));
+      ws.columns = [{ width: 26 }, { width: 28 }, { width: 22 }, ...years.map(() => ({ width: 12 }))];
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `年間生産台数_全品目コード全年.xlsx`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { alert('Excel書き出しに失敗しました: ' + (e.message || e)); }
+  };
+  // Excelを「行の配列」に開く。⚠読み手を2つ用意する。
+  //   ExcelJS は書き出したファイルとの相性が良いが、**作り手によっては読めずに落ちる**
+  //   (2026-08-01: 本番で「Cannot read properties of undefined (reading 'sheets')」= xl/workbook.xml
+  //    の解釈で失敗。ローカルの開発サーバーでは同じファイルが読めたため、片方だけでは気づけない)。
+  //   SheetJS(xlsx) は素性の違うファイルにずっと寛容なので、落ちたらそちらで読み直す。
+  //   ⚠入荷登録の取込でも同じことが起きて JSZip へ逃がした前例がある。
+  const readSheetRows = async (file) => {
+    const buf = await file.arrayBuffer();
+    const errs = [];
+    try {
+      const ExcelJS = await loadExcelJS();
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(buf);
+      const ws = wb.worksheets[0];
+      if (!ws) throw new Error('シートがありません');
+      const rows = [];
+      ws.eachRow((row) => {
+        const vals = row.values || [];
+        const out = [];
+        for (let c = 1; c < vals.length; c++) {
+          const v = vals[c];
+          out[c - 1] = (v && v.result != null) ? v.result : (v && v.text != null ? v.text : v);
+        }
+        rows.push(out);
+      });
+      return { rows, by: 'ExcelJS' };
+    } catch (e) { errs.push('ExcelJS: ' + (e?.message || e)); }
+    try {
+      // 部品は SheetJS を持たないので、入荷登録の取込と同じ JSZip 直読み(1始まりのグリッド)で読み直し、0始まりの行へ直す。
+      const grid = await readXlsxGridWithJSZip_pl(buf);
+      const rows = (grid || []).slice(1).map(r => (r || []).slice(1));
+      return { rows, by: 'JSZip' };
+    } catch (e) { errs.push('JSZip: ' + (e?.message || e)); }
+    throw new Error(`このファイルを開けませんでした。\n${errs.join('\n')}`);
+  };
+
+  const importProdExcel = async (file) => {
+    if (!file) return;
+    try {
+      const { rows, by } = await readSheetRows(file);
+      // ヘッダ行から「品目コード」列と「◯◯◯◯年」列(複数可)を特定。各年の列を全部読み、その年に反映する。
+      let modelCol = -1, dataStart = -1; const yearCols = [];
+      rows.forEach((cells, idx) => {
+        if (dataStart >= 0) return;
+        let mi = -1; const ycs = [];
+        (cells || []).forEach((v, c) => {
+          const s = String(v == null ? '' : (v.text || v)).trim();
+          if (s === '品目コード' || s === '型式') mi = c;
+          const my = s.match(/(20\d{2})\s*年?/); if (my && !s.includes('記録')) ycs.push({ col: c, year: Number(my[1]) });
+        });
+        if (mi >= 0 && ycs.length) { modelCol = mi; ycs.forEach(y => yearCols.push(y)); dataStart = idx + 1; }
+      });
+      if (modelCol < 0 || !yearCols.length) { alert('「品目コード」列と「◯◯◯◯年」の列が見つかりませんでした。ダウンロードしたExcelの形式（品目コードの列と、各年の列）でお願いします。'); return; }
+      const ap = { ...(settings.annualProduction || {}) };
+      yearCols.forEach(yc => { ap[yc.year] = { ...(ap[yc.year] || {}) }; });
+      let applied = 0; const touched = new Set();
+      rows.forEach((cells, idx) => {
+        if (idx < dataStart) return;
+        const model = String((cells && cells[modelCol]) == null ? '' : ((cells[modelCol].text) || cells[modelCol])).trim();
+        if (!model) return;
+        yearCols.forEach(yc => {
+          const raw = cells[yc.col]; const v = Number(raw && raw.result != null ? raw.result : raw);
+          if (Number.isFinite(v) && v > 0) { ap[yc.year][model] = Math.round(v); applied++; touched.add(yc.year); }
+        });
+      });
+      if (applied === 0) { alert('取り込める台数がありませんでした（品目コードの行と各年の列に数字が入っているかご確認ください）。'); return; }
+      const yrs = [...touched].sort((a, b) => a - b).join('・');
+      if (!window.confirm(`${yrs}年 の台数を ${applied}件 取り込んで保存します。よろしいですか？（Excelで空欄の品目コード・年は変更しません）`)) return;
+      saveSettings && saveSettings({ annualProduction: ap });
+      setProdDraft(d => ({ ...d, ...(ap[Number(editYear)] || {}) }));
+      alert(`保存しました（${yrs}年 / 合計${applied}件）。${by === 'JSZip' ? '\n※このファイルは別の読み方で開きました（中身は同じです）。' : ''}`);
+    } catch (e) { alert('Excel取込に失敗しました: ' + (e.message || e)); }
+  };
   const prodDirty = useMemo(() => { const saved = (settings.annualProduction || {})[editYear] || {}; const keys = new Set([...Object.keys(saved), ...Object.keys(prodDraft)]); for (const k of keys) { const a = Math.round(Number(prodDraft[k]) || 0); const b = Math.round(Number(saved[k]) || 0); if (a !== b) return true; } return false; }, [prodDraft, settings.annualProduction, editYear]);
 
   const range = () => { const t = new Date(); if (period === 'thisMonth') return [new Date(t.getFullYear(), t.getMonth(), 1).getTime(), new Date(t.getFullYear(), t.getMonth() + 1, 1).getTime()]; if (period === 'lastMonth') return [new Date(t.getFullYear(), t.getMonth() - 1, 1).getTime(), new Date(t.getFullYear(), t.getMonth(), 1).getTime()]; if (period === 'thisYear') return [new Date(t.getFullYear(), 0, 1).getTime(), new Date(t.getFullYear() + 1, 0, 1).getTime()]; return [-Infinity, Infinity]; };
@@ -17169,6 +17658,9 @@ const KpiDetailView = ({ lots = [], settings = {}, saveSettings = null, currentU
           </select>
           {isAdmin && <button onClick={() => setProdDraft(d => { const n = { ...d }; prodModels.forEach(m => { if (!(Number(n[m]) > 0)) n[m] = measuredByModel[m] || 0; }); return n; })} className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded border" title="空欄に記録上の台数を入れて、あとは手で直す">記録台数を初期値に入れる</button>}
           {isAdmin && <button onClick={saveProd} disabled={!prodDirty} className={`px-3 py-1 text-white text-xs font-bold rounded ${prodDirty ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-slate-300 cursor-not-allowed'}`}>{editYear}年の台数を保存</button>}
+          <span className="text-slate-300">|</span>
+          <button onClick={exportProdExcel} className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 fi-tap-text font-bold rounded border border-emerald-200" title="登録済みの全品目コード・全年の台数を1枚のExcelで出力（現状が丸見え）。各年の列を編集して取込むと更新できます">⬇ 現状をExcelでDL（全品目コード×全年）</button>
+          {isAdmin && <label className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white fi-tap-text font-bold rounded cursor-pointer" title="ダウンロードしたExcelの各年の列を編集して取込むと、その年の台数を一括更新（確認後すぐ保存）">⬆ Excelで取込んで更新<input type="file" accept=".xlsx,.xls" className="hidden" onChange={e => { importProdExcel(e.target.files && e.target.files[0]); e.target.value = ''; }} /></label>}
           {!isAdmin && <span className="text-xs text-slate-400">入力は管理者のみ</span>}
           {prodDirty && <span className="text-xs text-amber-600 font-bold">未保存の変更があります</span>}
         </div>
@@ -17177,7 +17669,7 @@ const KpiDetailView = ({ lots = [], settings = {}, saveSettings = null, currentU
             <table className="w-full text-xs border-collapse">
               <thead className="sticky top-0 bg-slate-100 text-slate-500"><tr>
                 <th className="px-2 py-1.5 text-left font-bold">品目コード</th>
-                <th className="px-2 py-1.5 text-right font-bold" title="直近365日に完了したロットの台数合計(目安)">記録上の台数<div className="text-xs font-normal text-slate-400">参考</div></th>
+                <th className="px-2 py-1.5 text-right font-bold" title="直近365日に完了した台数(目安)。同じ指図は1回だけ数える(テンプレごとに分かれたロットや分納を二重に数えない)">記録上の台数<div className="text-xs font-normal text-slate-400">参考</div></th>
                 <th className="px-2 py-1.5 text-right font-bold">実際の年間生産台数<div className="text-xs font-normal text-slate-400">{editYear}年</div></th>
               </tr></thead>
               <tbody>
@@ -17610,20 +18102,20 @@ const PdcaVerdictBadge = ({ v }) => {
 };
 
 // 改善カルテ 月次推移ミニグラフ: 主指標の月次値を棒で描き、対策実施月を境に色分け(実施前=灰/実施後=緑)
-const PdcaMiniTrend = ({ lots, model, stepKey, kpi, customTargetTimes, modelGroups, actionDate, months = 6 }) => {
+const PdcaMiniTrend = ({ lots, model, stepKey, templateId = '', kpi, customTargetTimes, modelGroups, actionDate, months = 6, traineeMode = 'exclude', workerName = null, caption = null }) => {
   const data = useMemo(() => {
     const out = []; const now = new Date();
     for (let i = months - 1; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
       const start = d.getTime();
       const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1).getTime() - 1;
-      const stat = measureWindow(lots, { model, stepKey, customTargetTimes, modelGroups, startMs: start, endMs: end });
+      const stat = measureWindow(lots, { model, stepKey, templateId: templateId || undefined, customTargetTimes, modelGroups, startMs: start, endMs: end, traineeMode, workerName });
       out.push({ label: `${d.getMonth() + 1}月`, monthStart: start, val: pdcaKpiValue(stat, kpi), n: stat.n });
     }
     return out;
-  }, [lots, model, stepKey, kpi, customTargetTimes, modelGroups, months]);
+  }, [lots, model, stepKey, templateId, kpi, customTargetTimes, modelGroups, months, traineeMode, workerName]);
   const vals = data.filter(x => x.val != null).map(x => x.val);
-  if (vals.length === 0) return <div className="text-xs text-slate-400 py-2">推移データなし</div>;
+  if (vals.length === 0) return <div className="fi-tap-text text-slate-400 py-2">推移データなし</div>;
   const max = Math.max(...vals, 1);
   const actMonthStart = actionDate ? new Date(new Date(actionDate).getFullYear(), new Date(actionDate).getMonth(), 1).getTime() : null;
   const fmtV = (v) => v == null ? '' : (kpi === 'achievement' ? `${Math.round(v)}%` : (kpi === 'defectRate' ? `${v}` : pdcaFmtSec(v)));
@@ -17635,14 +18127,14 @@ const PdcaMiniTrend = ({ lots, model, stepKey, kpi, customTargetTimes, modelGrou
           const h = x.val != null ? Math.max(4, (x.val / max) * 72) : 0;
           return (
             <div key={i} className="flex-1 flex flex-col items-center justify-end" title={`${x.label} n=${x.n}台`}>
-              <div className="text-[8px] text-slate-500 leading-none mb-0.5">{fmtV(x.val)}</div>
+              <div className="fi-tap-text text-slate-500 leading-none mb-0.5">{fmtV(x.val)}</div>
               <div className={`w-full rounded-t ${x.val == null ? 'bg-slate-100' : isAfter ? 'bg-emerald-400' : 'bg-slate-300'}`} style={{ height: `${h}px` }} />
-              <div className={`text-[8px] mt-0.5 ${isAfter ? 'text-emerald-600 font-bold' : 'text-slate-400'}`}>{x.label}</div>
+              <div className={`fi-tap-text leading-tight mt-0.5 ${isAfter ? 'text-emerald-600 font-bold' : 'text-slate-500'}`}>{x.label}</div>
             </div>
           );
         })}
       </div>
-      <div className="text-xs text-slate-400 mt-1 flex items-center gap-2"><span className="inline-flex items-center gap-1"><span className="w-2 h-2 bg-slate-300 rounded-sm" />実施前</span><span className="inline-flex items-center gap-1"><span className="w-2 h-2 bg-emerald-400 rounded-sm" />実施後</span>{actionDate ? `・対策実施: ${pdcaFmtDate(actionDate)}` : '・未実施'}</div>
+      <div className="fi-tap-text text-slate-400 mt-1 flex items-center gap-2">{caption || (<><span className="inline-flex items-center gap-1"><span className="w-2 h-2 bg-slate-300 rounded-sm" />実施前</span><span className="inline-flex items-center gap-1"><span className="w-2 h-2 bg-emerald-400 rounded-sm" />実施後</span>{actionDate ? `・対策実施: ${pdcaFmtDate(actionDate)}` : '・未実施'}</>)}</div>
     </div>
   );
 };
@@ -17659,7 +18151,7 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
   const [openedAt] = useState(() => Date.now());
   const isClosed = ['effective', 'noeffect', 'worse', 'rolledback'].includes(card.status);
   // 実施後の統計: 閉じたカルテは凍結値、それ以外はライブ計算
-  const afterLive = useMemo(() => card.actionDate ? measureWindow(lots, { model: card.model, stepKey: card.stepKey, customTargetTimes, modelGroups, startMs: card.actionDate, endMs: Date.now() }) : null, [lots, card.actionDate, card.model, card.stepKey, customTargetTimes, modelGroups]);
+  const afterLive = useMemo(() => card.actionDate ? measureWindow(lots, { model: card.model, stepKey: card.stepKey, templateId: card.templateId || undefined, customTargetTimes, modelGroups, startMs: card.actionDate, endMs: Date.now() }) : null, [lots, card.actionDate, card.model, card.stepKey, card.templateId, customTargetTimes, modelGroups]);
   const after = (isClosed && card.afterFrozen) ? card.afterFrozen : afterLive;
   const verdict = useMemo(() => (card.actionDate && (card.actionBaseline || card.baseline)) ? ((isClosed && card.verdictFrozen) ? card.verdictFrozen : computeVerdict(card.actionBaseline || card.baseline, after, edit.kpi)) : null, [card, after, edit.kpi, isClosed]);
 
@@ -17667,8 +18159,11 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
     setBusy(true);
     const log = [...(card.log || [])];
     if (logEntry) log.push({ ts: Date.now(), by: currentUserName || '?', ...logEntry });
-    await saveData('improvements', card.id, { ...p, log });
-    setBusy(false);
+    // ⚠保存が例外を投げるようになったので、finally で必ず busy を戻す。
+    //   戻さないとカードのボタンが全部押せないまま固まる(閉じて開き直すしかなくなる)。
+    try { await saveData('improvements', card.id, { ...p, log }); }
+    catch (e) { alert(`保存に失敗しました: ${e?.message || e}\n通信を確認してもう一度お試しください。`); }
+    finally { setBusy(false); }
   };
   const savePlan = () => patch({ problem: edit.problem, hypothesis: edit.hypothesis, action: edit.action, owner: edit.owner, dueDate: edit.dueDate, kpi: edit.kpi, changeNote: edit.changeNote, changeOld: edit.changeOld, changeNew: edit.changeNew }, { type: 'edit', note: '計画/内容を編集' });
   const markDoing = () => patch({ status: 'doing' }, { type: 'status', note: '実施中に変更' });
@@ -17679,7 +18174,7 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
     // ⚠実施時ベースライン再凍結: 起票から実施まで日が空くと起票時の90日窓は「対策直前の状態」とズレる。
     //   効果判定は actionBaseline(実施直前90日) を使い、起票時の値は discoverySnapshot として証拠に残す(仕様4.7)。
     const abStart = now - 90 * 86400000;
-    const abStat = measureWindow(lots, { model: card.model, stepKey: card.stepKey, customTargetTimes, modelGroups, startMs: abStart, endMs: now });
+    const abStat = measureWindow(lots, { model: card.model, stepKey: card.stepKey, templateId: card.templateId || undefined, customTargetTimes, modelGroups, startMs: abStart, endMs: now });
     const actionBaseline = { ...abStat, startMs: abStart, endMs: now };
     patch({
       status: 'measuring', actionDate: now, kpi: edit.kpi, changeNote: edit.changeNote, changeOld: edit.changeOld, changeNew: edit.changeNew,
@@ -17719,7 +18214,7 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
   };
   // 🔁 30日定着確認: 効果あり(暫定)から30日後、直近4週の実測で定着していれば「確定」へ。崩れていたら「要再確認」。
   const sustainCheck = () => {
-    const recent = measureWindow(lots, { model: card.model, stepKey: card.stepKey, customTargetTimes, modelGroups, startMs: Date.now() - 28 * 86400000, endMs: Date.now() });
+    const recent = measureWindow(lots, { model: card.model, stepKey: card.stepKey, templateId: card.templateId || undefined, customTargetTimes, modelGroups, startMs: Date.now() - 28 * 86400000, endMs: Date.now() });
     const sv = sustainVerdict({ afterVal: Number(card.verdictFrozen?.afterVal) || 0, recentMedian: recent.median, recentN: recent.n });
     if (sv.result === 'unknown') { alert(`まだ判定できません: ${sv.reason}`); return; }
     const label = sv.result === 'sustained' ? '✅ 定着を確認 → 確定に入ります' : `⚠ 崩れています: ${sv.reason}\n「要再確認」になり、確定から外れます`;
@@ -17760,8 +18255,8 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
       <div className="bg-white w-full max-w-3xl max-h-[92vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="bg-indigo-600 text-white px-4 py-3 flex items-center justify-between shrink-0">
           <div className="min-w-0">
-            <div className="font-bold flex items-center gap-2 truncate"><ClipboardList className="w-5 h-5 shrink-0" /> {card.model || '品目コード?'} ／ {card.stepTitle || card.stepKey || '工程?'}</div>
-            <div className="text-xs opacity-80">主指標: {PDCA_KPIS[card.kpi] || PDCA_KPIS.time}{card.source?.label ? ` ・由来: ${card.source.label}` : ''}</div>
+            <div className="font-bold flex items-center gap-2 truncate"><ClipboardList className="w-5 h-5 shrink-0" /> {card.model || '品目コード?'}{card.templateName ? <span className="text-xs font-normal opacity-80">〔{card.templateName}〕</span> : null} ／ {card.stepTitle || card.stepKey || '工程?'}</div>
+            <div className="fi-tap-text opacity-80">主指標: {PDCA_KPIS[card.kpi] || PDCA_KPIS.time}{card.source?.label ? ` ・由来: ${card.source.label}` : ''}</div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className={`px-2 py-1 rounded text-xs font-bold border ${meta.color}`}>{meta.label}</span>
@@ -17770,7 +18265,7 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
         </div>
         <div className="flex-1 min-h-0 p-4 overflow-y-auto space-y-4 text-sm">
           {/* タイムライン */}
-          <div className="flex items-center gap-1 text-xs flex-wrap bg-slate-50 border rounded-lg p-2">
+          <div className="flex items-center gap-1 fi-tap-text flex-wrap bg-slate-50 border rounded-lg p-2">
             {[['検知', card.createdAt], ['計画', card.createdAt], ['実施', card.actionDate], ['効果測定', card.actionDate], ['判定', card.closedAt]].map((s, i) => (
               <React.Fragment key={i}>
                 {i > 0 && <span className="text-slate-300">→</span>}
@@ -17783,18 +18278,18 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
           {/* 計画(Plan) */}
           <div className="border rounded-lg p-3 space-y-2">
             <div className="text-xs font-bold text-slate-500 flex items-center justify-between">計画 (Plan)
-              <select value={edit.kpi} onChange={e => setEdit(p => ({ ...p, kpi: e.target.value }))} className="border rounded px-1.5 py-0.5 text-xs font-normal" disabled={isClosed}>
+              <select value={edit.kpi} onChange={e => setEdit(p => ({ ...p, kpi: e.target.value }))} className="border rounded px-1.5 py-0.5 fi-tap-text font-normal" disabled={isClosed}>
                 {Object.entries(PDCA_KPIS).map(([k, v]) => <option key={k} value={k}>主指標: {v}</option>)}
               </select>
             </div>
-            <div><label className="block text-xs text-slate-400">問題 / 現状</label><textarea value={edit.problem} onChange={e => setEdit(p => ({ ...p, problem: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 準備工程が目標の1.7倍かかっている" /></div>
+            <div><label className="block fi-tap-text text-slate-400">問題 / 現状</label><textarea value={edit.problem} onChange={e => setEdit(p => ({ ...p, problem: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 準備工程が目標の1.7倍かかっている" /></div>
             <div className="grid grid-cols-2 gap-2">
-              <div><label className="block text-xs text-slate-400">仮説 (なぜ)</label><textarea value={edit.hypothesis} onChange={e => setEdit(p => ({ ...p, hypothesis: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 治具の位置が遠い" /></div>
-              <div><label className="block text-xs text-slate-400">対策 (どうする)</label><textarea value={edit.action} onChange={e => setEdit(p => ({ ...p, action: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 治具を手元へ移動・目標を見直す" /></div>
+              <div><label className="block fi-tap-text text-slate-400">仮説 (なぜ)</label><textarea value={edit.hypothesis} onChange={e => setEdit(p => ({ ...p, hypothesis: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 治具の位置が遠い" /></div>
+              <div><label className="block fi-tap-text text-slate-400">対策 (どうする)</label><textarea value={edit.action} onChange={e => setEdit(p => ({ ...p, action: e.target.value }))} rows={2} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} placeholder="例: 治具を手元へ移動・目標を見直す" /></div>
             </div>
             <div className="flex gap-2">
-              <div className="flex-1"><label className="block text-xs text-slate-400">担当</label><input value={edit.owner} onChange={e => setEdit(p => ({ ...p, owner: e.target.value }))} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} /></div>
-              <div><label className="block text-xs text-slate-400">期限</label><input type="date" value={edit.dueDate} onChange={e => setEdit(p => ({ ...p, dueDate: e.target.value }))} className="border rounded p-1.5 text-xs" disabled={isClosed} /></div>
+              <div className="flex-1"><label className="block fi-tap-text text-slate-400">担当</label><input value={edit.owner} onChange={e => setEdit(p => ({ ...p, owner: e.target.value }))} className="w-full border rounded p-1.5 text-xs" disabled={isClosed} /></div>
+              <div><label className="block fi-tap-text text-slate-400">期限</label><input type="date" value={edit.dueDate} onChange={e => setEdit(p => ({ ...p, dueDate: e.target.value }))} className="border rounded p-1.5 text-xs" disabled={isClosed} /></div>
             </div>
             {!isClosed && <button onClick={savePlan} disabled={busy} className="text-xs px-3 py-1.5 bg-slate-700 text-white rounded font-bold">計画を保存</button>}
           </div>
@@ -17802,14 +18297,15 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
           {/* ベースライン + 実施後 の比較 (エビデンス) */}
           <div className="border rounded-lg p-3 space-y-2">
             <div className="text-xs font-bold text-slate-500">エビデンス: 改善前 → 実施後</div>
-            <div className="text-xs text-slate-400">
+            <div className="fi-tap-text text-slate-400">
               ベースライン期間: {card.baseline ? `${pdcaFmtDate(card.baseline.startMs)} 〜 ${pdcaFmtDate(card.baseline.endMs)}` : '—'}
               {card.actionDate ? ` ／ 実施後: ${pdcaFmtDate(card.actionDate)} 〜 ${isClosed && card.closedAt ? pdcaFmtDate(card.closedAt) : '現在'}` : ' ／ 実施後: 未実施'}
             </div>
+            {card.actionBaseline && <div className="fi-tap-text text-slate-400 mb-1">改善前=対策実施直前の90日（起票時の値は監査ログに保存）</div>}
             <StatRows b={card.actionBaseline || card.baseline} a={after} kpi={edit.kpi} />
             <div className="pt-1">
-              <div className="text-xs text-slate-400 mb-0.5">月次推移 ({PDCA_KPIS[edit.kpi] || PDCA_KPIS.time}) — 対策実施を境に色が変わります</div>
-              <PdcaMiniTrend lots={lots} model={card.model} stepKey={card.stepKey} kpi={edit.kpi} customTargetTimes={customTargetTimes} modelGroups={modelGroups} actionDate={card.actionDate} />
+              <div className="fi-tap-text text-slate-400 mb-0.5">月次推移 ({PDCA_KPIS[edit.kpi] || PDCA_KPIS.time}) — 対策実施を境に色が変わります</div>
+              <PdcaMiniTrend lots={lots} model={card.model} stepKey={card.stepKey} templateId={card.templateId || ''} kpi={edit.kpi} customTargetTimes={customTargetTimes} modelGroups={modelGroups} actionDate={card.actionDate} />
             </div>
             {verdict && (
               <div className="flex items-center gap-2 text-xs bg-slate-50 border rounded p-2">
@@ -17824,15 +18320,15 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
             <div className="border rounded-lg p-3 space-y-2 bg-blue-50/40">
               <div className="text-xs font-bold text-slate-500">実施 (Do) — 対策を行った記録</div>
               <div className="grid grid-cols-3 gap-2">
-                <div><label className="block text-xs text-slate-400">変更前</label><input value={edit.changeOld} onChange={e => setEdit(p => ({ ...p, changeOld: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="例 目標300s" /></div>
-                <div><label className="block text-xs text-slate-400">変更後</label><input value={edit.changeNew} onChange={e => setEdit(p => ({ ...p, changeNew: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="例 目標240s" /></div>
-                <div><label className="block text-xs text-slate-400">内容メモ</label><input value={edit.changeNote} onChange={e => setEdit(p => ({ ...p, changeNote: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="治具移動 等" /></div>
+                <div><label className="block fi-tap-text text-slate-400">変更前</label><input value={edit.changeOld} onChange={e => setEdit(p => ({ ...p, changeOld: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="例 目標300s" /></div>
+                <div><label className="block fi-tap-text text-slate-400">変更後</label><input value={edit.changeNew} onChange={e => setEdit(p => ({ ...p, changeNew: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="例 目標240s" /></div>
+                <div><label className="block fi-tap-text text-slate-400">内容メモ</label><input value={edit.changeNote} onChange={e => setEdit(p => ({ ...p, changeNote: e.target.value }))} className="w-full border rounded p-1.5 text-xs" placeholder="治具移動 等" /></div>
               </div>
               <div className="flex gap-2">
                 {card.status === 'plan' && <button onClick={markDoing} disabled={busy} className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded font-bold">実施中にする</button>}
                 <button onClick={recordAction} disabled={busy} className="text-xs px-3 py-1.5 bg-amber-600 text-white rounded font-bold">対策を実施した(今日) → 効果測定へ</button>
               </div>
-              <div className="text-xs text-slate-400">「対策を実施した」を押すと、その日を境に before/after を自動測定します。{after && after.n < PDCA_MIN_N ? `(実施後 ${after.n}台・${PDCA_MIN_N}台たまると判定可)` : ''}</div>
+              <div className="fi-tap-text text-slate-400">「対策を実施した」を押すと、その日を境に before/after を自動測定します。{after && after.n < PDCA_MIN_N ? `(実施後 ${after.n}台・${PDCA_MIN_N}台たまると判定可)` : ''}</div>
             </div>
           )}
 
@@ -17846,7 +18342,7 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
                 <button onClick={() => closeWith('worse')} disabled={busy} className="text-xs px-3 py-1.5 bg-rose-600 text-white rounded font-bold">悪化 → 完了</button>
                 <button onClick={() => closeWith('rolledback')} disabled={busy} className="text-xs px-3 py-1.5 bg-purple-600 text-white rounded font-bold">元に戻す(差し戻し)</button>
               </div>
-              <div className="text-xs text-slate-400">判定すると実施後の統計が「恒久エビデンス」として凍結保存され、いつでも見返せます。</div>
+              <div className="fi-tap-text text-slate-400">判定すると実施後の統計が「恒久エビデンス」として凍結保存され、いつでも見返せます。</div>
             </div>
           )}
           {isClosed && (
@@ -17877,14 +18373,14 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
               <div className="text-xs font-bold text-slate-500 mb-1">記録 (監査ログ)</div>
               <div className="space-y-1">
                 {[...card.log].reverse().map((e, i) => (
-                  <div key={i} className="text-xs flex items-start gap-2"><span className="text-slate-400 font-mono shrink-0">{pdcaFmtDateTime(e.ts)}</span><span className="text-slate-700">{e.note || e.type}</span><span className="text-slate-400 ml-auto shrink-0">{e.by}</span></div>
+                  <div key={i} className="fi-tap-text flex items-start gap-2"><span className="text-slate-400 font-mono shrink-0">{pdcaFmtDateTime(e.ts)}</span><span className="text-slate-700">{e.note || e.type}</span><span className="text-slate-400 ml-auto shrink-0">{e.by}</span></div>
                 ))}
               </div>
             </div>
           )}
 
           <div className="flex justify-between pt-1">
-            <span className="text-xs text-slate-400">作成: {pdcaFmtDateTime(card.createdAt)} ・ {card.createdBy}</span>
+            <span className="fi-tap-text text-slate-400">作成: {pdcaFmtDateTime(card.createdAt)} ・ {card.createdBy}</span>
             {deleteData && <button onClick={doDelete} className="text-xs text-rose-500 hover:text-rose-700 flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> 削除</button>}
           </div>
         </div>
@@ -17926,7 +18422,10 @@ const ProfitDetailModal = ({ row, lots = [], settings = {}, rate = 0, onClose, o
             <div className="font-bold text-slate-800 mb-1">計算の内訳（実際の数字）</div>
             <table className="w-full text-xs border-collapse">
               <tbody>
-                <tr className="border-b border-slate-100"><td className="py-1.5 text-slate-500 w-1/2">① 年間台数（直近1年の完了数）</td><td className="py-1.5 text-right font-mono font-bold">{row.annualUnits.toLocaleString()} 台/年</td></tr>
+                <tr className="border-b border-slate-100"><td className="py-1.5 text-slate-500 w-1/2">① 年間台数{row.annualUnitsSource === 'actual' ? '（経営分析で登録した実台数）' : '（実績からの推定）'}</td><td className="py-1.5 text-right font-mono font-bold">{row.annualUnits.toLocaleString()} 台/年 <span className={`fi-tap-text font-bold px-1 rounded ${row.annualUnitsSource === 'actual' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}>{row.annualUnitsSource === 'actual' ? '登録値' : '推定'}</span></td></tr>
+                {/* ⚠ここは「書いてある式で電卓を叩いたら画面の数字になる」ことが条件。
+                    分子は row.n(教育中を除いた速さの標本数)ではなく row.execAll(実際にやった回数)。 */}
+                {row.annualUnitsSource !== 'actual' && <tr className="border-b border-slate-100"><td className="py-1 text-slate-400 fi-tap-text" colSpan={2}>└ 台数の出し方: この期間に <b>実際にやった {(row.execAll || 0).toLocaleString()}回</b>{row.traineeN > 0 ? <>（うち🎓教育中 {row.traineeN.toLocaleString()}回。回数には含めます）</> : null} の実績ペースを365日換算した概算です（{(row.execAll || 0).toLocaleString()}回 × 365日 ÷ {(row.windowDays || 365).toLocaleString()}日 ＝ <b>{(row.measuredAnnual || 0).toLocaleString()}</b>／端数四捨五入）。経営分析タブで実際の年間生産台数を登録すると、この値が登録値に置き換わり金額が正確になります。</td></tr>}
                 <tr className="border-b border-slate-100"><td className="py-1.5 text-slate-500">② 1台あたりの時間（実績の中央値・{detail.srcLots.reduce((s, x) => s + x.count, 0)}台ぶん）</td><td className="py-1.5 text-right font-mono font-bold">{pdcaFmtSec(row.median)}</td></tr>
                 <tr className="border-b border-slate-100"><td className="py-1.5 text-slate-500">③ 年間の合計時間 ＝ ① × ②</td><td className="py-1.5 text-right font-mono font-bold">{hrs(row.annualCostSec)}</td></tr>
                 {rate > 0 && <tr className="border-b border-slate-100"><td className="py-1.5 text-slate-500">④ 年間人件費 ＝ ③ × 時給{yen(rate)}/時</td><td className="py-1.5 text-right font-mono font-bold">{yen(row.annualCostYen)}</td></tr>}
@@ -18011,8 +18510,22 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
   const [rankingView, setRankingView] = useState('model');
   const [crossPct, setCrossPct] = useState(50); // ◯%短縮の仮定(レイアウト改善等の大改善)の率
   const [crossExpanded, setCrossExpanded] = useState(null); // 工程横断: 行展開で品目別内訳
+  // 工程横断の絞り込み(複数選択可): 'tpl:<テンプレID>'(同じテンプレ内=中間分割等) / 'grp:<品目グループID>'(ファナック等) を任意個。
+  //   空配列=全部まとめて。選んだタグに「いずれか一致」するロットを集めてから crossStepRanking に渡す(選んだ分だけまとめて横断集計)。
+  const [crossScopes, setCrossScopes] = useState([]);
+  const toggleCrossScope = (tok) => { setCrossScopes(prev => prev.includes(tok) ? prev.filter(x => x !== tok) : [...prev, tok]); setCrossExpanded(null); };
+  const crossScopedLots = useMemo(() => {
+    if (!crossScopes || crossScopes.length === 0) return lots;
+    const tplIds = new Set(crossScopes.filter(s => s.startsWith('tpl:')).map(s => s.slice(4)));
+    const grpModels = new Set();
+    crossScopes.filter(s => s.startsWith('grp:')).forEach(s => {
+      const g = (modelGroups || []).find(x => x.id === s.slice(4));
+      ((g && g.models) || []).forEach(m => grpModels.add(m));
+    });
+    return (lots || []).filter(l => tplIds.has(l.templateId) || grpModels.has(l.model));
+  }, [lots, crossScopes, modelGroups]);
   // 防御: 万一データ起因で集計が落ちても、パネル全体(改善PDCA)を白画面にしない。空表示に退避する。
-  const crossRanking = useMemo(() => { try { return crossStepRanking(lots, settings, { startMs: nowMs - 365 * 86400000, endMs: nowMs, reductionPct: crossPct / 100, annualUnitsByModel }); } catch (e) { console.error('crossStepRanking failed:', e); return { groups: [], rate: 0, reductionPct: crossPct / 100 }; } }, [lots, settings, crossPct, annualUnitsByModel]);
+  const crossRanking = useMemo(() => { try { return crossStepRanking(crossScopedLots, settings, { startMs: nowMs - 365 * 86400000, endMs: nowMs, reductionPct: crossPct / 100, annualUnitsByModel }); } catch (e) { console.error('crossStepRanking failed:', e); return { groups: [], rate: 0, reductionPct: crossPct / 100 }; } }, [crossScopedLots, settings, crossPct, annualUnitsByModel]);
   const crossRows = useMemo(() => crossRanking.groups.filter(g => g.annualCostSec > 0).slice(0, 20), [crossRanking]);
   const crossMaxCost = useMemo(() => Math.max(1, ...crossRows.map(g => g.annualCostSec)), [crossRows]);
   // 改善スコアボード(今月 vs 先月のトレンド + 浮いた時間)。改善ループの主役。
@@ -18055,8 +18568,8 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
   const liveVerdict = (c) => {
     if (!c.actionDate || !c.baseline) return null;
     if (['effective', 'noeffect', 'worse', 'rolledback'].includes(c.status) && c.verdictFrozen) return c.verdictFrozen;
-    const a = measureWindow(lots, { model: c.model, stepKey: c.stepKey, customTargetTimes, modelGroups, startMs: c.actionDate, endMs: nowMs });
-    return computeVerdict(c.baseline, a, c.kpi || 'time');
+    const a = measureWindow(lots, { model: c.model, stepKey: c.stepKey, templateId: c.templateId || undefined, customTargetTimes, modelGroups, startMs: c.actionDate, endMs: nowMs });
+    return computeVerdict(c.actionBaseline || c.baseline, a, c.kpi || 'time');
   };
 
   const filtered = useMemo(() => {
@@ -18217,11 +18730,69 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
           const cVal = (sec, yenv) => cr ? yen(yenv) : `${Math.round(sec / 3600)}h`;
           return (
             <>
-              <div className="px-3 py-2 bg-indigo-50/60 border-b border-indigo-100 flex items-center gap-2 flex-wrap text-xs">
+              {/* 💰 結論を先に言う: 「何を・どうやって・いくら」の3つの道 + 金額のつくり方(前提)を常設。
+                  ⚠謎の数字を作らない: 数字には必ず「出どころ」と「式」を添える(清水さん 2026-08-02
+                  「30%短縮って一体何がどうやって短縮して金額になってるのか謎すぎて」)。 */}
+              {(() => {
+                const hrs = (sec) => Math.round(sec / 3600).toLocaleString();
+                const t1s = crossRows.reduce((s, g) => s + g.saveToFastestSec, 0), t1y = crossRows.reduce((s, g) => s + (g.saveToFastestYen || 0), 0);
+                const t2s = crossRows.reduce((s, g) => s + g.saveByPctSec, 0), t2y = crossRows.reduce((s, g) => s + (g.saveByPctYen || 0), 0);
+                const t3s = crossRows.reduce((s, g) => s + g.saveToTargetSec, 0), t3y = crossRows.reduce((s, g) => s + (g.saveToTargetYen || 0), 0);
+                const badT = crossRows.reduce((s, g) => s + (g.models || []).filter(m => m.hasTarget && m.target > m.median).length, 0);
+                return (
+                  <div className="px-3 pt-2 pb-1.5 bg-white border-b">
+                    <div className="grid sm:grid-cols-3 gap-1.5 fi-tap-text">
+                      <div className="bg-emerald-50 border-2 border-emerald-300 rounded-lg px-2.5 py-1.5">
+                        <div className="font-bold text-emerald-800">① ばらつきを無くしたら <span className="font-mono text-sm">{cVal(t1s, t1y)}</span>/年 <span className="fi-tap-text bg-emerald-600 text-white rounded px-1 align-middle">根拠は実測</span></div>
+                        <div className="text-emerald-700/90 mt-0.5">遅い品目コードが、同じ工程を<b>一番速くやれている品目コードに追いつけたら</b>浮く分（年{hrs(t1s)}時間）。現にその速さで出来ている品目コードがいます。<b>まずここから。</b></div>
+                      </div>
+                      <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-2.5 py-1.5">
+                        <div className="font-bold text-indigo-800">② やり方を変えられたら <span className="font-mono text-sm">{cVal(t2s, t2y)}</span>/年 <span className="fi-tap-text bg-indigo-500 text-white rounded px-1 align-middle">仮定</span></div>
+                        <div className="text-indigo-700/90 mt-0.5">レイアウト・治具・自動化で全体を<b>{crossPct}%</b>縮められた<b>としたら</b>（年{hrs(t2s)}時間）。上のスライダーで動く仮置きで、<b>実測ではありません</b>。</div>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5">
+                        <div className="font-bold text-slate-700">③ 目標どおりにやれたら <span className="font-mono text-sm">{t3s > 0 ? cVal(t3s, t3y) : '—'}</span>{t3s > 0 ? '/年' : ''}</div>
+                        <div className="text-slate-500 mt-0.5">テンプレ(マスタ設定)に入れた<b>工程の目標時間</b>まで縮めたら（年{hrs(t3s)}時間）。目標の無い品目コードは数えません。</div>
+                      </div>
+                    </div>
+                    <div className="mt-1.5 fi-tap-text text-slate-600 bg-slate-50 border border-slate-200 rounded px-2 py-1">
+                      <b>金額のつくり方（3つとも同じ）</b>: 減らせる時間 × 年間台数 × {crossRanking.rate > 0 ? <>時給 <b>¥{Math.round(crossRanking.rate).toLocaleString()}</b>（設定の人件費単価）</> : <>時給（未設定のため時間で表示中）</>}。
+                      年間台数は<b>経営分析で入力した台数（登録）</b>を最優先し、無い品目コードは実績ペースからの推定。
+                      ⚠金額は「浮いた時間を時給で換算した試算」で、現金がそのまま増えるわけではありません。<b>行を開く → 品目コードを押す</b>と、掛け算の中身まで遡れます。
+                    </div>
+                    {badT > 0 && (
+                      <div className="mt-1 fi-tap-text font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                        ⚠「目標」が実測より<b>遅い</b>品目コードが {badT}件あります（例: 実測1分の作業に目標5分）。目標はまだ実測に合わせて整備できていないため、<b>③はまだ当てにしないでください</b>。テンプレの目標時間を実測に合わせて直すと、③が意味のある数字になります。
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              {/* 絞り込み(複数選択可): テンプレ/品目グループのタグを任意個選ぶと「選んだ分だけ」まとめて横断集計(例: 中間分割を数種まとめて・ファナックだけ等) */}
+              <div className="px-3 py-1.5 bg-white border-b fi-tap-text">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-bold text-slate-700">絞り込み:</span>
+                  <button onClick={() => { setCrossScopes([]); setCrossExpanded(null); }} className={`px-2 py-0.5 rounded-full border font-bold ${crossScopes.length === 0 ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>全部（まとめて）</button>
+                  {crossScopes.length > 0 && <span className="text-emerald-700 font-bold">選択中 {crossScopes.length}件 をまとめて集計</span>}
+                  {crossScopes.length > 0 && <button onClick={() => { setCrossScopes([]); setCrossExpanded(null); }} className="text-slate-400 underline hover:text-slate-600">クリア</button>}
+                </div>
+                {((templates || []).length > 0 || (modelGroups || []).length > 0) && (
+                  <div className="mt-1 max-h-24 overflow-auto flex flex-wrap gap-1 pr-1">
+                    {(templates || []).map(t => { const tok = `tpl:${t.id}`; const on = crossScopes.includes(tok); return (
+                      <button key={tok} onClick={() => toggleCrossScope(tok)} className={`px-2 py-0.5 rounded border ${on ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'}`} title="同じテンプレ内だけで横断（中間分割など）。複数選べます">{on ? '✓ ' : ''}{t.name}</button>
+                    ); })}
+                    {(modelGroups || []).map(g => { const tok = `grp:${g.id}`; const on = crossScopes.includes(tok); return (
+                      <button key={tok} onClick={() => toggleCrossScope(tok)} className={`px-2 py-0.5 rounded border ${on ? 'bg-amber-600 text-white border-amber-600' : 'bg-white text-amber-700 border-amber-200 hover:bg-amber-50'}`} title="品目グループ（ファナック等）。複数選べます">{on ? '✓ ' : ''}{g.name}</button>
+                    ); })}
+                  </div>
+                )}
+                <div className="mt-1 text-slate-400">{crossScopes.length === 0 ? '全部を横断集計中。同じと言えない工程が混ざる時は下のタグで絞り込み（複数選べます／青=テンプレ・橙=品目グループ）。' : '選んだタグの分だけ「まとめて」横断集計しています。タグを足すと対象が広がります。'}</div>
+              </div>
+              <div className="px-3 py-2 bg-indigo-50/60 border-b border-indigo-100 flex items-center gap-2 flex-wrap fi-tap-text">
                 <span className="font-bold text-indigo-800">「もし◯%短縮できたら」の仮定：</span>
                 <input type="range" min="10" max="70" step="5" value={crossPct} onChange={e => setCrossPct(Number(e.target.value))} className="accent-indigo-600 w-36" />
                 <span className="font-mono font-bold text-indigo-700 w-10">{crossPct}%</span>
-                <span className="text-slate-500">← レイアウト改善・治具・自動化など「大きい改善」の効果を仮置きで試算（下の②列）</span>
+                <span className="text-slate-500">← <b>何を</b>: 各工程の「年間合計」の時間 ／ <b>どうやって</b>: レイアウト・治具・自動化などの大きい改善 ／ <b>いくら</b>: 年間合計 × {crossPct}% ＝ ②列。実測ではなく<b>「できたとしたら」の仮置き</b>です</span>
               </div>
               <div className="overflow-auto max-h-80">
                 <table className="w-full text-xs border-collapse">
@@ -18229,10 +18800,10 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                     <tr>
                       <th className="px-2 py-1.5 text-left font-bold">共通工程</th>
                       <th className="px-2 py-1.5 text-right font-bold" title="この工程を持つ品目コードの数">品目コード数</th>
-                      <th className="px-2 py-1.5 text-right font-bold" title="全品目コード合計の年間時間（×時給）">年間合計<div className="text-xs font-normal text-slate-400">{cr ? '円/年' : '時間/年'}</div></th>
-                      <th className="px-2 py-1.5 text-right font-bold text-emerald-700" title="一番速い品目コードの中央値まで、遅い品目コードを全部揃えたら浮く分（現に出来てる品目コードがあるので実証済み）">①最速に揃える<div className="text-xs font-normal text-emerald-500">{cr ? '円/年' : '時間/年'}</div></th>
-                      <th className="px-2 py-1.5 text-right font-bold text-indigo-700" title={`全品目コード合計を${crossPct}%短縮できたらの仮定`}>②{crossPct}%短縮<div className="text-xs font-normal text-indigo-400">{cr ? '円/年' : '時間/年'}</div></th>
-                      <th className="px-2 py-1.5 text-right font-bold text-slate-600" title="各品目コードを目標時間まで詰めたら浮く分（堅実な下限）">③目標まで<div className="text-xs font-normal text-slate-400">{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold" title="この工程にいま年間でかかっている人件費。式: 品目コードごとの(年間台数 × 1台の時間 × 時給)の合計">年間合計<div className="fi-tap-text font-normal text-slate-400">今かかっている分・{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold text-emerald-700" title="一番速い品目コードに、遅い品目コードがみんな追いつけたら浮く分。現にその速さで出来ている品目コードがいるので根拠は実測">①最速に揃える<div className="fi-tap-text font-normal text-emerald-500">みんなが追いつけたら・{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold text-indigo-700" title={`この工程の年間合計の時間を${crossPct}%縮められたとしたら(レイアウト・治具・自動化などの大きい改善)。実測ではない仮置き`}>②{crossPct}%短縮<div className="fi-tap-text font-normal text-indigo-400">できたとしたら【仮定】・{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold text-slate-600" title="テンプレに設定した目標時間まで縮めたら浮く分。目標が実測より遅い品目コードには効かない">③目標まで<div className="fi-tap-text font-normal text-slate-400">目標どおりなら・{cr ? '円/年' : '時間/年'}</div></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -18244,7 +18815,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                         <React.Fragment key={g.title}>
                           <tr onClick={() => setCrossExpanded(open ? null : g.title)} className={`border-b border-slate-50 cursor-pointer hover:bg-indigo-50/50 ${open ? 'bg-indigo-50/60' : ''}`}>
                             <td className="px-2 py-1.5"><div className="font-bold text-slate-800 truncate max-w-[13rem] flex items-center gap-1" title={`${g.title}（クリックで品目別内訳）`}><span className="text-slate-300">{open ? '▼' : '▶'}</span><span className="text-slate-300">{i + 1}.</span>{g.title}</div></td>
-                            <td className="px-2 py-1.5 text-right font-mono">{g.modelCount}<span className="text-xs text-slate-400">品目コード</span>{g.actualModels > 0 && <div className="text-[8px] font-bold text-indigo-600">{g.actualModels}実数</div>}</td>
+                            <td className="px-2 py-1.5 text-right font-mono">{g.modelCount}<span className="fi-tap-text text-slate-400">品目コード</span>{g.actualModels > 0 && <div className="text-[8px] font-bold text-indigo-600">{g.actualModels}実数</div>}</td>
                             <td className="px-2 py-1.5 text-right">
                               <div className="flex items-center gap-1.5 justify-end">
                                 <div className="h-2 w-12 bg-slate-100 rounded overflow-hidden"><div className="h-full bg-slate-400" style={{ width: `${barPct}%` }} /></div>
@@ -18257,22 +18828,56 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                           </tr>
                           {open && (
                             <tr className="bg-indigo-50/30 border-b border-indigo-100"><td colSpan={6} className="px-3 py-2">
-                              <div className="text-xs text-slate-600 mb-1.5"><b className="text-indigo-700">「{g.title}」の品目別内訳</b> — 一番速いのは <b>{g.fastestModel}（{pdcaFmtSec(g.fastest)}）</b>。これに全品目コードを揃えれば <b className="text-emerald-700">{cVal(g.saveToFastestSec, g.saveToFastestYen)}/年</b> 浮く。さらにレイアウト等で{crossPct}%短縮できれば <b className="text-indigo-700">{cVal(g.saveByPctSec, g.saveByPctYen)}/年</b>。</div>
-                              <table className="w-full text-xs border-collapse">
-                                <thead><tr className="text-slate-400 border-b border-indigo-100"><th className="px-2 py-0.5 text-left">品目コード</th><th className="px-2 py-0.5 text-right">年間台数</th><th className="px-2 py-0.5 text-right">1台の中央値</th><th className="px-2 py-0.5 text-right">目標</th><th className="px-2 py-0.5 text-right">年間コスト</th></tr></thead>
+                              {(() => {
+                                // 検算の例: この工程でいちばん効く品目コード1つで、掛け算を実数のまま見せる(記号の式は読まれない)
+                                const rate = crossRanking.rate || 0;
+                                const slow = (g.models || []).filter(m => m.median > g.fastest);
+                                const ex = slow.length ? slow.reduce((a, b) => (b.annualUnits * (b.median - g.fastest) > a.annualUnits * (a.median - g.fastest) ? b : a)) : null;
+                                const exGap = ex ? ex.median - g.fastest : 0;
+                                const exSave = ex ? Math.round(ex.annualUnits * exGap) : 0;
+                                return (
+                                  <div className="mb-1.5">
+                                    <div className="fi-tap-text text-slate-700 mb-1"><b className="text-indigo-700">「{g.title}」の品目別内訳</b> — 🏆一番速いのは <b>{g.fastestModel}（1台 {pdcaFmtSec(g.fastest)}）</b>。<span className="text-amber-700 font-bold">オレンジの棒 ＝ 🏆より遅い分 ＝ 詰められる分</span>。全部詰めると <b className="text-emerald-700">{cVal(g.saveToFastestSec, g.saveToFastestYen)}/年</b>（①の中身）。</div>
+                                    {ex && (
+                                      <div className="fi-tap-text text-emerald-900 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+                                        <b>計算の例</b>（この工程でいちばん効く {ex.model}）: ふだん {pdcaFmtSec(ex.median)} − 🏆{pdcaFmtSec(g.fastest)} = <b>1台 {pdcaFmtSec(exGap)}</b> 詰められる × 年{ex.annualUnits.toLocaleString()}台{rate > 0 ? <> × 時給¥{Math.round(rate).toLocaleString()}</> : null} ≒ <b>{cVal(exSave, Math.round(exSave / 3600 * rate))}/年</b> ← これが「浮く分」の正体です
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
+                              <table className="w-full fi-tap-text border-collapse">
+                                <thead><tr className="text-slate-400 border-b border-indigo-100"><th className="px-2 py-0.5 text-left">品目コード</th><th className="px-2 py-0.5 text-right" title="経営分析で入力した台数(登録)。無い品目コードは実績ペースの推定">年間台数</th><th className="px-2 py-0.5 text-left" title="ふだん1台にかかっている時間(実測の真ん中の値)。緑=🏆と同じ速さの分・オレンジ=🏆より遅い分">1台の時間（ふだん）</th><th className="px-2 py-0.5 text-right" title="🏆(一番速い品目コード)との1台あたりの差">🏆との差</th><th className="px-2 py-0.5 text-right" title="差 × 年間台数 × 時給 = この品目コードを🏆に揃えたら浮く分">揃えたら浮く分/年</th><th className="px-2 py-0.5 text-right" title="年間台数 × 1台の時間 × 時給 = いまかかっている分">年間コスト</th><th className="px-2 py-0.5 text-right" title="テンプレに設定した目標時間。⚠=実測より遅い目標(見直し推奨)">目標</th></tr></thead>
                                 <tbody>
-                                  {g.models.map((m, j) => (
-                                    <tr key={j} className={`border-b border-indigo-50 ${m.median === g.fastest ? 'bg-emerald-50/50' : ''}`}>
-                                      <td className="px-2 py-0.5 font-bold text-slate-700">{m.median === g.fastest && <span className="text-emerald-600">🏆 </span>}{m.model}</td>
-                                      <td className="px-2 py-0.5 text-right font-mono">{m.annualUnits.toLocaleString()}</td>
-                                      <td className="px-2 py-0.5 text-right font-mono">{pdcaFmtSec(m.median)}</td>
-                                      <td className="px-2 py-0.5 text-right font-mono text-slate-400">{m.hasTarget ? pdcaFmtSec(m.target) : '—'}</td>
-                                      <td className="px-2 py-0.5 text-right font-mono">{cVal(m.annualCostSec, m.annualCostYen)}</td>
+                                  {g.models.map((m, j) => {
+                                    const maxMed = g.models[g.models.length - 1].median || 1; // 並びは速い順なので末尾=一番遅い品目コード
+                                    const gapSec = Math.max(0, m.median - g.fastest);
+                                    const gapSaveSec = Math.round(m.annualUnits * gapSec);
+                                    const gapSaveYen = Math.round(gapSaveSec / 3600 * (crossRanking.rate || 0));
+                                    const badTarget = m.hasTarget && m.target > m.median; // ⚠実測より遅い目標=未較正
+                                    return (
+                                    <tr key={j} onClick={(e) => { e.stopPropagation(); setDetailRow(m); }} className={`border-b border-indigo-50 cursor-pointer hover:bg-amber-50 ${m.median === g.fastest ? 'bg-emerald-50/50' : ''}`} title={`${m.model} の計算の内訳（台数の出し方・根拠データ）を見る`}>
+                                      <td className="px-2 py-0.5 font-bold text-slate-700 whitespace-nowrap">{m.median === g.fastest && <span className="text-emerald-600">🏆 </span>}{m.model}<span className="fi-tap-text text-indigo-400 ml-1">詳細▸</span></td>
+                                      <td className="px-2 py-0.5 text-right font-mono">{m.annualUnits.toLocaleString()}<span className="text-[8px] text-slate-400 ml-0.5">{m.annualUnitsSource === 'actual' ? '登録' : '推定'}</span></td>
+                                      <td className="px-2 py-0.5 min-w-[150px]">
+                                        {/* 棒グラフ: 緑=🏆と同じ速さの分 / オレンジ=🏆より遅い分(=詰められる分)。長さは一番遅い品目コードを100%に */}
+                                        <div className="flex items-center gap-1.5">
+                                          <div className="h-2.5 flex-1 max-w-[160px] bg-slate-100 rounded overflow-hidden flex">
+                                            <div className="h-full bg-emerald-400" style={{ width: `${Math.min(100, Math.round(Math.min(m.median, g.fastest) / maxMed * 100))}%` }} />
+                                            {gapSec > 0 && <div className="h-full bg-amber-400" style={{ width: `${Math.round(gapSec / maxMed * 100)}%` }} />}
+                                          </div>
+                                          <span className="font-mono whitespace-nowrap">{pdcaFmtSec(m.median)}</span>
+                                        </div>
+                                      </td>
+                                      <td className="px-2 py-0.5 text-right font-mono whitespace-nowrap">{gapSec > 0 ? <span className="text-amber-700 font-bold">+{pdcaFmtSec(gapSec)}</span> : <span className="text-emerald-600 font-bold">🏆</span>}</td>
+                                      <td className="px-2 py-0.5 text-right font-mono whitespace-nowrap">{gapSaveSec > 0 ? <span className="text-emerald-700 font-bold">{cVal(gapSaveSec, gapSaveYen)}</span> : <span className="text-slate-300">—</span>}</td>
+                                      <td className="px-2 py-0.5 text-right font-mono whitespace-nowrap">{cVal(m.annualCostSec, m.annualCostYen)}</td>
+                                      <td className="px-2 py-0.5 text-right font-mono whitespace-nowrap">{m.hasTarget ? (badTarget ? <span className="text-amber-600" title="実測より遅い目標。テンプレの目標時間を見直してください(このままだと③に効きません)">⚠{pdcaFmtSec(m.target)}</span> : <span className="text-slate-500">{pdcaFmtSec(m.target)}</span>) : <span className="text-slate-300">—</span>}</td>
                                     </tr>
-                                  ))}
+                                  ); })}
                                 </tbody>
                               </table>
-                              <div className="text-xs text-slate-400 mt-1">🏆=この工程で一番速い品目コード（実証済みの到達点）。年間コスト = 年間台数 × 中央値{cr ? ' × 時給' : ''}。</div>
+                              <div className="fi-tap-text text-slate-400 mt-1">🏆=この工程で一番速い品目コード（実証済みの到達点）。<b>揃えたら浮く分 = 🏆との差 × 年間台数{cr ? ' × 時給' : ''}</b> ／ 年間コスト = 年間台数 × 1台の時間{cr ? ' × 時給' : ''}。金額は時間を時給で換算した<b>試算</b>です。<b>品目コードをクリック</b>すると台数の出し方・根拠データまで遡れます。</div>
                             </td></tr>
                           )}
                         </React.Fragment>
@@ -18883,12 +19488,19 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
   //   作業/集計が記録に使う findObsPlan(有効&品目コード専用優先) を最優先、無ければ無効/空プランも編集できるよう「品目コード専用→全品目コード」で決定的にフォールバック。
   const resolveObsPlan = (stepKey) => {
     if (!templateId || !stepKey) return null;
+    // 品目コード専用の旧プランがあれば最優先(step直付けの全品目コードに黙殺されないように)
+    const _modelPlan = findObsPlanModel(observationPlans, templateId, stepKey, model);
+    if (_modelPlan) return _modelPlan;
+    // テンプレ工程に常設した要素(step.observationElements)を次に優先(記録/表示を一致させる)
+    const _stepObj = (((templates || []).find(t => t.id === templateId) || {}).steps || []).find(s => targetTimeStepKey(s) === stepKey);
+    const _sp = stepObsPlan(_stepObj);
+    if (_sp) return _sp.enabled === false ? null : _sp;
     const live = findObsPlan(observationPlans, templateId, stepKey, model);
     if (live) return live;
     const ps = (observationPlans || []).filter(p => p.templateId === templateId && p.stepKey === stepKey);
     return ps.find(p => p.model && p.model === model) || ps.find(p => !p.model) || null;
   };
-  const planForSel = useMemo(() => sel ? resolveObsPlan(sel.stepKey) : null, [observationPlans, templateId, sel, model]);
+  const planForSel = useMemo(() => sel ? resolveObsPlan(sel.stepKey) : null, [observationPlans, templateId, sel, model, templates]);
   const elStats = useMemo(() => (sel && templateId) ? obsElementStats(lots, { model, templateId, stepKey: sel.stepKey, plan: planForSel }) : null, [lots, model, templateId, sel, planForSel]);
   const cvBadge = (cv) => cv < 0.3 ? ['安定', 'bg-emerald-100 text-emerald-700'] : (cv < 0.5 ? ['ややバラつき', 'bg-amber-100 text-amber-700'] : ['バラつき大', 'bg-rose-100 text-rose-700']);
   // 見ながら計画: この工程を改善カルテ(計画)にして改善PDCAへ。進行中カルテがあればそれを案内。
@@ -20617,8 +21229,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
              // 期間フィルタを反映: 完了が isInDefectPeriod に該当するロットのみ
              const completedLots = lots.filter(l => l.status === 'completed' && isInDefectPeriod(toMsAny(l.completedAt) || toMsAny(l.updatedAt)));
 
-             // 自動工程の判定: executionMode='batch' or title に '自動' を含む
-             const isAutoStep = (step) => step?.executionMode === 'batch' || step?.title?.includes('自動');
+             // 自動工程の判定は上の階の isAutoStep(マスタ索引つき・製品と同じ)を使う
 
              // === 記録の質の件数(taskTimeQualityOf を画面へ・製品と同じ数え方) ===
              //   確定=作業区間あり / 推定=開始〜終了だけ(時間の手入力もここ) / 低信頼=記録が矛盾 / 記録不足=時刻なし
@@ -20941,7 +21552,6 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
 
            {activeMode === 'improvement' && (() => {
              const completedLots = lots.filter(l => l.status === 'completed' && isInDefectPeriod(toMsAny(l.completedAt) || toMsAny(l.updatedAt)));
-             const isAutoStep = (step) => step?.executionMode === 'batch' || step?.title?.includes('自動');
 
              // === 1) 不要工程あぶり出し ===
              // 各工程の「該当なし率」「不良発生数」「平均時間」を集計し、削除候補をランキング

@@ -14,7 +14,7 @@
     "reload-gate": "node scripts/verify-reload-gate.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node --test \"src/domain/**/*.test.mjs\" \"src/data/**/*.test.mjs\"",
+    "test": "node --test \"src/domain/**/*.test.mjs\" \"src/data/**/*.test.mjs\" \"src/opsim/**/*.test.mjs\"",
     "watchdogs-read-code": "node scripts/verify-watchdogs-read-code.mjs",
     "save-safety": "node scripts/selftest-save-safety.mjs && node scripts/verify-save-safety.mjs",
     "check": "node scripts/check-all.mjs",
