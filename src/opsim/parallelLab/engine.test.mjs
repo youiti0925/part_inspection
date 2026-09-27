@@ -1,0 +1,18 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {compare,EXAMPLE} from './engine.mjs';
+const row=(patch={},i=1)=>compare({...EXAMPLE,...patch}).rows[i];
+test('20分の別作業は26分で戻りAを遅らせない',()=>{const r=row();assert.equal(r.aEnd,35);assert.equal(r.bEnd,23);assert.equal(r.machineWaitMin,0);assert.equal(r.delta.b,-35);});
+test('長引く仕事を完了して戻るとAに6分の待ち',()=>{const r=row({otherMin:30},2);assert.equal(r.aEnd,41);assert.equal(r.machineWaitMin,6);assert.equal(r.lateA,1);});
+test('中断不可の仕事を都合よく切らない',()=>assert.equal(row({otherMin:30}).status,'blocked'));
+test('中断可能でも仕事量を失わず再訪の移動を数える',()=>{const r=row({otherMin:40,interruptible:true});assert.equal(r.segments.filter(s=>s.lane==='worker'&&s.kind==='other').reduce((n,s)=>n+s.end-s.start,0),40);assert.equal(r.travelMin,9);assert.equal(r.bEnd,56);});
+test('緊急ロットは終了前の余裕を守る',()=>assert.equal(row({otherMin:30,urgent:true},2).status,'blocked'));
+test('監視必要なら離席しない',()=>assert.equal(row({mayLeave:false}).status,'blocked'));
+test('同じ設備を自動中に別ロットへ渡さない',()=>{assert.equal(row({sameEquipment:true}).status,'blocked');assert.equal(row({sameEquipment:true},0).status,'ok');});
+test('技能不明・不可を担当可にしない',()=>assert.equal(row({canDoB:false}).status,'blocked'));
+test('勤務窓を越えて夜間に勝手に手作業しない',()=>assert.equal(row({windowMin:20}).status,'blocked'));
+test('納期不明は遅れゼロではない',()=>assert.equal(row({dueA:null}).lateA,null));
+test('欠損移動時間をゼロにしない',()=>assert.equal(compare({...EXAMPLE,outMin:null}).status,'unknown'));
+test('入力不変・再現性',()=>{const x=structuredClone(EXAMPLE),before=JSON.stringify(x);assert.deepEqual(compare(x),compare(x));assert.equal(JSON.stringify(x),before);});
+test('作業者の二重予約なし・人作業量は全案同じ',()=>{for(const r of compare({...EXAMPLE,otherMin:40,interruptible:true}).rows){const s=r.segments.filter(s=>s.lane==='worker').sort((a,b)=>a.start-b.start);for(let i=1;i<s.length;i++)assert.ok(s[i-1].end<=s[i].start);assert.equal(s.filter(x=>['other','response'].includes(x.kind)).reduce((n,x)=>n+x.end-x.start,0),45);}});
+test('往復が長いと人待ちは減っても全体完了は悪化する',()=>{const r=row({autoMin:10,otherMin:20,outMin:8,backMin:12},2);assert.ok(r.delta.idle<0);assert.ok(r.delta.pair>0);});

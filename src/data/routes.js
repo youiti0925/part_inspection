@@ -102,6 +102,10 @@ export const COLLECTION_AREA = Object.freeze({
 
   // --- 年間目標の棚の中身(goal-shared-v1 にしか無い) ------------------------
   weekly_briefs: 'goals',
+
+  // --- 共有棚 capacity-shared-v1(操業シミュ・2026-09-27 部品へ移植)。docId = parts ----------
+  daily_load: 'analytics',
+  placement_rules: 'analytics',
 });
 
 // ----------------------------------------------------------------------------
@@ -165,6 +169,8 @@ export const COLLECTION_APPS = Object.freeze({
   arrival_actuals: ['final', 'product'],
   push_tokens: ['final', 'product'],
   weekly_briefs: ['final', 'product'],
+  daily_load: ['final', 'product', 'parts'],
+  placement_rules: ['final', 'product', 'parts'],
 });
 
 /**

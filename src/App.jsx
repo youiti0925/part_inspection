@@ -57,6 +57,9 @@ import {
 //   原理的に作れない ② JSON にすると中身が消えて、送信待ちを人が確認できない。
 //   同じ理由で docRef()/colRef() の逃げ道も使わない(窓口に意図の名前で置く)。
 import { providerFor, ROW_DATA_WINS } from './data/provider.js';
+// 🏭 2026-09-27 製品→部品 移植: 操業シミュレーションの画面と共有棚の書類を作る純関数(製品と同じ)
+import { OperationsSimulationPanel } from './OperationsSimulationPanel.jsx';
+import { buildWeeklyRule as opsimBuildWeeklyRule, weeklyRuleDocId as opsimWeeklyRuleDocId, shouldRefreshDailyLoad as opsimShouldRefreshDailyLoad } from './domain/operationsSimulation/sharedWorkerPlan.js';
 import { DATA_DELETE, DATA_SERVER_NOW, withDeletions } from './data/sentinels.js';
 // 🚨🚨 作業時間が「保存で消える」のを止める見張り(2026-08-17 最終検査の事故と同じ形を部品でも塞ぐ)。
 //   ⚠このファイルは最終検査/製品検査と **1バイトも同じ**。片方だけ直すと静かに巻き戻る。
@@ -31164,6 +31167,61 @@ const QuotaStoppedPanel = ({ until }) => (
    }, [lots, templates, settings.strictModeRules, strictMaturityUnits]);
    const [showStrictManager, setShowStrictManager] = useState(false);
    const [optimizeView, setOptimizeView] = useState('target'); // 作業最適化タブ: 'target'(目標時間) | 'strict'(厳密)
+   /* 🏭 2026-09-27 製品→部品 移植: 操業シミュレーション(製品の OperationsSimulationPanel をそのまま)の入口。
+      共有棚 capacity-shared-v1 は 4アプリ共通の区画。部品は daily_load/parts・placement_rules・plan_control/parts を使う。
+      🚨 部品に無い土台(到着予定・工程連絡・相手工場の名簿/負荷)は渡さない(null)= 画面は「分からない/まだ届いていません」と出す。0 で埋めない。 */
+   const OPSIM_SHELF_NS = 'capacity-shared-v1';
+   // 休止中を外した名簿(毎描画で新しい配列を作ると計算がやり直しになるので1回だけ)
+   const opsimWorkers = useMemo(() => activeWorkersOf(workers || []), [workers]);
+   const [ownDailyLoad, setOwnDailyLoad] = useState(null);
+   const [placementRules, setPlacementRules] = useState(null);
+   // 共有棚を読み終えた印。false の間は棚へ書かない(読む前に書くと決めた配置の無い書類で丸ごと上書きする)。読めなかった時も true。
+   const [capacityShelfLoaded, setCapacityShelfLoaded] = useState(false);
+   useEffect(() => {
+     if (!db) return undefined;
+     let alive = true;
+     Promise.all([
+       DATA(db).getOne(OPSIM_SHELF_NS, 'daily_load', 'parts').catch((e) => { console.warn('[共有棚] daily_load/parts が読めていません', e); return null; }),
+       DATA(db).getAll(OPSIM_SHELF_NS, 'placement_rules').catch((e) => { console.warn('[共有棚] placement_rules が読めていません', e); return null; }),
+     ]).then(([own, rules]) => {
+       if (!alive) return;
+       setOwnDailyLoad(own || null);
+       setPlacementRules(Array.isArray(rules) ? rules : null);
+       setCapacityShelfLoaded(true);
+     });
+     return () => { alive = false; };
+   }, [db]);
+   const publishDailyLoad = useCallback((doc) => {
+     if (!db || !doc) return Promise.resolve(false);
+     return DATA(db).save(OPSIM_SHELF_NS, 'daily_load', 'parts', doc, { merge: false }).then(() => true);
+   }, [db]);
+   const savePlacementRule = useCallback((rule) => {
+     if (!db) return Promise.resolve(false);
+     const doc = opsimBuildWeeklyRule({ name: rule && rule.name, weekly: rule && rule.weekly, days: rule && rule.days, updatedBy: 'parts', nowMs: Date.now() });
+     if (!doc) return Promise.resolve(false);
+     return DATA(db).save(OPSIM_SHELF_NS, 'placement_rules', opsimWeeklyRuleDocId(doc.name), doc, { merge: false })
+       .then(() => { setPlacementRules((prev) => [...(prev || []).filter((r) => r && r.name !== doc.name), doc]); return true; });
+   }, [db]);
+   // 司令塔の工場の図を読むだけ(並列作業の道具が区画の距離に使う)。書かない。
+   const readOverviewMap = useCallback(() => (db ? DATA(db).getOne('overview-app-v1', 'config', 'mapConfig') : Promise.resolve(null)), [db]);
+   // 保存計画の共有棚(plan_control/parts)は渡さない: 部品の data/provider.js に commitVersion・createOnce が無い(版の保存が途中で落ちる)。
+   //   null の間 画面は計画の保存・読み込みをしない(端末の中へ逃がさない作り)。
+   const planShelf = null;
+   // 自分のぶんが古ければ、開いた時に画面を出さず1回だけ計算して書き直す(製品と同じ。判定は純関数 shouldRefreshDailyLoad だけ)。
+   const opsimScreenOpen = activeTab === 'optimize' && optimizeView === 'opsim';
+   const wantDailyLoadRefresh = useMemo(
+     () => opsimShouldRefreshDailyLoad({ ownDoc: ownDailyLoad, nowMs: Date.now(), shelfLoaded: capacityShelfLoaded, simScreenOpen: opsimScreenOpen }),
+     [ownDailyLoad, capacityShelfLoaded, opsimScreenOpen],
+   );
+   const [bgLoadArmed, setBgLoadArmed] = useState(false);
+   const bgLoadOnceRef = useRef(false);
+   useEffect(() => {
+     if (!wantDailyLoadRefresh || bgLoadOnceRef.current) return undefined;
+     bgLoadOnceRef.current = true;
+     // 端末ごとに待ち時間をずらす(同じ時刻に何台も計算しない)。
+     const t = setTimeout(() => setBgLoadArmed(true), 3000 + Math.floor(Math.random() * 60000));
+     return () => clearTimeout(t);
+   }, [wantDailyLoadRefresh]);
    const [analysisCombo, setAnalysisCombo] = useState(null); // 実データ分析モーダルの対象コンボ {model, templateId, templateName}
    const [strictModeHistory, setStrictModeHistory] = useState([]);
    const strictPanelActive = showStrictManager || (activeTab === 'optimize' && optimizeView === 'strict');
@@ -31949,6 +32007,7 @@ const QuotaStoppedPanel = ({ until }) => (
                  <button onClick={() => setOptimizeView('skill')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'skill' ? 'bg-white shadow text-orange-600' : 'text-slate-500 hover:text-slate-700'}`}><Award className="w-4 h-4" /> スキルマップ</button>
                  <button onClick={() => setOptimizeView('modelgroup')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'modelgroup' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}><Layers className="w-4 h-4" /> 品目グループ</button>
                  <button onClick={() => setOptimizeView('tskip')} data-optimize-tab="tskip" className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'tskip' ? 'bg-white shadow text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 抜取/スキップ</button>
+                 <button onClick={() => setOptimizeView('opsim')} data-optimize-tab="opsim" className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'opsim' ? 'bg-white shadow text-cyan-600' : 'text-slate-500 hover:text-slate-700'}`}><Activity className="w-4 h-4" /> 操業シミュレーション</button>
                </div>
                {/* 🚨 説明文は消していない。？ を押すと全文が出る(畳んだだけ)。
                    🚨 2026-09-08 直し2件:
@@ -31972,12 +32031,14 @@ const QuotaStoppedPanel = ({ until }) => (
                  </div>
                </details>
              </div>
-             <div className="flex-1 min-h-0 overflow-hidden w-full max-w-[1100px] mx-auto">
+             <div className={`flex-1 min-h-0 overflow-hidden w-full mx-auto ${optimizeView === 'opsim' ? 'max-w-none' : 'max-w-[1100px]'}`}>
                {(quotaBlock || !lotsHistoryReady) && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : <DataLoadingPanel what="過去のロット" />)}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'target' && <ProcessInsightsTab lots={lots} workers={workers} customTargetTimes={settings.customTargetTimes || {}} onSaveSettings={saveSettings} targetTimeHistory={settings.targetTimeHistory || []} settings={settings} saveData={saveData} currentUserName={currentUserName} />}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'strict' && (currentUserName === '管理者' ? <StrictModeManagerModal embedded lots={lots} templates={templates} rules={settings.strictModeRules || {}} history={strictModeHistory} currentUserName={currentUserName} maturityUnits={strictMaturityUnits} onSetMaturity={(n) => saveSettings({ strictMaturityUnits: n })} onDecide={handleStrictDecide} optimalByCombo={optimalByCombo} onDecideOptimal={handleOptimalDecide} onOpenAnalysis={(row) => setAnalysisCombo({ model: row.model, templateId: row.templateId, templateName: row.templateName })} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">厳密モードの管理は管理者のみです。ヘッダー左上で「管理者」を選択してください。</div>)}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'skill' && <SkillMapView lots={lots} templates={templates} workers={workers} skills={settings.skills && settings.skills.length ? settings.skills : DEFAULT_SKILLS} workerSkills={settings.workerSkills || {}} canEdit={currentUserName === '管理者'} onSaveSkills={(list) => saveSettings({ skills: list })} onSaveWorkerSkill={(wn, sid, level) => { const ws = settings.workerSkills || {}; saveSettings({ workerSkills: { ...ws, [wn]: { ...(ws[wn] || {}), [sid]: level } } }); }} onSaveTemplateSkills={(tplId, reqSkills) => saveData('templates', tplId, { requiredSkills: reqSkills })} />}
                {/* 🧾 品目×テンプレ単位の抜取／スキップ。決めるのは管理者。数字は domain/templateSkip.js が実測から出す。 */}
+               {/* 🏭 操業シミュレーション(製品から移植)。到着予定・工程連絡・相手工場の名簿/負荷は部品に無いので渡さない=画面は「分からない」と出す */}
+               {!quotaBlock && lotsHistoryReady && optimizeView === 'opsim' && <OperationsSimulationPanel planShelf={planShelf} isAdmin={currentUserName === '管理者'} readOverviewMap={readOverviewMap} lots={lots} templates={templates} workers={opsimWorkers} settings={settings} factoryCalendar={factoryCalendar} ownDailyLoad={ownDailyLoad} publishDailyLoad={publishDailyLoad} capacityShelfLoaded={capacityShelfLoaded} placementRules={placementRules} saveSettings={saveSettings} canEdit={!!currentUserName} savePlacementRule={savePlacementRule} />}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'tskip' && <TemplateSkipPanel unitLabel="品目" lots={lots} templates={templates} settings={settings} saveSettings={saveSettings} canEdit={currentUserName === '管理者'} currentUserName={currentUserName} />}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'modelgroup' && (currentUserName === '管理者' ? <ModelGroupManager lots={lots} settings={settings} saveSettings={saveSettings} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">品目グループの管理は管理者のみです。</div>)}
              </div>
@@ -32071,7 +32132,15 @@ const QuotaStoppedPanel = ({ until }) => (
        {/* Announcement Modal */}
        {showAnnouncementModal && <AnnouncementModal announcements={announcements} workers={workers} saveData={saveData} deleteData={deleteData} loadImage={loadNoteImage} onClose={() => setShowAnnouncementModal(false)} currentUserName={currentUserName} />}
 
-       {/* 異常値検出パネル */}
+       {/* 📦🔄 共有棚 daily_load/parts の書き直し(画面は出ない)。古い時だけ・1回だけ・操業シミュを開いている時は出さない(製品と同じ) */}
+      {bgLoadArmed && wantDailyLoadRefresh && (
+        <OperationsSimulationPanel publishOnly planShelf={planShelf} isAdmin={currentUserName === '管理者'} readOverviewMap={readOverviewMap}
+          lots={lots} templates={templates} workers={opsimWorkers} settings={settings}
+          canEdit={false} saveSettings={null} savePlacementRule={null} factoryCalendar={factoryCalendar}
+          ownDailyLoad={ownDailyLoad} publishDailyLoad={publishDailyLoad} capacityShelfLoaded={capacityShelfLoaded} placementRules={placementRules}
+        />
+      )}
+      {/* 異常値検出パネル */}
        {/* 厳密モードは「作業最適化」タブに内蔵（モーダルは廃止） */}
 
        {showAnomalyPanel && !lotsHistoryReady && (
