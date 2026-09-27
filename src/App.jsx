@@ -31302,6 +31302,15 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    // 過去まで揃っているか。🚨**揃っていない状態で過去の数字を出さない**(黙って減るのが一番まずい)。
    const historyLoaded = historyLots !== null;
    const lotsHistoryReady = lotsWindowWhole || historyLoaded;
+   // 📋 P135 スキルマップの「品目コード×テンプレ×人」の表へ、いま手元にある履歴の範囲を嘘なく渡す(製品 skillGridHistory と同じ考え)。
+   //   全部読めた(窓が全体)か、過去の取り寄せが上限(LOTS_HISTORY_LIMIT)に頭打ちしていない時だけ「全部」。
+   const skillGridHistory = useMemo(() => {
+     if (lotsWindowWhole) return { complete: true, note: 'ロットを全部読めています' };
+     if (!historyLoaded) return { complete: false, note: '過去のロットはまだ取り寄せていません。いまは最近の分＋未完了だけです' };
+     const got = historyLots.length;
+     if (LOTS_HISTORY_LIMIT > 0 && got >= LOTS_HISTORY_LIMIT) return { complete: false, note: `過去の取り寄せ（新しい順${LOTS_HISTORY_LIMIT}件・それより古い完了ロットは入っていません）` };
+     return { complete: true, note: `過去の取り寄せ ${got}件（全部）` };
+   }, [lotsWindowWhole, historyLoaded, historyLots]);
    // 🚨🚨 ロットの購読を「どれを張ったままにするか」は domain/readBudget.js の
    //   planLotSubscriptions **ただ1つ** で決める(試験 R90〜R95)。⚠ここに条件を直書きしない。
    //   直書きに戻すと、窓と過去が同じ束で同時に引っ込んで **購読が0本** になる道が開く
@@ -35448,7 +35457,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                {(quotaBlock || !lotsHistoryReady) && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : <DataLoadingPanel what="過去のロット" />)}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'target' && <ProcessInsightsTab lots={lots} workers={workers} customTargetTimes={settings.customTargetTimes || {}} onSaveSettings={saveSettings} targetTimeHistory={settings.targetTimeHistory || []} settings={settings} saveData={saveData} currentUserName={currentUserName} />}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'strict' && (currentUserName === '管理者' ? <StrictModeManagerModal embedded lots={lots} templates={templates} rules={settings.strictModeRules || {}} history={strictModeHistory} currentUserName={currentUserName} maturityUnits={strictMaturityUnits} onSetMaturity={(n) => saveSettings({ strictMaturityUnits: n })} onDecide={handleStrictDecide} optimalByCombo={optimalByCombo} onDecideOptimal={handleOptimalDecide} onOpenAnalysis={(row) => setAnalysisCombo({ model: row.model, templateId: row.templateId, templateName: row.templateName })} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">厳密モードの管理は管理者のみです。ヘッダー左上で「管理者」を選択してください。</div>)}
-               {!quotaBlock && lotsHistoryReady && optimizeView === 'skill' && <SkillMapView lots={lots} templates={templates} workers={workers} skills={settings.skills && settings.skills.length ? settings.skills : DEFAULT_SKILLS} workerSkills={settings.workerSkills || {}} canEdit={currentUserName === '管理者'} onSaveSkills={(list) => saveSettings({ skills: list })} onSaveWorkerSkill={(wn, sid, level) => { const ws = settings.workerSkills || {}; saveSettings({ workerSkills: { ...ws, [wn]: { ...(ws[wn] || {}), [sid]: level } } }); }} onSaveTemplateSkills={(tplId, reqSkills) => saveData('templates', tplId, { requiredSkills: reqSkills })} />}
+               {!quotaBlock && lotsHistoryReady && optimizeView === 'skill' && <SkillMapView lots={lots} templates={templates} workers={workers} skills={settings.skills && settings.skills.length ? settings.skills : DEFAULT_SKILLS} workerSkills={settings.workerSkills || {}} canEdit={currentUserName === '管理者'} onSaveSkills={(list) => saveSettings({ skills: list })} onSaveWorkerSkill={(wn, sid, level) => { const ws = settings.workerSkills || {}; saveSettings({ workerSkills: { ...ws, [wn]: { ...(ws[wn] || {}), [sid]: level } } }); }} onSaveTemplateSkills={(tplId, reqSkills) => saveData('templates', tplId, { requiredSkills: reqSkills })} onOpenTemplate={(tid) => { const tpl = (templates || []).find(t => t.id === tid); if (tpl) { setEditingTemplate(tpl); setActiveTab('template-mgr'); } }} currentUserName={currentUserName} historyComplete={skillGridHistory.complete} historyNote={skillGridHistory.note} />}
                {/* 🧾 品目×テンプレ単位の抜取／スキップ。決めるのは管理者。数字は domain/templateSkip.js が実測から出す。 */}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'solo' && <SoloErrorBoundary><SoloDependencyPanel lots={lots} templates={templates} workers={workers} /></SoloErrorBoundary>}
               {!quotaBlock && lotsHistoryReady && optimizeView === 'star' && <StarChartView lots={lots} workers={workers} templates={templates} settings={settings} skillMarks={skillMarks || []} canEdit={currentUserName === '管理者'} currentUserName={currentUserName} onSaveMark={(doc) => saveData('skill_marks', doc.id, doc)} />}
