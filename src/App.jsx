@@ -104,6 +104,7 @@ import {
 } from './domain/noteImages.js';
 // 💾 「保存してから画面を閉じてよいか」(2026-08-17 の是正。製品検査と同一ファイル)
 import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './domain/settleSave.js';
+import { MascotFx, MascotSettingsPanel } from './MascotFx.jsx'; // P156 ケンサくん
 // ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
@@ -22674,6 +22675,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          {/* 品目別 公差・基準値オーバーライド設定 (レガシー) */}
          {/* 勤務時間マスタ (始業・定時・残業・休憩) — 負荷計算で使用 */}
          <WorkScheduleSettingsPanel workSchedule={settings.workSchedule} saveSettings={saveSettings} workloadEffectiveWorkers={settings.workloadEffectiveWorkers} registeredWorkerCount={workers.length} />
+         {/* P156 マスコット(ケンサくん)の設定。既定は製品と同じ ON・ここで OFF にできる */}
+         <MascotSettingsPanel settings={settings} onSave={saveSettings} />
 
          {/* 作業順ガイド・厳密モード (管理者向け) — 一元管理は専用画面へ */}
          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
@@ -31539,6 +31542,8 @@ const QuotaStoppedPanel = ({ until }) => (
    return (
      <WorkScheduleContext.Provider value={workScheduleWithCalendar}>
      <LotCardDisplayContext.Provider value={settings.lotCardDisplay || DEFAULT_LOT_CARD_DISPLAY}>
+     {/* P156 ケンサくん。⚠完了履歴を開くと lots が窓→過去500件へ一気に増えるので、その時は祝わずに基準を取り直す(嘘の『ロット完了！』を止める) */}
+     <MascotFx lots={lots} settings={settings} onSaveSettings={saveSettings} baselineKey={historyLots === null ? 'live' : 'history'} />
      {/* グローバル CSS: 作業中ロット用の強い点滅アニメーション (Tailwind animate-pulse より強力) */}
      <style>{`
        @keyframes lotBlink {
