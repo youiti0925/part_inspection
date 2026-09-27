@@ -168,7 +168,9 @@ import { DefectPhotoMarkEditor, MarkedPhoto } from './workscreen/DefectPhotoMark
 // ⏱ 終わっていない工程を「該当なし」で閉じる時、時間・NG・写真を落とさない(製品検査 src/domain/skipKeepingRecord.js と md5 一致の写し)
 import { skipTaskKeepingRecord } from './domain/skipKeepingRecord.js';
 // 🖐 順序実行の「済・動いている・次の一手」(製品検査 src/domain/seqScreen.js と md5 一致の写し)
-import { seqNextOf, seqIsSettled, seqIsRunning } from './domain/seqScreen.js';
+import { seqTaskKeyOf, seqTaskOf, seqMovesOf, seqStatusGridOf, seqNextOf, seqWhileAutoOf, seqRemainingOf, seqAreasOf, seqPresetOf, seqIsSettled, seqIsRunning, SEQ_PRESETS } from './domain/seqScreen.js';
+// 🖐 順序実行の作業画面の部品(製品検査 src/workscreen/SeqParts.jsx と1バイト同じ写し)
+import { SeqPresetSwitch, SeqTimeBand, SeqOrderStrip, SeqOrderSheet, SeqPanel, SeqUpcoming, SeqZoom, SeqWaitCard } from './workscreen/SeqParts.jsx';
 // 🚦 全ロットを見る開始ガード(1人の手作業は同時に1つ・自動測定は別。製品検査 src/domain/lotStartGuard.js と md5 一致の写し)
 import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStartGuard.js';
 // 工場の暦(祝日・全社休業・休日出勤)。4アプリで同じ物(md5 一致)。
@@ -8965,6 +8967,38 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   //     該当なし・NG の所で順序実行が止まり、「完了して次へ」で その記録を completed に上書きしていた。
   //   ⚠部品の順序実行には「自動運転を開始」の画面が無いので、自動かどうかは見ない(isAuto を渡さない=前の並び方)。
 
+  // 🖐 2026-09-24 順序実行の「この工程×この台」の経過と 今の時刻(自動運転の残り)。refs は描画中に読まない(1秒ごとにここで写す)。
+  const [seqClock, setSeqClock] = useState({ unitSec: 0, nowMs: 0 });
+  useEffect(() => {
+    if (executionType !== 'sequential') return undefined;
+    const tick = () => setSeqClock({ unitSec: stepUnitAccumRef.current + (isTimerRunning ? Math.max(0, Math.floor((Date.now() - stepUnitStartRef.current) / 1000)) : 0), nowMs: Date.now() });
+    const first = setTimeout(tick, 0);
+    const iv = setInterval(tick, 1000);
+    return () => { clearTimeout(first); clearInterval(iv); };
+  }, [executionType, isTimerRunning, currentStepIdx, currentUnitIdx]);
+  const [seqPresetLocal, setSeqPresetLocal] = useState(null); // { name, key } 担当が決まっていない間・保存が返るまでの仮置き
+  const [seqZoom, setSeqZoom] = useState(null);           // 大きく表示の枠 'd'|'f'|'m'
+  const [seqOrderOpen, setSeqOrderOpen] = useState(false); // 全工程の順番
+  const [seqDescEdit, setSeqDescEdit] = useState(false);   // 作業内容の書き直し
+  const [seqFoldTab, setSeqFoldTab] = useState(null);      // 📱狭い時に見せる枠
+
+  // 🖐 2026-09-24 isTaskCompleted / findNextIncomplete(今いる所の後ろだけを探す)は seqNextOf(domain/seqScreen.js・頭から探す)へ置き換えた
+
+  // 🖐 2026-09-24 自動運転の工程に 測定/確認チェックが付いていて まだ入っていないか(順序実行で 自動の待ちの間に入れ忘れない為)
+  const seqNeedsInput = (s, u, mr = measurementResults) => {
+    const st = localSteps[s];
+    if (!st || !st.id) return false;
+    const unit = st.lotOnce ? 0 : u;
+    if (st.type === 'measurement' && st.measurementConfig) {
+      const v = mr[`${st.id}-${unit}-values`] || (unit === 0 ? mr[`${st.id}-values`] : null);
+      if (!v || !Object.keys(v).length) return true;
+      // 値が入っていても 必須の確認チェックが抜けていれば まだ(確かめ役 4回目: 完了で止まるのに戻れなかった)
+    }
+    const req = Array.isArray(st.checklistItems) ? st.checklistItems.filter((it) => it.required !== false) : [];
+    if (!req.length) return false;
+    const chk = mr[`${st.id}-${unit}-checklist`] || (st.lotOnce ? mr[`${st.id}-lot-0-checklist`] : null) || {};
+    return req.some((it) => !chk[it.id]);
+  };
   const handleNext = () => {
     // 音声の輪の中から呼ばれても 最新(ref)を読む(製品と同じ)
     const curTasks = tasksRef.current || tasks;
@@ -8997,6 +9031,12 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     //   音声の「完了」や 画面の「次へ」で、機械に載っている台を 測った時間ごと完了にしていた。
     if (seqIsRunning(prevTask)) {
       const msg = prevTask.status === 'reworking' ? '修正作業中です。修正の完了はカスタム画面で押します' : 'カスタム画面で作業中の記録があります。カスタム画面で終えてください';
+      setOrderHint(msg);
+      return { ok: false, msg };
+    }
+    // 🖐 始めていない自動運転は「完了して次へ」で済にしない(製品 2026-09-24・順序実行の作り直し)
+    if (isAutoStep(currentStep) && !seqIsSettled(prevTask)) {
+      const msg = '自動運転は 画面の「自動運転を開始」で始めてください';
       setOrderHint(msg);
       return { ok: false, msg };
     }
@@ -9053,7 +9093,13 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     setStepTimes(newStepTimes);
 
     // 次は 頭から「済でも 動いてもいない」最初の物(先の台へ移った後も 前の台の残りを飛ばさない・動いている物は飛ばす)。
-    const nxSeq = seqNextOf(localSteps, tasksRef.current || curTasks, totalUnits);
+    const nxSeq = seqNextOf(localSteps, tasksRef.current || curTasks, totalUnits, isAutoStep, { needsInput: (ss, uu) => seqNeedsInput(ss, uu, curMR) });
+    // 自動運転の工程の入力(測定/チェック)が まだで 同じ所に留まる時は 進めない(製品と同じ)
+    if (nxSeq && nxSeq.inputOnly && nxSeq.s === currentStepIdx && (currentStep?.lotOnce || nxSeq.u === currentUnitIdx)) {
+      const msg = `${currentStep?.type === 'measurement' ? '測定と確認チェック' : '確認チェック'}を入れてから 次へ進みます`;
+      setOrderHint(msg);
+      return { ok: false, msg };
+    }
     const next = nxSeq ? { step: nxSeq.s, unit: nxSeq.u } : null;
     if (next) {
       // 🚦 今の完了は残し、次の手作業が別ロットの手作業と重なる時は時計を止める(製品と同じ)
@@ -13569,6 +13615,203 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     );
   }
 
+  // ===== 🖐 2026-09-24 順序実行の作り直し(Claude Design の案・清水さん「かなり良いと思うのでこのまま進めて」) =====
+  //   並び・状態・次の一手は domain/seqScreen.js(試験 src/domain/__tests__/seqScreen.test.mjs)。描く部品は workscreen/SeqParts.jsx。
+  //   ⚠ ここは描く前の計算だけ(hooks ではない)。保存・完了・中断は 今までの関数(handleNext / toggleTask / handleCompleteTrigger / toggleBreak)を呼ぶ。
+  // 📱 部品には狭い画面の畳み(ExecFold)がまだ無い → 幅だけで 枠を1つずつ見せる形にする(既定)
+  const execFold = typeof window !== 'undefined' && window.innerWidth < 768;
+  const seqGrid = seqStatusGridOf(localSteps, tasks, totalUnits, { s: currentStepIdx, u: currentUnitIdx }, isAutoStep);
+  const seqCurTask = seqTaskOf(tasks, currentStep, currentStepIdx, currentUnitIdx);
+  const seqCurAuto = !!currentStep && isAutoStep(currentStep);
+  const seqWaiting = seqCurAuto && seqCurTask?.status === 'processing';
+  const seqCurDone = seqIsSettled(seqCurTask);
+  const seqUnitOf = (s, u) => (localSteps[s]?.lotOnce ? 'ロット1回' : `${u + 1}台目`);
+  // 目標: 手作業は補正込みの目標(カスタムと同じ)。自動運転は 設定の自動時間(autoEndSec)→無ければ目標。どこに出しても同じ数にする
+  const seqPlanOf = (s) => Number(effTargetsBySIdx[s] || localSteps[s]?.targetTime || 0) || 0;
+  const seqAutoSecOf = (s) => Number(autoEndSecForStep(localSteps[s]) || 0) || seqPlanOf(s);
+  const seqTargetOf = (s) => (isAutoStep(localSteps[s]) ? seqAutoSecOf(s) : seqPlanOf(s));
+  const seqFmtLeft = (sec) => { const m = Math.max(0, Math.round(sec / 60)); const h = Math.floor(m / 60); return h > 0 ? `約${h}時間${m % 60 ? `${m % 60}分` : ''}` : `約${m}分`; };
+  // 画面の型: 担当者の記録(workers の execLayout)に覚える。端末には置かない。担当が決まっていない間は この画面の中だけ
+  const seqPreset = seqPresetOf(seqPresetLocal && seqPresetLocal.name === (inspectorName || '') ? seqPresetLocal.key : inspectorWorker?.execLayout);
+  const seqSetPreset = (key) => {
+    setSeqPresetLocal({ name: inspectorName || '', key });
+    if (inspectorWorker?.id && saveData) {
+      Promise.resolve(saveData('workers', inspectorWorker.id, { execLayout: key })).catch(() => setOrderHint('画面の型を覚えられませんでした(通信を確かめてください)。この画面では切り替わっています'));
+    }
+  };
+  const seqIsMeasure = currentStep?.type === 'measurement' && !!currentStep?.measurementConfig;
+  const seqIsChecklist = !seqIsMeasure && Array.isArray(currentStep?.checklistItems) && currentStep.checklistItems.length > 0;
+  const seqImages = Array.isArray(currentStep?.images) ? currentStep.images.filter(Boolean) : [];
+  const seqLayout = seqAreasOf({ preset: seqPreset, hasFig: seqImages.length > 0, hasInput: seqIsMeasure || seqIsChecklist });
+  const seqZoomTabs = [{ key: 'd', label: '作業内容' }, ...(seqImages.length ? [{ key: 'f', label: '図・画像' }] : []), ...(seqIsMeasure ? [{ key: 'm', label: '測定' }] : seqIsChecklist ? [{ key: 'm', label: '確認チェック' }] : [])];
+  const seqZoomOn = !seqWaiting && seqZoomTabs.some((t) => t.key === seqZoom) ? seqZoom : null;
+  const seqZoomStep = (d) => { const i = Math.max(0, seqZoomTabs.findIndex((t) => t.key === seqZoomOn)); setSeqZoom(seqZoomTabs[(i + d + seqZoomTabs.length) % seqZoomTabs.length].key); };
+  const seqFoldOn = seqZoomTabs.some((t) => t.key === seqFoldTab) ? seqFoldTab : (seqIsMeasure || seqIsChecklist ? 'm' : 'd');
+  // 測定・確認チェックは 台ごと(前は順序実行だけ いつも1台目の欄に書いていた)。ロット1回は 0。
+  const seqInUnit = currentStep?.lotOnce ? 0 : currentUnitIdx;
+  const seqMeasValues = (currentStep && (measurementResults[`${currentStep.id}-${seqInUnit}-values`] || (seqInUnit === 0 ? measurementResults[`${currentStep.id}-values`] : null))) || {};
+  const seqMeasureChange = (newValues) => {
+    const cfg = currentStep.measurementConfig;
+    const resultVal = calculateMeasurementResult(newValues, cfg);
+    const crossVals = collectCrossStepValues(lot, currentStep.id);
+    const calcResults = calculateMeasurementResults(newValues, cfg, crossVals);
+    const measData = { values: newValues, result: resultVal, calcResults, timestamp: Date.now() };
+    const unitKey = `${currentStep.id}-${seqInUnit}`;
+    const newResults = { ...measurementResults, [`${unitKey}-values`]: newValues, [unitKey]: measData };
+    // 旧キー(1台目の分だけ)が在れば互換を保つ
+    if (seqInUnit === 0 && measurementResults[`${currentStep.id}-values`] !== undefined) newResults[`${currentStep.id}-values`] = newValues;
+    if (seqInUnit === 0 && measurementResults[`${currentStep.id}-result`] !== undefined) newResults[`${currentStep.id}-result`] = measData;
+    setMeasurementResults(newResults);
+    onSave({ measurementResults: newResults });
+  };
+  const seqChkKey = currentStep ? `${currentStep.id}-${seqInUnit}-checklist` : '';
+  const seqChecked = (seqChkKey && measurementResults[seqChkKey]) || {};
+  const seqChkItems = Array.isArray(currentStep?.checklistItems) ? currentStep.checklistItems : [];
+  const seqChkRequired = seqChkItems.filter((it) => it.required !== false);
+  const seqChkOk = seqChkRequired.filter((it) => seqChecked[it.id]).length;
+  const seqChkSave = (next) => { const newResults = { ...measurementResults, [seqChkKey]: next }; setMeasurementResults(newResults); onSave({ measurementResults: newResults }); };
+  // 次の一手(今の作業を済にした後に来る物)と、この後の流れ
+  const seqCurKey = currentStep ? seqTaskKeyOf(currentStep, currentStepIdx, currentStep.lotOnce ? 0 : currentUnitIdx) : '';
+  const seqAfter = currentStep ? seqNextOf(localSteps, seqCurDone ? tasks : { ...tasks, [seqCurKey]: { status: 'completed' } }, totalUnits, isAutoStep, { needsInput: seqNeedsInput }) : null;
+  const seqCurMoveAt = seqMovesOf(localSteps, totalUnits).findIndex((m) => m.s === currentStepIdx && (localSteps[m.s]?.lotOnce || m.u === currentUnitIdx));
+  const seqUpcoming = seqMovesOf(localSteps, totalUnits).slice(seqCurMoveAt + 1)
+    .filter((m) => !seqIsSettled(seqTaskOf(tasks, localSteps[m.s], m.s, m.u))).slice(0, 4)
+    .map((m) => ({ key: `${m.s}-${m.u}`, title: localSteps[m.s]?.title || '', unit: seqUnitOf(m.s, m.u), auto: isAutoStep(localSteps[m.s]), target: seqTargetOf(m.s) ? formatTime(seqTargetOf(m.s)) : '—' }));
+  // 動かす(位置を変えたら 工程×台の時間を測り直す・保存する)
+  const seqGoTo = (s, u) => {
+    if (isTimerRunning) {
+      const gate = startGuard({ targetStep: localSteps[s], excludeKey: SEQUENTIAL_KEY });
+      if (!gate.ok) { setOrderHint(gate.message); return false; }
+    }
+    setCurrentStepIdx(s); setCurrentUnitIdx(u);
+    stepUnitStartRef.current = Date.now(); stepUnitAccumRef.current = 0;
+    setSeqZoom(null); setSeqDescEdit(false);
+    onSave({ currentStepIndex: s, currentUnitIndex: u });
+  };
+  const seqNextFromDone = () => {
+    const nx = seqNextOf(localSteps, tasks, totalUnits, isAutoStep, { needsInput: seqNeedsInput });
+    if (!nx) { handleCompleteTrigger(); return; }
+    // 自動運転の工程の測定/確認チェックが まだ入っていない時は そこに留まる
+    if (nx.inputOnly && nx.s === currentStepIdx && (localSteps[nx.s]?.lotOnce || nx.u === currentUnitIdx)) { setOrderHint(`${seqIsMeasure && !Object.keys(seqMeasValues).length ? '測定' : '確認チェック'}を入れてから 次へ進みます`); return; }
+    seqGoTo(nx.s, nx.u);
+  };
+  const seqStartAuto = () => {
+    if (seqIsRunning(seqCurTask)) { setOrderHint(seqCurTask.status === 'reworking' ? '修正作業中です。修正の完了はカスタム画面で押します' : '自動運転が動いています'); return; }
+    if (rotaryConfig?.enabled && currentStep?.rotaryLink && !currentStep?.lotOnce) { setOrderHint('この工程は回転測定アプリと連動します。測定台を選ぶため カスタム画面から開始してください'); return; }
+    toggleTask(currentStepIdx, currentStep?.lotOnce ? 0 : currentUnitIdx);
+  };
+  const seqAutoDoneByHand = () => toggleTask(currentStepIdx, currentStep?.lotOnce ? 0 : currentUnitIdx);
+  // 自動運転を待つ間の手作業(このロットの中)。無ければ 次に始められる物(別の台の自動など)
+  const seqSuggestMove = seqWaiting ? (seqWhileAutoOf(localSteps, tasks, totalUnits, isAutoStep) || (() => { const nx = seqNextOf(localSteps, tasks, totalUnits, isAutoStep); return nx && !nx.waiting ? nx : null; })()) : null;
+  const seqSameAutoBusy = !!(seqSuggestMove && isAutoStep(localSteps[seqSuggestMove.s]) && seqSuggestMove.s === currentStepIdx);
+  const seqMoreSameAuto = seqCurAuto && !!seqGrid[currentStepIdx]?.units.some((x) => x.status === 'todo'); // 同じ工程の自動を まだ始めていない台がある(機械が空くのを待つ)
+  // 🖐 2026-09-24 機械が2台以上ある時の逃げ道: 同じ工程の自動を 別の台でも今始める(既定は1台ずつ=本番の記録どおり)
+  const seqAlsoMove = seqWaiting && seqMoreSameAuto ? (() => { const nx = seqNextOf(localSteps, tasks, totalUnits, isAutoStep, { sameStepAuto: true }); return nx && !nx.waiting && nx.s === currentStepIdx ? nx : null; })() : null;
+  const seqAutoLeft = seqWaiting && seqCurTask?.startTime ? seqAutoSecOf(currentStepIdx) - Math.max(0, (seqClock.nowMs - seqCurTask.startTime) / 1000) : seqAutoSecOf(currentStepIdx);
+  const seqSuggestText = seqSuggestMove && !seqSameAutoBusy
+    ? `待ち ${Math.max(1, Math.round(Math.max(0, seqAutoLeft) / 60))}分 のあいだに、${seqUnitOf(seqSuggestMove.s, seqSuggestMove.u)}の「${localSteps[seqSuggestMove.s]?.title || ''}」（目標 ${seqTargetOf(seqSuggestMove.s) ? formatTime(seqTargetOf(seqSuggestMove.s)) : '—'}）${isAutoStep(localSteps[seqSuggestMove.s]) ? 'を始められます（自動運転）' : 'ができます'}`
+    : '';
+  // 時間の帯
+  const seqTarget = seqCurAuto ? seqAutoSecOf(currentStepIdx) : seqTargetOf(currentStepIdx);
+  const seqRatio = seqTarget > 0 ? seqClock.unitSec / seqTarget : 0;
+  const seqTone = seqCurAuto ? 'auto' : !(seqTarget > 0) ? 'none' : seqRatio < 0.8 ? 'ok' : seqRatio < 1 ? 'near' : 'over';
+  const seqTimeNote = seqCurAuto
+    ? (seqWaiting ? '機械が動いています' : seqCurDone ? '自動運転は終わりました' : `開始すると ${seqFmtLeft(seqTarget)} で終わる見込みです`)
+    : !(seqTarget > 0) ? '' : seqRatio < 1 ? `目標まで あと ${formatTime(seqTarget - seqClock.unitSec)}` : `目標を ${formatTime(seqClock.unitSec - seqTarget)} 超えています`;
+  const seqRemain = seqRemainingOf(localSteps, tasks, totalUnits, { targetOf: seqTargetOf, cur: { s: currentStepIdx, u: currentUnitIdx }, curElapsedSec: seqCurAuto ? 0 : seqClock.unitSec, nowMs: seqClock.nowMs || 0 });
+  const seqMovesAll = seqMovesOf(localSteps, totalUnits).length;
+  const seqLotPct = seqMovesAll ? Math.round(((seqMovesAll - seqRemain.left) / seqMovesAll) * 100) : 0;
+  const seqChips = [
+    { label: currentStep?.lotOnce ? 'ロット1回' : `${currentUnitIdx + 1} / ${totalUnits} 台目`, tone: currentStep?.lotOnce ? 'once' : 'unit' },
+    ...(seqCurAuto ? [{ label: '自動運転', tone: 'auto' }] : []),
+    ...(seqIsMeasure ? [{ label: '測定あり', tone: 'measure' }] : []),
+    ...(currentStep?.type === 'danger' ? [{ label: '危険', tone: 'warn' }] : currentStep?.type === 'important' ? [{ label: '重要', tone: 'warn' }] : []),
+  ];
+  // 右の大きいボタン(1つだけ)
+  let seqPrimary = null;
+  if (!isTimerRunning) seqPrimary = { label: '作業開始', onClick: handleStart, cls: 'bg-blue-600 hover:bg-blue-700', icon: 'play' };
+  else if (seqWaiting) seqPrimary = seqSuggestMove && !seqSameAutoBusy ? { label: `${seqUnitOf(seqSuggestMove.s, seqSuggestMove.u)}の「${localSteps[seqSuggestMove.s]?.title || ''}」へ`, onClick: () => seqGoTo(seqSuggestMove.s, seqSuggestMove.u), cls: 'bg-blue-700 hover:bg-blue-800', icon: 'go' } : null;
+  // 🖐 2026-09-24 確かめ役: 手作業がカスタムで作業中・修正作業中の物は 順序実行では終えられない(押すと修正を完了にしていた) → カスタム画面へ
+  else if (seqIsRunning(seqCurTask)) seqPrimary = { label: seqCurTask.status === 'reworking' ? 'カスタム画面で修正を終える' : 'カスタム画面で続ける', onClick: switchToCustom, cls: 'bg-amber-600 hover:bg-amber-700', icon: 'go' };
+  else if (seqCurDone) seqPrimary = { label: seqAfter ? '次の作業へ' : '作業完了', onClick: seqNextFromDone, cls: 'bg-emerald-700 hover:bg-emerald-800', icon: 'go' };
+  else if (seqCurAuto) seqPrimary = { label: '自動運転を開始', onClick: seqStartAuto, cls: 'bg-violet-700 hover:bg-violet-800', icon: 'play' };
+  else seqPrimary = { label: !seqAfter ? '完了（作業完了へ）' : seqAfter.waiting ? '完了して自動運転を待つ' : '完了して次へ', onClick: () => handleNext(), cls: 'bg-emerald-700 hover:bg-emerald-800', icon: 'check' };
+  const seqNextCard = seqWaiting
+    ? { head: '待ち時間にやる作業', name: seqSuggestMove && !seqSameAutoBusy ? (localSteps[seqSuggestMove.s]?.title || '') : 'ありません', sub: seqSuggestMove && !seqSameAutoBusy ? `${seqUnitOf(seqSuggestMove.s, seqSuggestMove.u)} ・ 目標 ${seqTargetOf(seqSuggestMove.s) ? formatTime(seqTargetOf(seqSuggestMove.s)) : '—'}` : '自動運転が終わるのを待ちます' }
+    : seqAfter
+      ? { head: '次の作業', name: localSteps[seqAfter.s]?.title || '', sub: `${seqUnitOf(seqAfter.s, seqAfter.u)}${seqAfter.waiting ? ' ・ 自動運転の終わりを待つ' : ` ・ 目標 ${seqTargetOf(seqAfter.s) ? formatTime(seqTargetOf(seqAfter.s)) : '—'}`}${isAutoStep(localSteps[seqAfter.s]) && !seqAfter.waiting ? ' ・ 自動運転' : ''}` }
+      : { head: '次の作業', name: 'これが最後の作業です', sub: '' };
+  const seqActiveInts = interruptions.filter((i) => i.status === 'active' && i.type !== 'break');
+  const seqDescBody = (big) => (
+    <div className="flex flex-col gap-3">
+      <StepSetupChips step={currentStep}/>
+      {seqDescEdit ? (
+        <textarea autoFocus defaultValue={currentStep.description || ''} aria-label="作業内容・注意点を書き直す" className="w-full min-h-32 rounded-lg border border-slate-300 p-2 text-base" onBlur={(e) => {
+          // 変わった時だけ保存(前は閉じるたびに 工程の並び全部を書いていた)
+          if (e.target.value !== (currentStep.description || '')) {
+            const newSteps = localSteps.map((s, i) => i === currentStepIdx ? { ...s, description: e.target.value } : s);
+            setLocalSteps(newSteps); onSave({ steps: newSteps });
+          }
+          setSeqDescEdit(false);
+        }}/>
+      ) : currentStep.description ? (
+        <p className={`${big ? 'text-3xl leading-relaxed' : 'text-xl leading-relaxed'} text-slate-900 whitespace-pre-wrap`}>{currentStep.description}</p>
+      ) : <p className="text-sm text-slate-500">（作業内容・注意点は まだ書かれていません）</p>}
+      <div className="flex flex-wrap gap-2">
+        {currentStep.pdfData && <button type="button" onClick={() => setShowPdf(true)} className="min-h-11 flex items-center gap-1.5 rounded-xl border border-orange-200 bg-orange-50 px-3 text-sm font-bold text-orange-800"><FileText className="w-4 h-4"/> PDF資料</button>}
+        {/* ⚠書き直し中に押すと 先に書く欄の blur(保存して閉じる)が走り、続く click で また開いていた → 押した瞬間の blur を止め、書き直し中は blur で閉じる */}
+        {!big && <button type="button" onMouseDown={(e) => { if (seqDescEdit) e.preventDefault(); }} onClick={(e) => { if (seqDescEdit) { const ta = e.currentTarget.closest('section')?.querySelector('textarea'); if (ta) ta.blur(); else setSeqDescEdit(false); } else setSeqDescEdit(true); }} className="min-h-11 flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-sm font-bold text-blue-700"><Pencil className="w-4 h-4"/> {seqDescEdit ? '書き直しを閉じる' : '書き直す'}</button>}
+      </div>
+      {seqIsMeasure && currentStep.measurementConfig.conditionPreset && ((currentStep.measurementConfig.conditionPreset.params || []).length > 0 || currentStep.measurementConfig.conditionPreset.note) && (
+        <div className="rounded-xl border border-purple-200 bg-purple-50 p-3">
+          <div className="mb-1.5 flex items-center gap-2 text-sm font-bold text-purple-900"><ListChecks className="w-4 h-4"/> 測定条件{lot.appliedStandard?.standardNo ? <span className="rounded bg-purple-200 px-1.5 py-0.5 font-mono text-xs text-purple-900">{lot.appliedStandard.standardNo}{lot.appliedStandard.revision ? ` Rev.${lot.appliedStandard.revision}` : ''}</span> : null}</div>
+          <div className="flex flex-wrap gap-1.5">{(currentStep.measurementConfig.conditionPreset.params || []).map((p, idx) => <span key={idx} className="rounded border border-purple-200 bg-white px-2 py-1 text-sm"><b className="text-purple-800">{p.key}:</b> <span className="font-mono text-slate-800">{p.value}</span></span>)}</div>
+          {currentStep.measurementConfig.conditionPreset.note ? <div className="mt-1.5 whitespace-pre-wrap rounded border border-purple-200 bg-white p-2 text-sm text-purple-900">{currentStep.measurementConfig.conditionPreset.note}</div> : null}
+        </div>
+      )}
+    </div>
+  );
+  const seqFigBody = (big) => big ? (
+    <div className="flex flex-col gap-4">{seqImages.map((src, i) => <img key={i} src={src} alt={`工程の図 ${i + 1}枚目`} className="w-full max-h-[70vh] object-contain rounded-xl bg-slate-50"/>)}</div>
+  ) : (
+    <div className="h-full flex flex-col gap-2">
+      <button type="button" onClick={() => setSeqZoom('f')} aria-label="図を大きく表示" className="flex-1 min-h-40 overflow-hidden rounded-xl bg-slate-50"><img src={seqImages[0]} alt="工程の図" className="h-full w-full object-contain"/></button>
+      {seqImages.length > 1 ? <span className="text-sm text-slate-600">ほかに {seqImages.length - 1}枚（大きく表示で見られます）</span> : null}
+    </div>
+  );
+  const seqInputBody = (big) => seqIsMeasure ? (
+    <div className="flex flex-col gap-3">
+    <MeasurementInputPanel
+      splitLayout={big}
+      config={currentStep.measurementConfig}
+      values={seqMeasValues}
+      onChange={seqMeasureChange}
+      onComplete={seqCurAuto ? null : () => { setSeqZoom(null); handleNext(); }}
+      pastData={lots ? getPastMeasurementData(lots, lot.model, currentStep.id) : []}
+      lot={lot}
+      comboPresets={comboPresets}
+      voiceAssistantActive={voiceEnabled}
+    />
+    {seqChkItems.length > 0 && seqChkBody(big)}
+    </div>
+  ) : seqChkBody(big);
+  const seqChkBody = (big) => (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <span className={`text-sm font-bold ${seqChkOk === seqChkRequired.length ? 'text-emerald-700' : 'text-amber-800'}`}>{seqChkOk === seqChkRequired.length ? '必須は全部チェック済み' : `必須 あと ${seqChkRequired.length - seqChkOk}件`}</span>
+        <div className="flex-1"/>
+        <button type="button" onClick={() => { const next = {}; seqChkItems.forEach((it) => { next[it.id] = true; }); seqChkSave(next); }} className="min-h-11 rounded-xl bg-purple-100 px-3 text-sm font-bold text-purple-800">全てチェック</button>
+      </div>
+      {seqChkItems.map((item) => (
+        <label key={item.id} className={`flex cursor-pointer items-center gap-4 rounded-xl border-2 ${big ? 'p-5' : 'p-3'} ${seqChecked[item.id] ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white'}`}>
+          <input type="checkbox" checked={!!seqChecked[item.id]} onChange={() => seqChkSave({ ...seqChecked, [item.id]: !seqChecked[item.id] })} className={`${big ? 'h-9 w-9' : 'h-7 w-7'} shrink-0 accent-emerald-600`}/>
+          <span className={`flex-1 font-bold ${big ? 'text-2xl' : 'text-base'} ${seqChecked[item.id] ? 'text-emerald-800' : 'text-slate-800'}`}>{item.label || '(無題)'}</span>
+          {item.required === false ? <span className="shrink-0 text-xs font-bold text-slate-500">任意</span> : <span className="shrink-0 rounded bg-rose-100 px-2 py-0.5 text-xs font-bold text-rose-700">必須</span>}
+        </label>
+      ))}
+    </div>
+  );
+
   // --- Sequential Mode UI (Same as before) ---
   return (
     <div data-fs="execution" className="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-4">
@@ -13577,6 +13820,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       {sharedReportModals}
       {/* 📨 P058 連絡・呼出(右下に浮かせる)と送るモーダル */}
       <WorkContactBlock lot={lot} draft={contactDraft} setDraft={setContactDraft} contactEnabled={contactEnabled} contactRequests={contactRequests} contactGroups={contactGroups} contactMembers={contactMembers} chipOptions={complaintOptions || []} from={inspectorName} saveData={saveData} notifyPush={notifyPush} itemMaster={itemMaster} />
+      {seqOrderOpen && <SeqOrderSheet steps={localSteps} grid={seqGrid} qty={totalUnits} title={`${lot.model || ''} ・ ${totalUnits}台 ・ ${localSteps.length}工程`} targetTextOf={(s) => (seqTargetOf(s) ? `${formatTime(seqTargetOf(s))}${localSteps[s]?.lotOnce ? '' : '/台'}` : '—')} onClose={() => setSeqOrderOpen(false)} onCustom={() => { setSeqOrderOpen(false); switchToCustom(); }} />}
       {/* 🚨🚨🚨 画面の「済み」とサーバの中身が食い違っている。**この画面を信じてはいけない**状態。
              2026-08-17 の事故はここが見えなかったので、作業者は最後まで気づけなかった。
              ⚠× で消せないようにする(消せると意味が無い)。押せるのは「送り直す」だけ。 */}
@@ -13658,209 +13902,119 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         </div>
       )}
 
-      <div className="bg-white w-full max-w-4xl h-[85vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-        <div className="bg-slate-800 text-white p-4 flex justify-between items-center shrink-0">
-          <div><h2 className="text-lg font-bold flex items-center gap-2"><button onClick={switchToCustom} className="bg-blue-600 hover:bg-emerald-600 px-2 py-0.5 rounded text-xs transition-colors" title="カスタムモードに切替">順序実行 ⇄</button><span data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70">#{lot.serialNo}</span> {inspectorSelector}</h2><p className="text-xs text-slate-400 mt-1">工程 {currentStepIdx + 1} / {localSteps.length}: {currentStep.title}{totalUnits > 1 ? ` — ${currentUnitIdx + 1}/${totalUnits}台目` : ''}</p></div>
-          <div className="flex items-center gap-2">
+      <div data-exec-shell="seq" className={`bg-white w-full max-w-7xl rounded-2xl shadow-2xl flex flex-col overflow-hidden ${execFold ? 'min-h-full' : 'h-full max-h-full'}`}>
+        <div data-exec-head="seq" className={`bg-slate-800 text-white flex justify-between items-center shrink-0 gap-2 ${execFold ? 'px-2 py-1.5' : 'px-4 py-2'}`}>
+          {/* ⚠左の塊は縮む側(min-w-0)。右の【✕閉じる】を画面の外へ押し出さない。 */}
+          <div className="min-w-0"><h2 className="text-lg font-bold flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 cursor-pointer"><button onClick={(e) => { e.stopPropagation(); switchToCustom(); }} className="bg-blue-600 hover:bg-emerald-600 px-3 rounded-lg text-sm transition-colors shrink-0 min-h-11" title="カスタムモードに切替">順序実行 ⇄</button><span className="truncate min-w-[4rem] max-w-[16rem]" title={`品目コード: ${lot.model || ''}${lot.modelText ? ` ${lot.modelText}` : ''}`} data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70 truncate min-w-[3.5rem] max-w-[8rem]" title={`指図番号: ${lot.serialNo || ''}`}>#{lot.serialNo}</span> {inspectorSelector}</h2></div>
+          <div className="flex items-center gap-2 shrink-0">
             {voiceEnabled && voiceStatus && <div className="bg-blue-500/30 text-blue-100 text-xs px-3 py-1 rounded-full max-w-xs truncate animate-pulse">{voiceStatus}</div>}
-            <button onClick={toggleVoice} className={`p-2 rounded-full transition-all ${voiceEnabled ? 'bg-blue-500 text-white animate-pulse ring-2 ring-blue-300' : 'bg-white/10 text-white/60 hover:bg-white/20'}`} title={voiceEnabled ? '音声OFF' : '音声ON'}>
-              {voiceEnabled ? <Mic className="w-5 h-5"/> : <MicOff className="w-5 h-5"/>}
-            </button>
-            <button onClick={()=>setShowVoiceHelp(true)} className="p-2 rounded-full bg-white/10 text-white/70 hover:bg-white/20 transition-all" title="音声コマンドの使い方"><HelpCircle className="w-5 h-5"/></button>
-            <button onClick={()=>setShowInProgressReport(true)} className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 rounded font-bold text-sm flex items-center gap-1" title="途中経過の成績表を表示 (未入力は空白)"><Printer className="w-4 h-4"/> 成績表</button>
-            <button onClick={handleSafeClose} title="閉じる（作業中なら一時停止・保存）" className="p-2 hover:bg-white/10 rounded-full"><X className="w-6 h-6"/></button>
+            {/* 📱狭い時は枠を1つずつタブで見せるので 画面の型は出さない(見出しの型式を潰さない) */}
+            {!execFold && <SeqPresetSwitch presets={SEQ_PRESETS} value={seqPreset} onChange={seqSetPreset} compact={execFold} note={inspectorWorker ? '画面の型（担当者ごとに覚えます）' : '画面の型（担当を選ぶと覚えます）'} />}
+            {/* 🚨📱 狭い/低い画面では【⋯】へ畳む。⚠消さない。 */}
+            <>
+              <button onClick={toggleVoice} className={`p-2 rounded-full transition-all ${voiceEnabled ? 'bg-blue-500 text-white animate-pulse ring-2 ring-blue-300' : 'bg-white/10 text-white/60 hover:bg-white/20'}`} title={voiceEnabled ? '音声OFF' : '音声ON'}>
+                {voiceEnabled ? <Mic className="w-5 h-5"/> : <MicOff className="w-5 h-5"/>}
+              </button>
+              <button onClick={()=>setShowVoiceHelp(true)} className="p-2 rounded-full bg-white/10 text-white/70 hover:bg-white/20 transition-all" title="音声コマンドの使い方"><HelpCircle className="w-5 h-5"/></button>
+              <button onClick={()=>setShowInProgressReport(true)} className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 rounded font-bold text-sm flex items-center gap-1" title="途中経過の成績表を表示 (未入力は空白)"><Printer className="w-4 h-4"/> 成績表</button>
+            </>
+            {/* ⚠✕だけは畳まない(閉じる手段は何があっても画面に残す) */}
+            <button onClick={handleSafeClose} title="閉じる（作業中なら一時停止・保存）" className="hover:bg-white/10 rounded-full flex items-center justify-center min-w-11 min-h-11"><X className="w-6 h-6"/></button>
           </div>
         </div>
         {voiceHelpModal}
-        <div className="flex-1 flex overflow-hidden">
-          <div className="flex-1 bg-slate-100 p-4 flex flex-col relative overflow-y-auto">
-             {/* === 品質情報共有: この品目コード・この工程で直近こんな気づき/不良が出てます === */}
-             <ModelQualityInfoPanel
-               model={lot.model}
-               stepTitle={currentStep?.title}
-               info={modelQualityInfo}
-               open={showQualityInfoPanel}
-               onToggle={toggleQualityInfoPanel}
-             />
-             {Array.isArray(currentStep.checklistItems) && currentStep.checklistItems.length > 0 && currentStep.type !== 'measurement' ? (() => {
-               // チェックリスト単独工程 (順序実行モード、測定なし)
-               const chkKey = `${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}-checklist`;  // 順序実行も台ごと(ロット1回は0・handleNext の見張りと同じ鍵)
-               const checked = measurementResults[chkKey] || {};
-               const items = currentStep.checklistItems;
-               const requiredItems = items.filter(it => it.required !== false);
-               const requiredOkCount = requiredItems.filter(it => checked[it.id]).length;
-               const allRequiredDone = requiredOkCount === requiredItems.length;
-               const toggle = (itemId) => {
-                 const next = { ...checked, [itemId]: !checked[itemId] };
-                 const newResults = { ...measurementResults, [chkKey]: next };
-                 setMeasurementResults(newResults);
-                 onSave({ measurementResults: newResults });
-               };
-               const checkAll = () => {
-                 const next = {};
-                 items.forEach(it => { next[it.id] = true; });
-                 const newResults = { ...measurementResults, [chkKey]: next };
-                 setMeasurementResults(newResults);
-                 onSave({ measurementResults: newResults });
-               };
-               return (
-                 <div className="flex flex-col gap-3">
-                   <StepSetupChips step={currentStep}/>
-                   {currentStep.description && (
-                     <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-sm text-slate-700 whitespace-pre-wrap">
-                       <div className="text-xs font-bold text-slate-500 mb-1">作業内容 / 注意事項</div>
-                       {currentStep.description}
-                     </div>
-                   )}
-                   <div className="bg-purple-50/50 border-2 border-purple-200 rounded-xl p-4">
-                     <div className="flex items-center justify-between mb-3">
-                       <div className="text-base font-bold text-purple-800 flex items-center gap-2">
-                         <ListChecks className="w-5 h-5"/> 確認チェック ({requiredOkCount}/{requiredItems.length} 必須)
-                       </div>
-                       <button onClick={checkAll} className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1 rounded font-bold">全てチェック</button>
-                     </div>
-                     <div className="space-y-2">
-                       {items.map(item => (
-                         <label key={item.id} className={`flex items-center gap-4 p-4 rounded-lg border-2 cursor-pointer transition-all ${checked[item.id] ? 'bg-emerald-50 border-emerald-300' : 'bg-white border-slate-200 hover:border-purple-300'}`}>
-                           <input type="checkbox" checked={!!checked[item.id]} onChange={() => toggle(item.id)} className="w-7 h-7 accent-emerald-600 shrink-0"/>
-                           <span className={`flex-1 text-base font-bold ${checked[item.id] ? 'text-emerald-700' : 'text-slate-700'}`}>
-                             {item.label || '(無題)'}
-                           </span>
-                           {item.required === false ? (
-                             <span className="text-xs text-slate-400 font-bold shrink-0">任意</span>
-                           ) : (
-                             <span className="text-xs bg-rose-100 text-rose-700 px-2 py-0.5 rounded font-bold shrink-0">必須</span>
-                           )}
-                         </label>
-                       ))}
-                     </div>
-                     <div className={`mt-3 p-3 rounded-lg text-center text-sm font-bold ${allRequiredDone ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-50 text-amber-700'}`}>
-                       {allRequiredDone ? '✓ 全ての必須項目をチェック済 — 次工程へ進めます' : `あと ${requiredItems.length - requiredOkCount} 件 必須項目をチェックしてください`}
-                     </div>
-                   </div>
-                 </div>
-               );
-             })() : currentStep.type === 'measurement' && currentStep.measurementConfig ? (
-               <div className="flex flex-col h-full gap-2">
-                 {/* 詳細・注意事項（測定タイプでも常に表示） */}
-                 <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 shrink-0 max-h-[36%] overflow-y-auto">
-                   <div className="flex items-start gap-3">
-                     {currentStep.images && currentStep.images.length > 0 && (
-                       <div className="relative shrink-0 cursor-pointer" onClick={() => setMeasurementFullscreen(true)}>
-                         <img src={currentStep.images[0]} className="w-24 h-24 object-contain rounded border border-slate-200" alt="参考"/>
-                         {currentStep.images.length > 1 && <span className="absolute bottom-0.5 right-0.5 bg-black/70 text-white text-xs font-bold px-1 rounded">＋{currentStep.images.length - 1}枚</span>}
-                       </div>
-                     )}
-                     <div className="flex-1 min-w-0">
-                       <div className="flex items-center gap-2 mb-1 flex-wrap">
-                         <span className="text-xs font-bold text-slate-500">作業内容 / 注意事項</span>
-                         {currentStep.type === 'danger' && <span className="bg-red-100 text-red-700 text-xs font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5"><AlertOctagon className="w-2.5 h-2.5"/> 危険</span>}
-                         {currentStep.type === 'important' && <span className="bg-amber-100 text-amber-700 text-xs font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5"><AlertTriangle className="w-2.5 h-2.5"/> 重要</span>}
-                         {currentStep.pdfData && <button onClick={() => setShowPdf(true)} className="bg-orange-100 text-orange-700 text-xs font-bold px-1.5 py-0.5 rounded hover:bg-orange-200 flex items-center gap-0.5"><FileText className="w-2.5 h-2.5"/> PDF</button>}
-                       </div>
-                       <div className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">{currentStep.description || <span className="text-slate-400 italic">（詳細・注意事項なし）</span>}</div>
-                     </div>
-                   </div>
-                 </div>
-
-                 {/* 測定条件 (品質規格から焼き付けられた conditionPreset) */}
-                 {currentStep.measurementConfig.conditionPreset && (
-                   ((currentStep.measurementConfig.conditionPreset.params && currentStep.measurementConfig.conditionPreset.params.length > 0) ||
-                    currentStep.measurementConfig.conditionPreset.note) && (
-                     <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 shrink-0">
-                       <div className="flex items-center gap-2 mb-1.5">
-                         <ListChecks className="w-4 h-4 text-purple-700"/>
-                         <span className="text-xs font-bold text-purple-900">測定条件</span>
-                         {lot.appliedStandard?.standardNo && (
-                           <span className="text-xs bg-purple-200 text-purple-800 px-1.5 py-0.5 rounded font-mono">
-                             {lot.appliedStandard.standardNo}{lot.appliedStandard.revision ? ` Rev.${lot.appliedStandard.revision}` : ''}
-                           </span>
-                         )}
-                       </div>
-                       {currentStep.measurementConfig.conditionPreset.params && currentStep.measurementConfig.conditionPreset.params.length > 0 && (
-                         <div className="flex flex-wrap gap-1.5 mb-1.5">
-                           {currentStep.measurementConfig.conditionPreset.params.map((p, idx) => (
-                             <div key={idx} className="bg-white border border-purple-200 rounded px-2 py-1 text-xs">
-                               <span className="font-bold text-purple-700">{p.key}:</span>
-                               <span className="ml-1 font-mono text-slate-700">{p.value}</span>
-                             </div>
-                           ))}
-                         </div>
-                       )}
-                       {currentStep.measurementConfig.conditionPreset.note && (
-                         <div className="text-xs text-purple-900 bg-white border border-purple-200 rounded p-1.5 whitespace-pre-wrap leading-relaxed">
-                           {currentStep.measurementConfig.conditionPreset.note}
-                         </div>
-                       )}
-                     </div>
-                   )
-                 )}
-                 <div className="flex justify-end shrink-0">
-                   <button onClick={() => setMeasurementFullscreen(true)} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm font-black flex items-center gap-2 shadow-md ring-1 ring-teal-400/40 min-h-[40px]">
-                     <Maximize2 className="w-4 h-4"/> 測定画面を最大化
-                   </button>
-                 </div>
-                 <div className="flex-1 min-h-0 overflow-y-auto">
-                   <MeasurementInputPanel
-                     config={currentStep.measurementConfig}
-                     values={measurementResults[`${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}-values`] || measurementResults[`${currentStep.id}-values`] || {}}
-                     onChange={(newValues) => {
-                       const resultVal = calculateMeasurementResult(newValues, currentStep.measurementConfig);
-                       const crossVals = collectCrossStepValues(lot, currentStep.id);
-                       const calcResults = calculateMeasurementResults(newValues, currentStep.measurementConfig, crossVals);
-                       const measData = { values: newValues, result: resultVal, calcResults, timestamp: Date.now() };
-                       // 統一キー方針: ${id}-${unit}-values と ${id}-${unit}
-                       const newResults = { ...measurementResults, [`${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}-values`]: newValues, [`${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}`]: measData };
-                       // 旧キーがあれば互換維持
-                       if (measurementResults[`${currentStep.id}-values`] !== undefined) newResults[`${currentStep.id}-values`] = newValues;
-                       if (measurementResults[`${currentStep.id}-result`] !== undefined) newResults[`${currentStep.id}-result`] = measData;
-                       setMeasurementResults(newResults);
-                       onSave({ measurementResults: newResults });
-                     }}
-                     onComplete={() => handleNext()}
-                     pastData={lots ? getPastMeasurementData(lots, lot.model, currentStep.id) : []}
-                     lot={lot}
-                     comboPresets={comboPresets}
-                     voiceAssistantActive={voiceEnabled}
-                   />
-                 </div>
-               </div>
-             ) : (
-               <>
-                 <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-center overflow-hidden relative">
-                    {currentStep.images && currentStep.images.length > 0 ? ( <img src={currentStep.images[0]} className="w-full h-full object-contain" /> ) : ( <div className="text-slate-300 flex flex-col items-center"><Camera className="w-16 h-16 mb-2"/><span>画像なし</span></div> )}
-                    {currentStep.type === 'danger' && ( <div className="absolute top-4 right-4 bg-red-600 text-white px-4 py-2 rounded-full font-bold shadow-lg animate-pulse flex items-center gap-2"><AlertOctagon className="w-5 h-5"/> 危険</div> )}
-                    {currentStep.type === 'important' && ( <div className="absolute top-4 right-4 bg-amber-500 text-white px-4 py-2 rounded-full font-bold shadow-lg flex items-center gap-2"><AlertTriangle className="w-5 h-5"/> 重要</div> )}
-                 </div>
-                 {currentStep.pdfData && ( <button onClick={() => setShowPdf(true)} className="mt-2 w-full bg-orange-50 text-orange-700 border border-orange-200 py-2 rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-orange-100"><FileText className="w-4 h-4"/> PDF資料を開く</button> )}
-                 <div className="mt-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                   <h3 className="text-sm font-bold text-slate-500 mb-1 flex items-center justify-between">作業内容 / 注意事項 <button onClick={() => { const el = document.getElementById('seq-desc-edit'); if(el) el.style.display = el.style.display === 'none' ? '' : 'none'; }} className="text-xs text-blue-500 hover:text-blue-700"><Pencil className="w-3 h-3 inline"/> 編集</button></h3>
-                   <p className="text-lg text-slate-800 whitespace-pre-wrap">{currentStep.description}</p>
-                   <textarea id="seq-desc-edit" style={{display:'none'}} defaultValue={currentStep.description || ''} className="w-full border rounded p-2 text-sm mt-2 h-24" onBlur={(e) => {
-                     const newSteps = localSteps.map((s,i) => i === currentStepIdx ? {...s, description: e.target.value} : s);
-                     setLocalSteps(newSteps); onSave({ steps: newSteps });
-                   }}/>
-                 </div>
-               </>
-             )}
+        {/* 対応中の不具合など(前は カスタムにしか止める所が無く、順序実行で「対応開始」を押すと止められなかった) */}
+        {seqActiveInts.length > 0 && (
+          <div className="shrink-0 bg-rose-700 text-white px-4 py-1.5 flex items-center gap-3 overflow-x-auto" data-seq="interruptions">
+            <span className="text-sm font-bold shrink-0">対応中</span>
+            {seqActiveInts.map((i) => (
+              <span key={i.id} className="shrink-0 flex items-center gap-2 rounded-full bg-white/15 pl-3 text-sm font-bold">
+                {i.label} <span className="font-mono">{formatTime(i.duration)}</span>
+                <button type="button" onClick={() => stopInterruption(i.id)} className="min-h-11 rounded-full bg-white px-3 text-sm font-black text-rose-800">対応を終える</button>
+              </span>
+            ))}
           </div>
-          <div className="w-80 bg-white border-l border-slate-200 flex flex-col p-6 shrink-0">
-             <div className="text-center mb-8"><div className="text-sm text-slate-500 mb-1">経過時間</div><div className={`text-4xl font-mono font-black ${currentStep.targetTime && elapsed/1000 > currentStep.targetTime ? 'text-rose-500' : 'text-slate-800'}`}>{formatTime(Math.floor(elapsed / 1000))}</div>{currentStep.targetTime > 0 && (<div className="text-xs text-slate-400 mt-1">目標: {formatTime(currentStep.targetTime)}</div>)}</div>
-             <div className="flex-1 flex flex-col gap-4 justify-center">
-               {!isTimerRunning ? ( <button onClick={() => handleStart()} className="w-full py-6 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xl shadow-lg flex items-center justify-center gap-2 transition-all hover:scale-105"><Play className="w-6 h-6 fill-current"/> 作業開始</button> ) : ( <>
-                {totalUnits > 1 && <div className="text-center text-sm font-bold text-blue-600 mb-2">{currentUnitIdx + 1} / {totalUnits} 台目</div>}
-                <button onClick={handleNext} className="w-full py-6 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xl shadow-lg flex items-center justify-center gap-2 transition-all hover:scale-105"><CheckCircle2 className="w-6 h-6"/> {currentUnitIdx < totalUnits - 1 ? `次の台 (${currentUnitIdx + 2}台目)` : currentStepIdx < localSteps.length - 1 ? '次工程へ' : '作業完了'}</button>
-                <button onClick={() => handleCompleteTrigger()} className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex items-center justify-center gap-2"><Check className="w-5 h-5"/> 全作業完了</button></> )}
-             </div>
-             <div className="mt-8 border-t pt-6 space-y-2">
-               <button onClick={()=>setShowDefectModal(true)} className="w-full py-3 border-2 border-rose-100 text-rose-500 hover:bg-rose-50 rounded-xl font-bold flex items-center justify-center gap-2"><AlertTriangle className="w-5 h-5"/> 不具合報告</button>
-               <button onClick={()=>setShowComplaintModal(true)} className="w-full py-2 border-2 border-purple-100 text-purple-500 hover:bg-purple-50 rounded-xl font-bold flex items-center justify-center gap-2 text-sm"><Megaphone className="w-4 h-4"/> 軽微不良報告</button>
-               <button onClick={()=>setShowImproveModal(true)} className="w-full py-2 border-2 border-indigo-100 text-indigo-500 hover:bg-indigo-50 rounded-xl font-bold flex items-center justify-center gap-2 text-sm"><Lightbulb className="w-4 h-4"/> 気づき・改善（工程の提案）</button>
-               <button onClick={toggleBreak} className={`w-full py-3 ${isOnBreak ? 'bg-emerald-500 text-white animate-pulse' : 'border-2 border-amber-100 text-amber-500 hover:bg-amber-50'} rounded-xl font-bold flex items-center justify-center gap-2`} title={isOnBreak ? '作業時間の計測を再開' : '作業時間の計測を一時停止'}>
-                 {isOnBreak ? <><Play className="w-5 h-5"/> 再開</> : <><Pause className="w-5 h-5"/> 中断</>}
-               </button>
-             </div>
+        )}
+        <SeqTimeBand name={currentStep.title || ''} chips={seqChips} timeLabel={seqCurAuto ? '自動運転' : 'この作業の経過'}
+          elapsedText={seqWaiting ? formatTime(Math.max(0, seqAutoLeft)) : seqCurAuto ? formatTime(0) : formatTime(seqClock.unitSec)}
+          targetText={seqTarget > 0 ? formatTime(seqTarget) : ''} pct={seqCurAuto ? (seqWaiting && seqTarget > 0 ? Math.round((1 - Math.max(0, seqAutoLeft) / seqTarget) * 100) : 0) : Math.round(seqRatio * 100)}
+          tone={seqTone} note={seqTimeNote} compact={execFold}
+          lotLeftText={`残り ${seqFmtLeft(seqRemain.sec)}`} lotPct={seqLotPct}
+          lotNote={`あと ${seqRemain.left}件の作業${seqRemain.unknown ? `（目標の無い ${seqRemain.unknown}件は含まず）` : ''} ・ 経過 ${formatTime(Math.floor(elapsed / 1000))}`} />
+        <SeqOrderStrip steps={localSteps} grid={seqGrid} curS={currentStepIdx} onOpen={() => setSeqOrderOpen(true)} compact={execFold} />
+        <div className={`flex-1 flex min-h-0 ${execFold ? 'flex-col' : ''}`}>
+          {/* ⚠paddingBottom: 🎬小窓は左下。開いている間だけ 末尾の操作に届くよう余白を足す。 */}
+          <div className={`flex-1 min-w-0 min-h-0 bg-slate-100 relative flex flex-col gap-3 ${execFold ? 'p-2' : 'p-4'}`}>
+            <ModelQualityInfoPanel model={lot.model} stepTitle={currentStep?.title} info={modelQualityInfo} open={showQualityInfoPanel} onToggle={toggleQualityInfoPanel} />
+            {seqWaiting ? (<>
+              {/* 🚶 掛け持ち案内(順序実行でも出す。前は同じロットの中だけ見ていた)。⚠待ちカードの上に置く: 下に置くと右下の「別エリアの自動測定」の小窓が「移る」に重なる(写しで確認) */}
+              {juggle && juggle.cands.length > 0 && (
+                <JuggleGuide cands={juggle.cands} remainingSec={juggle.remainingSec} runningTitle={juggle.runningAuto.step.title || ''} unitIdx={juggle.runningAuto.unitIdx} onGo={switchToLot} blocked={juggleBlocked} compact={execFold} />
+              )}
+              <SeqWaitCard title={currentStep.title || ''} unitLabel={seqUnitOf(currentStepIdx, currentUnitIdx)}
+                leftText={formatTime(Math.max(0, seqAutoLeft))} overText={seqAutoLeft < 0 ? formatTime(-seqAutoLeft) : ''}
+                pct={seqTarget > 0 ? Math.round((1 - Math.max(0, seqAutoLeft) / seqTarget) * 100) : 0}
+                suggestion={seqSuggestText} onSuggest={() => seqSuggestMove && seqGoTo(seqSuggestMove.s, seqSuggestMove.u)}
+                noSuggestion={seqSameAutoBusy || seqMoreSameAuto ? '同じ工程の自動運転が動いています。機械が空くまで待ちます' : 'このロットの中で いま手でできる作業はありません。終わるまで待ちます'}
+                onAutoDone={seqAutoDoneByHand} autoDoneLabel={autoEndSecForStep(currentStep) > 0 ? '予定より早く終わった（手で終える）' : '自動運転が終わった（手で終える）'}
+                alsoLabel={seqAlsoMove ? `${seqUnitOf(seqAlsoMove.s, seqAlsoMove.u)}の自動運転も 今始める（機械が空いている時）` : ''} onAlso={() => seqAlsoMove && seqGoTo(seqAlsoMove.s, seqAlsoMove.u)} />
+            </>) : execFold ? (
+              <>
+                <div role="group" aria-label="表示する枠" className="flex gap-1 rounded-xl bg-slate-200 p-1">
+                  {seqZoomTabs.map((t) => <button key={t.key} type="button" aria-pressed={seqFoldOn === t.key} onClick={() => setSeqFoldTab(t.key)} className={`min-h-11 flex-1 rounded-lg text-sm font-black ${seqFoldOn === t.key ? 'bg-white text-slate-900' : 'text-slate-600'}`}>{t.label}</button>)}
+                </div>
+                {seqFoldOn === 'd' && <SeqPanel title="作業内容・注意点" onZoom={() => setSeqZoom('d')}>{seqDescBody(false)}</SeqPanel>}
+                {seqFoldOn === 'f' && <SeqPanel title="図・画像" onZoom={() => setSeqZoom('f')}>{seqFigBody(false)}</SeqPanel>}
+                {seqFoldOn === 'm' && <SeqPanel title={`${seqIsMeasure ? '測定' : '確認チェック'} ${seqUnitOf(currentStepIdx, currentUnitIdx)}`} accent onZoom={() => setSeqZoom('m')}>{seqInputBody(false)}</SeqPanel>}
+              </>
+            ) : (
+              <div className="flex-1 min-h-0 grid gap-3.5" data-seq="grid" style={{ gridTemplateColumns: seqLayout.cols, gridTemplateRows: seqLayout.rows, gridTemplateAreas: seqLayout.areas }}>
+                <SeqPanel area="d" title="作業内容・注意点" onZoom={() => setSeqZoom('d')}>{seqDescBody(false)}</SeqPanel>
+                {seqLayout.panels.includes('f') && <SeqPanel area="f" title="図・画像" onZoom={() => setSeqZoom('f')}>{seqFigBody(false)}</SeqPanel>}
+                {seqLayout.panels.includes('m') && <SeqPanel area="m" title={`${seqIsMeasure ? '測定' : '確認チェック'} ${seqUnitOf(currentStepIdx, currentUnitIdx)}`} accent onZoom={() => setSeqZoom('m')}>{seqInputBody(false)}</SeqPanel>}
+                {seqLayout.panels.includes('n') && <SeqPanel area="n" title="この後の流れ"><SeqUpcoming items={seqUpcoming} /></SeqPanel>}
+              </div>
+            )}
+            {seqZoomOn && (
+              <SeqZoom tabs={seqZoomTabs} active={seqZoomOn} onPick={setSeqZoom} onPrev={() => seqZoomStep(-1)} onNext={() => seqZoomStep(1)} onClose={() => setSeqZoom(null)}>
+                {seqZoomOn === 'd' && seqDescBody(true)}
+                {seqZoomOn === 'f' && seqFigBody(true)}
+                {seqZoomOn === 'm' && seqInputBody(true)}
+              </SeqZoom>
+            )}
           </div>
+          {/* 右の操作。⚠📱狭い時は一番上(完了が画面の外に出ない)。⚠列ごとスクロールでき、中断は足元に残す。 */}
+          <aside aria-label="操作" data-seq="actions" className={`bg-white border-slate-200 flex flex-col min-h-0 ${execFold ? 'w-full border-b order-first' : 'w-80 border-l shrink-0'}`}>
+            <div className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2.5">
+              <div className="rounded-2xl border border-slate-200 px-3.5 py-2.5 flex flex-col gap-0.5">
+                <span className="text-xs font-bold tracking-wider text-slate-500">{seqNextCard.head}</span>
+                <span className="text-base font-black text-slate-900 leading-snug">{seqNextCard.name}</span>
+                {seqNextCard.sub ? <span className="text-sm text-slate-600">{seqNextCard.sub}</span> : null}
+              </div>
+              {seqPrimary ? (
+                <button type="button" onClick={seqPrimary.onClick} data-seq="primary" className={`w-full min-h-20 rounded-2xl text-white text-xl font-black shadow-lg flex items-center justify-center gap-2 px-3 ${seqPrimary.cls}`}>
+                  {seqPrimary.icon === 'play' ? <Play className="w-6 h-6 fill-current"/> : seqPrimary.icon === 'go' ? <ChevronRight className="w-7 h-7"/> : <CheckCircle2 className="w-6 h-6"/>}
+                  <span>{seqPrimary.label}</span>
+                </button>
+              ) : <div className="w-full min-h-20 rounded-2xl border-2 border-violet-200 bg-violet-50 text-violet-800 text-base font-black flex items-center justify-center text-center px-3">自動運転が終わるのを待っています</div>}
+              {/* ⚠onClick={handleCompleteTrigger} と直に渡すと、クリックイベントが第1引数(skipTimeCheck)に入って
+                  測定時間の異常チェックを素通りする。必ず引数なしで呼ぶ。 */}
+              {isTimerRunning && <button type="button" onClick={() => handleCompleteTrigger()} className="w-full min-h-11 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-bold flex items-center justify-center gap-2"><Check className="w-5 h-5"/> 全作業完了</button>}
+              <button type="button" onClick={() => setSeqOrderOpen(true)} className="w-full min-h-11 rounded-xl border border-slate-300 bg-white text-slate-800 font-bold">全工程の順番を見る</button>
+              <div className="flex-1"/>
+              <button type="button" onClick={()=>setShowDefectModal(true)} className="w-full min-h-11 border-2 border-rose-200 text-rose-700 hover:bg-rose-50 rounded-xl font-bold flex items-center justify-center gap-2"><AlertTriangle className="w-5 h-5"/> 不具合報告</button>
+              <div className="flex gap-2">
+                <button type="button" onClick={()=>setShowComplaintModal(true)} className="flex-1 min-h-11 border-2 border-purple-200 text-purple-700 hover:bg-purple-50 rounded-xl font-bold text-sm flex items-center justify-center gap-1"><Megaphone className="w-4 h-4"/> 軽微不良</button>
+                <button type="button" onClick={()=>setShowImproveModal(true)} className="flex-1 min-h-11 border-2 border-indigo-200 text-indigo-700 hover:bg-indigo-50 rounded-xl font-bold text-sm flex items-center justify-center gap-1"><Lightbulb className="w-4 h-4"/> 気づき・改善</button>
+              </div>
+            </div>
+            {/* 足元(スクロールしない)。中断は休憩のたびに押すので 常に見える所に置く。 */}
+            <div className="shrink-0 border-t border-slate-200 px-3 py-2 bg-white">
+              <button type="button" onClick={toggleBreak} className={`w-full min-h-12 ${isOnBreak ? 'bg-emerald-600 text-white animate-pulse' : 'bg-amber-50 border-2 border-amber-200 text-amber-800 hover:bg-amber-100'} rounded-xl font-bold flex items-center justify-center gap-2`} title={isOnBreak ? '作業時間の計測を再開' : '作業時間の計測を一時停止'}>
+                {isOnBreak ? <><Play className="w-5 h-5"/> 再開</> : <><Pause className="w-5 h-5"/> 中断</>}
+              </button>
+            </div>
+          </aside>
         </div>
         {/* Voice Log Panel (Sequential) - collapsible */}
         {voiceEnabled && voiceLog.length > 0 && (
@@ -13886,7 +14040,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             <button onClick={handleUndo} className="px-4 py-1 bg-white text-amber-700 rounded font-bold">取り消し</button>
           </div>
         )}
-        <div className="h-2 bg-slate-100"><div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${((currentStepIdx + (lot.status==='completed'?1:0)) / localSteps.length) * 100}%` }} /></div>
+        <div className="h-2 bg-slate-100"><div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${lot.status === 'completed' ? 100 : seqLotPct}%` }} /></div>
       </div>
 
       {/* 中断中 (一時停止) のフルスクリーンオーバーレイ — 元のシンプル版 (タップで再開) */}
