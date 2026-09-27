@@ -143,6 +143,7 @@ const PAIRS = [
   { file: 'domain/workClock.js', product: 'product-inspection-app/src/domain/workClock.js', md5: '67253d9ef3e0b53325ca6f146cf89049' },
   { file: 'domain/workSessions.js', product: 'product-inspection-app/src/domain/workSessions.js', md5: 'e03d0ca73c84520b58f4760bbc2dd192' },
   { file: 'domain/workerDailyActual.js', product: 'product-inspection-app/src/domain/workerDailyActual.js', md5: 'c2f19376c2a6608a1e4e1eb87ca091ea' },
+  { file: 'ShrinkConfirm.jsx', product: 'product-inspection-app/src/ShrinkConfirm.jsx', md5: 'd7ca21dec7173fad2662b68a54a4bf0a' },
   { file: 'domain/workerPlan.js', product: 'product-inspection-app/src/domain/workerPlan.js', md5: '813226cf8606115a270a27cf07181b5f' },
   // X8 2026-09-27: 直工(検査以外の直接作業)の時間取り
   { file: 'domain/directWork.js', product: 'product-inspection-app/src/domain/directWork.js', md5: '7bcf6e2788af15a79d158ba3a9500e8b' },

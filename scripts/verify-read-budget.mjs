@@ -323,7 +323,8 @@ export const STARTUP = {
     //     どちらへ外れているか誰も言えなくなる(checkStartupFresh が赤で教えてくれた)。
     lazy: [['parts-inspection-v1', 'indirectWork', '日次集計/引き継ぎ/過去が要る画面を開いた時(src/App.jsx 26985)'],
            ['parts-inspection-v1', 'improvements', '分析タブ・作業最適化タブを開いた時(src/App.jsx 26989)'],
-           ['parts-inspection-v1', 'logs', '分析タブを開いた時(src/App.jsx 26993)']],
+           ['parts-inspection-v1', 'logs', '分析タブを開いた時(src/App.jsx 26993)'],
+           ['parts-inspection-v1', 'minor_reports', '分析タブ・台帳の窓を開いた時(useLazyCollection)']],
     why: 'src/App.jsx の unsubs 配列。名前空間は実測0件',
   },
 };

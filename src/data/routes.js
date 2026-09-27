@@ -139,7 +139,7 @@ export const COLLECTION_APPS = Object.freeze({
   skip_evidence: ['final'],
   logs: ['product', 'parts', 'overview'],
   strict_mode_history: ['product', 'parts', 'overview'],
-  minor_reports: ['product'],
+  minor_reports: ['product', 'parts'],
   controllers: ['product'],
   motor_ledger: ['product'],
   order_motors: ['product'],

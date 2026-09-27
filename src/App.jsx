@@ -104,6 +104,29 @@ import {
 } from './domain/noteImages.js';
 // 💾 「保存してから画面を閉じてよいか」(2026-08-17 の是正。製品検査と同一ファイル)
 import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './domain/settleSave.js';
+// 改善カルテの効果判定(製品と同じ純関数・不具合率の分母=検査機会(台数))
+import {
+  PDCA_KPIS, PDCA_MIN_N, PDCA_THRESHOLD_PCT, PDCA_STALE_DAYS,
+  pdcaWindowDays, pdcaKpiValue, computeVerdict
+} from './domain/goal/verdictEngine.js';
+// 「効果あり」で閉じてよいかの門・30日定着確認・品質ガード(製品と同じ純関数)
+import {
+  SUSTAIN_DAYS, qualityGuardOf, canCloseEffective, sustainCheckDue, sustainVerdict, cardStageOf
+} from './domain/goal/effectiveGate.js';
+import { SjhGuide } from './SjhGuide.jsx';
+// 中断(不具合・軽微不良・気づき)は1件ずつ鍵つきで書く(製品と同じ純関数)
+import { intKeyOf, withInterruptionLog, intWritePatch, intDeletePatch, stopIntEntry, mergePendingInts, dropSettledPending } from './domain/interruptionLog.js';
+import { sjhInsert } from './sjhText.js';
+import ReworkKindEditor from './ReworkKindEditor.jsx';
+import ReworkAnalysisPanel from './ReworkAnalysisPanel.jsx';
+import MinorReportLedgerModal from './MinorReportLedgerModal.jsx';
+// 📷 縮めた事を撮った瞬間に見せて確かめる(製品と同じ画面・同じ純関数)
+import { ShrinkConfirm } from './ShrinkConfirm.jsx';
+import { budgetOf, laddersFor, dataUrlBytes, pickStep, shouldConfirm, shrinkNote } from './domain/imageBudget.js';
+// 不良・軽微不良・気づきを「どこから数えるか」の1本化(製品と同じ純関数・検査中/NG判定/台帳)
+import { collectQualityRows, filterQuality, sourceNote } from './domain/qualitySources.js';
+import { UNKNOWN_KIND, UNKNOWN_CAUSE } from './domain/reworkAnalysis.js';
+import { DEFAULT_REWORK_KIND_OPTIONS } from './reworkKinds.js';
 // ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
@@ -589,24 +612,40 @@ const _resizeOnce = (file, MAX, Q) => new Promise((resolve) => {
 //   ⚠ **1段目(いままでの設定)で上限内なら、そのまま返る = 既存の見え方は1pxも変わらない。**
 //     段を降りるのは「今までなら重すぎた写真」だけ。
 //   ⚠縮める場所はここ1か所だけにする。カメラ側で先に縮めるとJPEGが二重に掛かって汚くなる。
-const IMG_BYTE_BUDGET = 260_000; // 1枚あたりの上限(base64込み)。1MBのロットに写真が積める枚数で決めた。
-const dataUrlBytes = (s) => (typeof s === 'string' ? s.length : 0);
+const IMG_BYTE_BUDGET = 260_000; // 部品の既定の上限(base64込み)。写真の別置き先が無いので、1MBのロットに写真が積める枚数で決めた。
+// ⚙ settings.imageBudget[用途] があればそれ(budgetOf)、無ければ部品の既定 260KB。⚠純関数(imageBudget.js)は製品のまま変えない。
+let _lastShrink = null;
+const lastShrinkInfo = () => _lastShrink;
+let SETTINGS_FOR_BUDGET = null;
+const syncImageBudget = (settings) => { SETTINGS_FOR_BUDGET = settings || null; };
+const partsBudgetOf = (use) => {
+  const cfg = SETTINGS_FOR_BUDGET && SETTINGS_FOR_BUDGET.imageBudget;
+  return (cfg && cfg[use || 'default'] != null) ? budgetOf(SETTINGS_FOR_BUDGET, use || 'default') : IMG_BYTE_BUDGET;
+};
 const resizeImage = async (file, typeOrOpts = 'default') => {
-  const o = (typeof typeOrOpts === 'object') ? typeOrOpts : (IMG_QUALITY[typeOrOpts] || IMG_QUALITY.default);
-  const MAX = o.maxDim || 900; const Q = (typeof o.quality === 'number') ? o.quality : 0.6;
+  const isObj = (typeof typeOrOpts === 'object');
+  const use = isObj ? '' : typeOrOpts;
+  const base = isObj ? typeOrOpts : (IMG_QUALITY[typeOrOpts] || IMG_QUALITY.default);
+  const budget = partsBudgetOf(use);
   // 段。1段目は **今までと同じ設定**。以降は px と画質を少しずつ落とす。
-  const steps = [
-    { maxDim: MAX,                    quality: Q },
-    { maxDim: Math.round(MAX * 0.85), quality: Math.max(0.4, Q - 0.1) },
-    { maxDim: Math.round(MAX * 0.7),  quality: Math.max(0.35, Q - 0.15) },
-    { maxDim: Math.round(MAX * 0.55), quality: 0.35 },
-  ];
+  const steps = laddersFor({ maxDim: base.maxDim || 900, quality: (typeof base.quality === 'number') ? base.quality : 0.6 });
+  const sizes = [];
   let out = '';
-  for (const s of steps) {
-    out = await _resizeOnce(file, s.maxDim, s.quality);
-    if (!out) break;                              // 読めなかった時はこれ以上試さない
-    if (dataUrlBytes(out) <= IMG_BYTE_BUDGET) break; // ⚠収まったらそこで止める(必要以上に落とさない)
+  for (let i = 0; i < steps.length; i++) {
+    out = await _resizeOnce(file, steps[i].maxDim, steps[i].quality);
+    sizes.push(dataUrlBytes(out));
+    if (!out) break;                 // 読めなかった時はこれ以上試さない
+    if (sizes[i] <= budget) break;   // ⚠収まったらそこで止める(必要以上に落とさない)
   }
+  const picked = pickStep(sizes, budget);
+  if (out && picked.index !== sizes.length - 1) out = await _resizeOnce(file, steps[picked.index].maxDim, steps[picked.index].quality);
+  const before = Number(file && file.size) || 0;
+  const after = dataUrlBytes(out);
+  _lastShrink = {
+    use, stepIndex: picked.index, withinBudget: picked.withinBudget, budget, before, after,
+    note: shrinkNote({ before, after, stepIndex: picked.index, withinBudget: picked.withinBudget, budget }),
+    confirm: !!out && shouldConfirm(picked.index),
+  };
   return out;
 };
 const getBase64 = (file) => new Promise((resolve) => { const r = new FileReader(); r.readAsDataURL(file); r.onload = () => resolve(r.result); r.onerror = () => resolve(""); });
@@ -662,12 +701,9 @@ const toMsAny = (raw) => {
 // CSVセルのエスケープ。カンマ/引用符/改行を含む値(品名・指図名のユーザー入力や toLocaleString のカンマ)を
 // 正しく引用し、列ずれ・破損を防ぐ。RFC4180準拠(" は "" にエスケープ)。
 const csvCell = (v) => { const s = String(v ?? ''); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-const PDCA_MIN_N = 5;            // 効果判定に必要な片側の最小標本数
-const PDCA_THRESHOLD_PCT = 5;    // 改善/悪化と判定する変化率しきい値(%)
-const PDCA_STALE_DAYS = 14;      // 対策実施から効果が出ない/悪化を「放置」と見なす日数
 const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGroups = [], startMs = 0, endMs = Infinity } = {}) => {
   const samples = []; // {d, tgt}
-  let defectCount = 0;
+  let defectCount = 0, unitsSeen = 0, lotsSeen = 0;
   const titlePart = stepKey ? (stepKey.includes('_') ? stepKey.slice(stepKey.indexOf('_') + 1) : stepKey) : null;
   (lots || []).forEach(l => {
     if (!l) return;
@@ -683,8 +719,10 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
     // 時間統計の標本は完了ロットのみ (作業中の途中durationを混ぜない)
     if (l.status !== 'completed' && l.location !== 'completed') return;
     const lotMs = toMsAny(l.completedAt) || toMsAny(l.updatedAt);
+    let lotHasStep = !stepKey; // 検査機会(unitsSeen)の分母: この窓・このフィルタに該当するロットの台数
     (l.steps || []).forEach((step, idx) => {
       if (stepKey && targetTimeStepKey(step) !== stepKey) return;
+      lotHasStep = true;
       const effTarget = getEffectiveTargetTime(step, l.model, customTargetTimes, modelGroups);
       const keys = step.lotOnce
         ? lotOnceKeysOf(l.tasks || {}, step)
@@ -700,6 +738,8 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
         samples.push({ d, tgt: effTarget });
       });
     });
+    // 検査機会: 窓内に完了した該当ロットの台数(抜取でスキップした台も分母に入る)
+    if (lotHasStep && lotMs != null && lotMs >= startMs && lotMs <= endMs) { lotsSeen++; unitsSeen += (l.quantity || 1); }
   });
   const ds = samples.map(x => x.d).sort((a, b) => a - b);
   const n = ds.length;
@@ -715,7 +755,7 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
     cv: mean > 0 ? Math.round((sigma / mean) * 1000) / 1000 : 0,
     min: n ? ds[0] : 0, max: n ? ds[n - 1] : 0,
     achievementRate: sum > 0 && sumTgt > 0 ? Math.round((sumTgt / sum) * 1000) / 10 : null,
-    within, sumTgt, sumAct: sum, defectCount,
+    within, sumTgt, sumAct: sum, defectCount, unitsSeen, lotsSeen,
     avgTarget: n ? Math.round(sumTgt / n) : 0, // 1台(1回)あたりの実効目標秒 (儲けどころの短縮余地算出に使う)
     startMs, endMs, days: (isFinite(endMs) && startMs > 0) ? Math.max(1, (endMs - startMs) / 86400000) : null,
   };
@@ -967,49 +1007,6 @@ const histogramOf = (durations, bins = 8) => {
   const buckets = Array.from({ length: bins }, (_, i) => ({ lo: min + i * width, hi: min + (i + 1) * width, count: 0 }));
   durations.forEach(d => { let bi = Math.floor((d - min) / width); if (bi >= bins) bi = bins - 1; if (bi < 0) bi = 0; buckets[bi].count++; });
   return { buckets, min, max, width };
-};
-// 統計オブジェクトの窓日数 (古いカルテ等で days 欠落時は startMs/endMs から復元)
-const pdcaWindowDays = (stat) => {
-  if (!stat) return 1;
-  if (stat.days) return stat.days;
-  if (stat.startMs != null && stat.endMs != null && isFinite(stat.endMs)) return Math.max(1, (stat.endMs - stat.startMs) / 86400000);
-  return 1;
-};
-// 効果判定: KPIに応じて 改善/悪化/横ばい/標本不足 を返す。時間/σ/不具合=小さいほど良い、達成率=大きいほど良い。
-const PDCA_KPIS = { time: '工程時間(中央値)', sigma: 'ばらつき(σ)', achievement: '達成率', defectRate: '不具合件数' };
-const pdcaKpiValue = (stat, kpi) => {
-  if (!stat) return null;
-  if (kpi === 'achievement') return stat.achievementRate;
-  if (kpi === 'sigma') return stat.sigma;
-  if (kpi === 'defectRate') return stat.defectCount;
-  return stat.median || stat.mean;
-};
-const computeVerdict = (baseline, after, kpi = 'time') => {
-  const label = PDCA_KPIS[kpi] || PDCA_KPIS.time;
-  const higherBetter = kpi === 'achievement';
-  if (!baseline || !after) return { result: 'insufficient', reason: '測定データなし', label };
-  const nB = baseline.n || 0, nA = after.n || 0;
-  const bv = pdcaKpiValue(baseline, kpi), av = pdcaKpiValue(after, kpi);
-  // 件数系(不具合)以外は片側5標本以上を要求
-  if (kpi !== 'defectRate' && (nB < PDCA_MIN_N || nA < PDCA_MIN_N)) {
-    return { result: 'insufficient', reason: `標本不足(前${nB}/後${nA}件・各${PDCA_MIN_N}件以上必要)`, label, nBefore: nB, nAfter: nA, beforeVal: bv, afterVal: av, higherBetter };
-  }
-  // 不具合件数: 窓長(日数)が違う前後を「1日あたり件数」で比較する(90日 vs 14日 を生比較しない)。ベースライン0件でも増加(0→N)は悪化と判定。
-  if (kpi === 'defectRate') {
-    if (bv == null || av == null) return { result: 'insufficient', reason: '比較値が不足', label, nBefore: nB, nAfter: nA, beforeVal: bv, afterVal: av, higherBetter };
-    const bRate = bv / pdcaWindowDays(baseline), aRate = av / pdcaWindowDays(after);
-    const deltaPct = bRate > 0 ? Math.round(((aRate - bRate) / bRate) * 1000) / 10 : null;
-    let r;
-    if (deltaPct == null) r = aRate > 0 ? 'worse' : 'flat';
-    else r = deltaPct <= -PDCA_THRESHOLD_PCT ? 'improved' : (deltaPct >= PDCA_THRESHOLD_PCT ? 'worse' : 'flat');
-    return { result: r, deltaPct, label, nBefore: nB, nAfter: nA, beforeVal: bv, afterVal: av, higherBetter };
-  }
-  if (bv == null || av == null || bv === 0) return { result: 'insufficient', reason: '比較値が不足', label, nBefore: nB, nAfter: nA, beforeVal: bv, afterVal: av, higherBetter };
-  const deltaPct = ((av - bv) / Math.abs(bv)) * 100;
-  let result;
-  if (higherBetter) result = deltaPct >= PDCA_THRESHOLD_PCT ? 'improved' : (deltaPct <= -PDCA_THRESHOLD_PCT ? 'worse' : 'flat');
-  else result = deltaPct <= -PDCA_THRESHOLD_PCT ? 'improved' : (deltaPct >= PDCA_THRESHOLD_PCT ? 'worse' : 'flat');
-  return { result, deltaPct: Math.round(deltaPct * 10) / 10, label, nBefore: nB, nAfter: nA, beforeVal: bv, afterVal: av, higherBetter };
 };
 // 改善テーマ候補: 完了ロットに現れる 品目×工程 を列挙 (カルテ化の入口・乖離候補算出に使う)
 const enumerateModelSteps = (lots) => {
@@ -7622,6 +7619,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const [checklistFullscreen, setChecklistFullscreen] = useState(false);
   const [detailsFullscreen, setDetailsFullscreen] = useState(false);
   const [showDefectModal, setShowDefectModal] = useState(false);
+  const [shrinkAsk, setShrinkAsk] = useState(null); // 📷 縮めた写真を見せて確かめる { src, info, label, onOk, onRetake }
+
   const [defectLabel, setDefectLabel] = useState('');
   const [defectCauseProcess, setDefectCauseProcess] = useState('');
   const [defectPhotos, setDefectPhotos] = useState([]);
@@ -11287,7 +11286,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-slate-500 mb-1">詳細内容</label>
-                        <textarea className="w-full border rounded-lg p-2" rows={3} placeholder="不良の内容を入力（工程改善の提案は「気づき・改善」へ）..." value={complaintLabel} onChange={e=>setComplaintLabel(e.target.value)}/>
+                        <textarea className="w-full border rounded-lg p-2" rows={4} placeholder="状況: 何があったか / 対処: どうしたか / 判断: 最後どうなったか（工程改善の提案は「気づき・改善」へ）" value={complaintLabel} onChange={e=>setComplaintLabel(e.target.value)}/>
+                        <SjhGuide onInsert={() => setComplaintLabel(v => sjhInsert(v))} />
                       </div>
                     </div>
                     <div className="mt-4 p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-500">
@@ -11406,6 +11406,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             ⏰ {worstOverrun.over ? '目標時間オーバー！' : 'まもなく目標時間'}：{worstOverrun.title}{worstOverrun.isLot ? '' : ` #${worstOverrun.u + 1}`} — {formatTime(worstOverrun.sec)} / 目標{formatTime(worstOverrun.tgt)}{myOverruns.length > 1 ? ` （他${myOverruns.length - 1}件）` : ''}
           </div>
         )}
+        {/* 📷 縮めた写真を見せて確かめる(段が下がった時だけ) */}
+        <ShrinkConfirm open={!!shrinkAsk} src={shrinkAsk?.src} info={shrinkAsk?.info} label={shrinkAsk?.label} onOk={() => shrinkAsk?.onOk?.()} onRetake={() => shrinkAsk?.onRetake?.()} />
         {showDefectModal && (
             <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
@@ -11436,7 +11438,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                           <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
                             <Camera className="w-5 h-5"/>
                           </button>
-                          <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); setDefectPhotos(prev=>[...prev, img]);} e.target.value='';}}/>
+                          <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); const info=lastShrinkInfo(); if(info&&info.confirm){setShrinkAsk({src:img,info,label:'不具合の写真',onOk:()=>{setDefectPhotos(prev=>[...prev, img]); setShrinkAsk(null);},onRetake:()=>setShrinkAsk(null)});} else {setDefectPhotos(prev=>[...prev, img]);}} e.target.value='';}}/>
                         </div>
                       </div>
                     </div>
@@ -12909,6 +12911,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         </div>
       ) : null}
 
+      {/* 📷 縮めた写真を見せて確かめる(段が下がった時だけ) */}
+      <ShrinkConfirm open={!!shrinkAsk} src={shrinkAsk?.src} info={shrinkAsk?.info} label={shrinkAsk?.label} onOk={() => shrinkAsk?.onOk?.()} onRetake={() => shrinkAsk?.onRetake?.()} />
       {showDefectModal && (
         <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
@@ -12939,7 +12943,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                   <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
                     <Camera className="w-5 h-5"/>
                   </button>
-                  <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); setDefectPhotos(prev=>[...prev, img]);} e.target.value='';}}/>
+                  <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); const info=lastShrinkInfo(); if(info&&info.confirm){setShrinkAsk({src:img,info,label:'不具合の写真',onOk:()=>{setDefectPhotos(prev=>[...prev, img]); setShrinkAsk(null);},onRetake:()=>setShrinkAsk(null)});} else {setDefectPhotos(prev=>[...prev, img]);}} e.target.value='';}}/>
                 </div>
               </div>
             </div>
@@ -16214,11 +16218,11 @@ const EXPORT_SOURCES = {
     { k: 'leadDays', label: 'リードタイム(日)' }, { k: 'workers', label: '作業者' },
   ]},
   defect: { label: '不具合', cols: [
-    { k: 'date', label: '日時' }, { k: 'orderNo', label: '指図No' }, { k: 'model', label: '品目コード' },
+    { k: 'date', label: '日時' }, { k: 'src', label: '出所' }, { k: 'orderNo', label: '指図No' }, { k: 'model', label: '品目コード' },
     { k: 'item', label: '項目' }, { k: 'content', label: '内容' }, { k: 'cause', label: '原因工程' }, { k: 'worker', label: '報告者' },
   ]},
   complaint: { label: '軽微不良・気づき', cols: [
-    { k: 'date', label: '日時' }, { k: 'kind', label: '種別' }, { k: 'orderNo', label: '指図No' }, { k: 'model', label: '品目コード' },
+    { k: 'date', label: '日時' }, { k: 'kind', label: '種別' }, { k: 'src', label: '出所' }, { k: 'orderNo', label: '指図No' }, { k: 'model', label: '品目コード' },
     { k: 'item', label: '項目' }, { k: 'content', label: '内容' }, { k: 'worker', label: '報告者' },
   ]},
   worktime: { label: '作業時間（工程×台数）', cols: [
@@ -16234,7 +16238,7 @@ const EXPORT_SOURCES = {
   ]},
 };
 
-const DataExportCenter = ({ lots = [], workers = [], indirectWork = [], settings = {}, currentUserName = '', saveSettings = null }) => {
+const DataExportCenter = ({ lots = [], workers = [], indirectWork = [], settings = {}, currentUserName = '', saveSettings = null, minorReports = [] }) => {
   const toMs = (raw) => { if (raw == null) return null; if (typeof raw === 'number') return raw; if (raw.seconds) return raw.seconds * 1000; const t = new Date(raw).getTime(); return isNaN(t) ? null : t; };
   const wname = (idOrName) => (workers.find(w => w.id === idOrName)?.name) || idOrName || '';
   const pad = (n) => String(n).padStart(2, '0');
@@ -16277,13 +16281,14 @@ const DataExportCenter = ({ lots = [], workers = [], indirectWork = [], settings
         rows.push({ date: fmtDate(cMs), orderNo: l.orderNo || '', model: l.model || '', qty: l.quantity || 1, standard: l.appliedStandard?.standardNo || '', ng: ngCount, leadDays: (cMs && eMs) ? Math.max(0, Math.round((cMs - eMs) / 86400000)) : '', workers: ws, _ts: cMs, _model: l.model || '', _worker: ws, _order: l.orderNo || '' });
       });
     } else if (s === 'defect' || s === 'complaint') {
-      const wantTypes = s === 'defect' ? ['defect'] : ['complaint', 'improvement'];
-      (lots || []).forEach(l => {
-        (l.interruptions || []).filter(i => wantTypes.includes(i.type)).forEach(d => {
-          const w = wname(d.workerName);
-          const kind = d.type === 'improvement' ? '気づき・改善' : (d.type === 'defect' ? '不具合' : '軽微不良');
-          rows.push({ date: fmtDateTime(d.timestamp), kind, orderNo: l.orderNo || '', model: l.model || '', item: d.stepInfo?.title || '全体', content: d.label || d.note || '', cause: d.causeProcess || '', worker: w, _ts: d.timestamp, _model: l.model || '', _worker: w, _order: l.orderNo || '' });
-        });
+      // ⚠3ソース(検査中 interruptions / NG判定 task.ngReason / 台帳 minor_reports)を合流して出す(製品と同じ)。
+      // ⚠サンプル(台帳 sample:true)は出さない。⚠出所(src)列を必ず付ける。
+      const wantKinds = s === 'defect' ? ['defect'] : ['complaint', 'improvement'];
+      const q = collectQualityRows({ lots, ledger: minorReports });
+      filterQuality(q.rows, { kinds: wantKinds }).forEach(r => {
+        const w = wname(r.workerName);
+        const kind = r.kind === 'improvement' ? '気づき・改善' : (r.kind === 'defect' ? '不具合' : '軽微不良');
+        rows.push({ date: fmtDateTime(r.timestamp), kind, src: r.srcLabel, orderNo: r.orderNo || '', model: r.model || '', item: r.stepTitle || '全体', content: r.content || '', cause: r.causeProcess || '', worker: w, _ts: r.timestamp, _model: r.model || '', _worker: w, _order: r.orderNo || '' });
       });
     } else if (s === 'worktime') {
       (lots || []).filter(l => l.status === 'completed' || l.location === 'completed').forEach(l => {
@@ -16459,7 +16464,11 @@ const DataExportCenter = ({ lots = [], workers = [], indirectWork = [], settings
 //  管理者ダッシュボード — 当月KPI(完了台数/不良率/納期遵守率/平均リードタイム/軽微不良)
 //  ＋前月比＋12ヶ月トレンド＋品目別トップ。すべて読み取り集計(書き込み無し)。
 // =============================================================================
-const ManagerDashboard = ({ lots = [], settings = {} }) => {
+// ⚠台帳(minor_reports)を prop で受け取る(台帳ができるまでは空)。
+const ManagerDashboard = ({ lots = [], settings = {}, minorReports = [] }) => {
+  // 3ソース(検査中 interruptions / NG判定 task.ngReason / 台帳 minor_reports)を1本に合流。
+  // ⚠数える場所は domain/qualitySources.js の1か所だけ。ここで数え直さない。
+  const _q = useMemo(() => collectQualityRows({ lots, ledger: minorReports }), [lots, minorReports]);
   const toMs = (raw) => { if (raw == null) return null; if (typeof raw === 'number') return raw; if (raw.seconds) return raw.seconds * 1000; const t = new Date(raw).getTime(); return isNaN(t) ? null : t; };
   const now = new Date();
   const compMs = (l) => toMs(l.completedAt) || toMs(l.updatedAt);
@@ -16484,9 +16493,15 @@ const ManagerDashboard = ({ lots = [], settings = {} }) => {
       const em = toMs(l.entryAt) || toMs(l.createdAt);
       if (em && cm && cm >= em) { leadSum += (cm - em) / 86400000; leadN++; }
     });
-    let minor = 0;
-    (lots || []).forEach(l => (l.interruptions || []).forEach(i => { const it = toMs(i.timestamp); if ((i.type === 'complaint' || i.type === 'improvement') && it != null && it >= s && it < e) minor++; }));
-    return { lots: comp.length, units, defectLots, defectTotal, defectRate: comp.length ? (defectLots / comp.length * 100) : 0, onTime, withDue, dueRate: withDue ? (onTime / withDue * 100) : null, lead: leadN ? (leadSum / leadN) : null, minor, byModel, defByModel };
+    // 軽微不良・気づき = 3ソース。⚠サンプル(台帳 sample:true)は数えない=作り物を管理指標に混ぜない。
+    const minorAll = filterQuality(_q.rows, { kinds: ['complaint', 'improvement'], from: s, to: e, includeSample: true });
+    const minorRows = minorAll.filter(r => !r.sample);
+    const minor = minorRows.length;
+    // ⚠数が変わったことを黙らせない。出所の内訳を画面に出すための一行。
+    const minorNote = sourceNote(minorRows, { mergedNg: _q.mergedNg, excludedSample: minorAll.length - minorRows.length });
+    // 台帳の不良はロットに紐づかないため不良率の分母には入れない。件数だけ別に数えて注記に出す。
+    const ledgerDefects = filterQuality(_q.rows, { kinds: ['defect'], from: s, to: e }).filter(r => r.src === 'ledger').length;
+    return { lots: comp.length, units, defectLots, defectTotal, defectRate: comp.length ? (defectLots / comp.length * 100) : 0, onTime, withDue, dueRate: withDue ? (onTime / withDue * 100) : null, lead: leadN ? (leadSum / leadN) : null, minor, minorNote, ledgerDefects, byModel, defByModel };
   };
   const cur = calcMonth(0), prev = calcMonth(-1);
   const trend = []; for (let i = 11; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); const mm = calcMonth(-i); trend.push({ label: `${d.getMonth() + 1}月`, units: mm.units, defectRate: mm.defectRate }); }
@@ -16550,6 +16565,9 @@ const ManagerDashboard = ({ lots = [], settings = {} }) => {
         </div>
       </div>
       <div className="text-xs text-slate-400">※ 完了=ステータス完了のロット。不良率=不良が出た完了ロット数÷完了ロット数。納期遵守=完了日が納期以内。リードタイム=入荷→完了の日数平均。</div>
+      {/* ⚠数が変わったことを黙らせない。どの出所を何件数えたかを必ず画面に出す */}
+      <div className="fi-tap-text text-slate-500">※ 軽微不良・気づき {cur.minorNote}</div>
+      {cur.ledgerDefects > 0 && <div className="fi-tap-text text-slate-500">※ 台帳に登録された不良 {cur.ledgerDefects}件は、ロットに紐づかないため上の不良率・品目コード別不良件数には入っていません。</div>}
     </div>
   );
 };
@@ -17513,11 +17531,13 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
     changeNote: card.changeNote || '', changeOld: card.changeOld || '', changeNew: card.changeNew || '',
   });
   const [busy, setBusy] = useState(false);
+  // 30日定着確認ができるかを見る「いま」。描画のたびに Date.now() を呼ばない(開いた時刻で足りる)
+  const [openedAt] = useState(() => Date.now());
   const isClosed = ['effective', 'noeffect', 'worse', 'rolledback'].includes(card.status);
   // 実施後の統計: 閉じたカルテは凍結値、それ以外はライブ計算
   const afterLive = useMemo(() => card.actionDate ? measureWindow(lots, { model: card.model, stepKey: card.stepKey, customTargetTimes, modelGroups, startMs: card.actionDate, endMs: Date.now() }) : null, [lots, card.actionDate, card.model, card.stepKey, customTargetTimes, modelGroups]);
   const after = (isClosed && card.afterFrozen) ? card.afterFrozen : afterLive;
-  const verdict = useMemo(() => (card.actionDate && card.baseline) ? ((isClosed && card.verdictFrozen) ? card.verdictFrozen : computeVerdict(card.baseline, after, edit.kpi)) : null, [card, after, edit.kpi, isClosed]);
+  const verdict = useMemo(() => (card.actionDate && (card.actionBaseline || card.baseline)) ? ((isClosed && card.verdictFrozen) ? card.verdictFrozen : computeVerdict(card.actionBaseline || card.baseline, after, edit.kpi)) : null, [card, after, edit.kpi, isClosed]);
 
   const patch = async (p, logEntry) => {
     setBusy(true);
@@ -17532,7 +17552,15 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
     // 既に実施日があるのに再度押すと効果測定がリセットされるため確認 (初回=actionDate無しは確認なし)
     if (card.actionDate && !confirm('対策実施日を今日に変更すると、これまでの効果測定がリセットされます。よろしいですか？')) return;
     const now = Date.now();
-    patch({ status: 'measuring', actionDate: now, kpi: edit.kpi, changeNote: edit.changeNote, changeOld: edit.changeOld, changeNew: edit.changeNew }, { type: 'do', note: `対策を実施 (${edit.changeNote || '内容未記入'})` });
+    // ⚠実施時ベースライン再凍結: 起票から実施まで日が空くと起票時の90日窓は「対策直前の状態」とズレる。
+    //   効果判定は actionBaseline(実施直前90日) を使い、起票時の値は discoverySnapshot として証拠に残す(仕様4.7)。
+    const abStart = now - 90 * 86400000;
+    const abStat = measureWindow(lots, { model: card.model, stepKey: card.stepKey, customTargetTimes, modelGroups, startMs: abStart, endMs: now });
+    const actionBaseline = { ...abStat, startMs: abStart, endMs: now };
+    patch({
+      status: 'measuring', actionDate: now, kpi: edit.kpi, changeNote: edit.changeNote, changeOld: edit.changeOld, changeNew: edit.changeNew,
+      actionBaseline, discoverySnapshot: card.discoverySnapshot || card.baseline || null,
+    }, { type: 'do', note: `対策を実施 (${edit.changeNote || '内容未記入'})・実施直前90日をベースラインに再凍結(中央値${pdcaFmtSec(actionBaseline.median)}・${actionBaseline.n}台)` });
   };
   const closeWith = (status) => {
     // 「効果あり/悪化」は実施後の標本が一定数たまるまで判定させない (無意味な0台凍結を防ぐ。defectRateは件数ベースなので除外)
@@ -17540,11 +17568,44 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
       alert(`実施後の標本が ${afterLive?.n || 0}台 です。${PDCA_MIN_N}台たまってから「効果あり／悪化」を判定してください。（「効果なし」「元に戻す」での完了は可能です）`);
       return;
     }
-    // 実施後統計と判定を凍結して恒久エビデンス化 (窓情報も保存=後で日あたり率の再計算が可能)。kpiも永続化して凍結判定と一致させる。
+    // 実施後統計と判定を凍結して恒久エビデンス化 (窓情報も保存=後で率の再計算が可能)。kpiも永続化して凍結判定と一致させる。
+    // ベースラインは実施時再凍結(actionBaseline)を最優先 (起票から実施まで空くと直前の状態とズレるため)。
+    const before = card.actionBaseline || card.baseline;
     const frozen = afterLive ? { ...afterLive, startMs: card.actionDate, endMs: Date.now() } : null;
-    const v = (card.baseline && frozen) ? computeVerdict(card.baseline, frozen, edit.kpi) : null;
+    const v = (before && frozen) ? computeVerdict(before, frozen, edit.kpi) : null;
+    // 🚦効果確定ゲート: 「効果あり」は 自動判定improved+前後標本+品質ガード+必須項目 を全部通過した時だけ。
+    //   (5%未満の小改善=flat が正の金額のまま確定へ入る抜け道と、前標本不足の抜け道をここで塞ぐ)
+    let quality = null;
+    if (status === 'effective') {
+      quality = qualityGuardOf({
+        beforeDefects: before?.defectCount || 0, beforeUnits: before?.unitsSeen ?? before?.n ?? 0,
+        afterDefects: frozen?.defectCount || 0, afterUnits: frozen?.unitsSeen ?? frozen?.n ?? 0,
+      });
+      const gate = canCloseEffective({ verdict: v, before, after: frozen, quality, kpi: edit.kpi, action: card.action || edit.changeNote || card.changeNote || '', owner: card.owner || '', actionDate: card.actionDate });
+      if (!gate.ok) {
+        alert(`「効果あり」にはまだできません:\n・${gate.reasons.join('\n・')}\n\n(「効果なし」「悪化」「元に戻す」での完了は可能です)`);
+        return;
+      }
+    }
     const label = PDCA_STATUS_META[status]?.label || status;
-    patch({ status, kpi: edit.kpi, afterFrozen: frozen, verdictFrozen: v, closedAt: Date.now(), closedBy: currentUserName || '?' }, { type: 'close', note: `判定: ${label}` });
+    patch({
+      status, kpi: edit.kpi, afterFrozen: frozen, verdictFrozen: v, closedAt: Date.now(), closedBy: currentUserName || '?',
+      ...(status === 'effective' ? { verifiedStage: 'provisional', qualityFrozen: quality } : {}),
+    }, { type: 'close', note: `判定: ${label}${status === 'effective' ? '（暫定・30日定着確認待ち）' : ''}` });
+  };
+  // 🔁 30日定着確認: 効果あり(暫定)から30日後、直近4週の実測で定着していれば「確定」へ。崩れていたら「要再確認」。
+  const sustainCheck = () => {
+    const recent = measureWindow(lots, { model: card.model, stepKey: card.stepKey, customTargetTimes, modelGroups, startMs: Date.now() - 28 * 86400000, endMs: Date.now() });
+    const sv = sustainVerdict({ afterVal: Number(card.verdictFrozen?.afterVal) || 0, recentMedian: recent.median, recentN: recent.n });
+    if (sv.result === 'unknown') { alert(`まだ判定できません: ${sv.reason}`); return; }
+    const label = sv.result === 'sustained' ? '✅ 定着を確認 → 確定に入ります' : `⚠ 崩れています: ${sv.reason}\n「要再確認」になり、確定から外れます`;
+    if (!window.confirm(`30日定着確認\n定着時 ${pdcaFmtSec(Number(card.verdictFrozen?.afterVal) || 0)} → 直近4週 ${pdcaFmtSec(recent.median)}（${recent.n}台）\n\n${label}\nよろしいですか？`)) return;
+    patch({
+      verifiedStage: sv.result === 'sustained' ? 'verified' : 'broken',
+      sustainedAt: Date.now(), sustainStat: { ...recent, startMs: Date.now() - 28 * 86400000, endMs: Date.now() },
+    }, { type: 'sustain', note: sv.result === 'sustained' ? '30日定着確認OK → 確定' : `30日定着確認NG(${sv.reason}) → 要再確認` });
+    // 定着チェックリスト(仕様7): 確定にしたら標準側も揃える(カルテと標準更新を切り離さない)
+    if (sv.result === 'sustained') alert('✅ 確定にしました。仕上げの3点を忘れずに:\n① 目標時間をこの実測に更新（分析→目標時間・厳密モードへ）\n② テンプレ・工程手順を新しいやり方に更新\n③ 対象の作業者へ共有・教育');
   };
   const reopen = () => patch({ status: 'measuring', closedAt: null, closedBy: null, afterFrozen: null, verdictFrozen: null }, { type: 'status', note: '再オープン(効果測定中へ)' });
   const doDelete = async () => { if (!deleteData) return; if (!confirm('このカルテを削除しますか？(元に戻せません)')) return; await deleteData('improvements', card.id); onClose(); };
@@ -17621,7 +17682,7 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
               ベースライン期間: {card.baseline ? `${pdcaFmtDate(card.baseline.startMs)} 〜 ${pdcaFmtDate(card.baseline.endMs)}` : '—'}
               {card.actionDate ? ` ／ 実施後: ${pdcaFmtDate(card.actionDate)} 〜 ${isClosed && card.closedAt ? pdcaFmtDate(card.closedAt) : '現在'}` : ' ／ 実施後: 未実施'}
             </div>
-            <StatRows b={card.baseline} a={after} kpi={edit.kpi} />
+            <StatRows b={card.actionBaseline || card.baseline} a={after} kpi={edit.kpi} />
             <div className="pt-1">
               <div className="text-xs text-slate-400 mb-0.5">月次推移 ({PDCA_KPIS[edit.kpi] || PDCA_KPIS.time}) — 対策実施を境に色が変わります</div>
               <PdcaMiniTrend lots={lots} model={card.model} stepKey={card.stepKey} kpi={edit.kpi} customTargetTimes={customTargetTimes} modelGroups={modelGroups} actionDate={card.actionDate} />
@@ -17629,7 +17690,7 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
             {verdict && (
               <div className="flex items-center gap-2 text-xs bg-slate-50 border rounded p-2">
                 <PdcaVerdictBadge v={verdict} />
-                <span className="text-slate-600">{verdict.label}: {pdcaKpiDisplay(card.baseline, edit.kpi)} → {pdcaKpiDisplay(after, edit.kpi)}{verdict.reason ? ` (${verdict.reason})` : ''}</span>
+                <span className="text-slate-600">{verdict.label}: {pdcaKpiDisplay(card.actionBaseline || card.baseline, edit.kpi)} → {pdcaKpiDisplay(after, edit.kpi)}{verdict.reason ? ` (${verdict.reason})` : ''}</span>
               </div>
             )}
           </div>
@@ -17665,9 +17726,24 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
             </div>
           )}
           {isClosed && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500">判定: {pdcaFmtDateTime(card.closedAt)} ・ {card.closedBy}</span>
-              {!busy && <button onClick={reopen} className="text-xs px-2 py-1 border rounded text-slate-600 hover:bg-slate-50">再オープン</button>}
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-slate-500">判定: {pdcaFmtDateTime(card.closedAt)} ・ {card.closedBy}</span>
+                {card.status === 'effective' && (
+                  cardStageOf(card) === 'verified' ? <span className="fi-tap-text px-2 py-0.5 rounded bg-emerald-600 text-white font-bold">✅ 確定（30日定着済）</span>
+                  : cardStageOf(card) === 'broken' ? <span className="fi-tap-text px-2 py-0.5 rounded bg-rose-500 text-white font-bold">⚠ 要再確認（定着崩れ）</span>
+                  : <span className="fi-tap-text px-2 py-0.5 rounded bg-teal-500 text-white font-bold">⏳ 暫定（30日定着確認待ち）</span>
+                )}
+                {!busy && <button onClick={reopen} className="fi-tap-text px-2 py-1 border rounded text-slate-600 hover:bg-slate-50">再オープン</button>}
+              </div>
+              {card.status === 'effective' && cardStageOf(card) === 'provisional' && (
+                sustainCheckDue(card, openedAt)
+                  ? <button onClick={sustainCheck} disabled={busy} className="text-xs px-3 py-1.5 bg-emerald-600 text-white rounded font-bold">🔁 30日定着確認をする（直近4週の実測で判定）</button>
+                  : <div className="fi-tap-text text-slate-400">判定から{SUSTAIN_DAYS}日たつと「30日定着確認」ができます（確認して定着していれば貯金箱の「確定」に入ります）。</div>
+              )}
+              {card.status === 'effective' && cardStageOf(card) === 'broken' && (
+                <button onClick={sustainCheck} disabled={busy} className="text-xs px-3 py-1.5 bg-amber-500 text-white rounded font-bold">🔁 再度 定着確認をする</button>
+              )}
             </div>
           )}
 
@@ -19053,8 +19129,9 @@ const ANALYSIS_GROUPS = [
     { k: 'export', l: 'データ書き出し', color: 'text-blue-600' },
   ] },
 ];
-const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settings, saveSettings, currentUserName = '', indirectWork = [], improvements = [], observationPlans = [], templates = [], notes = [], announcements = [], strictModeHistory = [], onRestore = null, db = null, anomalies = [], onGoOptimize = null, parentTabs = null }) => {
+const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settings, saveSettings, currentUserName = '', minorReports = [], indirectWork = [], improvements = [], observationPlans = [], templates = [], notes = [], announcements = [], strictModeHistory = [], onRestore = null, db = null, anomalies = [], onGoOptimize = null, parentTabs = null }) => {
   // デフォルトは process (工程改善分析)。旧 'daily' は全体進捗タブと重複していたため削除済み
+  const [showLedger, setShowLedger] = useState(false); // 📒 軽微不良・改善 台帳の窓
   const [activeMode, setActiveMode] = useState('process-analysis'); // 既定=工程分析(データを見る土台)。グループは activeMode から導出
   const activeGroup = ANALYSIS_GROUPS.find(g => g.tabs.some(t => t.k === activeMode)) || ANALYSIS_GROUPS[0];
   const [selectedModel, setSelectedModel] = useState('all');
@@ -19324,8 +19401,15 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     const isInPrev = getPrevPeriodChecker();
 
     lots.forEach(lot => {
-      const lotComplaints = (lot.interruptions || []).filter(i => i.type === 'complaint');
-      lotComplaints.forEach(c => {
+      const lotComplaints = (lot.interruptions || []).filter(i => i.type === 'complaint').map(i => ({ ...i, _src: 'interruption' }));
+      // カスタムモードの NG判定(理由あり) を軽微不良として合成する(製品と同じ)。
+      //   task.ngReason はどの集計にも入っておらず、「NG→理由記入」した分が丸ごと欠けていた。元データは変えず読むだけ。
+      const _steps = lot.steps || [];
+      const _titleForKey = (key) => { for (const s of _steps) { if (s?.id && String(key).startsWith(`${s.id}-`)) return s.title || '全体'; } const m = /^(\d+)-/.exec(String(key)); if (m && _steps[+m[1]]) return _steps[+m[1]].title || '全体'; return '全体'; };
+      const ngComplaints = Object.entries(lot.tasks || {})
+        .filter(([, t]) => t && typeof t.ngReason === 'string' && t.ngReason.trim())
+        .map(([key, t]) => ({ id: `ng:${lot.id}:${key}`, type: 'complaint', _src: 'ng', source: 'NG判定', label: t.ngReason.trim(), timestamp: toMsAny(t.ngAt) || toMsAny(t.endTime) || null, stepInfo: { title: _titleForKey(key) }, workerName: t.workerName || '' }));
+      [...lotComplaints, ...ngComplaints].forEach(c => {
         // 月別推移用の全期間カウント (期間フィルタに依存しない)
         if (c.timestamp) { const d0 = new Date(c.timestamp); const ym0 = `${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,'0')}`; monthlyCountsAll[ym0] = (monthlyCountsAll[ym0] || 0) + 1; }
         if (isInDefectPeriod(c.timestamp)) {
@@ -19351,6 +19435,25 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
           prevCount++;
         }
       });
+    });
+
+    // 台帳(minor_reports)の軽微不良も合流(ロット非依存の単独記録・いつでも登録した分)。
+    (minorReports || []).filter(r => r && r.type === 'complaint').forEach(r => {
+      const lot = { id: r.id, model: r.model || '不明', modelText: r.modelText || '', orderNo: r.orderNo || '' };
+      const c = { id: r.id, _src: 'minor', type: 'complaint', label: r.content || '', timestamp: toMsAny(r.timestamp), stepInfo: r.stepTitle ? { title: r.stepTitle } : null, workerName: r.workerName || '', source: '台帳', sample: !!r.sample };
+      if (c.timestamp) { const d0 = new Date(c.timestamp); const ym0 = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}`; monthlyCountsAll[ym0] = (monthlyCountsAll[ym0] || 0) + 1; }
+      if (isInDefectPeriod(c.timestamp)) {
+        const wname = (workers.find(x => x.id === c.workerName)?.name) || c.workerName || '不明';
+        complaints.push({ ...c, lot, workerName: wname });
+        const mainLabel = ((c.label || '').split(' : ')[0] || 'その他');
+        labelCounts[mainLabel] = (labelCounts[mainLabel] || 0) + 1;
+        const st = (c.stepInfo ? c.stepInfo.title : '全体');
+        stepCounts[st] = (stepCounts[st] || 0) + 1;
+        workerCounts[wname] = (workerCounts[wname] || 0) + 1;
+        const m = (lot.model || '不明');
+        modelCounts[m] = (modelCounts[m] || 0) + 1;
+        if (c.timestamp) { const d = new Date(c.timestamp); const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; const ymd = `${ym}-${String(d.getDate()).padStart(2, '0')}`; monthlyCounts[ym] = (monthlyCounts[ym] || 0) + 1; dayCounts[ymd] = (dayCounts[ymd] || 0) + 1; if (c.timestamp < minTs) minTs = c.timestamp; if (c.timestamp > maxTs) maxTs = c.timestamp; }
+      } else if (isInPrev(c.timestamp)) { prevCount++; }
     });
 
     const sortObj = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
@@ -19386,7 +19489,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
       diff,
       diffRate,
     };
-  }, [lots, workers, defectFilterMonth, defectFilterMode, defectFilterStart, defectFilterEnd]);
+  }, [lots, workers, defectFilterMonth, defectFilterMode, defectFilterStart, defectFilterEnd, minorReports]);
 
   // 気づき・改善(type='improvement') の集計。タブ名「軽微不良・改善提案」の“改善”側。
   //   軽微不良(complaint)とは別概念(工程の提案)なので complaintStats とは分けて集計し、同タブ内に別セクションで出す。
@@ -19426,16 +19529,14 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     if (!confirm(`この${typeName}を削除しますか？`)) return;
     const lot = lots.find(l => l.id === lotId);
     if (lot) {
-      // ⚠配列から抜いて丸ごと書き戻さない(作業画面の古い配列ですぐ復活する)。消した印を1件書く(製品と同じ)
+      // ⚠配列から抜いて丸ごと書き戻さない。作業画面が握っている古い配列ですぐ復活する。消したことを共有に1件書く。
+      // ⚠3秒だけ待つ(settleSaveBriefly)。電波が無い時は送信待ちとして進め、拒否された時だけ知らせる。
       const target = (lot.interruptions || []).find(i => i && i.id === interruptionId);
-      if (!target) return;
-      try {
-        await saveData('lots', lotId, intDeletePatch(target, currentUserName));
-      } catch (e) {
-        console.error('🚨 削除がサーバに届きませんでした', e);
-        alert('🚨 削除がサーバに届きませんでした。\n\n'
-          + `${(e && e.message) || e}\n\n`
-          + 'まだ消えていません。つながってから、もう一度お試しください。');
+      if (target) {
+        let r;
+        try { r = await settleSaveBriefly(saveData('lots', lotId, intDeletePatch(target, currentUserName))); }
+        catch (e) { console.error('🚨 削除がサーバに届きませんでした', e); alert(SAVE_REFUSED_MESSAGE); return; }
+        if (!mayCloseAfterSave(r)) { alert(SAVE_REFUSED_MESSAGE); return; }
       }
     }
   };
@@ -19452,9 +19553,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     const { data, lotId, type } = editModal;
     const lot = lots.find(l => l.id === lotId);
     if (!lot) return;
-    const curInt = (lot.interruptions || []).find(i => i && i.id === data.id);
-    if (!curInt) return;
-    const updatedInterruptions = [curInt].map(i => {
+    const cur = (lot.interruptions || []).find(i => i && i.id === data.id);
+    if (!cur) return;
+    const updatedOne = [cur].map(i => {
       if (type === 'defect') {
         const updated = { ...i, label: editLabel };
         if (editCauseProcess) updated.causeProcess = editCauseProcess; else delete updated.causeProcess;
@@ -19462,12 +19563,13 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
         return updated;
       }
       return { ...i, label: editLabel };
-    });
+    })[0];
     // 🚨 **届いてから閉じる**。先に閉じると、打ち直した内容が手元ごと消える。
     setSavingEdit(true);
     try {
-      // 1件だけ書く(消した項目には消す印・製品と同じ)
-      await saveData('lots', lotId, intWritePatch(curInt, updatedInterruptions[0]));
+      // ⚠1件だけ書く(intWritePatch)。3秒だけ待ち、送信待ちなら閉じ、拒否なら閉じない。
+      const r = await settleSaveBriefly(saveData('lots', lotId, intWritePatch(cur, updatedOne)));
+      if (!mayCloseAfterSave(r)) { alert(SAVE_REFUSED_MESSAGE); return; }
       setEditModal({ isOpen: false, type: null, data: null, lotId: null });
     } catch (e) {
       // 🚨 **閉じない**。打った内容は窓に残っているので、送り直せる。
@@ -20053,11 +20155,20 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                    </table>
                  </div>
                </div>
+               {/* 🔁 やり直し(再作業)の中身(製品と同じ表・部品は品目コード｜品名で出す) */}
+               <ReworkAnalysisPanel lots={lots} templates={templates} settings={settings} isInPeriod={isInDefectPeriod} />
              </div>
              );
            })()}
 
            {/* Complaints / Observations Tab — KPI + 横棒チャート + 月別推移 + 詳細 */}
+           {/* 📒 台帳(ロットに紐づかない記録を いつでも登録・後から直す) */}
+           {showLedger && <MinorReportLedgerModal reports={minorReports} lots={lots} workers={workers} currentUserName={currentUserName} saveData={saveData} deleteData={deleteData} itemMaster={settings?.itemMaster || {}} onClose={() => setShowLedger(false)} />}
+           {activeMode === 'complaints' && (
+             <div className="flex justify-end mb-2">
+               <button onClick={() => setShowLedger(true)} className="px-3 py-1.5 rounded-lg text-xs font-black text-white bg-purple-600 hover:bg-purple-700 flex items-center gap-1.5"><Megaphone className="w-4 h-4"/> いつでも登録・台帳（全{minorReports.length}件）</button>
+             </div>
+           )}
            {activeMode === 'complaints' && (() => {
              const cs = complaintStats;
              const maxLabel = Math.max(1, ...cs.labels.map(x => x.count));
@@ -20258,8 +20369,11 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <td className="p-3 text-xs text-slate-600 whitespace-nowrap">{d.workerName || ''}</td>
                            <td className="p-3 text-center">
                              <div className="flex items-center justify-center gap-1">
+                               {/* NG判定から合流した行は中断の記録ではない(作業画面の NG 理由)ので、ここでは直さない・消さない */}
+                               {d._src === 'ng' ? <span className="fi-tap-text text-rose-600 font-bold" title="作業画面の NG判定の理由から数えています">NG判定</span> : d._src === 'minor' ? <button onClick={() => setShowLedger(true)} className="fi-tap-text text-purple-700 font-bold underline" title="台帳の記録は台帳の窓で直します">台帳</button> : (<>
                                <button onClick={() => triggerEditInterruption(d, d.lot.id, 'complaint')} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded" title="編集"><Pencil className="w-4 h-4" /></button>
                                <button onClick={() => triggerDeleteInterruption(d.id, d.lot.id, '軽微不良')} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded" title="削除"><Trash2 className="w-4 h-4" /></button>
+                               </>)}
                              </div>
                            </td>
                          </tr>
@@ -21154,9 +21268,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
              );
            })()}
 
-           {activeMode === 'monthly' && <MonthlyReportView lots={lots} workers={workers} settings={settings} customTargetTimes={settings.customTargetTimes || {}} targetTimeHistory={settings.targetTimeHistory || []} improvements={improvements} currentUserName={currentUserName} templates={templates} indirectWork={indirectWork} onSaveSettings={saveSettings} />}
-           {activeMode === 'export' && <DataExportCenter lots={lots} workers={workers} indirectWork={indirectWork} settings={settings} currentUserName={currentUserName} saveSettings={saveSettings} />}
-           {activeMode === 'dashboard' && <ManagerDashboard lots={lots} settings={settings} />}
+           {activeMode === 'monthly' && <MonthlyReportView lots={lots} workers={workers} settings={settings} customTargetTimes={settings.customTargetTimes || {}} targetTimeHistory={settings.targetTimeHistory || []} improvements={improvements} currentUserName={currentUserName} templates={templates} indirectWork={indirectWork} onSaveSettings={saveSettings} minorReports={minorReports} />}
+           {activeMode === 'export' && <DataExportCenter lots={lots} workers={workers} indirectWork={indirectWork} settings={settings} currentUserName={currentUserName} saveSettings={saveSettings} minorReports={minorReports} />}
+           {activeMode === 'dashboard' && <ManagerDashboard lots={lots} settings={settings} minorReports={minorReports} />}
            {activeMode === 'kpi' && <KpiDetailView lots={lots} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} />}
            {activeMode === 'achievement' && <AchievementRateView lots={lots} customTargetTimes={settings.customTargetTimes || {}} settings={settings} templates={templates} />}
            {activeMode === 'process-analysis' && <ProcessAnalysisView lots={lots} settings={settings} workers={workers} templates={templates} customTargetTimes={settings.customTargetTimes || {}} modelGroups={modelGroupsOf(settings)} observationPlans={observationPlans} improvements={improvements} saveData={saveData} deleteData={deleteData} currentUserName={currentUserName} onGoToPdca={() => setActiveMode('pdca')} />}
@@ -22397,6 +22511,15 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
   const [localZones, setLocalZones] = useState(mapZones || INITIAL_MAP_ZONES);
   const [localBreakAlerts, setLocalBreakAlerts] = useState(settings?.breakAlerts || []);
   const [complaintOptionsText, setComplaintOptionsText] = useState((settings?.complaintOptions || DEFAULT_COMPLAINT_OPTIONS).join('\n'));
+  // 🔁 不良項目ごとの「種別」(やり直しの分析で使う)。⚠決めるのは現場。既定は必ず「未分類」で、中身から推測して付けない。
+  const [localComplaintKinds, setLocalComplaintKinds] = useState(settings?.complaintKinds || {});
+  // 設定が後から届いた/他端末で変わった時は手元を合わせる(描画中に前の値と比べる形・effect で setState しない)
+  const [kindsSrc, setKindsSrc] = useState(settings?.complaintKinds);
+  if (kindsSrc !== settings?.complaintKinds) { setKindsSrc(settings?.complaintKinds); setLocalComplaintKinds(settings?.complaintKinds || {}); }
+  // 🔁 種別として選べる言葉(語彙)。「未分類」は reworkKindOptions が必ず最後に付ける。
+  const [reworkKindOptionsText, setReworkKindOptionsText] = useState(
+    (Array.isArray(settings?.reworkKindOptions) && settings.reworkKindOptions.length ? settings.reworkKindOptions : DEFAULT_REWORK_KIND_OPTIONS).join('\n')
+  );
   const [localComboPresets, setLocalComboPresets] = useState(settings?.comboPresets || []);
   const [expandedPresetId, setExpandedPresetId] = useState(null);
 
@@ -22491,7 +22614,20 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
   const handleDeleteZone = (id) => { if (confirm('このエリアを削除しますか？')) setLocalZones(localZones.filter(z => z.id !== id)); };
   const handleSaveZoneSettings = () => {
     const newComplaintOptions = complaintOptionsText.split('\n').map(s => s.trim()).filter(Boolean);
-    saveSettings({ mapZones: localZones, breakAlerts: localBreakAlerts, complaintOptions: newComplaintOptions, comboPresets: localComboPresets, voiceSettings: localVoiceSettings, voiceCommands: localVoiceCommands });
+    // 🔁 種別の語彙。「未分類」「原因不明」は語彙ではないので保存しない。空にした時は空配列=既定に戻る。
+    const newReworkKindOptions = reworkKindOptionsText.split('\n').map(s => s.trim())
+      .filter(s => s && s !== UNKNOWN_KIND && s !== UNKNOWN_CAUSE);
+    // 🔁 種別は「いま残っている項目の分」だけ保存する。「未分類」は入れない(入れないこと自体が未分類の意味)。
+    const newComplaintKinds = {};
+    newComplaintOptions.forEach(opt => {
+      const k = localComplaintKinds[opt];
+      if (k && k !== UNKNOWN_KIND) newComplaintKinds[opt] = k;
+    });
+    // ⚠「未分類に戻した」「項目ごと消した」は送らないだけでは消えない(merge:true)。消す印を明示する。
+    const deadKinds = Object.keys(settings?.complaintKinds || {})
+      .filter(k => !(k in newComplaintKinds))
+      .map(k => ['complaintKinds', k]);
+    saveSettings({ mapZones: localZones, breakAlerts: localBreakAlerts, complaintOptions: newComplaintOptions, complaintKinds: newComplaintKinds, reworkKindOptions: newReworkKindOptions, comboPresets: localComboPresets, voiceSettings: localVoiceSettings, voiceCommands: localVoiceCommands, ...(deadKinds.length ? { __deleteMapKeys: deadKinds } : {}) });
     alert('設定を保存しました');
   };
 
@@ -22636,6 +22772,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
              className="w-full border rounded p-3 text-sm h-32"
              placeholder="作業しづらい&#10;工具が不足&#10;手順が不明確"
            />
+           <ReworkKindEditor complaintOptionsText={complaintOptionsText} reworkKindOptionsText={reworkKindOptionsText} setReworkKindOptionsText={setReworkKindOptionsText} localComplaintKinds={localComplaintKinds} setLocalComplaintKinds={setLocalComplaintKinds} />
          </div>
 
          {/* コンボボックスプリセット管理 */}
@@ -27512,7 +27649,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
 // ・PDF (ブラウザ印刷) + Excel (多シート) の両方を出力。
 // ・PLAN は lot.dueDate ベースで当月の予定を集計、ACTUAL は lot.completedAt ベースで当月の実績を集計。
 // =====================================================================================
-const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTargetTimes = {}, targetTimeHistory = [], improvements = [], currentUserName = '', templates = [], indirectWork = [], onSaveSettings }) => {
+const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTargetTimes = {}, targetTimeHistory = [], improvements = [], currentUserName = '', templates = [], indirectWork = [], onSaveSettings, minorReports = [] }) => {
   // ---- 月選択 (既定: 当月) ----
   const ymNow = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
   const [selectedMonth, setSelectedMonth] = useState(ymNow());
@@ -27754,31 +27891,38 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
     const dModel = {}, dStep = {}, dProc = {};
     const cLabel = {}, cStep = {};
     const iKind = {}, iStep = {};
-    lots.forEach(lot => {
-      (lot.interruptions || []).forEach(it => {
-        if (!inMonth(it.timestamp)) return;
-        if (it.type === 'defect') {
-          const wname = resolveWorker(it.workerName);
-          defects.push({ ...it, lot, workerName: wname });
-          const m = lot.model || '不明'; dModel[m] = (dModel[m] || 0) + 1;
-          const st = it.stepInfo ? it.stepInfo.title : '全体'; dStep[st] = (dStep[st] || 0) + 1;
-          const cp = it.causeProcess || '未指定'; dProc[cp] = (dProc[cp] || 0) + 1;
-        } else if (it.type === 'complaint') {
-          const wname = resolveWorker(it.workerName);
-          const main = (it.label || '').split(' : ')[0] || 'その他';
-          const sub = (it.label || '').split(' : ').slice(1).join(' : ');
-          complaints.push({ ...it, lot, workerName: wname, mainLabel: main, subLabel: sub });
-          cLabel[main] = (cLabel[main] || 0) + 1;
-          const st = it.stepInfo ? it.stepInfo.title : '全体'; cStep[st] = (cStep[st] || 0) + 1;
-        } else if (it.type === 'improvement') {
-          const wname = resolveWorker(it.workerName);
-          const kindLabel = IMPROVE_LABELS[it.improvementKind] || 'その他';
-          const reason = (it.label || '').split('：').slice(1).join('：').trim() || it.label || '';
-          improvements.push({ ...it, lot, workerName: wname, kindLabel, reason });
-          iKind[kindLabel] = (iKind[kindLabel] || 0) + 1;
-          const st = it.targetStepTitle || (it.stepInfo ? it.stepInfo.title : '全体'); iStep[st] = (iStep[st] || 0) + 1;
-        }
-      });
+    // ⚠3ソース(検査中 interruptions / NG判定 task.ngReason / 台帳 minor_reports)を1本に合流。
+    //   ここが interruptions だけだったので、会社提出の月次レポートが分析タブより少なく出ていた
+    //   (実測: 2026-05 の軽微不良+気づき 41件 vs 49件 = 8件・16.3%の過少。台帳18件は全件0)。
+    // ⚠期間の判定は既存の inMonth をそのまま使う(月の境界の解釈を勝手に変えない)。
+    // ⚠サンプル(台帳 sample:true)は入れない。提出する書類に作り物の記録を混ぜない。
+    const _q = collectQualityRows({ lots, ledger: minorReports });
+    const _all = filterQuality(_q.rows, { includeSample: true }).filter(r => inMonth(r.timestamp));
+    const _rows = _all.filter(r => !r.sample);
+    const _note = sourceNote(_rows, { mergedNg: _q.mergedNg, excludedSample: _all.length - _rows.length });
+    _rows.forEach(r => {
+      const wname = resolveWorker(r.workerName);
+      const base = { id: r.id, timestamp: r.timestamp, label: r.content, workerName: wname, source: r.srcLabel,
+        causeProcess: r.causeProcess, stepInfo: r.stepTitle ? { title: r.stepTitle } : null,
+        lot: { id: r.lotId, model: r.model, orderNo: r.orderNo } };
+      if (r.kind === 'defect') {
+        defects.push(base);
+        const m = r.model || '不明'; dModel[m] = (dModel[m] || 0) + 1;
+        const st = r.stepTitle || '全体'; dStep[st] = (dStep[st] || 0) + 1;
+        const cp = r.causeProcess || '未指定'; dProc[cp] = (dProc[cp] || 0) + 1;
+      } else if (r.kind === 'complaint') {
+        const main = (r.content || '').split(' : ')[0] || 'その他';
+        const sub = (r.content || '').split(' : ').slice(1).join(' : ');
+        complaints.push({ ...base, mainLabel: main, subLabel: sub });
+        cLabel[main] = (cLabel[main] || 0) + 1;
+        const st = r.stepTitle || '全体'; cStep[st] = (cStep[st] || 0) + 1;
+      } else {
+        const kindLabel = IMPROVE_LABELS[r.improvementKind] || 'その他';
+        const reason = (r.content || '').split('：').slice(1).join('：').trim() || r.content || '';
+        improvements.push({ ...base, kindLabel, reason });
+        iKind[kindLabel] = (iKind[kindLabel] || 0) + 1;
+        const st = r.stepTitle || '全体'; iStep[st] = (iStep[st] || 0) + 1;
+      }
     });
     const sortObj = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
     return {
@@ -27788,8 +27932,10 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
       defectModels: sortObj(dModel), defectSteps: sortObj(dStep), defectProcesses: sortObj(dProc),
       complaintLabels: sortObj(cLabel), complaintSteps: sortObj(cStep),
       improveKinds: sortObj(iKind), improveSteps: sortObj(iStep),
+      sourceNote: _note, // ⚠どの出所を何件数えたか。PDFにもそのまま出す(黙って数を変えない)
     };
-  }, [lots, workers, monthRange]);
+    // ⚠minorReports を依存に足す。忘れると台帳へ登録しても月報が古い件数のまま出る。
+  }, [lots, workers, monthRange, minorReports]);
 
   // 改善PDCA(改善カルテ)の当月集計: 作成/実施/判定/定着/効果なし + 削減時間・不具合減
   const pdcaData = useMemo(() => {
@@ -27965,7 +28111,7 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
     });
     body += `</tbody></table>`;
     // §5 品質サマリー
-    body += `<h2>§5 品質サマリー</h2><div class="kpi-grid">
+    body += `<h2>§5 品質サマリー</h2><p class="muted" style="margin:0 0 6px">${esc(q.sourceNote || '')}</p><div class="kpi-grid">
       <div class="kpi"><div class="v" style="color:#dc2626">${q.defects.length}</div><div class="l">不具合 (件)</div></div>
       <div class="kpi"><div class="v" style="color:#7c3aed">${q.complaints.length}</div><div class="l">軽微不良 (件)</div></div>
       <div class="kpi"><div class="v" style="color:#4f46e5">${q.improvements.length}</div><div class="l">気づき・改善 (件)</div></div>
@@ -29242,12 +29388,18 @@ const QuotaStoppedPanel = ({ until }) => (
      lazyCtx, 'improvements',
      activeTab === 'analysis' || activeTab === 'optimize',
      (rows) => rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+   // 📒 軽微不良・改善 台帳(minor_reports)。分析タブか台帳の窓を開いた時だけ読む。
+   const [showQuickLedger, setShowQuickLedger] = useState(false);
+   const [minorReports, minorReportsReady] = useLazyCollection(
+     lazyCtx, 'minor_reports',
+     activeTab === 'analysis' || showQuickLedger,
+     (rows) => rows.slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
    const [logs, logsReady] = useLazyCollection(
      lazyCtx, 'logs',
      activeTab === 'analysis',
      (rows) => rows.slice().sort((a, b) => b.timestamp - a.timestamp));
    // 分析タブが要る物が全部揃ったか。⚠揃うまで画面を出さない(途中の数字を見せない)。
-   const analysisDataReady = lotsHistoryReady && indirectWorkReady && improvementsReady && logsReady;
+   const analysisDataReady = lotsHistoryReady && indirectWorkReady && improvementsReady && logsReady && minorReportsReady;
    const progressDataReady = lotsHistoryReady && indirectWorkReady;
 
    // お知らせ通知タイマー
@@ -29651,6 +29803,10 @@ const QuotaStoppedPanel = ({ until }) => (
    useEffect(() => {
      syncImageQuality(settings.imageQuality);
    }, [settings.imageQuality]);
+   // 📷 写真の容量の上限(settings.imageBudget)を resizeImage へ渡す。走り直すのは上限が変わった時だけ。
+   useEffect(() => {
+     syncImageBudget(settings);
+   }, [settings.imageBudget]); // eslint-disable-line react-hooks/exhaustive-deps
 
    // --- Break Alert Timer ---
    useEffect(() => {
@@ -29988,6 +30144,7 @@ const QuotaStoppedPanel = ({ until }) => (
        ['notes', parsed.notes],
        ['announcements', parsed.announcements],
        ['logs', parsed.logs],
+       ['minor_reports', parsed.minor_reports],
      ];
      const total = cols.reduce((n, [, a]) => n + (Array.isArray(a) ? a.length : 0), 0) + 1; // +1: settings/config
      let done = 0;
@@ -32225,6 +32382,7 @@ const QuotaStoppedPanel = ({ until }) => (
              {hdrMenu.type === 'more' && (<>
                <button onClick={() => { setHdrMenu(null); setShowHelp(true); }} className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><HelpCircle className="w-4 h-4 text-blue-600" /> 使い方</button>
                <button onClick={() => { setHdrMenu(null); setShowReadBudget(true); }} className="w-full text-left px-3 py-2 hover:bg-emerald-50 flex items-center gap-2 text-slate-700 text-sm font-bold" title="この端末が今日読んだ件数と、無料枠に対する割合"><Activity className="w-4 h-4 text-emerald-600" /> 通信量（この端末）{readTally.total > 0 && <span className={`ml-auto text-xs text-white rounded px-1 font-black ${quotaPercent(readTally.total) >= 20 ? 'bg-rose-500' : 'bg-emerald-500'}`}>{quotaPercent(readTally.total)}%</span>}</button>
+               <button onClick={() => { setHdrMenu(null); setShowQuickLedger(true); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><Megaphone className="w-4 h-4 text-purple-600" /> 軽微不良・改善 台帳（いつでも登録）</button>
                <button onClick={() => { setHdrMenu(null); setShowAnnouncementModal(true); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><Megaphone className="w-4 h-4 text-purple-600" /> お知らせ{(() => { const unread = announcements.filter(a => (a.mode || 'confirm') === 'confirm' && !(a.confirmedBy || []).includes(currentUserName)).length; return unread > 0 ? <span className="ml-auto bg-red-500 text-xs text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{unread}</span> : null; })()}</button>
              </>)}
            </div>
@@ -32277,7 +32435,9 @@ const QuotaStoppedPanel = ({ until }) => (
          )}
          {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)} />}
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
-         {activeTab === 'analysis' && analysisDataReady && !quotaBlock && <AnalysisView lots={lots} logs={logs} workers={workers} saveData={saveData} deleteData={deleteData} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} indirectWork={indirectWork} improvements={improvementCards} observationPlans={observationPlans} templates={templates} notes={notes} announcements={announcements} strictModeHistory={strictModeHistory} onRestore={restoreAllFromBackup} db={db} anomalies={anomalies} onGoOptimize={(view) => { setOptimizeView(view); setActiveTab('optimize'); }} parentTabs={renderTabGroupButtons(TAB_GROUPS.analysis)} />}
+         {/* 📒 ヘッダーの☰から開く台帳(読み終わるまで出さない=0件と見分けが付かないため) */}
+         {showQuickLedger && minorReportsReady && <MinorReportLedgerModal reports={minorReports} lots={lots} workers={workers} currentUserName={currentUserName} saveData={saveData} deleteData={deleteData} itemMaster={settings?.itemMaster || {}} onClose={() => setShowQuickLedger(false)} />}
+         {activeTab === 'analysis' && analysisDataReady && !quotaBlock && <AnalysisView lots={lots} logs={logs} workers={workers} saveData={saveData} deleteData={deleteData} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} minorReports={minorReports} indirectWork={indirectWork} improvements={improvementCards} observationPlans={observationPlans} templates={templates} notes={notes} announcements={announcements} strictModeHistory={strictModeHistory} onRestore={restoreAllFromBackup} db={db} anomalies={anomalies} onGoOptimize={(view) => { setOptimizeView(view); setActiveTab('optimize'); }} parentTabs={renderTabGroupButtons(TAB_GROUPS.analysis)} />}
          {activeTab === 'optimize' && (
            <div className="h-full flex flex-col gap-3">
              {/* 🚨 2026-09-07: 親タブ(分析 | 作業最適化)をこの帯へ合流させて1本減らした。札の名前・順番・行き先はそのまま。
