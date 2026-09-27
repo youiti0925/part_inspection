@@ -17908,8 +17908,22 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
   const [rankingView, setRankingView] = useState('model');
   const [crossPct, setCrossPct] = useState(50); // ◯%短縮の仮定(レイアウト改善等の大改善)の率
   const [crossExpanded, setCrossExpanded] = useState(null); // 工程横断: 行展開で品目別内訳
+  // 工程横断の絞り込み(複数選択可): 'tpl:<テンプレID>'(同じテンプレ内=中間分割等) / 'grp:<品目グループID>'(ファナック等) を任意個。
+  //   空配列=全部まとめて。選んだタグに「いずれか一致」するロットを集めてから crossStepRanking に渡す(選んだ分だけまとめて横断集計)。
+  const [crossScopes, setCrossScopes] = useState([]);
+  const toggleCrossScope = (tok) => { setCrossScopes(prev => prev.includes(tok) ? prev.filter(x => x !== tok) : [...prev, tok]); setCrossExpanded(null); };
+  const crossScopedLots = useMemo(() => {
+    if (!crossScopes || crossScopes.length === 0) return lots;
+    const tplIds = new Set(crossScopes.filter(s => s.startsWith('tpl:')).map(s => s.slice(4)));
+    const grpModels = new Set();
+    crossScopes.filter(s => s.startsWith('grp:')).forEach(s => {
+      const g = (modelGroups || []).find(x => x.id === s.slice(4));
+      ((g && g.models) || []).forEach(m => grpModels.add(m));
+    });
+    return (lots || []).filter(l => tplIds.has(l.templateId) || grpModels.has(l.model));
+  }, [lots, crossScopes, modelGroups]);
   // 防御: 万一データ起因で集計が落ちても、パネル全体(改善PDCA)を白画面にしない。空表示に退避する。
-  const crossRanking = useMemo(() => { try { return crossStepRanking(lots, settings, { startMs: nowMs - 365 * 86400000, endMs: nowMs, reductionPct: crossPct / 100, annualUnitsByModel }); } catch (e) { console.error('crossStepRanking failed:', e); return { groups: [], rate: 0, reductionPct: crossPct / 100 }; } }, [lots, settings, crossPct, annualUnitsByModel]);
+  const crossRanking = useMemo(() => { try { return crossStepRanking(crossScopedLots, settings, { startMs: nowMs - 365 * 86400000, endMs: nowMs, reductionPct: crossPct / 100, annualUnitsByModel }); } catch (e) { console.error('crossStepRanking failed:', e); return { groups: [], rate: 0, reductionPct: crossPct / 100 }; } }, [crossScopedLots, settings, crossPct, annualUnitsByModel]);
   const crossRows = useMemo(() => crossRanking.groups.filter(g => g.annualCostSec > 0).slice(0, 20), [crossRanking]);
   const crossMaxCost = useMemo(() => Math.max(1, ...crossRows.map(g => g.annualCostSec)), [crossRows]);
   // 改善スコアボード(今月 vs 先月のトレンド + 浮いた時間)。改善ループの主役。
@@ -18114,11 +18128,69 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
           const cVal = (sec, yenv) => cr ? yen(yenv) : `${Math.round(sec / 3600)}h`;
           return (
             <>
-              <div className="px-3 py-2 bg-indigo-50/60 border-b border-indigo-100 flex items-center gap-2 flex-wrap text-xs">
+              {/* 💰 結論を先に言う: 「何を・どうやって・いくら」の3つの道 + 金額のつくり方(前提)を常設。
+                  ⚠謎の数字を作らない: 数字には必ず「出どころ」と「式」を添える(清水さん 2026-08-02
+                  「30%短縮って一体何がどうやって短縮して金額になってるのか謎すぎて」)。 */}
+              {(() => {
+                const hrs = (sec) => Math.round(sec / 3600).toLocaleString();
+                const t1s = crossRows.reduce((s, g) => s + g.saveToFastestSec, 0), t1y = crossRows.reduce((s, g) => s + (g.saveToFastestYen || 0), 0);
+                const t2s = crossRows.reduce((s, g) => s + g.saveByPctSec, 0), t2y = crossRows.reduce((s, g) => s + (g.saveByPctYen || 0), 0);
+                const t3s = crossRows.reduce((s, g) => s + g.saveToTargetSec, 0), t3y = crossRows.reduce((s, g) => s + (g.saveToTargetYen || 0), 0);
+                const badT = crossRows.reduce((s, g) => s + (g.models || []).filter(m => m.hasTarget && m.target > m.median).length, 0);
+                return (
+                  <div className="px-3 pt-2 pb-1.5 bg-white border-b">
+                    <div className="grid sm:grid-cols-3 gap-1.5 fi-tap-text">
+                      <div className="bg-emerald-50 border-2 border-emerald-300 rounded-lg px-2.5 py-1.5">
+                        <div className="font-bold text-emerald-800">① ばらつきを無くしたら <span className="font-mono text-sm">{cVal(t1s, t1y)}</span>/年 <span className="fi-tap-text bg-emerald-600 text-white rounded px-1 align-middle">根拠は実測</span></div>
+                        <div className="text-emerald-700/90 mt-0.5">遅い品目コードが、同じ工程を<b>一番速くやれている品目コードに追いつけたら</b>浮く分（年{hrs(t1s)}時間）。現にその速さで出来ている品目コードがいます。<b>まずここから。</b></div>
+                      </div>
+                      <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-2.5 py-1.5">
+                        <div className="font-bold text-indigo-800">② やり方を変えられたら <span className="font-mono text-sm">{cVal(t2s, t2y)}</span>/年 <span className="fi-tap-text bg-indigo-500 text-white rounded px-1 align-middle">仮定</span></div>
+                        <div className="text-indigo-700/90 mt-0.5">レイアウト・治具・自動化で全体を<b>{crossPct}%</b>縮められた<b>としたら</b>（年{hrs(t2s)}時間）。上のスライダーで動く仮置きで、<b>実測ではありません</b>。</div>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5">
+                        <div className="font-bold text-slate-700">③ 目標どおりにやれたら <span className="font-mono text-sm">{t3s > 0 ? cVal(t3s, t3y) : '—'}</span>{t3s > 0 ? '/年' : ''}</div>
+                        <div className="text-slate-500 mt-0.5">テンプレ(マスタ設定)に入れた<b>工程の目標時間</b>まで縮めたら（年{hrs(t3s)}時間）。目標の無い品目コードは数えません。</div>
+                      </div>
+                    </div>
+                    <div className="mt-1.5 fi-tap-text text-slate-600 bg-slate-50 border border-slate-200 rounded px-2 py-1">
+                      <b>金額のつくり方（3つとも同じ）</b>: 減らせる時間 × 年間台数 × {crossRanking.rate > 0 ? <>時給 <b>¥{Math.round(crossRanking.rate).toLocaleString()}</b>（設定の人件費単価）</> : <>時給（未設定のため時間で表示中）</>}。
+                      年間台数は<b>経営分析で入力した台数（登録）</b>を最優先し、無い品目コードは実績ペースからの推定。
+                      ⚠金額は「浮いた時間を時給で換算した試算」で、現金がそのまま増えるわけではありません。<b>行を開く → 品目コードを押す</b>と、掛け算の中身まで遡れます。
+                    </div>
+                    {badT > 0 && (
+                      <div className="mt-1 fi-tap-text font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                        ⚠「目標」が実測より<b>遅い</b>品目コードが {badT}件あります（例: 実測1分の作業に目標5分）。目標はまだ実測に合わせて整備できていないため、<b>③はまだ当てにしないでください</b>。テンプレの目標時間を実測に合わせて直すと、③が意味のある数字になります。
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              {/* 絞り込み(複数選択可): テンプレ/品目グループのタグを任意個選ぶと「選んだ分だけ」まとめて横断集計(例: 中間分割を数種まとめて・ファナックだけ等) */}
+              <div className="px-3 py-1.5 bg-white border-b fi-tap-text">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-bold text-slate-700">絞り込み:</span>
+                  <button onClick={() => { setCrossScopes([]); setCrossExpanded(null); }} className={`px-2 py-0.5 rounded-full border font-bold ${crossScopes.length === 0 ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>全部（まとめて）</button>
+                  {crossScopes.length > 0 && <span className="text-emerald-700 font-bold">選択中 {crossScopes.length}件 をまとめて集計</span>}
+                  {crossScopes.length > 0 && <button onClick={() => { setCrossScopes([]); setCrossExpanded(null); }} className="text-slate-400 underline hover:text-slate-600">クリア</button>}
+                </div>
+                {((templates || []).length > 0 || (modelGroups || []).length > 0) && (
+                  <div className="mt-1 max-h-24 overflow-auto flex flex-wrap gap-1 pr-1">
+                    {(templates || []).map(t => { const tok = `tpl:${t.id}`; const on = crossScopes.includes(tok); return (
+                      <button key={tok} onClick={() => toggleCrossScope(tok)} className={`px-2 py-0.5 rounded border ${on ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'}`} title="同じテンプレ内だけで横断（中間分割など）。複数選べます">{on ? '✓ ' : ''}{t.name}</button>
+                    ); })}
+                    {(modelGroups || []).map(g => { const tok = `grp:${g.id}`; const on = crossScopes.includes(tok); return (
+                      <button key={tok} onClick={() => toggleCrossScope(tok)} className={`px-2 py-0.5 rounded border ${on ? 'bg-amber-600 text-white border-amber-600' : 'bg-white text-amber-700 border-amber-200 hover:bg-amber-50'}`} title="品目グループ（ファナック等）。複数選べます">{on ? '✓ ' : ''}{g.name}</button>
+                    ); })}
+                  </div>
+                )}
+                <div className="mt-1 text-slate-400">{crossScopes.length === 0 ? '全部を横断集計中。同じと言えない工程が混ざる時は下のタグで絞り込み（複数選べます／青=テンプレ・橙=品目グループ）。' : '選んだタグの分だけ「まとめて」横断集計しています。タグを足すと対象が広がります。'}</div>
+              </div>
+              <div className="px-3 py-2 bg-indigo-50/60 border-b border-indigo-100 flex items-center gap-2 flex-wrap fi-tap-text">
                 <span className="font-bold text-indigo-800">「もし◯%短縮できたら」の仮定：</span>
                 <input type="range" min="10" max="70" step="5" value={crossPct} onChange={e => setCrossPct(Number(e.target.value))} className="accent-indigo-600 w-36" />
                 <span className="font-mono font-bold text-indigo-700 w-10">{crossPct}%</span>
-                <span className="text-slate-500">← レイアウト改善・治具・自動化など「大きい改善」の効果を仮置きで試算（下の②列）</span>
+                <span className="text-slate-500">← <b>何を</b>: 各工程の「年間合計」の時間 ／ <b>どうやって</b>: レイアウト・治具・自動化などの大きい改善 ／ <b>いくら</b>: 年間合計 × {crossPct}% ＝ ②列。実測ではなく<b>「できたとしたら」の仮置き</b>です</span>
               </div>
               <div className="overflow-auto max-h-80">
                 <table className="w-full text-xs border-collapse">
@@ -18126,10 +18198,10 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                     <tr>
                       <th className="px-2 py-1.5 text-left font-bold">共通工程</th>
                       <th className="px-2 py-1.5 text-right font-bold" title="この工程を持つ品目コードの数">品目コード数</th>
-                      <th className="px-2 py-1.5 text-right font-bold" title="全品目コード合計の年間時間（×時給）">年間合計<div className="text-xs font-normal text-slate-400">{cr ? '円/年' : '時間/年'}</div></th>
-                      <th className="px-2 py-1.5 text-right font-bold text-emerald-700" title="一番速い品目コードの中央値まで、遅い品目コードを全部揃えたら浮く分（現に出来てる品目コードがあるので実証済み）">①最速に揃える<div className="text-xs font-normal text-emerald-500">{cr ? '円/年' : '時間/年'}</div></th>
-                      <th className="px-2 py-1.5 text-right font-bold text-indigo-700" title={`全品目コード合計を${crossPct}%短縮できたらの仮定`}>②{crossPct}%短縮<div className="text-xs font-normal text-indigo-400">{cr ? '円/年' : '時間/年'}</div></th>
-                      <th className="px-2 py-1.5 text-right font-bold text-slate-600" title="各品目コードを目標時間まで詰めたら浮く分（堅実な下限）">③目標まで<div className="text-xs font-normal text-slate-400">{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold" title="この工程にいま年間でかかっている人件費。式: 品目コードごとの(年間台数 × 1台の時間 × 時給)の合計">年間合計<div className="fi-tap-text font-normal text-slate-400">今かかっている分・{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold text-emerald-700" title="一番速い品目コードに、遅い品目コードがみんな追いつけたら浮く分。現にその速さで出来ている品目コードがいるので根拠は実測">①最速に揃える<div className="fi-tap-text font-normal text-emerald-500">みんなが追いつけたら・{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold text-indigo-700" title={`この工程の年間合計の時間を${crossPct}%縮められたとしたら(レイアウト・治具・自動化などの大きい改善)。実測ではない仮置き`}>②{crossPct}%短縮<div className="fi-tap-text font-normal text-indigo-400">できたとしたら【仮定】・{cr ? '円/年' : '時間/年'}</div></th>
+                      <th className="px-2 py-1.5 text-right font-bold text-slate-600" title="テンプレに設定した目標時間まで縮めたら浮く分。目標が実測より遅い品目コードには効かない">③目標まで<div className="fi-tap-text font-normal text-slate-400">目標どおりなら・{cr ? '円/年' : '時間/年'}</div></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -18141,7 +18213,7 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                         <React.Fragment key={g.title}>
                           <tr onClick={() => setCrossExpanded(open ? null : g.title)} className={`border-b border-slate-50 cursor-pointer hover:bg-indigo-50/50 ${open ? 'bg-indigo-50/60' : ''}`}>
                             <td className="px-2 py-1.5"><div className="font-bold text-slate-800 truncate max-w-[13rem] flex items-center gap-1" title={`${g.title}（クリックで品目別内訳）`}><span className="text-slate-300">{open ? '▼' : '▶'}</span><span className="text-slate-300">{i + 1}.</span>{g.title}</div></td>
-                            <td className="px-2 py-1.5 text-right font-mono">{g.modelCount}<span className="text-xs text-slate-400">品目コード</span>{g.actualModels > 0 && <div className="text-[8px] font-bold text-indigo-600">{g.actualModels}実数</div>}</td>
+                            <td className="px-2 py-1.5 text-right font-mono">{g.modelCount}<span className="fi-tap-text text-slate-400">品目コード</span>{g.actualModels > 0 && <div className="text-[8px] font-bold text-indigo-600">{g.actualModels}実数</div>}</td>
                             <td className="px-2 py-1.5 text-right">
                               <div className="flex items-center gap-1.5 justify-end">
                                 <div className="h-2 w-12 bg-slate-100 rounded overflow-hidden"><div className="h-full bg-slate-400" style={{ width: `${barPct}%` }} /></div>
@@ -18154,22 +18226,56 @@ const ImprovementCardsPanel = ({ improvements = [], lots = [], settings = {}, sa
                           </tr>
                           {open && (
                             <tr className="bg-indigo-50/30 border-b border-indigo-100"><td colSpan={6} className="px-3 py-2">
-                              <div className="text-xs text-slate-600 mb-1.5"><b className="text-indigo-700">「{g.title}」の品目別内訳</b> — 一番速いのは <b>{g.fastestModel}（{pdcaFmtSec(g.fastest)}）</b>。これに全品目コードを揃えれば <b className="text-emerald-700">{cVal(g.saveToFastestSec, g.saveToFastestYen)}/年</b> 浮く。さらにレイアウト等で{crossPct}%短縮できれば <b className="text-indigo-700">{cVal(g.saveByPctSec, g.saveByPctYen)}/年</b>。</div>
-                              <table className="w-full text-xs border-collapse">
-                                <thead><tr className="text-slate-400 border-b border-indigo-100"><th className="px-2 py-0.5 text-left">品目コード</th><th className="px-2 py-0.5 text-right">年間台数</th><th className="px-2 py-0.5 text-right">1台の中央値</th><th className="px-2 py-0.5 text-right">目標</th><th className="px-2 py-0.5 text-right">年間コスト</th></tr></thead>
+                              {(() => {
+                                // 検算の例: この工程でいちばん効く品目コード1つで、掛け算を実数のまま見せる(記号の式は読まれない)
+                                const rate = crossRanking.rate || 0;
+                                const slow = (g.models || []).filter(m => m.median > g.fastest);
+                                const ex = slow.length ? slow.reduce((a, b) => (b.annualUnits * (b.median - g.fastest) > a.annualUnits * (a.median - g.fastest) ? b : a)) : null;
+                                const exGap = ex ? ex.median - g.fastest : 0;
+                                const exSave = ex ? Math.round(ex.annualUnits * exGap) : 0;
+                                return (
+                                  <div className="mb-1.5">
+                                    <div className="fi-tap-text text-slate-700 mb-1"><b className="text-indigo-700">「{g.title}」の品目別内訳</b> — 🏆一番速いのは <b>{g.fastestModel}（1台 {pdcaFmtSec(g.fastest)}）</b>。<span className="text-amber-700 font-bold">オレンジの棒 ＝ 🏆より遅い分 ＝ 詰められる分</span>。全部詰めると <b className="text-emerald-700">{cVal(g.saveToFastestSec, g.saveToFastestYen)}/年</b>（①の中身）。</div>
+                                    {ex && (
+                                      <div className="fi-tap-text text-emerald-900 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+                                        <b>計算の例</b>（この工程でいちばん効く {ex.model}）: ふだん {pdcaFmtSec(ex.median)} − 🏆{pdcaFmtSec(g.fastest)} = <b>1台 {pdcaFmtSec(exGap)}</b> 詰められる × 年{ex.annualUnits.toLocaleString()}台{rate > 0 ? <> × 時給¥{Math.round(rate).toLocaleString()}</> : null} ≒ <b>{cVal(exSave, Math.round(exSave / 3600 * rate))}/年</b> ← これが「浮く分」の正体です
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
+                              <table className="w-full fi-tap-text border-collapse">
+                                <thead><tr className="text-slate-400 border-b border-indigo-100"><th className="px-2 py-0.5 text-left">品目コード</th><th className="px-2 py-0.5 text-right" title="経営分析で入力した台数(登録)。無い品目コードは実績ペースの推定">年間台数</th><th className="px-2 py-0.5 text-left" title="ふだん1台にかかっている時間(実測の真ん中の値)。緑=🏆と同じ速さの分・オレンジ=🏆より遅い分">1台の時間（ふだん）</th><th className="px-2 py-0.5 text-right" title="🏆(一番速い品目コード)との1台あたりの差">🏆との差</th><th className="px-2 py-0.5 text-right" title="差 × 年間台数 × 時給 = この品目コードを🏆に揃えたら浮く分">揃えたら浮く分/年</th><th className="px-2 py-0.5 text-right" title="年間台数 × 1台の時間 × 時給 = いまかかっている分">年間コスト</th><th className="px-2 py-0.5 text-right" title="テンプレに設定した目標時間。⚠=実測より遅い目標(見直し推奨)">目標</th></tr></thead>
                                 <tbody>
-                                  {g.models.map((m, j) => (
-                                    <tr key={j} className={`border-b border-indigo-50 ${m.median === g.fastest ? 'bg-emerald-50/50' : ''}`}>
-                                      <td className="px-2 py-0.5 font-bold text-slate-700">{m.median === g.fastest && <span className="text-emerald-600">🏆 </span>}{m.model}</td>
-                                      <td className="px-2 py-0.5 text-right font-mono">{m.annualUnits.toLocaleString()}</td>
-                                      <td className="px-2 py-0.5 text-right font-mono">{pdcaFmtSec(m.median)}</td>
-                                      <td className="px-2 py-0.5 text-right font-mono text-slate-400">{m.hasTarget ? pdcaFmtSec(m.target) : '—'}</td>
-                                      <td className="px-2 py-0.5 text-right font-mono">{cVal(m.annualCostSec, m.annualCostYen)}</td>
+                                  {g.models.map((m, j) => {
+                                    const maxMed = g.models[g.models.length - 1].median || 1; // 並びは速い順なので末尾=一番遅い品目コード
+                                    const gapSec = Math.max(0, m.median - g.fastest);
+                                    const gapSaveSec = Math.round(m.annualUnits * gapSec);
+                                    const gapSaveYen = Math.round(gapSaveSec / 3600 * (crossRanking.rate || 0));
+                                    const badTarget = m.hasTarget && m.target > m.median; // ⚠実測より遅い目標=未較正
+                                    return (
+                                    <tr key={j} onClick={(e) => { e.stopPropagation(); setDetailRow(m); }} className={`border-b border-indigo-50 cursor-pointer hover:bg-amber-50 ${m.median === g.fastest ? 'bg-emerald-50/50' : ''}`} title={`${m.model} の計算の内訳（台数の出し方・根拠データ）を見る`}>
+                                      <td className="px-2 py-0.5 font-bold text-slate-700 whitespace-nowrap">{m.median === g.fastest && <span className="text-emerald-600">🏆 </span>}{m.model}<span className="fi-tap-text text-indigo-400 ml-1">詳細▸</span></td>
+                                      <td className="px-2 py-0.5 text-right font-mono">{m.annualUnits.toLocaleString()}<span className="text-[8px] text-slate-400 ml-0.5">{m.annualUnitsSource === 'actual' ? '登録' : '推定'}</span></td>
+                                      <td className="px-2 py-0.5 min-w-[150px]">
+                                        {/* 棒グラフ: 緑=🏆と同じ速さの分 / オレンジ=🏆より遅い分(=詰められる分)。長さは一番遅い品目コードを100%に */}
+                                        <div className="flex items-center gap-1.5">
+                                          <div className="h-2.5 flex-1 max-w-[160px] bg-slate-100 rounded overflow-hidden flex">
+                                            <div className="h-full bg-emerald-400" style={{ width: `${Math.min(100, Math.round(Math.min(m.median, g.fastest) / maxMed * 100))}%` }} />
+                                            {gapSec > 0 && <div className="h-full bg-amber-400" style={{ width: `${Math.round(gapSec / maxMed * 100)}%` }} />}
+                                          </div>
+                                          <span className="font-mono whitespace-nowrap">{pdcaFmtSec(m.median)}</span>
+                                        </div>
+                                      </td>
+                                      <td className="px-2 py-0.5 text-right font-mono whitespace-nowrap">{gapSec > 0 ? <span className="text-amber-700 font-bold">+{pdcaFmtSec(gapSec)}</span> : <span className="text-emerald-600 font-bold">🏆</span>}</td>
+                                      <td className="px-2 py-0.5 text-right font-mono whitespace-nowrap">{gapSaveSec > 0 ? <span className="text-emerald-700 font-bold">{cVal(gapSaveSec, gapSaveYen)}</span> : <span className="text-slate-300">—</span>}</td>
+                                      <td className="px-2 py-0.5 text-right font-mono whitespace-nowrap">{cVal(m.annualCostSec, m.annualCostYen)}</td>
+                                      <td className="px-2 py-0.5 text-right font-mono whitespace-nowrap">{m.hasTarget ? (badTarget ? <span className="text-amber-600" title="実測より遅い目標。テンプレの目標時間を見直してください(このままだと③に効きません)">⚠{pdcaFmtSec(m.target)}</span> : <span className="text-slate-500">{pdcaFmtSec(m.target)}</span>) : <span className="text-slate-300">—</span>}</td>
                                     </tr>
-                                  ))}
+                                  ); })}
                                 </tbody>
                               </table>
-                              <div className="text-xs text-slate-400 mt-1">🏆=この工程で一番速い品目コード（実証済みの到達点）。年間コスト = 年間台数 × 中央値{cr ? ' × 時給' : ''}。</div>
+                              <div className="fi-tap-text text-slate-400 mt-1">🏆=この工程で一番速い品目コード（実証済みの到達点）。<b>揃えたら浮く分 = 🏆との差 × 年間台数{cr ? ' × 時給' : ''}</b> ／ 年間コスト = 年間台数 × 1台の時間{cr ? ' × 時給' : ''}。金額は時間を時給で換算した<b>試算</b>です。<b>品目コードをクリック</b>すると台数の出し方・根拠データまで遡れます。</div>
                             </td></tr>
                           )}
                         </React.Fragment>
