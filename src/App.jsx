@@ -305,8 +305,8 @@ import { makeSaveFactoryCalendar } from './calendar/saveFactoryCalendar.js';
 import { shouldSkipReworkContact, buildRepairDraft } from './domain/repairContact.js';
 import { GoalLayerView } from './goal/GoalLayerView.jsx';
 import { ArrivalTag } from './contact/ContactKit.jsx';
-import { arrivalFilterMatches } from './domain/contactBoard.js';
-import { arrivalForWhen } from './domain/arrivalSplits.js';
+import { arrivalFilterMatches, arrivalWhenOf } from './domain/contactBoard.js';
+import { arrivalForWhen, buildArrivalDoc, isSplitArrival, splitsOf, formatSplits } from './domain/arrivalSplits.js';
 import { useContactHub, WorkContactBlock, contactPropsOf, ContactTabBadge, ContactTab } from './contact/ContactHub.jsx';
 import { IncomingArrivalsPanel } from './IncomingArrivals.jsx';
 import { DriveFileViewer } from './DriveFileViewer.jsx';
@@ -26413,7 +26413,57 @@ const GROUP_STATE_CLS = {
 const fmtMd = (ms) => { const n = toMsAny(ms); if (!n) return ''; const d = new Date(n); return `${d.getMonth() + 1}/${d.getDate()}`; };
 // 🕒 入庫時間・検査完了は「日付+時刻」で出す(2026-09-09 清水さん「入庫時間と納期、検査完了日」)
 const fmtMdHm = (ms) => { const n = toMsAny(ms); if (!n) return ''; const d = new Date(n); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
-const OrderGroupCard = ({ group, workers, templates, onOpen, onEdit = null, onDelete = null }) => {
+// 🚚 P164 製品 App.jsx の ArrivalCell を写した(2026-09-27・title の全角空白だけ \u3000 と書いた)。工程連絡が OFF なら出さない(arrivalOn)。
+// 検査リスト(表)の🚚到着予定セル。PCから直接入れられるように(今まで到着予定は組立ポータルからしか入らなかった)。
+//   ⚠書き込む形は ContactPortal の registerArrival と完全に同じにする。ここだけ形が違うと、
+//     到着→入荷時間の自動反映(contactArrivalDT が date+time を読む)が黙って効かなくなる。
+//   by は入れた人。group='' = 検査が自分で入れた(組立の班が知らせたのではない)。
+const ArrivalCell = ({ lot, arrival, saveData, currentUserName }) => {
+  const [open, setOpen] = useState(false);
+  const [d, setD] = useState({ date: '', time: '' });
+  const todayStr = (() => { const x = new Date(); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; })();
+  const has = arrival && arrival.time;
+  // 🚚 この欄に出ているのが「同じ指図の別ロットへの連絡を、反映で広げた札」かどうか。
+  //   ⚠広げた札は原本が別のロットに1件あるだけ。ここで直すと**このロット専用の到着予定が新しく1件できて**、
+  //     以後そちらが勝つ(原本は変わらない)。黙ってやると「直したのに元の連絡が変わっていない」になるので、必ず断る。
+  const spread = !!(arrival && arrival._spreadFrom);
+  const save = () => {
+    if (!d.time) return;
+    if (spread && !window.confirm(`この到着予定は、同じ指図の別ロットへの連絡を反映で広げて出している物です。\n\nここで直すと、このロット専用の到着予定が新しくできます（元の連絡は変わりません）。\nよろしいですか？`)) return;
+    // ⚠分納(便が2つ以上)で登録されているロットをここで直しても、splits を書き換えていないので
+    //   画面は今までの便を出し続け、直した時間が黙って効かなかった(2026-08-05 発覚)。
+    //   ここは「1件に直す」入口なので、便の内訳が消えることを必ず断ってから splits ごと置き換える。
+    if (isSplitArrival(arrival) && !window.confirm(`このロットは分納（${splitsOf(arrival).length}便）で登録されています。\n${formatSplits(splitsOf(arrival))}\n\nここで直すと便の内訳は消えて ${d.time} の1件になります。よろしいですか？`)) return;
+    saveData('arrival_times', lot.id, {
+      orderNo: lot.orderNo || '', model: lot.model || '',
+      quantity: lot.quantity || 0, dueDate: lot.dueDate || '',   // 組立ポータル(buildArrivalDoc)と同じ形にそろえる
+      date: d.date || todayStr, time: d.time, splits: [],        // splits を書かないと前の便が残り続ける
+      by: currentUserName || '検査', group: '', viaReq: '', at: Date.now(),
+    });
+    setOpen(false);
+  };
+  if (!open) {
+    return has
+      ? <button onClick={() => { setD({ date: arrival.date || todayStr, time: arrival.time }); setOpen(true); }}
+          title={`到着予定 (登録: ${arrival.by || '?'}${arrival.group ? ` / ${arrival.group}` : ''})3000クリックで直す${spread ? `／ ⚠この札は同じ指図の別ロットへの連絡を、検査が「到着予定を反映」した時に広げた物です${arrival._spreadBy ? `（反映: ${arrival._spreadBy}）` : ''}。組立がこのロットについて直接言ってきた物ではありません。` : ''}`}
+          className="fi-tap-text font-black text-teal-800 bg-teal-50 border border-teal-300 rounded px-1.5 py-0.5 whitespace-nowrap hover:bg-teal-100">
+          🚚 {arrival.date ? `${String(arrival.date).slice(5).replace('-', '/')} ` : ''}{arrival.time}
+          {/* 同じ指図の別ロットへ広げた札。組立が直接言ってきた物と見分けが付くようにする */}
+          {spread && <span className="ml-1 font-normal text-teal-600">・同じ指図から</span>}
+        </button>
+      : <button onClick={() => { setD({ date: todayStr, time: '' }); setOpen(true); }}
+          title="到着予定を入れる" className="fi-tap-text font-bold text-slate-300 border border-dashed border-slate-300 rounded px-1.5 py-0.5 hover:text-teal-700 hover:border-teal-400">＋ 入力</button>;
+  }
+  return (
+    <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+      <input type="date" value={d.date} onChange={e => setD(p => ({ ...p, date: e.target.value }))} className="border border-slate-300 rounded px-1 py-0.5 fi-tap-text" />
+      <input type="time" value={d.time} onChange={e => setD(p => ({ ...p, time: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setOpen(false); }} autoFocus className="border border-slate-300 rounded px-1 py-0.5 fi-tap-text font-black" />
+      <button onClick={save} disabled={!d.time} className="px-1.5 py-0.5 rounded bg-teal-600 text-white fi-tap-text font-black disabled:opacity-40">✓</button>
+      <button onClick={() => setOpen(false)} className="px-1 text-slate-400 fi-tap-text">×</button>
+    </div>
+  );
+};
+const OrderGroupCard = ({ group, workers, templates, arrivalByLot = {}, onOpen, onEdit = null, onDelete = null }) => {
   const rows = [...group.active, ...group.done];
   const doneN = group.done.length;
   const tplName = (l) => (l.templateId === 'demo' ? '詳細デモ手順' : (templates?.find((t) => t.id === l.templateId)?.name || '（テンプレなし）'));
@@ -26443,7 +26493,7 @@ const OrderGroupCard = ({ group, workers, templates, onOpen, onEdit = null, onDe
                 <ClipboardList className="w-3.5 h-3.5 shrink-0" /><span className="truncate">{tplName(lot)}</span>
               </span>
               <span className="text-xs text-slate-500">{lot.quantity}台</span>
-              <span className="text-xs text-slate-600" title="入庫時間（検査へ来た日時）＝入荷（検査へ来た日）" data-order-group-entry={lot.id}>入庫 <b className="text-slate-800">{fmtMdHm(lot.entryAt) || fmtMd(lot.entryAt) || '—'}</b></span>
+              <span className="text-xs text-slate-600" title="入庫時間（検査へ来た日時）＝入荷（検査へ来た日）" data-order-group-entry={lot.id}>入庫 <b className="text-slate-800">{fmtMdHm(lot.entryAt) || fmtMd(lot.entryAt) || '—'}</b>{(() => { const arr = (arrivalByLot || {})[lot.id]; const aw = arr && arr.time ? arrivalWhenOf(arrivalForWhen(arr)) : null; return aw ? <span className="ml-1 text-teal-700">🚚 {aw.label}</span> : null; })()}</span>
               <span className="text-xs text-slate-600" title="納期">納期 <b className="text-slate-800">{fmtDue(lot.dueDate, false) || '—'}</b></span>
               {st.key === 'done' ? <span className="text-xs text-emerald-800" title="検査完了（完了した日時）" data-order-group-done={lot.id}>検査完了 <b>{fmtMdHm(st.at) || '—'}</b></span> : null}
               <span className={`ml-auto text-xs font-black border rounded px-2 py-0.5 ${GROUP_STATE_CLS[st.key]}`}>
@@ -26529,7 +26579,7 @@ const NarrowFold = ({ fold, summary, className = '', children }) => {
   );
 };
 
-const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onDeleteLot, setExecutionLotId, currentUserName = '', saveData, parentTabs = null, arrivalByLot = {} }) => {
+const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onDeleteLot, setExecutionLotId, currentUserName = '', saveData, parentTabs = null, arrivalByLot = {}, arrivalEnabled = false }) => {
   // 🚚 P164 到着予定の絞り込み(製品 38513)。arrivalByLot は工程連絡が ON の時だけ中身が入る(既定 OFF=空)。
   const [arrivalFilter, setArrivalFilter] = useState([]);
   const arrivalOn = Object.keys(arrivalByLot || {}).length > 0;
@@ -27036,7 +27086,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           groupByOrder ? (
             <div data-order-group-grid="1" className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start pb-10">
               {orderGroups.map((g) => (
-                <OrderGroupCard key={g.orderNo} group={g} workers={workers} templates={templates} onOpen={(lot) => setAssignmentLot(lot)} onEdit={onEditLot} onDelete={onDeleteLot} />
+                <OrderGroupCard key={g.orderNo} group={g} workers={workers} templates={templates} arrivalByLot={arrivalByLot} onOpen={(lot) => setAssignmentLot(lot)} onEdit={onEditLot} onDelete={onDeleteLot} />
               ))}
             </div>
           ) : viewMode === 'grid' ? (
@@ -27170,6 +27220,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                     <th className="p-3 font-bold border-b">テンプレート</th>
                     <th className="p-3 font-bold border-b text-center">台数</th>
                     <th className="p-3 font-bold border-b">入荷日時</th>
+                    {(arrivalOn || arrivalEnabled) && <th className="p-3 font-bold border-b whitespace-nowrap">🚚 到着予定</th>}
                     <th className="p-3 font-bold border-b">納期</th>
                     <th className="p-3 font-bold border-b">場所</th>
                     <th className="p-3 font-bold border-b">担当</th>
@@ -27219,6 +27270,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                         </td>
                         <td className="p-3 text-center">{lot.quantity}</td>
                         <td className="p-3 text-slate-500 text-xs">{lot.entryAt ? `${toDateShort(lot.entryAt)} ${new Date(lot.entryAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}` : '-'}</td>
+                        {(arrivalOn || arrivalEnabled) && <td className="p-3"><ArrivalCell lot={lot} arrival={arrivalByLot[lot.id]} saveData={saveData} currentUserName={currentUserName} /></td>}
                         {/* 🚩 表の納期もカードと同じ色(片方だけ赤くしない) */}
                         <td className={`p-3 text-xs font-bold whitespace-nowrap ${dueVizOf(lot).text}`} title={dueVizOf(lot).label}>{fmtDue(lot.dueDate) || '-'}</td>
                         {/* 場所 (エリア) */}
@@ -32082,6 +32134,9 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    const openHdrMenu = (type, e) => { const r = e.currentTarget.getBoundingClientRect(); setHdrMenu(prev => prev && prev.type === type ? null : { type, top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) }); };
    const [showLotModal, setShowLotModal] = useState(false);
    const [lotFormQty, setLotFormQty] = useState(1);
+   // 🆕 P164 組立からの「検査リストに無い品」の連絡を登録画面へ前入力する(製品 lotPrefill と同じ)。窓を閉じたら捨てる。
+   const [lotPrefill, setLotPrefill] = useState(null);
+   useEffect(() => { if (!showLotModal) setLotPrefill(null); }, [showLotModal]);
    const [showAnomalyPanel, setShowAnomalyPanel] = useState(false);
    // 「❓使い方」マニュアル
    const [showHelp, setShowHelp] = useState(false);
@@ -33864,8 +33919,42 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
         };
         await saveData('lots', id, lot);
         await saveData('logs', generateId(), { timestamp, type: 'CREATE', batchId, count: qty, model, ...(appliedStandard?.standardNo ? { standardNo: appliedStandard.standardNo } : {}) });
+        // 🆕 P164 連絡から登録した時の後始末(製品と同じ)。⚠lotId と status:'done' は必ず両方書く。
+        if (lotPrefill && lotPrefill.reqId) {
+          await saveData('contact_requests', lotPrefill.reqId, { lotId: id, status: 'done' });
+          if (lotPrefill.arrivalDate && lotPrefill.arrivalTime) {
+            await saveData('arrival_times', id, buildArrivalDoc({
+              lot: { id, orderNo, model, quantity: qty, dueDate: parsedDueDate || '' },
+              splits: [{ date: lotPrefill.arrivalDate, time: lotPrefill.arrivalTime, qty }],
+              by: currentUserName, group: lotPrefill.group || '', viaReq: lotPrefill.reqId, now: timestamp,
+            }));
+          }
+        }
      }
      setShowLotModal(false);
+   };
+
+   // 🆕 P164「この内容で検査対象に登録」= 登録画面を前入力で開くだけ(製品と同じ)。テンプレは人に選んでもらう。
+   const registerLotFromContact = (req) => {
+     if (!req) return;
+     if (req.lotId) { alert('この連絡は、もう検査対象に登録されています。'); return; }
+     const orderNo = String(req.orderNo || '').trim();
+     const dup = (lots || []).filter(l => l && String(l.orderNo || '').trim() === orderNo);
+     if (orderNo && dup.length) {
+       const list = dup.map(l => `・${l.model || '品目コードなし'} ${l.quantity || 0}台（${l.status === 'completed' ? '完了済み' : '検査中/未着手'}）`).join('\n');
+       if (!window.confirm(`指図 ${orderNo} は既に検査リストにあります。\n${list}\n\nそれでも新しく登録しますか？`)) return;
+     }
+     const qty = Math.max(1, Number(req.quantity) || 1);
+     const it = (req.items || [])[0] || {};
+     setEditingLot(null);
+     setLotFormQty(qty);
+     setLotPrefill({
+       reqId: req.id, orderNo, model: String(req.model || ''), quantity: qty,
+       dueDate: String(req.dueDate || ''), message: String(req.message || ''),
+       from: String(req.from || ''), group: String(req.to || ''),
+       arrivalDate: String(it.date || ''), arrivalTime: String(it.time || ''),
+     });
+     setShowLotModal(true);
    };
 
    // === Excel一括登録: テンプレートダウンロード ===
@@ -36023,7 +36112,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
            : !progressDataReady ? <DataLoadingPanel what="過去のロットと間接作業" />
            : <div className="h-full flex flex-col gap-3 min-h-0">{/* 👀 P161 独り立ち直後の見守り。カードが無ければ null */}<MimamoriCard report={mimamoriReport} currentUserName={currentUserName} canEdit={currentUserName === '管理者'} /><div className="flex-1 min-h-0"><ProgressOverviewView lots={lots} /* 🧹 2026-09-23 休止中の人を在籍・ロスター・タイムラインに数えない(製品と同じ。作業者の現状の5人と合わせる) */ workers={activeWorkersOf(workers || [])} pausedCount={Math.max(0, (workers || []).length - activeWorkersOf(workers || []).length)} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} saveFactoryCalendar={makeSaveFactoryCalendar(contactHub.saveContactShared, currentUserName)} factoryCalendarLoaded={contactShared !== null} canEditCalendarSwitch={currentUserName === '管理者'} /></div></div>
          )}
-         {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)} arrivalByLot={contactHub.contactFeatureOn ? contactHub.arrivalByLot : {}} />}
+         {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)} arrivalByLot={contactHub.contactFeatureOn ? contactHub.arrivalByLot : {}} arrivalEnabled={contactHub.contactFeatureOn} />}
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
          {/* 📒 ヘッダーの☰から開く台帳(読み終わるまで出さない=0件と見分けが付かないため) */}
          {showQuickLedger && minorReportsReady && <MinorReportLedgerModal reports={minorReports} lots={lots} workers={workers} currentUserName={currentUserName} saveData={saveData} deleteData={deleteData} itemMaster={settings?.itemMaster || {}} onClose={() => setShowQuickLedger(false)} />}
@@ -36130,7 +36219,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
            )
          )}
          {/* 📨 P070 連絡タブ */}
-         {activeTab === 'contact' && <ContactTab hub={contactHub} lots={lots} saveSettings={saveSettings} saveData={saveData} deleteData={deleteData} currentUserName={currentUserName} templates={templates} />}
+         {activeTab === 'contact' && <ContactTab hub={contactHub} lots={lots} saveSettings={saveSettings} saveData={saveData} deleteData={deleteData} currentUserName={currentUserName} templates={templates} onRegisterLot={registerLotFromContact} />}
          {/* 📨 P070 ⑥ / P140: 工程連絡の入切と、この端末をアプリとして入れる */}
          {activeTab === 'contact-settings' && (
            <div className="h-full overflow-y-auto">
@@ -36476,6 +36565,15 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                </div>
              </div>
              {!editingLot && <LotImportOptionsPanel opts={lotImportOpts} setOpts={setLotImportOpts} />}
+             {lotPrefill && !editingLot && (
+               <div className="mb-3 rounded-lg border-2 border-rose-300 bg-rose-50 p-3">
+                 <div className="font-black text-rose-700 text-sm">🆕 連絡から登録します</div>
+                 <div className="text-xs text-slate-600 mt-0.5">{lotPrefill.group || '組立'}{lotPrefill.from ? `（${lotPrefill.from}さん）` : ''} から</div>
+                 {lotPrefill.message && <div className="mt-1.5 whitespace-pre-wrap bg-white border border-rose-200 rounded p-2 text-xs text-slate-700"><b>検査内容:</b> {lotPrefill.message}</div>}
+                 <div className="mt-1.5 text-xs font-bold text-rose-700">適用テンプレートだけ選んでください。</div>
+                 {lotPrefill.arrivalDate && lotPrefill.arrivalTime && <div className="mt-1 text-xs text-slate-600">🚚 到着予定 {lotPrefill.arrivalDate} {lotPrefill.arrivalTime} — 登録すると、そのまま到着予定に入ります。</div>}
+               </div>
+             )}
              <form onSubmit={(e) => {
                e.preventDefault();
                handleAddLot(Object.fromEntries(new FormData(e.target)));
@@ -36494,7 +36592,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                <div className="grid grid-cols-2 gap-4">
                  <div>
                     <label className="block text-sm font-bold text-slate-700 mb-1">品目コード</label>
-                    <input name="model" list="itemCodeOptions" defaultValue={editingLot?.model} required
+                    <input name="model" list="itemCodeOptions" defaultValue={editingLot?.model ?? lotPrefill?.model ?? ''} required
                       onInput={(e) => {
                         // P029: 名簿に在る品目コードなら、品名欄の薄字に名簿の品名を出す(空のまま保存すれば名簿の品名で埋まる)
                         const f = e.currentTarget.form; const el = f && f.elements && f.elements.namedItem('modelText');
@@ -36505,7 +36603,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                  </div>
                  <div>
                     <label className="block text-sm font-bold text-slate-700 mb-1">指図番号</label>
-                    <input name="orderNo" defaultValue={editingLot?.orderNo} required className="w-full border rounded p-2 bg-slate-50" placeholder="例: 001" />
+                    <input name="orderNo" defaultValue={editingLot?.orderNo ?? lotPrefill?.orderNo ?? ''} required className="w-full border rounded p-2 bg-slate-50" placeholder="例: 001" />
                  </div>
                </div>
                <div>
@@ -36545,7 +36643,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                  </div>
                  <div>
                     <label className="block text-sm font-bold text-slate-700 mb-1">適用テンプレート</label>
-                    <select name="templateId" defaultValue={editingLot?.templateId} className="w-full border rounded p-2 bg-slate-50">
+                    <select name="templateId" defaultValue={editingLot?.templateId ?? (lotPrefill ? '' : undefined)} required={!!lotPrefill && !editingLot} className="w-full border rounded p-2 bg-slate-50">
+                      {lotPrefill && !editingLot && <option value="">▼ 検査内容に合うテンプレートを選んでください</option>}
                       <option value="demo">詳細デモ手順 (4工程)</option>
                       {[...templates].sort((a, b) => new Intl.Collator('ja').compare(a.name || '', b.name || '')).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                     </select>
@@ -36565,7 +36664,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                     <input
                       name="dueDate"
                       type="text"
-                      defaultValue={editingLot?.dueDate || ''}
+                      defaultValue={editingLot?.dueDate || lotPrefill?.dueDate || ''}
                       placeholder="例: 2026/5/15"
                       pattern="\d{4}[/\-]\d{1,2}[/\-]\d{1,2}"
                       className="w-full border rounded p-2 bg-slate-50 font-mono"

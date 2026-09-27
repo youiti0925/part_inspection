@@ -745,12 +745,12 @@ export const ContactTabBadge = ({ hub }) => {
 };
 
 // 連絡タブの中身(製品 App.jsx 50572 の ContactView の呼び方を写した)
-export const ContactTab = ({ hub, lots, saveSettings, saveData, deleteData, currentUserName, templates }) => {
+export const ContactTab = ({ hub, lots, saveSettings, saveData, deleteData, currentUserName, templates, onRegisterLot = null }) => {
   if (!hub || !hub.contactFeatureOn) return null;
   return (
     <ContactView contactRequests={hub.contactRequests} arrivalTimes={hub.arrivalTimes} lots={lots} settings={hub.contactSettings} saveSettings={saveSettings} saveShared={hub.saveContactShared} saveData={saveData} deleteData={deleteData} currentUserName={currentUserName} pushTokens={hub.pushTokens} notifyPush={hub.notifyContactPush} onApplyArrival={(reqId, itemIdx) => hub.setArrivalApply({ reqId, itemIdx })} onOpenArrivalEntry={(key) => hub.setArrivalApply({ key })} templates={templates}
       arrivalActuals={[]} onCheckArrival={hub.checkArrival} onUndoArrival={hub.undoArrivalCheck} onRemindArrival={hub.remindArrival}
       onOpenComplete={(lot) => hub.setCompletePrompt({ lot, group: contactCompleteGroupFor(hub.contactSettings, lot.model), qty: null })}
-      onUndoDecline={hub.undoDeclineComplete} />
+      onUndoDecline={hub.undoDeclineComplete} onRegisterLot={onRegisterLot} />
   );
 };
