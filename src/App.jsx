@@ -214,6 +214,8 @@ import { FEEDBACK_COL, openFeedbackCount, feedbackConfigOf, toggleAgreePatch } f
 import { NoticePopup } from './AppNotice.jsx';
 import { LotImportOptionsPanel, LotImportPreviewModal } from './LotImportPanels.jsx'; // 📥 P034/P035
 import { Bar as VizBar, Dots as VizDots } from './opsim/vizKit.jsx'; // 📊 P107 台数の点・進捗の棒
+// 📱 P108 PC/スマホの切替1本(製品と同じ layoutMode.js)。layoutInfo() は { wide, narrow, short } を返す。short(スマホ横)は narrow の仲間
+import { layoutInfo, nextLayoutMode, readLayoutMode, saveLayoutMode, layoutModeLabel } from './domain/layoutMode.js';
 import { NOTICE_COL, noticeConfigOf } from './domain/appNotices.js';
 
 // --- 一度だけ実行: 管理者未承認の厳密モード(localStorageの古い残骸)を全消去して既定OFFに戻す ---
@@ -25104,6 +25106,52 @@ const OrderGroupCard = ({ group, workers, templates, onOpen, onEdit = null, onDe
   );
 };
 
+// 📱 P108 見せ方(PC/スマホ)の購読者。製品 App.jsx 1165-1170・1215-1244 の写し
+const layoutSubscribers = new Set();
+let layoutModeValue = null;                       // 最初に使われた時だけ localStorage を読む
+const layoutModeNow = () => (layoutModeValue === null ? (layoutModeValue = readLayoutMode()) : layoutModeValue);
+const setLayoutModeGlobal = (m) => { layoutModeValue = saveLayoutMode(m); layoutSubscribers.forEach(f => { try { f(); } catch { /* 1つ壊れても他は起こす */ } }); };
+const viewportNow = () => {
+  try { return { w: window.innerWidth || 1280, h: window.innerHeight || 800 }; } catch { return { w: 1280, h: 800 }; }
+};
+/**
+ * いまの見せ方。戻り値 = layoutInfo() + 操作。
+ *   wide   : 広い版(今までのPCの見た目)でよい
+ *   narrow : 縦1列側。**short を含む**
+ *   short  : 縦が足りない(スマホ横 844×390)
+ *   cycle(): 自動 → PC → スマホ → 自動
+ */
+const useLayout = () => {
+  const [, setTick] = useState(0);
+  const [vp, setVp] = useState(viewportNow);
+  useEffect(() => {
+    const bump = () => setTick(t => t + 1);
+    const onResize = () => setVp(viewportNow());
+    layoutSubscribers.add(bump);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    onResize();   // 初回描画と実寸がズレる端末(アドレスバーの伸縮)へ念のため
+    return () => {
+      layoutSubscribers.delete(bump);
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, []);
+  const mode = layoutModeNow();
+  const info = layoutInfo(mode, vp.w, vp.h);
+  return {
+    ...info,
+    vw: vp.w, vh: vp.h,
+    // 端末そのものが狭いか(人の指定を無視した素の判定)。
+    // ⚠手で「PC」を選んだせいで閉じ込められた人に、戻る道を出す為だけに使う。
+    deviceNarrow: !layoutInfo('auto', vp.w, vp.h).wide,
+    label: layoutModeLabel(mode, info.layout),
+    cycle: () => setLayoutModeGlobal(nextLayoutMode(layoutModeNow())),
+    setMode: setLayoutModeGlobal,
+  };
+};
+
+
 /**
  * 📦 狭い時だけ「畳む」入れ物。(製品アプリ product-inspection-app の NarrowFold と同じ物)
  * ⚠⚠ fold=false(=PC) の時は **子をそのまま返すだけ**。囲いも増えないので、
@@ -25138,12 +25186,9 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
   // 担当者絞り込み (管理者/代理作業者向け): '' = 全員, 'me' = 自分のみ, workerId = 指定作業者
   const [workerFilter, setWorkerFilter] = useState('');
   // 🖥 狭い画面(1024px以下)かどうか。狭い時だけ絞り込み帯を畳む(NarrowFold)。広い画面は今まで通り。
-  const [narrow, setNarrow] = useState(() => { try { return window.innerWidth <= 1024; } catch { return false; } });
-  useEffect(() => {
-    const f = () => { try { setNarrow(window.innerWidth <= 1024); } catch { /* noop */ } };
-    window.addEventListener('resize', f);
-    return () => window.removeEventListener('resize', f);
-  }, []);
+  // 📱 P108 自分で幅を測るのをやめ、切替1本(useLayout)に揃える。狭い = PC 以外(スマホ・スマホ横)
+  const LY = useLayout();
+  const narrow = !LY.wide;
 
   // 詳細フィルタ (multi-select)
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
@@ -25295,6 +25340,8 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           畳んだ中に入れると「完了履歴へ行く道」が閉じている間 押せなくなるので、その時だけ今までどおり行の上に出す。
           広い画面(現場の 1366px)では下の行の左端に入り、帯は1本減る。 */}
       {narrow && parentTabsEl && <div data-band="inspection-tabs-narrow" className="shrink-0 flex items-center gap-1">{parentTabsEl}</div>}
+      {/* 📱 P108 見せ方の切替1本(自動→PC→スマホ→自動)。端末ごとに覚える */}
+      <div className="shrink-0 flex justify-end"><button type="button" onClick={LY.cycle} data-layout-toggle className={`text-xs font-bold text-slate-600 bg-white border rounded px-2 ${narrow ? 'min-h-[44px]' : 'py-1'}`} title="画面の見せ方を切り替えます（自動 → PC → スマホ → 自動）">🖥/📱 表示: {LY.label}</button></div>
       <NarrowFold
         fold={narrow}
         summary={<>
@@ -25315,14 +25362,14 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           {!narrow && parentTabsEl && (<>{parentTabsEl}<div className="h-7 w-px bg-slate-300 shrink-0" /></>)}
           <div className="flex items-center gap-2 text-sm font-bold text-slate-600">
             <MapPin className="w-4 h-4" /> エリア:
-            <select value={selectedZoneFilter} onChange={(e) => setSelectedZoneFilter(e.target.value)} className="border rounded px-2 py-1 bg-slate-50 text-slate-800 max-w-[10rem] md:max-w-[12rem] truncate">
+            <select value={selectedZoneFilter} onChange={(e) => setSelectedZoneFilter(e.target.value)} className={`border rounded px-2 py-1 bg-slate-50 text-slate-800 max-w-[10rem] md:max-w-[12rem] truncate ${narrow ? 'min-h-[44px]' : ''}`}>
               <option value="all">すべて</option>
               {mapZones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
             </select>
           </div>
           <div className="flex items-center gap-2 text-sm font-bold text-slate-600">
             <ArrowUpDown className="w-4 h-4" /> 並び替え:
-            <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} className="border rounded px-2 py-1 bg-slate-50 text-slate-800">
+            <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} className={`border rounded px-2 py-1 bg-slate-50 text-slate-800 ${narrow ? 'min-h-[44px]' : ''}`}>
               <option value="entry_asc">入荷日時 (早い順)</option>
               <option value="entry_desc">入荷日時 (遅い順)</option>
               <option value="due_asc">納期 (近い順)</option>
@@ -25394,7 +25441,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
             </datalist>
           </div>
           {/* 担当者絞り込み: 自分のみ / 全員 / 指定作業者 を選択可能 (管理者・代理作業向け) */}
-          <select value={workerFilter || (onlyMine ? 'me' : '')} onChange={(e) => { setWorkerFilter(e.target.value); setOnlyMine(e.target.value === 'me'); }} className="bg-white border rounded-lg px-2 py-1.5 text-sm font-bold text-slate-700 shadow-sm">
+          <select value={workerFilter || (onlyMine ? 'me' : '')} onChange={(e) => { setWorkerFilter(e.target.value); setOnlyMine(e.target.value === 'me'); }} className={`bg-white border rounded-lg px-2 py-1.5 text-sm font-bold text-slate-700 shadow-sm ${narrow ? 'min-h-[44px]' : ''}`}>
             <option value="">担当: 全員</option>
             {myWorkerId && <option value="me">自分のみ ({currentUserName})</option>}
             <optgroup label="作業者で絞り込み">
@@ -25593,7 +25640,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
               ))}
             </div>
           ) : viewMode === 'grid' ? (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 items-start pb-10">
+            <div className={`grid ${LY.wide ? 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4' : LY.short ? 'grid-cols-2 gap-2' : 'grid-cols-1 sm:grid-cols-2 gap-3'} items-start pb-10`}>
               {sortedLots.map(lot => {
                 const isPaused = Object.values(lot.tasks || {}).some(t => t.status === 'paused');
                 const zoneName = mapZones.find(z => z.id === lot.mapZoneId)?.name || '';
