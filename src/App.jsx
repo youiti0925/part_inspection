@@ -124,6 +124,8 @@ import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStar
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
 //   この部品検査アプリは **読むだけ**(登録する画面は製品検査/最終検査にある)。
 import { isWorkdayYmd } from './domain/factoryCalendar.js';
+import { workerWorkedSecondsInRange, dayRangeOf } from './domain/workerDailyActual.js';
+import { remainingByTasks, lotRemainingSec } from './domain/lotRemaining.js';
 // 🛌 作業者の休止/復帰(2026-08-31 清水さんの要望)。消すのではなく一旦しまう。復帰したら元どおり。
 //   🚨 使ってよいのは「これから割り当てる先」を絞る所だけ。
 //     過去の記録の名前を引く所(WorkerBadge・分析・成績表)には絶対に使わない。
@@ -2701,9 +2703,11 @@ const isUnassignedLot = (l) => {
 //   完了ロットは completedAt(無ければ updatedAt)が今日のものだけを実績に数える。
 //   全期間の完了を積むと、予定が空の作業者でも昔の完了分が実績に出続けて
 //   「予定なしなのに実績だけ数字」になる(=ユーザー指摘)。当日分に限定して整合させる。
-const computeWorkerTimes = (lots, workerId) => {
-  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-  const todayStartMs = todayStart.getTime();
+const targetSecOfStep = (lot) => (step) => getEffectiveTargetTime(step, lot?.model, null, null);
+
+const computeWorkerTimes = (lots, workerId, workerName = '') => {
+  const nowMs = Date.now();
+  const { fromMs: todayStartMs, toMs: todayEndMs } = dayRangeOf(nowMs);
   const completedTodayMs = (l) => {
     const ms = toMsAny(l.completedAt) || toMsAny(l.updatedAt) || 0;
     return ms >= todayStartMs;
@@ -2719,29 +2723,49 @@ const computeWorkerTimes = (lots, workerId) => {
 
   plannedLots.forEach(lot => {
     const elapsedMs = getLotElapsedMs(lot);
-    const isInProgress = elapsedMs > 0 || lot.status === 'processing' || lot.status === 'paused';
+    // ⚠「進行中」は経過時間だけで決めない。1台でも終わっていれば進行中。
+    //   まとめて開始などで totalWorkTime に積まれない作りだと、経過0のまま作業が進む。
+    const prog = remainingByTasks(lot, targetSecOfStep(lot), { lotOnceKeys: lotOnceKeysOf });
+    const isInProgress = elapsedMs > 0 || prog.doneTasks > 0
+      || lot.status === 'processing' || lot.status === 'paused';
     if (isInProgress) {
       inProgressCount += 1;
       if (lot.status === 'processing') processingCount += 1;
-      const estimatedSec = calculateLotEstimatedTime(lot);
-      const elapsedSec = elapsedMs / 1000;
-      inProgressElapsedSec += elapsedSec;
-      inProgressRemainingSec += Math.max(0, estimatedSec - elapsedSec);
+      inProgressElapsedSec += elapsedMs / 1000;
+      // ⚠⚠ 残りは **終わっていないタスクの目標時間** から数える(経過時間から引かない)。
+      //   2026-08-11: 79%終わっているロットが「ほぼ手つかず」で計上されていた。→ src/domain/lotRemaining.js
+      inProgressRemainingSec += lotRemainingSec(
+        lot, targetSecOfStep(lot), calculateLotEstimatedTime(lot), elapsedMs / 1000,
+        { lotOnceKeys: lotOnceKeysOf },
+      ).sec;
     } else {
       notStartedSec += calculateLotEstimatedTime(lot);
     }
   });
 
-  const completedSec = completedLots.reduce((acc, lot) => acc + (lot.totalWorkTime || 0) / 1000, 0);
+  // 🟢 本日実績。完了ロットに限らず **全てのロットの tasks** を見る
+  //    (今日やった工程のロットが完了待ち・タッチアップ・別レーンに居ても、働いた時間は消えない)。
+  //    進行中の当日ぶんは runningSec / liveSec として中に入っているので、
+  //    上の inProgressElapsedSec(= totalWorkTime + 生の経過。日でも人でも切れていない)は足さない。
+  //    足すと同じ作業を二重に数える。
+  const worked = workerWorkedSecondsInRange(lots, {
+    workerId,
+    workerName,
+    fromMs: todayStartMs,
+    toMs: todayEndMs,
+    nowMs,
+    lotDoneMsOf: (l) => toMsAny(l.completedAt) || toMsAny(l.updatedAt) || 0,
+  });
 
   return {
     plannedRemainingSec: notStartedSec + inProgressRemainingSec,
-    actualDoneSec: completedSec + inProgressElapsedSec,
+    actualDoneSec: worked.totalSec,
     inProgressCount,
     processingCount,
     inProgressElapsedSec,
     notStartedCount: plannedLots.length - inProgressCount,
     completedCount: completedLots.length,
+    actualBreakdown: worked,
   };
 };
 
@@ -3548,7 +3572,7 @@ const WorkerSummaryCard = ({ worker, lots }) => {
     return () => clearInterval(intv);
   }, [hasProcessing]);
 
-  const { plannedRemainingSec, actualDoneSec, inProgressCount, processingCount } = computeWorkerTimes(lots, worker.id);
+  const { plannedRemainingSec, actualDoneSec, inProgressCount, processingCount } = computeWorkerTimes(lots, worker.id, worker.name);
 
   return (
     <div className="bg-white border border-slate-200 rounded-lg p-3 shadow-sm flex flex-col gap-2">
@@ -13316,7 +13340,7 @@ const ArrivalPlanningView = ({ onBack, lots, workers, templates, handleMoveLot, 
             </div>
             {/* 🛌休止中の人はこの並びから外す。ただし作業が残っている間はレーンごと残す(行方不明にしない)。 */}
             {laneWorkersOf(workers, lots).map(w => {
-              const { plannedRemainingSec: wPlannedTime, actualDoneSec: wCompletedTime, inProgressCount: wInProgress, processingCount: wProcessing } = computeWorkerTimes(lots, w.id);
+              const { plannedRemainingSec: wPlannedTime, actualDoneSec: wCompletedTime, inProgressCount: wInProgress, processingCount: wProcessing } = computeWorkerTimes(lots, w.id, w.name);
               return (
               <div key={w.id} data-drop-zone="planned" data-worker-id={w.id} className="min-w-[200px] flex-1 border border-blue-100 bg-blue-50/30 rounded-lg p-3 flex flex-col min-h-0" onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>{e.preventDefault(); const id=e.dataTransfer.getData('lotId'); if(id) handleMoveLot(id, 'planned', w.id);}}>
                 <div className="text-sm font-bold text-blue-800 mb-1 flex items-center justify-between shrink-0">
@@ -13365,7 +13389,7 @@ const PlanningExecutionView = ({ onBack, workers, lots, templates, handleMoveLot
              {laneWorkersOf(workers, lots).map(w => {
                if (filterWorkerId && filterWorkerId !== w.id) return null;
                const workerLots = lots.filter(l => l.location === 'planned' && l.workerId === w.id);
-               const { plannedRemainingSec: wPlanTime, actualDoneSec: wDoneTime, inProgressCount: wInProgress, processingCount: wProcessing } = computeWorkerTimes(lots, w.id);
+               const { plannedRemainingSec: wPlanTime, actualDoneSec: wDoneTime, inProgressCount: wInProgress, processingCount: wProcessing } = computeWorkerTimes(lots, w.id, w.name);
                return (
                  <div key={w.id} className="bg-white border border-slate-200 rounded-lg shadow-sm flex flex-col overflow-hidden shrink-0">
                    <div
@@ -26437,11 +26461,13 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
       const activeLot = processing || paused;
       const queued = myLots.filter(l => l !== activeLot);
 
-      // 残り推定時間 (全担当ロットの未完了タスク × 想定時間)
+      // 残り推定時間: 終わっていないタスクの目標時間から数える(個数×平均60秒はやめた・製品と同じ lotRemainingSec)
       const remainingSec = myLots.reduce((acc, lot) => {
-        const p = computeLotProgress(lot);
-        if (!p) return acc + calculateLotEstimatedTime(lot);
-        return acc + (p.remainingTasks * (p.avgTaskTime || 60));
+        const elapsedMs = getLotElapsedMs(lot);
+        return acc + lotRemainingSec(
+          lot, targetSecOfStep(lot), calculateLotEstimatedTime(lot), elapsedMs / 1000,
+          { lotOnceKeys: lotOnceKeysOf },
+        ).sec;
       }, 0);
 
       let state, stateLabel, stateColor;
