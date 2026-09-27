@@ -57,7 +57,7 @@ import {
 //   原理的に作れない ② JSON にすると中身が消えて、送信待ちを人が確認できない。
 //   同じ理由で docRef()/colRef() の逃げ道も使わない(窓口に意図の名前で置く)。
 import { providerFor, ROW_DATA_WINS } from './data/provider.js';
-import { DATA_DELETE, DATA_SERVER_NOW } from './data/sentinels.js';
+import { DATA_DELETE, DATA_SERVER_NOW, withDeletions } from './data/sentinels.js';
 // 🚨🚨 作業時間が「保存で消える」のを止める見張り(2026-08-17 最終検査の事故と同じ形を部品でも塞ぐ)。
 //   ⚠このファイルは最終検査/製品検査と **1バイトも同じ**。片方だけ直すと静かに巻き戻る。
 import { assertSafeLotSave, assertLotsLoaded, wouldLoseWorkTime } from './domain/workTimeGuard.js';
@@ -71,7 +71,7 @@ import { decideCapacity, capacityBlockMessage } from './domain/lotCapacityGate.j
 // 📦 ロット1件の容量。Firestore は1ドキュメント1MB。溢れると **そのロットは何も保存できなくなる**
 //   (不具合写真だけでなく検査記録の保存も落ちる = 凍結)。⚠バイトで数える(日本語は1文字≒3バイト)。
 //   ⚠このファイルも最終検査/製品検査と1バイトも同じ。
-import { approxBytes as capBytes, mergeEstimate as capMerge, DANGER_BYTES as CAP_DANGER, DOC_LIMIT as CAP_LIMIT } from './domain/lotCapacity.js';
+import { approxBytes as capBytes, mergeEstimate as capMerge, DANGER_BYTES as CAP_DANGER, DOC_LIMIT as CAP_LIMIT, SAFE_BYTES as CAP_SAFE, capacityLabel } from './domain/lotCapacity.js';
 // 💾🚨 保存の「順番」の関所。2026-08-17 の事故(作業時間が5ロット分まるごと消えた)の中心。
 //   決まりは1つ: **記録が先・写真(別置き)が後・その間に await を1つも挟まない。**
 //   ⚠このファイルも最終検査/製品検査と1バイトも同じ(md5一致)。片方だけ直すと片方だけ記録が消える。
@@ -29516,6 +29516,22 @@ const QuotaStoppedPanel = ({ until }) => (
        setErrorMsg(msg);
        throw new Error(msg);
      }
+     // 📏 P030 設定の箱も1MB上限(製品 saveSettings の関所と同じ3段)。溢れると 品質規格マスタ・目標時間・宛先・文字サイズ・品目名簿 がどれも保存できなくなる。
+     //   ⚠測る時は withDeletions を通す(通さないと __deleteMapKeys が一番大きいと出る)。保存へは今のまま生の newSettings を渡す(窓口が解く)。
+     try {
+       const merged = capMerge(settings || {}, withDeletions(newSettings || {}));
+       const size = capBytes(merged);
+       if (size > CAP_SAFE) {
+         const big = Object.entries(merged).map(([k, v]) => [k, capBytes(v)]).sort((a, b) => b[1] - a[1])[0];
+         const cap = capacityLabel(size);
+         const msg = `⚠ 設定の保存データが ${cap.text} まで大きくなっています。\n`
+           + `いちばん大きいのは「${big[0]}」で ${Math.round(big[1] / 1024)}KB です。\n`
+           + `上限(1MB)を超えると、品質規格マスタ・目標時間・宛先・文字サイズ・品目名簿が保存できなくなります。\n\n`
+           + (cap.level === 'danger' ? 'このまま保存しますか？（資料PDFや規格のPDFを減らすことをおすすめします）' : '保存は続けます。大きなPDFを足すのは控えてください。');
+         if (cap.level === 'danger' && !confirm(msg)) throw new Error('保存を中止しました（入力はそのまま残っています）。');
+         if (cap.level !== 'danger') console.warn(msg);
+       }
+     } catch (e) { if (e && /保存を中止/.test(e.message || '')) throw e; }
      const rec = { kind: 'settings', data: newSettings };
      bumpInflight(+1);
      try {
