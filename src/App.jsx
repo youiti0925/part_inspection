@@ -25850,7 +25850,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
 // ・週次/月次の必要時間と必要人数を可視化 → 採用判断・残業計画に活用
 // ===========================
 // 1日の作業者活動を時間軸で可視化するガントチャート
-const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
+const DailyWorkerGantt = ({ lots, workers, workSchedule, factoryCalendar = null }) => {
   const localDateStr = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const [selectedDate, setSelectedDate] = useState(() => localDateStr(new Date()));
   const [tick, setTick] = useState(0);
@@ -26090,7 +26090,10 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
       // === 実績: 各タスク(項目×台)を、記録された実開始→実終了でそのまま配置する(再構成しない) ===
       workerLots.forEach(lot => {
         const { auto, manual, noTimeCount: ntc } = buildTaskBars(lot);
-        noTimeCount += ntc;
+        // 時刻の無い記録は日付が分からないので、その日に触ったロット(その日に時刻の在る記録か、その日に完了)の分だけ数える(製品 70de730 と同じ)
+        const touchedThatDay = [...auto, ...manual].some(b => toLocalDateStr(b.start) === selectedDate)
+          || (typeof lot.completedAt === 'number' && toLocalDateStr(lot.completedAt) === selectedDate);
+        if (touchedThatDay) noTimeCount += ntc;
         const pushBar = (b, arr) => {
           if (toLocalDateStr(b.start) !== selectedDate) return;
           const startStr = new Date(b.start).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
@@ -26112,7 +26115,9 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
       });
 
       // === 予定 (未着手) — 当日/未来のみ。実バーの最後 or 現在時刻から前方に概算配置 ===
-      if (selectedDate >= todayStr) {
+      // 工場の暦が休みの日は予定の破線を置かない(実績はそのまま出す)
+      const selectedIsWorkday = makeIsWorkday(factoryCalendar)(new Date(`${selectedDate}T12:00:00`).getTime());
+      if (selectedDate >= todayStr && selectedIsWorkday) {
         const now = Date.now();
         const lastEnd = [...autoRaw, ...manualRaw].reduce((mx, b) => Math.max(mx, b.end), 0);
         let planCursor = (selectedDate === todayStr && now >= dayStartMs && now <= dayEndMs) ? Math.max(lastEnd, now) : (lastEnd > 0 ? lastEnd : dayStartMs);
@@ -26135,7 +26140,7 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
       const manualPacked = packLanes(mergeActual(manualRaw));
       return { worker, autoBlocks: autoPacked.bars, autoLaneCount: autoPacked.laneCount, manualBlocks: manualPacked.bars, manualLaneCount: manualPacked.laneCount, realLaborSec, autoLaborSec, manualLaborSec, taskCount, lotCountActual: taskCount, lotCountPlanned, noTimeCount };
     });
-  }, [workers, lots, dayStartMs, dayEndMs, tick, todayStr, selectedDate]);
+  }, [workers, lots, dayStartMs, dayEndMs, tick, todayStr, selectedDate, factoryCalendar]);
 
   const totalActuals = workerActivities.reduce((sum, w) => sum + (w.taskCount || 0), 0);
   const totalPlanned = workerActivities.reduce((sum, w) => sum + (w.lotCountPlanned || 0), 0);
@@ -26250,7 +26255,7 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
                     {taskCount}項目 / 予{lotCountPlanned}ロット
                   </div>
                   {noTimeCount > 0 && (
-                    <div className="text-xs text-amber-500 ml-6 leading-tight font-bold" title="開始時刻が記録されていないため時間軸に表示できない項目数">時刻なし{noTimeCount}</div>
+                    <div className="text-xs text-amber-500 ml-6 leading-tight font-bold" title="この日に触ったロットのうち、開始時刻が記録されていないため時間軸に置けない項目の数(作業していない時間ではありません)">時刻の記録なし {noTimeCount}項目</div>
                   )}
                 </div>
                 <div className="flex-1 flex flex-col gap-0.5">
@@ -26814,6 +26819,7 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
         lots={lots}
         workers={workers}
         workSchedule={settings?.workSchedule}
+        factoryCalendar={factoryCalendar}
       />
 
       {/* 作業者ロスター（日次の在席）— 下のキャパ計算の作業者数に反映 */}
