@@ -14272,6 +14272,13 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
         next[idx] = { ...next[idx], daysBefore: daysBefore };
         writeTemplateEntries(selectedQs.id, next);
     };
+    // 🚚 P054 進捗管理表の取込の日数(出荷日の何日前を納期にするか・入荷は納期の何日前か)。空(null)なら取込の既定
+    const setEntryField = (idx, patch) => {
+        if (!selectedQs) return;
+        const next = [...templateEntries];
+        next[idx] = { ...next[idx], ...patch };
+        writeTemplateEntries(selectedQs.id, next);
+    };
 
     const updateEntryOverrides = (idx, newOverrides) => {
         if (!selectedQs) return;
@@ -14651,6 +14658,22 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                             />
                                             <span className="text-xs text-emerald-700">日</span>
                                         </div>
+                                        {/* 🚚 P054 出荷日(AD列)の何日前までに検査を終えるか = 一番大事な納期(空なら既定 1日) */}
+                                        <label className="flex items-center gap-1 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5" title="進捗管理表の出荷日(AD列)の何日前を納期にするか。空なら取込の既定(1日前)">
+                                            <span className="text-xs text-rose-700 font-bold">出荷日の</span>
+                                            <input type="number" value={entry.shipDaysBefore ?? ''} placeholder="1"
+                                                onChange={e => setEntryField(entryIdx, { shipDaysBefore: e.target.value === '' ? null : parseInt(e.target.value) || 0 })}
+                                                className="w-12 border rounded p-0.5 text-xs text-center font-mono bg-white" />
+                                            <span className="text-xs text-rose-700">日前</span>
+                                        </label>
+                                        {/* 🚚 P054 入荷は納期の何日前か(表に入荷の日が無い時に使う。空なら既定 3日) */}
+                                        <label className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title="入荷の日が表に無い時、入荷は納期の何日前とするか。空なら取込の既定(3日前)">
+                                            <span className="text-xs text-amber-700 font-bold">入荷は納期の</span>
+                                            <input type="number" value={entry.entryDaysBefore ?? ''} placeholder="3"
+                                                onChange={e => setEntryField(entryIdx, { entryDaysBefore: e.target.value === '' ? null : parseInt(e.target.value) || 0 })}
+                                                className="w-12 border rounded p-0.5 text-xs text-center font-mono bg-white" />
+                                            <span className="text-xs text-amber-700">日前</span>
+                                        </label>
                                         <select
                                             value={entry.templateId || ''}
                                             onChange={e => setEntryTemplateId(entryIdx, e.target.value)}
