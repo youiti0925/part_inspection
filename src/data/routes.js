@@ -100,6 +100,7 @@ export const COLLECTION_AREA = Object.freeze({
   //   他に見せることはしない」。連絡の棚(arrival_times)に混ぜると、書いた瞬間に
   //   組立ポータルから読めてしまう。だから **別の棚** に分ける(隠すのではなく、置かない)。
   arrival_actuals: 'analytics',
+  usage_daily: 'analytics',   // P101: 端末ごとの1日の読み取り件数(③司令塔が4アプリぶん足す)
 
   // --- プッシュ通知(Firebaseに残す) ----------------------------------------
   push_tokens: 'push',
@@ -168,6 +169,7 @@ export const COLLECTION_APPS = Object.freeze({
   contact_requests: ['final', 'product', 'overview'],
   arrival_times: ['final', 'product'],
   arrival_actuals: ['final', 'product'],
+  usage_daily: ['parts'],   // P101: 部品は自分の名前空間へ1端末1日1件だけ書く
   push_tokens: ['final', 'product'],
   app_feedback: ['final', 'product', 'parts'],
   app_notices: ['final', 'product', 'parts'],
@@ -217,7 +219,15 @@ const badSegment = (v) =>
  * ⚠パスは配列で扱う。ドット区切りやスラッシュ結合にすると、型式名や指図番号に
  *   記号が入ったときに黙って別の場所へ書く(過去に実際にやっている)。
  */
-export const dataPath = (ns, col, id) => {
+// ---------------------------------------------------------------------------
+// デモ公開ビルド(VITE_DEMO=1)。製品 routes.js:295-302 と同じ形。
+//   全部の名前空間を demo- 側へ寄せ、本番の棚には1バイトも触れない。
+//   node のテストでは import.meta.env が無いので必ず非デモ。
+export const IS_DEMO_BUILD = String((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_DEMO) || '') === '1';
+const demoNs = (ns) => (IS_DEMO_BUILD && typeof ns === 'string' && !ns.startsWith('demo-') ? `demo-${ns}` : ns);
+
+export const dataPath = (ns0, col, id) => {
+  const ns = demoNs(ns0);
   if (badSegment(ns)) throw new Error(`dataPath: 名前空間が不正です: ${JSON.stringify(ns)}`);
   if (badSegment(col)) throw new Error(`dataPath: コレクション名が不正です: ${JSON.stringify(col)}`);
   if (id === undefined || id === null) return ['artifacts', ns, 'public', 'data', col];

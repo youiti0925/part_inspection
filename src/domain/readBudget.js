@@ -342,3 +342,33 @@ export const estimateOpenReads = (counts = {}, opts = {}) => {
   }
   return { rows, total: rows.reduce((s, r) => s + r.reads, 0) };
 };
+
+// ---------------------------------------------------------------------------
+// P101: 製品 readBudget.js と同じ名前・同じ中身(usageRollup.js を1バイト同じで写すため)。
+//   ⚠ 部品の帳面の日付 quotaDayKeyOf は「枠が戻る日」で、quotaWindowKey(米国西部の今日)とは1日ずれる。混ぜない。
+export const FREE_READS_PER_DAY = FREE_TIER_DAILY_READS;
+
+//   清水さんの実測「日本時間16:00」は夏時間(いま)の値。**固定値で焼き付けない**。
+const LA_TZ = 'America/Los_Angeles';
+
+const zonedParts = (ms, tz) => {
+  const f = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
+  const p = {};
+  for (const x of f.formatToParts(new Date(ms))) if (x.type !== 'literal') p[x.type] = x.value;
+  return {
+    y: Number(p.year), m: Number(p.month), d: Number(p.day),
+    hh: Number(p.hour === '24' ? '0' : p.hour), mm: Number(p.minute), ss: Number(p.second),
+  };
+};
+
+
+
+/** いま食っている枠の名前(米国西部の日付)。⚠日本の日付で数えると 16時をまたいで混ざる。 */
+const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+export const quotaWindowKey = (nowMs) => {
+  const p = zonedParts(num(nowMs, 0), LA_TZ);
+  return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
+};

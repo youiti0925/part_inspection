@@ -168,6 +168,18 @@ const PAIRS = [
   // P112: 印を描く道具(画面部品)。描き方は製品と同じ
   { file: 'MarkCanvas.jsx', product: 'product-inspection-app/src/MarkCanvas.jsx', md5: '8845eaaf8481df33679e06b52259ef8b' },
   { file: 'RecipeMarks.jsx', product: 'product-inspection-app/src/RecipeMarks.jsx', md5: '30c5884e352229a0f896ca4fb6474f2c' },
+  // 2026-09-27 g3 土台の残り: P101 usageRollup(readBudget に quotaWindowKey/FREE_READS_PER_DAY を製品と同じ中身で足した)・backupBundle・Drive の共通部品・共通の画面部品(qrcode が要る LiveCamera と、使わない引数 e が lint の基準を越える push.js は除く)
+  { file: 'domain/usageRollup.js', product: 'product-inspection-app/src/domain/usageRollup.js', md5: '13b5ff4f96bdcfb7b75c7834f9cc1fdb' },
+  { file: 'domain/backupBundle.js', product: 'product-inspection-app/src/domain/backupBundle.js', md5: 'cd7be06651c2816347644ecb48eca6ac' },
+  { file: 'driveClient.js', product: 'product-inspection-app/src/driveClient.js', md5: '11aa1266b6ab1306cfe2edf018becc5e' },
+  { file: 'DriveFileViewer.jsx', product: 'product-inspection-app/src/DriveFileViewer.jsx', md5: 'db9b927ff5a45d56cc5cb2047ee79c9c' },
+  { file: 'liveLink.js', product: 'product-inspection-app/src/liveLink.js', md5: '89cbee42c2654d0dfd07e5007c51f162' },
+  { file: 'liveRooms.js', product: 'product-inspection-app/src/liveRooms.js', md5: '468c067996b4febd1973ddddae8d3d4d' },
+  { file: 'DataUsageTable.jsx', product: 'product-inspection-app/src/DataUsageTable.jsx', md5: '02057ec8acc58d76f662bc996589d4ea' },
+  { file: 'videoFrames.js', product: 'product-inspection-app/src/videoFrames.js', md5: '0824f71e81967d0f89b304f2ff5cd598' },
+  { file: 'videoDraft.js', product: 'product-inspection-app/src/videoDraft.js', md5: '93a9980d13aa6637ffc725a5790c2234' },
+  { file: 'StandardChangeBanner.jsx', product: 'product-inspection-app/src/StandardChangeBanner.jsx', md5: '792c555dd86477ff5cf43d91dd5e27f2' },
+  { file: 'MimamoriCard.jsx', product: 'product-inspection-app/src/MimamoriCard.jsx', md5: 'a3c8c16f7efe8451677ffb1cf1535995' },
 ];
 
 for (const p of PAIRS) {
