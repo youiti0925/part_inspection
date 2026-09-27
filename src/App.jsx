@@ -104,6 +104,11 @@ import {
 } from './domain/noteImages.js';
 // 💾 「保存してから画面を閉じてよいか」(2026-08-17 の是正。製品検査と同一ファイル)
 import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './domain/settleSave.js';
+// 改善カルテの効果判定(製品と同じ純関数・不具合率の分母=検査機会(台数))
+import {
+  PDCA_KPIS, PDCA_MIN_N, PDCA_THRESHOLD_PCT, PDCA_STALE_DAYS,
+  pdcaWindowDays, pdcaKpiValue, computeVerdict
+} from './domain/goal/verdictEngine.js';
 // ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
@@ -571,12 +576,9 @@ const toMsAny = (raw) => {
 // CSVセルのエスケープ。カンマ/引用符/改行を含む値(品名・指図名のユーザー入力や toLocaleString のカンマ)を
 // 正しく引用し、列ずれ・破損を防ぐ。RFC4180準拠(" は "" にエスケープ)。
 const csvCell = (v) => { const s = String(v ?? ''); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-const PDCA_MIN_N = 5;            // 効果判定に必要な片側の最小標本数
-const PDCA_THRESHOLD_PCT = 5;    // 改善/悪化と判定する変化率しきい値(%)
-const PDCA_STALE_DAYS = 14;      // 対策実施から効果が出ない/悪化を「放置」と見なす日数
 const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGroups = [], startMs = 0, endMs = Infinity } = {}) => {
   const samples = []; // {d, tgt}
-  let defectCount = 0;
+  let defectCount = 0, unitsSeen = 0, lotsSeen = 0;
   const titlePart = stepKey ? (stepKey.includes('_') ? stepKey.slice(stepKey.indexOf('_') + 1) : stepKey) : null;
   (lots || []).forEach(l => {
     if (!l) return;
@@ -592,8 +594,10 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
     // 時間統計の標本は完了ロットのみ (作業中の途中durationを混ぜない)
     if (l.status !== 'completed' && l.location !== 'completed') return;
     const lotMs = toMsAny(l.completedAt) || toMsAny(l.updatedAt);
+    let lotHasStep = !stepKey; // 検査機会(unitsSeen)の分母: この窓・このフィルタに該当するロットの台数
     (l.steps || []).forEach((step, idx) => {
       if (stepKey && targetTimeStepKey(step) !== stepKey) return;
+      lotHasStep = true;
       const effTarget = getEffectiveTargetTime(step, l.model, customTargetTimes, modelGroups);
       const keys = step.lotOnce
         ? lotOnceKeysOf(l.tasks || {}, step)
@@ -609,6 +613,8 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
         samples.push({ d, tgt: effTarget });
       });
     });
+    // 検査機会: 窓内に完了した該当ロットの台数(抜取でスキップした台も分母に入る)
+    if (lotHasStep && lotMs != null && lotMs >= startMs && lotMs <= endMs) { lotsSeen++; unitsSeen += (l.quantity || 1); }
   });
   const ds = samples.map(x => x.d).sort((a, b) => a - b);
   const n = ds.length;
@@ -624,7 +630,7 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
     cv: mean > 0 ? Math.round((sigma / mean) * 1000) / 1000 : 0,
     min: n ? ds[0] : 0, max: n ? ds[n - 1] : 0,
     achievementRate: sum > 0 && sumTgt > 0 ? Math.round((sumTgt / sum) * 1000) / 10 : null,
-    within, sumTgt, sumAct: sum, defectCount,
+    within, sumTgt, sumAct: sum, defectCount, unitsSeen, lotsSeen,
     avgTarget: n ? Math.round(sumTgt / n) : 0, // 1台(1回)あたりの実効目標秒 (儲けどころの短縮余地算出に使う)
     startMs, endMs, days: (isFinite(endMs) && startMs > 0) ? Math.max(1, (endMs - startMs) / 86400000) : null,
   };
@@ -876,49 +882,6 @@ const histogramOf = (durations, bins = 8) => {
   const buckets = Array.from({ length: bins }, (_, i) => ({ lo: min + i * width, hi: min + (i + 1) * width, count: 0 }));
   durations.forEach(d => { let bi = Math.floor((d - min) / width); if (bi >= bins) bi = bins - 1; if (bi < 0) bi = 0; buckets[bi].count++; });
   return { buckets, min, max, width };
-};
-// 統計オブジェクトの窓日数 (古いカルテ等で days 欠落時は startMs/endMs から復元)
-const pdcaWindowDays = (stat) => {
-  if (!stat) return 1;
-  if (stat.days) return stat.days;
-  if (stat.startMs != null && stat.endMs != null && isFinite(stat.endMs)) return Math.max(1, (stat.endMs - stat.startMs) / 86400000);
-  return 1;
-};
-// 効果判定: KPIに応じて 改善/悪化/横ばい/標本不足 を返す。時間/σ/不具合=小さいほど良い、達成率=大きいほど良い。
-const PDCA_KPIS = { time: '工程時間(中央値)', sigma: 'ばらつき(σ)', achievement: '達成率', defectRate: '不具合件数' };
-const pdcaKpiValue = (stat, kpi) => {
-  if (!stat) return null;
-  if (kpi === 'achievement') return stat.achievementRate;
-  if (kpi === 'sigma') return stat.sigma;
-  if (kpi === 'defectRate') return stat.defectCount;
-  return stat.median || stat.mean;
-};
-const computeVerdict = (baseline, after, kpi = 'time') => {
-  const label = PDCA_KPIS[kpi] || PDCA_KPIS.time;
-  const higherBetter = kpi === 'achievement';
-  if (!baseline || !after) return { result: 'insufficient', reason: '測定データなし', label };
-  const nB = baseline.n || 0, nA = after.n || 0;
-  const bv = pdcaKpiValue(baseline, kpi), av = pdcaKpiValue(after, kpi);
-  // 件数系(不具合)以外は片側5標本以上を要求
-  if (kpi !== 'defectRate' && (nB < PDCA_MIN_N || nA < PDCA_MIN_N)) {
-    return { result: 'insufficient', reason: `標本不足(前${nB}/後${nA}件・各${PDCA_MIN_N}件以上必要)`, label, nBefore: nB, nAfter: nA, beforeVal: bv, afterVal: av, higherBetter };
-  }
-  // 不具合件数: 窓長(日数)が違う前後を「1日あたり件数」で比較する(90日 vs 14日 を生比較しない)。ベースライン0件でも増加(0→N)は悪化と判定。
-  if (kpi === 'defectRate') {
-    if (bv == null || av == null) return { result: 'insufficient', reason: '比較値が不足', label, nBefore: nB, nAfter: nA, beforeVal: bv, afterVal: av, higherBetter };
-    const bRate = bv / pdcaWindowDays(baseline), aRate = av / pdcaWindowDays(after);
-    const deltaPct = bRate > 0 ? Math.round(((aRate - bRate) / bRate) * 1000) / 10 : null;
-    let r;
-    if (deltaPct == null) r = aRate > 0 ? 'worse' : 'flat';
-    else r = deltaPct <= -PDCA_THRESHOLD_PCT ? 'improved' : (deltaPct >= PDCA_THRESHOLD_PCT ? 'worse' : 'flat');
-    return { result: r, deltaPct, label, nBefore: nB, nAfter: nA, beforeVal: bv, afterVal: av, higherBetter };
-  }
-  if (bv == null || av == null || bv === 0) return { result: 'insufficient', reason: '比較値が不足', label, nBefore: nB, nAfter: nA, beforeVal: bv, afterVal: av, higherBetter };
-  const deltaPct = ((av - bv) / Math.abs(bv)) * 100;
-  let result;
-  if (higherBetter) result = deltaPct >= PDCA_THRESHOLD_PCT ? 'improved' : (deltaPct <= -PDCA_THRESHOLD_PCT ? 'worse' : 'flat');
-  else result = deltaPct <= -PDCA_THRESHOLD_PCT ? 'improved' : (deltaPct >= PDCA_THRESHOLD_PCT ? 'worse' : 'flat');
-  return { result, deltaPct: Math.round(deltaPct * 10) / 10, label, nBefore: nB, nAfter: nA, beforeVal: bv, afterVal: av, higherBetter };
 };
 // 改善テーマ候補: 完了ロットに現れる 品目×工程 を列挙 (カルテ化の入口・乖離候補算出に使う)
 const enumerateModelSteps = (lots) => {
