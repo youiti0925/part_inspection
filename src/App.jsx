@@ -109,6 +109,7 @@ import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './do
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
 // 🤖 自動工程の判定・開始ガードの唯一の正(製品検査 src/domain/workExecution.js と md5 一致の写し)
 import { isAutoStep } from './domain/workExecution.js';
+import { annualOccurrencesOf, laborSecOf, machineSecOf } from './domain/goal/occurrence.js';
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
 import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGuide.js';
 // 🚶 掛け持ち案内の枠(製品検査 src/workscreen/JuggleGuide.jsx と md5 一致の写し。描くだけ)
@@ -576,13 +577,30 @@ const csvCell = (v) => { const s = String(v ?? ''); return /[",\r\n]/.test(s) ? 
 const PDCA_MIN_N = 5;            // 効果判定に必要な片側の最小標本数
 const PDCA_THRESHOLD_PCT = 5;    // 改善/悪化と判定する変化率しきい値(%)
 const PDCA_STALE_DAYS = 14;      // 対策実施から効果が出ない/悪化を「放置」と見なす日数
-const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGroups = [], startMs = 0, endMs = Infinity } = {}) => {
+// traineeMode: 'exclude'(既定=ものさし) / 'only'(教育の伸び画面) / 'all'(教育中も込みで見たい時)
+const statTaskFilterOf = (traineeMode = 'exclude') => {
+  if (traineeMode === 'only') return (t) => !!t && !t.samplingSkipped && t.trainee === true;
+  if (traineeMode === 'all') return (t) => !!t && !t.samplingSkipped;
+  return isStatTask;
+};
+
+// workerName: 指定するとその人の記録だけで時間統計を出す (🎓伸び画面の月別推移で使う)。
+//   ⚠既定は null = 今までどおり全員。不具合件数(defectCount)は作業者を持たないので絞らない。
+const measureWindow = (lots, { model, stepKey, templateId, customTargetTimes = {}, modelGroups = [], startMs = 0, endMs = Infinity, traineeMode = 'exclude', workerName = null } = {}) => {
+  const statOk = statTaskFilterOf(traineeMode);
   const samples = []; // {d, tgt}
-  let defectCount = 0;
+  // 🎓「速さ(中央値)」と「回数」は別の母集団で数える (あら探し#3)。
+  //   中央値は教育中を外す(ものさしなので)が、**回数は実際にやった全部**でなければならない。
+  //   n(=教育中を外した件数)を年間回数の分子に使うと、新人が入った工程ほど年間人件費・削減見込(円)が
+  //   目減りする = 改善を何もしていないのに「新人を入れた/外した」だけで金額と順位が動く。
+  let execCountAll = 0;
+  let defectCount = 0, unitsSeen = 0, lotsSeen = 0;
   const titlePart = stepKey ? (stepKey.includes('_') ? stepKey.slice(stepKey.indexOf('_') + 1) : stepKey) : null;
   (lots || []).forEach(l => {
     if (!l) return;
     if (model && l.model !== model) return;
+    // テンプレ指定時はそのテンプレのロットだけに絞る (同名工程でも検査の種類が違えば別作業=混ぜると中央値が嘘になる)
+    if (templateId && l.templateId !== templateId) return;
     // 不具合件数: 不具合自身の timestamp で窓を切る。完了/作業中に関係なく数える
     // (defectStatsと対称=saveDataがupdatedAtを更新する作業中ロットの不具合を落とさない。完了ゲートより前で数える)
     (l.interruptions || []).filter(i => i.type === 'defect').forEach(dft => {
@@ -594,8 +612,10 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
     // 時間統計の標本は完了ロットのみ (作業中の途中durationを混ぜない)
     if (l.status !== 'completed' && l.location !== 'completed') return;
     const lotMs = toMsAny(l.completedAt) || toMsAny(l.updatedAt);
+    let lotHasStep = !stepKey; // 検査機会(unitsSeen)の分母: この窓・このフィルタに該当するロットの台数
     (l.steps || []).forEach((step, idx) => {
       if (stepKey && targetTimeStepKey(step) !== stepKey) return;
+      lotHasStep = true;
       const effTarget = getEffectiveTargetTime(step, l.model, customTargetTimes, modelGroups);
       const keys = step.lotOnce
         ? lotOnceKeysOf(l.tasks || {}, step)
@@ -604,13 +624,18 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
         const t = (l.tasks || {})[k];
         if (!t) return;
         if (t.status !== 'completed' && t.status !== 'ng') return;
-        if (t.samplingSkipped) return;
+        if (t.samplingSkipped) return; // 抜取でスキップした台は実際に作業していない(回数にも入れない)
+        if (workerName && (t.workerName || '') !== workerName) return; // 指定があればその人の記録だけ
         const d = t.duration || 0; if (d <= 0) return;
         const ms = toMsAny(t.endTime) || lotMs;
         if (ms == null || ms < startMs || ms > endMs) return;
+        execCountAll++;                 // 🎓回数は教育中も込みで数える(実際にやった回数)
+        if (!statOk(t)) return; // 🎓教育中は「ものさし(速さ)」から外す
         samples.push({ d, tgt: effTarget });
       });
     });
+    // 検査機会: 窓内に完了した該当ロットの台数(抜取でスキップした台も分母に入る=実施率の分母)
+    if (lotHasStep && lotMs != null && lotMs >= startMs && lotMs <= endMs) { lotsSeen++; unitsSeen += (l.quantity || 1); }
   });
   const ds = samples.map(x => x.d).sort((a, b) => a - b);
   const n = ds.length;
@@ -626,37 +651,68 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
     cv: mean > 0 ? Math.round((sigma / mean) * 1000) / 1000 : 0,
     min: n ? ds[0] : 0, max: n ? ds[n - 1] : 0,
     achievementRate: sum > 0 && sumTgt > 0 ? Math.round((sumTgt / sum) * 1000) / 10 : null,
-    within, sumTgt, sumAct: sum, defectCount,
+    within, sumTgt, sumAct: sum, defectCount, unitsSeen, lotsSeen, execCountAll,
     avgTarget: n ? Math.round(sumTgt / n) : 0, // 1台(1回)あたりの実効目標秒 (儲けどころの短縮余地算出に使う)
     startMs, endMs, days: (isFinite(endMs) && startMs > 0) ? Math.max(1, (endMs - startMs) / 86400000) : null,
   };
 };
-// 儲けどころランキング: 品目×工程ごとに「年間台数 × 実績中央値 × 時給」で年間人件費・年間削減見込(円)を出す純関数。
+// 儲けどころランキング: 品目コード×工程ごとに「年間台数 × 実績中央値 × 時給」で年間人件費・年間削減見込(円)を出す純関数。
 // reductionPerUnit = max(0, 実績中央値 − 目標)。年間台数は窓内標本を365日換算。低頻度(年lowFreq台未満)は flag。
-const profitRanking = (lots, settings, { startMs = 0, endMs = Infinity, ratePerHour = 0, lowFreq = 10, annualUnitsByModel = null } = {}) => {
+const profitRanking = (lots, settings, { startMs = 0, endMs = Infinity, ratePerHour = 0, lowFreq = 10, annualUnitsByModel = null, byTemplate = false, templates = null, autoLaborPct = 100 } = {}) => {
   const customTargetTimes = settings?.customTargetTimes || {};
   const modelGroups = modelGroupsOf(settings);
   const rate = ratePerHour || settings?.laborCostPerHour || 0;
+  const tplNameOf = (id) => (id && (templates || []).find(t => t.id === id)?.name) || '';
   const rows = [];
-  enumerateModelSteps(lots).forEach(ms => {
-    const stat = measureWindow(lots, { model: ms.model, stepKey: ms.stepKey, customTargetTimes, modelGroups, startMs, endMs });
+  // byTemplate: 集計単位を「品目コード×テンプレ×工程」に分ける。同じ品目コードでも検査の種類(テンプレ)が違えば
+  //   同名工程の中身は別作業(実測: RTT-311,ZD 傾斜分割測定はテンプレ間で中央値8.2倍差) — 混ぜると中央値も目標乖離も嘘になる。
+  const pre = [];
+  const items = byTemplate ? enumerateModelTplSteps(lots) : enumerateModelSteps(lots);
+  items.forEach(ms => {
+    const stat = measureWindow(lots, { model: ms.model, stepKey: ms.stepKey, templateId: byTemplate ? ms.templateId : undefined, customTargetTimes, modelGroups, startMs, endMs });
     if (stat.n < 1) return;
+    pre.push({ ms, stat });
+  });
+  // 登録年間台数(品目コード単位)の扱い(仕様4.3): 台数をそのまま回数にしない。
+  //   年間実施回数 = 登録台数 × 窓内実施率(実施回数÷対象台数)。抜取1/10なら1/10回、ロット1回工程はロット回数になる。
+  //   テンプレ分割時は同じ品目コード×工程の全テンプレ行の対象台数合計で割る=二重計上の物理的防止。
+  const unitsByModelStep = {};
+  if (byTemplate) pre.forEach(p => { const k = `${p.ms.model}||${p.ms.stepKey}`; unitsByModelStep[k] = (unitsByModelStep[k] || 0) + (p.stat.unitsSeen || 0); });
+  pre.forEach(({ ms, stat }) => {
     const days = pdcaWindowDays(stat) || 365;
-    // 年間台数: ユーザーが入力した実際の年間生産台数を優先。無ければ測定台数を365日換算した推定。
-    const measuredAnnual = Math.round(stat.n * (365 / days));
+    // 🎓回数は「実際にやった全部」で数える (あら探し#3)。
+    //   ⚠stat.n は教育中を除いた**速さの標本数**。分子だけ教育中を落として分母(unitsSeen=全台)と割ると、
+    //     実施率が新人比率のぶん下がり、年間人件費も削減見込(円)も丸ごと過少になる
+    //     (例: 100台中40台を新人 → 実施率0.6 → 年間1200台なら 720回として計算 = 4割の取りこぼし)。
+    //     改善は新人がやる回にも効くので、掛ける回数は全実施回数が正しい。
+    const execAll = Number.isFinite(stat.execCountAll) ? stat.execCountAll : stat.n;
+    const measuredAnnual = Math.round(execAll * (365 / days)); // 実測回数の年換算(未登録時の既定・回数ベースなので工程タイプに依らず正しい)
     const inputAnnual = annualUnitsByModel ? annualUnitsByModel[ms.model] : null;
     const useActual = typeof inputAnnual === 'number' && inputAnnual > 0;
-    const annualUnits = useActual ? inputAnnual : measuredAnnual;
-    const annualUnitsSource = useActual ? 'actual' : 'estimated';
+    const windowUnits = byTemplate ? (unitsByModelStep[`${ms.model}||${ms.stepKey}`] || 0) : (stat.unitsSeen || 0);
+    const { occ, source: occSource } = annualOccurrencesOf({ useActual, inputAnnualUnits: inputAnnual || 0, windowExecs: execAll, windowUnits, measuredAnnualExecs: measuredAnnual });
+    const annualUnits = occ; // フィールド名は互換のため維持(意味は「年間実施回数」)
+    const annualUnitsSource = occSource;
     const median = stat.median || 0;
     const target = stat.avgTarget || 0;
     const reductionPerUnit = target > 0 ? Math.max(0, median - target) : 0; // 目標未設定は削減見込0(過大評価しない)
-    const annualCostYen = Math.round(annualUnits * median / 3600 * rate);
-    const annualSaveYen = Math.round(annualUnits * reductionPerUnit / 3600 * rate);
+    // 🤖自動運転の分離: 自動工程は拘束率(autoLaborPct%)分だけ人件費、全時間は機械時間として別集計(混ぜない)。
+    const workKind = ms.auto ? 'auto' : 'manual';
+    const costSecRaw = annualUnits * median, saveSecRaw = annualUnits * reductionPerUnit;
+    const annualCostSec = Math.round(laborSecOf({ workKind, sec: costSecRaw, autoLaborPct }));
+    const annualSaveSec = Math.round(laborSecOf({ workKind, sec: saveSecRaw, autoLaborPct }));
+    const machineCostSec = Math.round(machineSecOf({ workKind, sec: costSecRaw }));
+    const machineSaveSec = Math.round(machineSecOf({ workKind, sec: saveSecRaw }));
     rows.push({
-      ...ms, n: stat.n, annualUnits, measuredAnnual, annualUnitsSource, median, target, sigma: stat.sigma, cv: stat.cv,
-      reductionPerUnit, annualCostSec: annualUnits * median, annualSaveSec: annualUnits * reductionPerUnit,
-      annualCostYen, annualSaveYen, hasTarget: target > 0, lowFreq: annualUnits < lowFreq,
+      ...ms, templateId: ms.templateId || '', templateName: tplNameOf(ms.templateId),
+      // ⚠画面に式を出すために、年換算の**実際の分子**(execAll)と窓の日数を行に持たせる (2026-08-09 是正)。
+      //   n は「速さの標本数(教育中を除く)」で年換算の分子ではない。画面に n を式として書くと
+      //   読んだ人が電卓を叩いても合わない = 金額を出す画面の「出どころと実数の式を必ず添える」に反する。
+      n: stat.n, execAll, traineeN: Math.max(0, execAll - (stat.n || 0)), windowDays: Math.round(days * 10) / 10,
+      annualUnits, measuredAnnual, annualUnitsSource, median, target, sigma: stat.sigma, cv: stat.cv,
+      reductionPerUnit, workKind, annualCostSec, annualSaveSec, machineCostSec, machineSaveSec,
+      annualCostYen: Math.round(annualCostSec / 3600 * rate), annualSaveYen: Math.round(annualSaveSec / 3600 * rate),
+      hasTarget: target > 0, lowFreq: annualUnits < lowFreq,
     });
   });
   // 削減見込(¥)優先、同値や時給未設定なら年間コスト(=工数の山=割合が多い所)でソート
@@ -672,24 +728,28 @@ const profitRanking = (lots, settings, { startMs = 0, endMs = Infinity, ratePerH
     totalSaveSec: rows.reduce((s, r) => s + r.annualSaveSec, 0),
     totalCostYen: rows.reduce((s, r) => s + r.annualCostYen, 0),
     totalCostSec: totalCost,
+    // 🤖機械時間(設備能力・納期効果): 人件費とは別枠で報告する(混ぜない)
+    totalMachineSec: rows.reduce((s, r) => s + (r.machineCostSec || 0), 0),
+    totalMachineSaveSec: rows.reduce((s, r) => s + (r.machineSaveSec || 0), 0),
+    autoLaborPct,
   };
 };
-// 共通工程 横断改善: profitRanking の「品目×工程」行を、工程タイトルで品目横断にまとめ直す純関数。
+// 共通工程 横断改善: profitRanking の「品目コード×工程」行を、工程タイトルで品目コード横断にまとめ直す純関数。
 //   「この工程は何品目コードに共通か」「全品目コード合計で年いくらかかっているか」と、3つの改善余地を出す:
 //   ① 最速の品目コードに揃える(実証済み=現に一番速い品目コードの中央値まで全品目コードを揃えたら) ② ◯%短縮の仮定(レイアウト改善等の大改善)
 //   ③ 目標まで詰める(堅実な下限)。狙い=共通ポイントを1つ直すと全品目コードに効く=大きい、を可視化する。
-const crossStepRanking = (lots, settings, { startMs = 0, endMs = Infinity, ratePerHour = 0, reductionPct = 0.5, annualUnitsByModel = null } = {}) => {
-  const base = profitRanking(lots, settings, { startMs, endMs, ratePerHour, lowFreq: 0, annualUnitsByModel });
+const crossStepRanking = (lots, settings, { startMs = 0, endMs = Infinity, ratePerHour = 0, reductionPct = 0.5, annualUnitsByModel = null, byTemplate = false, templates = null, autoLaborPct = 100 } = {}) => {
+  const base = profitRanking(lots, settings, { startMs, endMs, ratePerHour, lowFreq: 0, annualUnitsByModel, byTemplate, templates, autoLaborPct });
   const rate = base.rate;
   const groups = {};
   base.rows.forEach(r => {
-    // 工程タイトル(category_title の title 部分)でまとめる。profitDetail の品目横断比較と同じ粒度。
+    // 工程タイトル(category_title の title 部分)でまとめる。profitDetail の品目コード横断比較と同じ粒度。
     const title = r.stepTitle || (r.stepKey && r.stepKey.includes('_') ? r.stepKey.slice(r.stepKey.indexOf('_') + 1) : r.stepKey) || '(不明)';
     (groups[title] = groups[title] || { title, rows: [] }).rows.push(r);
   });
   const out = Object.values(groups).map(g => {
     const rows = g.rows.slice().sort((a, b) => a.median - b.median); // 速い順(先頭=最速品目コード)
-    const modelCount = rows.length;
+    const modelCount = new Set(rows.map(r => r.model)).size; // byTemplate時は同品目コードが複数行になるためユニーク品目コード数で数える
     const actualModels = rows.filter(r => r.annualUnitsSource === 'actual').length; // 実際の年間台数を入力済の品目コード数
     const annualUnits = rows.reduce((s, r) => s + r.annualUnits, 0);
     const annualCostSec = rows.reduce((s, r) => s + r.annualCostSec, 0);
@@ -930,7 +990,22 @@ const enumerateModelSteps = (lots) => {
     (l.steps || []).forEach(step => {
       const sk = targetTimeStepKey(step);
       const key = `${l.model}||${sk}`;
-      if (!map.has(key)) map.set(key, { model: l.model, stepKey: sk, stepTitle: step.title, category: step.category || '' });
+      if (!map.has(key)) map.set(key, { model: l.model, stepKey: sk, stepTitle: step.title, category: step.category || '', auto: isAutoStep(step) });
+    });
+  });
+  return [...map.values()];
+};
+// 品目コード×テンプレ×工程 の列挙 (🎯目標レイヤー用)。実測: 68品目コード中23品目コードが複数テンプレで流れており、
+// 品目コード×工程だけで束ねると検査種類の違う作業が混ざる(混在の実害16件・中央値差 最大15.6倍)。
+const enumerateModelTplSteps = (lots) => {
+  const map = new Map();
+  (lots || []).forEach(l => {
+    if (l.status !== 'completed' && l.location !== 'completed') return;
+    const tpl = l.templateId || '';
+    (l.steps || []).forEach(step => {
+      const sk = targetTimeStepKey(step);
+      const key = `${l.model}||${tpl}||${sk}`;
+      if (!map.has(key)) map.set(key, { model: l.model, templateId: tpl, stepKey: sk, stepTitle: step.title, category: step.category || '', auto: isAutoStep(step) });
     });
   });
   return [...map.values()];
@@ -16654,7 +16729,7 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
         {/* 式の説明の帯を <details> に畳み、上の行へ合流(製品 PU6 と同じ)。文は1文字も消していない。押す所は44pxの床・吹き出しは right-0。 */}
         <details className="fi-tap-text text-slate-500" data-band="achievement-formula">
           <summary style={{ minHeight: 'max(2.75rem, 44px)' }} className="cursor-pointer list-none select-none text-xs font-bold text-emerald-800 flex items-center px-2 rounded-lg bg-emerald-50 border border-emerald-200 hover:bg-emerald-100">？ 達成率(能率) の計算方法 ▾</summary>
-          <div className="absolute right-0 top-full mt-1 z-30 w-[420px] max-w-full bg-white border border-emerald-200 rounded-lg shadow-lg p-3">
+          <div className="z-30 absolute top-full right-0 mt-1 max-w-full w-[420px] bg-white border border-emerald-200 rounded-lg shadow-lg p-3">
             <b>達成率(能率) = 目標時間の合計 ÷ 実績時間の合計 ×100</b>。100%超 = 目標より速く作業できている。目標時間は較正済みの品目別値（無ければ工程の既定値）。抜取で省略した工程・目標未設定・時間0は集計から除外。
           </div>
         </details>
@@ -17823,7 +17898,10 @@ const ProfitDetailModal = ({ row, lots = [], settings = {}, rate = 0, onClose, o
             <div className="font-bold text-slate-800 mb-1">計算の内訳（実際の数字）</div>
             <table className="w-full text-xs border-collapse">
               <tbody>
-                <tr className="border-b border-slate-100"><td className="py-1.5 text-slate-500 w-1/2">① 年間台数（直近1年の完了数）</td><td className="py-1.5 text-right font-mono font-bold">{row.annualUnits.toLocaleString()} 台/年</td></tr>
+                <tr className="border-b border-slate-100"><td className="py-1.5 text-slate-500 w-1/2">① 年間台数{row.annualUnitsSource === 'actual' ? '（経営分析で登録した実台数）' : '（実績からの推定）'}</td><td className="py-1.5 text-right font-mono font-bold">{row.annualUnits.toLocaleString()} 台/年 <span className={`fi-tap-text font-bold px-1 rounded ${row.annualUnitsSource === 'actual' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}>{row.annualUnitsSource === 'actual' ? '登録値' : '推定'}</span></td></tr>
+                {/* ⚠ここは「書いてある式で電卓を叩いたら画面の数字になる」ことが条件。
+                    分子は row.n(教育中を除いた速さの標本数)ではなく row.execAll(実際にやった回数)。 */}
+                {row.annualUnitsSource !== 'actual' && <tr className="border-b border-slate-100"><td className="py-1 text-slate-400 fi-tap-text" colSpan={2}>└ 台数の出し方: この期間に <b>実際にやった {(row.execAll || 0).toLocaleString()}回</b>{row.traineeN > 0 ? <>（うち🎓教育中 {row.traineeN.toLocaleString()}回。回数には含めます）</> : null} の実績ペースを365日換算した概算です（{(row.execAll || 0).toLocaleString()}回 × 365日 ÷ {(row.windowDays || 365).toLocaleString()}日 ＝ <b>{(row.measuredAnnual || 0).toLocaleString()}</b>／端数四捨五入）。経営分析タブで実際の年間生産台数を登録すると、この値が登録値に置き換わり金額が正確になります。</td></tr>}
                 <tr className="border-b border-slate-100"><td className="py-1.5 text-slate-500">② 1台あたりの時間（実績の中央値・{detail.srcLots.reduce((s, x) => s + x.count, 0)}台ぶん）</td><td className="py-1.5 text-right font-mono font-bold">{pdcaFmtSec(row.median)}</td></tr>
                 <tr className="border-b border-slate-100"><td className="py-1.5 text-slate-500">③ 年間の合計時間 ＝ ① × ②</td><td className="py-1.5 text-right font-mono font-bold">{hrs(row.annualCostSec)}</td></tr>
                 {rate > 0 && <tr className="border-b border-slate-100"><td className="py-1.5 text-slate-500">④ 年間人件費 ＝ ③ × 時給{yen(rate)}/時</td><td className="py-1.5 text-right font-mono font-bold">{yen(row.annualCostYen)}</td></tr>}
