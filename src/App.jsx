@@ -911,6 +911,20 @@ const findObsPlan = (plans, templateId, stepKey, model) => {
   const ps = (plans || []).filter(p => p.enabled && p.templateId === templateId && p.stepKey === stepKey && Array.isArray(p.elements) && p.elements.length);
   return ps.find(p => p.model && p.model === model) || ps.find(p => !p.model) || null;
 };
+// 工程(step)に直付けした要素(じっと見る)。工程テンプレ編集で常設設定したもの → 旧 observationPlans コレクションより優先。
+//   明示OFF(observationEnabled===false)は {enabled:false} を返し、旧プランへのフォールバックを止める。
+const stepObsPlan = (step) => {
+  if (!step || !Array.isArray(step.observationElements)) return null;
+  if (step.observationEnabled === false) return { enabled: false, elements: [] };
+  const els = step.observationElements.filter(e => e && (e.label || '').trim() !== '').slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+  if (els.length < 2) return null;
+  return { source: 'step', enabled: true, model: '', elements: els };
+};
+// 旧 observationPlans の「品目コード専用(model一致)」プランのみを返す。step直付け(全品目コード)より優先させて品目コード別プランの黙殺を防ぐ。
+const findObsPlanModel = (plans, templateId, stepKey, model) => {
+  if (!templateId || !stepKey || !model) return null;
+  return (plans || []).find(p => p.enabled && p.templateId === templateId && p.stepKey === stepKey && p.model === model && Array.isArray(p.elements) && p.elements.length) || null;
+};
 // 要素別の実績集計: 完了タスクの elementDurations を要素IDごとに集める→中央値/n
 const obsElementStats = (lots, { model, templateId, stepKey, plan }) => {
   const byEl = {};
@@ -925,7 +939,7 @@ const obsElementStats = (lots, { model, templateId, stepKey, plan }) => {
         const t = (l.tasks || {})[`${step.id}-${u}`] || (l.tasks || {})[`${idx}-${u}`];
         // 該当なし(skipped)/抜取スキップ/未完了の台は時間統計(stepBreakdown/measureWindow)と対称に除外。
         // 完了→該当なし変換しても elementDurations が残るため、status を見ないと内訳に古い値が居座る。
-        if (!t || t.status !== 'completed' || t.samplingSkipped || !t.elementDurations) continue;
+        if (!t || t.status !== 'completed' || !isStatTask(t) || !t.elementDurations) continue; // 抜取スキップ・教育中は除外(製品と同じ)
         const entries = Object.entries(t.elementDurations).filter(([, sec]) => sec > 0);
         if (!entries.length) continue;
         observedUnits++; // この台は内訳ありの1観測
@@ -5270,6 +5284,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
   const [type, setType] = useState('normal');
   // 確認チェック項目 (type 不問で工程に添付できる)
   const [checklistItems, setChecklistItems] = useState([]);
+  const [obsEnabled, setObsEnabled] = useState(true);      // じっと見る(要素作業) ON/OFF
+  const [obsElements, setObsElements] = useState([]);       // [{id,label,order}]
   const [targetTime, setTargetTime] = useState(0);
   // 自動測定 (機械占有) 工程か / この工程は他の台の自動測定中に並行できるか
   const [executionMode, setExecutionMode] = useState('manual'); // 'manual' | 'batch' (= 自動)
@@ -5397,6 +5413,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
   const addStep = () => {
     if (!title) return alert('工程名入力');
     const validChecklistItems = (checklistItems || []).filter(i => i.label?.trim());
+    const validObsElements = (obsElements || []).filter(e => (e.label || '').trim()).map((e, i) => ({ id: e.id || generateId(), label: e.label.trim(), order: i }));
     const newStep = {
       id: editingStepId || generateId(),
       title, description, type, targetTime, images, pdfData,
@@ -5408,12 +5425,14 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
       ...(rotaryLink && !lotOnce && executionMode !== 'batch' ? { rotaryLink: true, rotaryRole, rotaryMode } : {}),  // 分割測定アプリ連携(準備/測定開始の指令送信+測定モード)。lotOnce/batchとは併用不可(workId採番が噛み合わない)
       ...(type === 'measurement' && measurementConfig ? { measurementConfig } : {}),
       // checklistItems は type 問わず保存可能 (測定 + チェックの併用OK)
-      ...(validChecklistItems.length > 0 ? { checklistItems: validChecklistItems } : {})
+      ...(validChecklistItems.length > 0 ? { checklistItems: validChecklistItems } : {}),
+      // じっと見る(要素作業分割): 2要素以上で常設。ONで作業画面に区切りボタンが出る。
+      ...(validObsElements.length >= 2 ? { observationElements: validObsElements, observationEnabled: obsEnabled } : {})
     };
     if (editingStepId) { setSteps(steps.map(s => s.id === editingStepId ? newStep : s)); } else { setSteps([...steps, newStep]); }
     resetInput();
   };
-  const resetInput = () => { setTitle(''); setDescription(''); setType('normal'); setTargetTime(0); setImages([]); setPdfData(null); setEditingStepId(null); setMeasurementConfig(null); setChecklistItems([]); setExecutionMode('manual'); setWorkResource(''); setAutoEndEnabled(false); setAutoEndSec(0); setLotOnce(false); setRotaryLink(false); setRotaryRole('capture'); setRotaryMode('回転分割'); };
+  const resetInput = () => { setTitle(''); setDescription(''); setType('normal'); setTargetTime(0); setImages([]); setPdfData(null); setEditingStepId(null); setMeasurementConfig(null); setChecklistItems([]); setExecutionMode('manual'); setWorkResource(''); setAutoEndEnabled(false); setAutoEndSec(0); setLotOnce(false); setRotaryLink(false); setRotaryRole('capture'); setRotaryMode('回転分割'); setObsEnabled(true); setObsElements([]); };
   const editStep = (s) => {
     setEditingStepId(s.id);
     setTitle(s.title);
@@ -5433,6 +5452,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
     setRotaryRole(s.rotaryRole || (s.type === 'measurement' ? 'capture' : 'prepare'));
     setRotaryMode(s.rotaryMode || '回転分割');
     setChecklistItems(Array.isArray(s.checklistItems) ? s.checklistItems : []);
+    setObsElements(Array.isArray(s.observationElements) ? s.observationElements.map(e => ({ ...e })) : []);
+    setObsEnabled(s.observationEnabled !== false);
   };
   const deleteStep = (id) => setSteps(steps.filter(s => s.id !== id));
   const moveStep = (index, direction) => { const newSteps = [...steps]; if (direction === 'up' && index > 0) { [newSteps[index-1], newSteps[index]] = [newSteps[index], newSteps[index-1]]; } else if (direction === 'down' && index < steps.length-1) { [newSteps[index+1], newSteps[index]] = [newSteps[index], newSteps[index+1]]; } setSteps(newSteps); };
@@ -5706,6 +5727,45 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                   )}
                 </div>
               </div>
+
+            {/* じっと見る（要素作業分割）— 工程をさらに小さな要素に分けて内訳時間を観測する。テンプレに常設。 */}
+            <div className="bg-blue-50/30 border-2 border-blue-100 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-bold text-blue-800 flex items-center gap-1">
+                  <Eye className="w-4 h-4"/> じっと見る（要素作業）{obsElements.length > 0 ? `（${obsElements.length}要素）` : ''}
+                  <span className="fi-tap-text font-normal text-blue-500 ml-1">(任意 — 工程を要素に分けて内訳時間を観測)</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  {obsElements.length >= 2 && (
+                    <label className="flex items-center gap-1 fi-tap-text font-bold text-slate-600 cursor-pointer" title="作業画面で区切りボタンを出す">
+                      <input type="checkbox" checked={obsEnabled} onChange={e => setObsEnabled(e.target.checked)} className="w-3.5 h-3.5 accent-blue-600"/>ON
+                    </label>
+                  )}
+                  <button type="button" onClick={() => setObsElements(p => [...(p || []), { id: generateId(), label: '', order: (p || []).length }])} className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded font-bold flex items-center gap-1"><Plus className="w-3 h-3"/> 要素追加</button>
+                </div>
+              </div>
+              {obsElements.length > 0 && obsElements.length < 2 && <p className="fi-tap-text text-amber-600">要素は2つ以上で有効になります（1つでは分割になりません）。</p>}
+              {obsElements.length >= 2 && <p className="fi-tap-text text-blue-700">作業者がこの工程を計測すると、要素ごとの「区切り」ボタンが出ます。<b>合計は工程時間のまま</b>、要素ごとの内訳も取れます（1要素6秒以上が目安）。</p>}
+              <div className="space-y-1.5">
+                {(obsElements || []).map((el, idx) => {
+                  const setLabel = (v) => setObsElements(obsElements.map((x, j) => j === idx ? { ...x, label: v } : x));
+                  const move = (d) => setObsElements(p => { const a = [...p]; const j = idx + d; if (j < 0 || j >= a.length) return a; [a[idx], a[j]] = [a[j], a[idx]]; return a.map((x, k) => ({ ...x, order: k })); });
+                  const remove = () => setObsElements(obsElements.filter((_, j) => j !== idx).map((x, k) => ({ ...x, order: k })));
+                  return (
+                    <div key={el.id || idx} className="bg-white border border-blue-200 rounded p-2 flex items-center gap-1.5">
+                      <span className="fi-tap-text font-bold text-blue-500 w-5 text-center">{idx + 1}</span>
+                      <input value={el.label || ''} onChange={e => setLabel(e.target.value)} placeholder={idx === 0 ? '例: 治具に取り付け' : (idx === 1 ? '例: 測定' : '例: 取り外し・記録')} className="flex-1 border rounded px-2 py-1 text-sm"/>
+                      <button type="button" onClick={() => move(-1)} disabled={idx === 0} className="text-slate-300 hover:text-slate-600 disabled:opacity-30"><ArrowUp className="w-4 h-4"/></button>
+                      <button type="button" onClick={() => move(1)} disabled={idx === obsElements.length - 1} className="text-slate-300 hover:text-slate-600 disabled:opacity-30"><ArrowDown className="w-4 h-4"/></button>
+                      <button type="button" onClick={remove} className="text-rose-400 hover:text-rose-600"><X className="w-4 h-4"/></button>
+                    </div>
+                  );
+                })}
+                {obsElements.length === 0 && (
+                  <div className="text-center text-blue-400 text-xs py-3 bg-white rounded border border-dashed border-blue-200">「要素追加」で工程を小分けにして観測できます（任意）。</div>
+                )}
+              </div>
+            </div>
 
             {type === 'measurement' && measurementConfig && (() => {
               const mcCalcs = measurementConfig.calculations || [{ id: 'default', label: '計算結果', method: measurementConfig.calculation || 'max-min', formula: measurementConfig.formula || '', inputIds: [], toleranceUpper: measurementConfig.toleranceUpper ?? 0.05, toleranceLower: measurementConfig.toleranceLower ?? -0.05, unit: measurementConfig.unit || 'mm' }];
@@ -9924,7 +9984,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     const key = step.id ? `${step.id}-${unitIdx}` : `${stepIdx}-${unitIdx}`;
     const t = tasks[key];
     if (!t || t.status !== 'processing') return null;
-    const plan = findObsPlan(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model);
+    const plan = findObsPlanModel(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model) || stepObsPlan(step) || findObsPlan(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model);
     if (!plan || plan.enabled === false || !(plan.elements || []).length) return null;
     return { key, step, stepIdx, unitIdx, plan, els: plan.elements };
   }, [activeCustomTaskKey, localSteps, tasks, observationPlans, lot.templateId, lot.model]);
@@ -9966,7 +10026,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     // プラン要素(完了時に再解決)
     const { stepIdx } = parseActiveTaskKey(key);
     const step = localSteps[stepIdx];
-    const plan = step ? findObsPlan(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model) : null;
+    const plan = step ? (findObsPlanModel(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model) || stepObsPlan(step) || findObsPlan(observationPlans, lot.templateId, targetTimeStepKey(step), lot.model)) : null;
     const els = plan?.elements || [];
     const t0 = taskObj.firstStartTime || laps[0].atMs;
     const wallSpanSec = (endMs - t0) / 1000;
@@ -18994,12 +19054,19 @@ const ProcessAnalysisView = ({ lots = [], settings = {}, workers = [], templates
   //   作業/集計が記録に使う findObsPlan(有効&品目コード専用優先) を最優先、無ければ無効/空プランも編集できるよう「品目コード専用→全品目コード」で決定的にフォールバック。
   const resolveObsPlan = (stepKey) => {
     if (!templateId || !stepKey) return null;
+    // 品目コード専用の旧プランがあれば最優先(step直付けの全品目コードに黙殺されないように)
+    const _modelPlan = findObsPlanModel(observationPlans, templateId, stepKey, model);
+    if (_modelPlan) return _modelPlan;
+    // テンプレ工程に常設した要素(step.observationElements)を次に優先(記録/表示を一致させる)
+    const _stepObj = (((templates || []).find(t => t.id === templateId) || {}).steps || []).find(s => targetTimeStepKey(s) === stepKey);
+    const _sp = stepObsPlan(_stepObj);
+    if (_sp) return _sp.enabled === false ? null : _sp;
     const live = findObsPlan(observationPlans, templateId, stepKey, model);
     if (live) return live;
     const ps = (observationPlans || []).filter(p => p.templateId === templateId && p.stepKey === stepKey);
     return ps.find(p => p.model && p.model === model) || ps.find(p => !p.model) || null;
   };
-  const planForSel = useMemo(() => sel ? resolveObsPlan(sel.stepKey) : null, [observationPlans, templateId, sel, model]);
+  const planForSel = useMemo(() => sel ? resolveObsPlan(sel.stepKey) : null, [observationPlans, templateId, sel, model, templates]);
   const elStats = useMemo(() => (sel && templateId) ? obsElementStats(lots, { model, templateId, stepKey: sel.stepKey, plan: planForSel }) : null, [lots, model, templateId, sel, planForSel]);
   const cvBadge = (cv) => cv < 0.3 ? ['安定', 'bg-emerald-100 text-emerald-700'] : (cv < 0.5 ? ['ややバラつき', 'bg-amber-100 text-amber-700'] : ['バラつき大', 'bg-rose-100 text-rose-700']);
   // 見ながら計画: この工程を改善カルテ(計画)にして改善PDCAへ。進行中カルテがあればそれを案内。
