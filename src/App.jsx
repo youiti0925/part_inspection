@@ -16552,6 +16552,7 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
           lotOnceKeysOf(tasks, st).forEach(k => {
             const t = tasks[k];
             if (!t || (t.status !== 'completed' && t.status !== 'ng')) return;
+            if (!isStatTask(t)) return; // 抜取スキップ(0秒扱い)・教育中はロット1回工程でも入れない(製品と同じ)
             const d = t.duration || 0; if (d <= 0) return;
             const ms = toMs(t.endTime) || lotMs; if (!ms) return;
             out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt });
@@ -16561,7 +16562,7 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
         for (let u = 0; u < qty; u++) {
           const t = tasks[st.id ? `${st.id}-${u}` : `${si}-${u}`] || tasks[`${si}-${u}`];
           if (!t || (t.status !== 'completed' && t.status !== 'ng')) continue;
-          if (t.samplingSkipped) continue;
+          if (!isStatTask(t)) continue; // 抜取スキップ/教育中は除外
           const d = t.duration || 0; if (d <= 0) continue;
           const ms = toMs(t.endTime) || lotMs; if (!ms) continue;
           out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt });
@@ -16631,7 +16632,8 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
 
   return (
     <div className="h-full overflow-auto p-1 space-y-3">
-      <div className="flex items-center gap-2 flex-wrap">
+      {/* この行は relative が要る(下の ？ の吹き出しの位置の土台・製品と同じ) */}
+      <div className="relative flex items-center gap-2 flex-wrap">
         <div className="flex bg-slate-200 rounded-lg p-1">
           <button onClick={() => setMode('model')} className={`px-4 py-1.5 rounded-md text-sm font-bold ${mode === 'model' ? 'bg-white shadow text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}>品目別（期間指定）</button>
           <button onClick={() => setMode('trend')} className={`px-4 py-1.5 rounded-md text-sm font-bold ${mode === 'trend' ? 'bg-white shadow text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}>全体推移（週・月）</button>
@@ -16649,10 +16651,13 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
             <button onClick={() => setBucket('week')} className={`px-3 py-1 rounded-md text-xs font-bold ${bucket === 'week' ? 'bg-white shadow text-emerald-700' : 'text-slate-500'}`}>週毎</button>
           </div>
         )}
-      </div>
-
-      <div className="text-xs text-slate-500 bg-emerald-50 border border-emerald-200 rounded-lg p-2">
-        <b>達成率(能率) = 目標時間の合計 ÷ 実績時間の合計 ×100</b>。100%超 = 目標より速く作業できている。目標時間は較正済みの品目別値（無ければ工程の既定値）。抜取で省略した工程・目標未設定・時間0は集計から除外。
+        {/* 式の説明の帯を <details> に畳み、上の行へ合流(製品 PU6 と同じ)。文は1文字も消していない。押す所は44pxの床・吹き出しは right-0。 */}
+        <details className="fi-tap-text text-slate-500" data-band="achievement-formula">
+          <summary style={{ minHeight: 'max(2.75rem, 44px)' }} className="cursor-pointer list-none select-none text-xs font-bold text-emerald-800 flex items-center px-2 rounded-lg bg-emerald-50 border border-emerald-200 hover:bg-emerald-100">？ 達成率(能率) の計算方法 ▾</summary>
+          <div className="absolute right-0 top-full mt-1 z-30 w-[420px] max-w-full bg-white border border-emerald-200 rounded-lg shadow-lg p-3">
+            <b>達成率(能率) = 目標時間の合計 ÷ 実績時間の合計 ×100</b>。100%超 = 目標より速く作業できている。目標時間は較正済みの品目別値（無ければ工程の既定値）。抜取で省略した工程・目標未設定・時間0は集計から除外。
+          </div>
+        </details>
       </div>
 
       {mode === 'model' ? (
