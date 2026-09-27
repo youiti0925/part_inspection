@@ -16,3 +16,4 @@
 }
 *::-webkit-scrollbar-thumb:hover { background: #64748b; }
 *::-webkit-scrollbar-thumb:active { background: #475569; }
+.fi-tap-text { font-size: max(0.75rem, 12px); }

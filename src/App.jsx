@@ -33,6 +33,9 @@ import DuplicateLotsPanel from './DuplicateLotsPanel.jsx';
 import ProgressImportExtras from './ProgressImportExtras.jsx';
 import PendingImportPanel from './PendingImportPanel.jsx';
 import ProgressSheetMapPanel from './ProgressSheetMapPanel.jsx';
+import MapViewLanes from './mapviews/MapViewLanes.jsx';
+import MapViewTimeline from './mapviews/MapViewTimeline.jsx';
+import { fmtWorkSec } from './domain/incomingWork.js';
 import { auditProgressRows } from './domain/progressSheetAudit.js';
 import { orderNosOfRows, orderNoChunks, orderNoLotsSpec, mergeLotsForImport, dropAlreadyExisting } from './domain/importExistingCheck.js';
 import { judgeTemplateSkip, buildTemplateSkippedTasks, isTemplateSkippedLot } from './domain/templateSkip.js';
@@ -3808,7 +3811,20 @@ const ZoneList = ({ id, title, icon: Icon, color, border, children, onDropLot, o
 // 2. Complex & Functional Components
 // ----------------------------------------------------------------------
 
+// 🗺 P056 現場マップの見せ方(製品 12243-12278 と同じ)。[保存する名前, ボタンの文字, 説明]。'classic' は従来の描画そのもの
+const MAP_VIEW_CHOICES = [
+  ['classic', '従来', '従来の現場マップ(エリアを並べた図)'],  // 既定
+  ['lanes', 'レーン', '人がレーン(作業者ごとの横一列)'],
+  ['timeline', '時間軸', '時間軸レーン盤(横軸が時刻)'],
+];
+const MAP_VIEW_COMPONENTS = { lanes: MapViewLanes, timeline: MapViewTimeline };
+// 端末に保存されている値を今の選択肢に合わせて直す(知らない値・空・壊れた値は 'classic')
+const normalizeMapView = (v) => (MAP_VIEW_CHOICES.some(([key]) => key === v) ? v : 'classic');
+
 const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, setDraggedLotId, draggedLotId, onEditLot, onDeleteLot, setExecutionLotId, settings, handleImageUpload, saveSettings, mapZones, isDashboard = false }) => {
+  // 🗺 P056 見せ方の切替。端末ごとの好み(localStorage)。'classic' なら従来の描画を1文字も変えない
+  const [mapView, setMapView] = useState(() => { try { return normalizeMapView(localStorage.getItem('map.viewStyle.v1')); } catch { return 'classic'; } });
+  const setMapViewStyle = (v) => { const next = normalizeMapView(v); setMapView(next); try { localStorage.setItem('map.viewStyle.v1', next); } catch { /* 保存できない端末は今回だけ */ } };
   const [isLayoutMode, setIsLayoutMode] = useState(false);
   // 既存設定に「未該当エリア」がなければレンダリング時に自動追加
   // (不良/残ロット待ちなどの一時置き場として現場マップにも常時表示)
@@ -3893,6 +3909,13 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
         <div className="p-3 bg-white/90 backdrop-blur border-b border-slate-200 flex justify-between items-center">
           <h2 className="font-bold text-slate-800 flex items-center gap-2"><MapIcon className="w-5 h-5 text-blue-600" /> 作業エリア</h2>
           <div className="flex items-center gap-2">
+             <div className="flex items-center rounded border border-indigo-300 bg-indigo-50 overflow-hidden shrink-0" title="現場マップの見せ方を切り替えます。表示が変わるだけで、ロットのデータは変わりません。この端末だけに効きます">
+               <span className="fi-tap-text font-black text-indigo-700 px-1.5 whitespace-nowrap">🧪見せ方</span>
+               {MAP_VIEW_CHOICES.map(([v, l, hint]) => (
+                 <button key={v} onClick={() => setMapViewStyle(v)} aria-pressed={mapView === v} title={hint || l}
+                   className={`text-xs px-2 py-1 font-bold whitespace-nowrap ${mapView === v ? 'bg-indigo-600 text-white' : 'text-indigo-700 hover:bg-indigo-100'}`}>{l}</button>
+               ))}
+             </div>
              <button onClick={() => setShowFilterBar(v => !v)} className={`text-xs flex items-center gap-1 px-2 py-1 rounded border font-bold transition-colors ${isFiltered ? 'bg-amber-100 text-amber-700 border-amber-300' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>
                <Filter className="w-3 h-3" /> 表示{isFiltered ? `(${visibleZones.length}/${localZones.length})` : ''}
              </button>
@@ -3967,6 +3990,27 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
            : { backgroundImage: settings.mapImage ? `url(${settings.mapImage})` : 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: settings.mapImage ? 'contain' : '20px 20px', backgroundRepeat: 'no-repeat', backgroundPosition: 'center' }
          }
        >
+       {!isDashboard && !EMBED_MAP && mapView !== 'classic' && MAP_VIEW_COMPONENTS[mapView] ? (() => {
+         // 🗺 P056 別の見せ方。部品には到着予定が無いので arrivalByLot は {}・ArrivalTag は渡さない
+         const V = MAP_VIEW_COMPONENTS[mapView];
+         const BoundLotCard = (p) => (
+           <LotCard workers={workers} templates={templates} mapZones={localZones} saveData={saveData}
+             setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId}
+             onOpenExecution={(l) => l && setExecutionLotId(l.id)} {...p} />
+         );
+         return (
+           <div className="flex-1 min-h-0 overflow-y-auto">
+             <V lots={lots} zones={visibleZones} workers={workers} arrivalByLot={{}} settings={settings}
+               templates={templates}
+               onOpenExecution={(l) => l && setExecutionLotId(l.id)} onMoveLot={handleMoveLot}
+               LotCard={BoundLotCard}
+               saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId}
+               estimateSecOf={(l) => calculateLotEstimatedTime(l)}
+               fmtWorkSec={fmtWorkSec}
+               pauseReasonColorOf={(r) => getPauseReasonColor(r)} />
+           </div>
+         );
+       })() : (<>
        {/* 通常ゾーン (未該当エリア以外) — グリッドで並べる or 自由配置 */}
        <div
          className={`${isFiltered && !isLayoutMode ? 'grid flex-1' : 'flex-1 relative'}`}
@@ -4103,6 +4147,7 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
            </div>
          );
        })()}
+       </>)}
        </div>{/* close mapRef container */}
     </div>
   );
