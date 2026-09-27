@@ -108,7 +108,13 @@ import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './do
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
 // 🤖 自動工程の判定・開始ガードの唯一の正(製品検査 src/domain/workExecution.js と md5 一致の写し)
-import { isAutoStep } from './domain/workExecution.js';
+import { isAutoStep as isAutoStepShared, buildStepMasterIndex } from './domain/workExecution.js';
+// 現行マスタ索引(製品と同じ): templates の購読で作り直す。旧ロットの executionMode 未設定は今のマスタ設定を優先して自動工程を判定する。
+//   React の state ではなくモジュール変数(読み取り専用・判定のためだけ)。
+let STEP_MASTER_INDEX = null;
+const refreshStepMasterIndex = (templates) => { try { STEP_MASTER_INDEX = buildStepMasterIndex(templates); } catch { STEP_MASTER_INDEX = null; } };
+// アプリ全体はこの1関数だけを使う(索引は自動で効く)
+const isAutoStep = (step) => isAutoStepShared(step, STEP_MASTER_INDEX);
 import { annualOccurrencesOf, laborSecOf, machineSecOf } from './domain/goal/occurrence.js';
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
 import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGuide.js';
@@ -20656,8 +20662,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
              // 期間フィルタを反映: 完了が isInDefectPeriod に該当するロットのみ
              const completedLots = lots.filter(l => l.status === 'completed' && isInDefectPeriod(toMsAny(l.completedAt) || toMsAny(l.updatedAt)));
 
-             // 自動工程の判定: executionMode='batch' or title に '自動' を含む
-             const isAutoStep = (step) => step?.executionMode === 'batch' || step?.title?.includes('自動');
+             // 自動工程の判定は上の階の isAutoStep(マスタ索引つき・製品と同じ)を使う
 
              // === 1) 工程別の全社ベースタイム (平均) と最速タイムを事前算出 ===
              const stepGlobalTimes = {}; // stepKey → { times: [], targetTime }
@@ -20950,7 +20955,6 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
 
            {activeMode === 'improvement' && (() => {
              const completedLots = lots.filter(l => l.status === 'completed' && isInDefectPeriod(toMsAny(l.completedAt) || toMsAny(l.updatedAt)));
-             const isAutoStep = (step) => step?.executionMode === 'batch' || step?.title?.includes('自動');
 
              // === 1) 不要工程あぶり出し ===
              // 各工程の「該当なし率」「不良発生数」「平均時間」を集計し、削除候補をランキング
@@ -29692,7 +29696,7 @@ const QuotaStoppedPanel = ({ until }) => (
      const watch = (colName, cb) => P.watchCollection(APP_DATA_ID, colName, (rows, snap) => { meter(colName, snap); readOk(colName); cb(rows, snap); }, { onError: readFailed(colName) });
 
      unsubs = [
-       P.watchCollection(APP_DATA_ID, 'templates', (rows, snap) => { meter('templates', snap); readOk('templates'); setTemplates(rows); }, { includeMetadataChanges: true, onError: readFailed('templates') }),
+       P.watchCollection(APP_DATA_ID, 'templates', (rows, snap) => { meter('templates', snap); readOk('templates'); setTemplates(rows); refreshStepMasterIndex(rows); }, { includeMetadataChanges: true, onError: readFailed('templates') }),
        P.watchCollection(APP_DATA_ID, 'workers', (rows, snap) => { meter('workers', snap); readOk('workers'); setWorkers(rows); }, { includeMetadataChanges: true, onError: readFailed('workers') }),
        // ⚠notes / announcements はヘッダーのバッジ(未読件数)で **常に** 使う。外すと数字が黙って0になる。
        watch('notes', (rows) => setNotes(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
