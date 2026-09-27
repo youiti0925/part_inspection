@@ -124,6 +124,7 @@ import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStar
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
 //   この部品検査アプリは **読むだけ**(登録する画面は製品検査/最終検査にある)。
 import { isWorkdayYmd, makeIsWorkday } from './domain/factoryCalendar.js';
+import { LOT_PRIORITY_CHOICES, LOT_PRIORITY_LABEL, normalizeLotPriority, priorityLabelOf, priorityFromImportText, priorityBadgeOf, priorityFilterStyleOf } from './domain/lotPriority.js';
 import { workerWorkedSecondsInRange, dayRangeOf } from './domain/workerDailyActual.js';
 import { remainingByTasks, lotRemainingSec } from './domain/lotRemaining.js';
 // 🛌 作業者の休止/復帰(2026-08-31 清水さんの要望)。消すのではなく一旦しまう。復帰したら元どおり。
@@ -2227,6 +2228,17 @@ const LotActionSheet = ({ lot, templateName, onEdit, onDelete, onClose }) => {
   );
 };
 
+/**
+ * 🚩 優先度の小さな札(緊急=赤 / 特注=橙)。通常は何も描かない(製品 PriorityBadge と同じ)。旧 'high'(急ぎ)は「緊急」として出る。
+ */
+const PriorityBadge = ({ priority, className = '' }) => {
+  const b = priorityBadgeOf(priority);
+  if (!b) return null;
+  return (
+    <span data-lot-priority={b.key} className={`shrink-0 rounded border px-1 text-xs font-black leading-tight whitespace-nowrap ${b.cls} ${className}`}>{b.label}</span>
+  );
+};
+
 const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData, setDraggedLotId, draggedLotId, variant = 'full', onEdit, onDelete, onMove, display: displayProp }) => {
   const workSchedule = React.useContext(WorkScheduleContext);
   const ctxDisplay = React.useContext(LotCardDisplayContext);
@@ -2388,7 +2400,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
       >
         <div className="flex justify-between items-start">
            <div className="min-w-0">
-             <div className="text-xs text-slate-500 font-bold mb-0.5">指図: {lot.orderNo}</div>
+             <div className="text-xs text-slate-500 font-bold mb-0.5 flex items-center gap-1">指図: {lot.orderNo}<PriorityBadge priority={lot.priority} /></div>
              <div className="text-lg font-black text-slate-800 leading-tight truncate" title={lot.modelText ? `${lot.model}\u3000${lot.modelText}` : lot.model}>{lot.model}</div>
              {/* 🚨 2026-09-19 清水さん「型式が 品目コード と 品名(品目テキスト)になったぐらい」。
                  品名は登録の窓・絞り込み・Excel・エリアマップのカードには在るのに、**この大きいカードだけ出ていなかった**。
@@ -2449,6 +2461,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
               {stripPause.emoji}{lot.pauseReason.label}
             </span>
           )}
+          <PriorityBadge priority={lot.priority} />
           <span className="text-xs text-slate-500 font-bold shrink-0">{lot.orderNo}</span>
           <span className="text-sm font-black text-slate-800 truncate shrink-0 max-w-[45%]">{lot.model}</span>
           {/* 品名。番号だけでは分からないので、横に広くなった分ここへ入れる(縦には増やさない) */}
@@ -2526,6 +2539,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
                  <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500"/>
                </span>
              )}
+             <PriorityBadge priority={lot.priority} />
              <span className="text-xs text-slate-500 font-bold shrink-0">{lot.orderNo}</span>
              <span className="text-sm font-black text-slate-800 truncate min-w-0 flex-1" title={lot.modelText ? `${lot.model} ${lot.modelText}` : lot.model}>{lot.model}</span>
              <span className="text-xs font-bold text-blue-600 shrink-0">{lot.quantity}台</span>
@@ -2601,6 +2615,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
         })()}
         {(display.orderNo || display.model || display.quantity) && (
           <div className="flex items-baseline gap-1.5 flex-wrap leading-none">
+            <PriorityBadge priority={lot.priority} />
             {display.orderNo && <span className="font-black text-base text-slate-800">{lot.orderNo}</span>}
             {display.model && <span className="font-bold text-base text-slate-700">{lot.model}</span>}
             {display.quantity && <span className="text-sm font-bold text-slate-500 shrink-0 ml-auto">{lot.quantity}台</span>}
@@ -23623,7 +23638,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [templateFilter, setTemplateFilter] = useState([]);    // テンプレートID配列 (空=全て)
   const [statusFilter, setStatusFilter] = useState([]);        // ['waiting','processing','paused'] etc (空=全て)
-  const [priorityFilter, setPriorityFilter] = useState([]);    // ['normal','high'] (空=全て)
+  const [priorityFilter, setPriorityFilter] = useState([]);    // ['normal','special','urgent'] (空=全て・旧 'high' は urgent に読む)
   const [delayFilter, setDelayFilter] = useState([]);          // ['ontime','warning','critical','ahead'] (空=全て)
 
   const mapZones = settings?.mapZones || INITIAL_MAP_ZONES;
@@ -23700,7 +23715,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
     }
     // 優先度フィルタ
     if (priorityFilter.length > 0) {
-      result = result.filter(l => priorityFilter.includes(l.priority || 'normal'));
+      result = result.filter(l => priorityFilter.includes(normalizeLotPriority(l.priority)));
     }
     // 遅延状況フィルタ
     if (delayFilter.length > 0) {
@@ -23970,13 +23985,17 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
             </div>
             <div className="flex flex-wrap gap-1.5">
               <button
-                onClick={() => setPriorityFilter(toggleInArray(priorityFilter, 'high'))}
-                className={`px-2.5 py-1 rounded-full text-xs font-bold border transition-colors ${priorityFilter.includes('high') ? 'bg-rose-600 text-white border-rose-700' : 'bg-white text-slate-600 border-slate-200 hover:bg-rose-50 hover:border-rose-300'}`}
-              >🔥 急ぎ</button>
-              <button
                 onClick={() => setPriorityFilter(toggleInArray(priorityFilter, 'normal'))}
-                className={`px-2.5 py-1 rounded-full text-xs font-bold border transition-colors ${priorityFilter.includes('normal') ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
-              >通常</button>
+                className={`px-2.5 py-1 rounded-full text-xs font-bold border transition-colors ${priorityFilter.includes('normal') ? priorityFilterStyleOf('normal').on : priorityFilterStyleOf('normal').off}`}
+              >{LOT_PRIORITY_LABEL.normal}</button>
+              <button
+                onClick={() => setPriorityFilter(toggleInArray(priorityFilter, 'special'))}
+                className={`px-2.5 py-1 rounded-full text-xs font-bold border transition-colors ${priorityFilter.includes('special') ? priorityFilterStyleOf('special').on : priorityFilterStyleOf('special').off}`}
+              >{LOT_PRIORITY_LABEL.special}</button>
+              <button
+                onClick={() => setPriorityFilter(toggleInArray(priorityFilter, 'urgent'))}
+                className={`px-2.5 py-1 rounded-full text-xs font-bold border transition-colors ${priorityFilter.includes('urgent') ? priorityFilterStyleOf('urgent').on : priorityFilterStyleOf('urgent').off}`}
+              >{LOT_PRIORITY_LABEL.urgent}</button>
             </div>
           </div>
 
@@ -24030,7 +24049,7 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
           })}
           {priorityFilter.map(p => (
             <span key={`pr-${p}`} className="bg-white border border-indigo-300 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
-              {p === 'high' ? '急ぎ' : '通常'}
+              {priorityLabelOf(p)}
               <button onClick={() => setPriorityFilter(priorityFilter.filter(x => x !== p))} className="hover:bg-indigo-100 rounded-full"><X className="w-3 h-3"/></button>
             </span>
           ))}
@@ -30429,7 +30448,7 @@ const QuotaStoppedPanel = ({ until }) => (
            lot.quantity,
            lot.templateId || '',
            templateNameFormula(rowIdx),
-           lot.priority === 'high' ? '急ぎ' : '通常',
+           priorityLabelOf(lot.priority),
            lot.dueDate || '',
            lot.entryAt ? (() => { const d = new Date(lot.entryAt); return `${localYMD(d)} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; })() : ''
          ];
@@ -30536,7 +30555,7 @@ const QuotaStoppedPanel = ({ until }) => (
      ws.addRow(['※ テンプレートID 列はクリックでドロップダウンが出ます。規格登録済みの品目コードは規格に登録されたテンプレのみ、未登録は全テンプレが候補に出ます']);
      ws.addRow(['※ ◯ = 品質規格 + テンプレ一致 (完全適用) / ▲ = 規格は紐付け済だがテンプレ要確認 (複数候補) / △ = レガシーオーバーライド / × = 未登録 (テンプレデフォルト適用)']);
      ws.addRow(['※ 1 規格に複数テンプレが紐付いている場合、テンプレID 列を正しく入力しないと規格が適用されません (▲ 表示時は要注意)']);
-     ws.addRow(['※ 優先度: 「通常」または「急ぎ」（空欄は通常扱い）']);
+     ws.addRow(['※ 優先度: 「通常」「特注」「緊急」のどれか（空欄は通常扱い・旧い「急ぎ」は緊急として読む）']);
      ws.addRow(['※ 納期: yyyy-mm-dd 形式（空欄可）']);
      ws.addRow(['※ 入庫日時: yyyy-mm-dd HH:MM 形式 / 空欄可（空欄=納期の3日前 08:30、納期も空欄なら取込実行時刻）']);
      ws.addRow(['※ 機番1〜10: 台数分のみ入力。空欄は #1, #2... 自動採番']);
@@ -30933,7 +30952,7 @@ const QuotaStoppedPanel = ({ until }) => (
          const qty = parseInt(row.getCell(C_QTY).value) || 1;
          const templateId = row.getCell(C_TEMPLATE).value?.toString?.() || 'demo';
          const priorityRaw = row.getCell(C_PRIORITY).value?.toString?.() || '通常';
-         const priority = priorityRaw === '急ぎ' ? 'high' : 'normal';
+         const priority = priorityFromImportText(priorityRaw);
          const dueDate = parseDueYMD_pl(row.getCell(C_DUE).value);
          // 入庫日時: 入力があればそれ(Date型セルも安全に)。空欄なら「納期の3日前 08:30」(納期あり時)=製品と同じ既定。
          const entryAtRaw = row.getCell(C_ENTRY).value;
@@ -32355,9 +32374,8 @@ const QuotaStoppedPanel = ({ until }) => (
                <div className="grid grid-cols-2 gap-4">
                  <div>
                     <label className="block text-sm font-bold text-slate-700 mb-1">優先度</label>
-                    <select name="priority" defaultValue={editingLot?.priority || 'normal'} className="w-full border rounded p-2 bg-slate-50">
-                      <option value="normal">通常</option>
-                      <option value="high">急ぎ</option>
+                    <select name="priority" defaultValue={normalizeLotPriority(editingLot?.priority)} className="w-full border rounded p-2 bg-slate-50">
+                      {LOT_PRIORITY_CHOICES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
                     </select>
                  </div>
                  <div>
