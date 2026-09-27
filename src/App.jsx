@@ -270,7 +270,13 @@ import SignoffModal from './SignoffModal.jsx';
 import { WorkerProfilesEditor } from './WorkerProfilesEditor.jsx'; // 👤 P118 個人ごとの設定(製品の写し)
 // 📚 P167 知識標準(講座)の登録と受講(製品 KnowledgeCourses.jsx をそのまま写した)
 import { KnowledgePanel, KnowledgeLibraryModal } from './KnowledgeCourses.jsx';
-import { KNOWLEDGE_COURSES_COL, KNOWLEDGE_RECORDS_COL } from './domain/knowledgeCourses.js';
+import { KNOWLEDGE_COURSES_COL, KNOWLEDGE_RECORDS_COL, pendingRequiredCourses } from './domain/knowledgeCourses.js';
+import { KnowledgeNudgeBand } from './KnowledgeCourses.jsx';
+import { RecipePlayer, TrainingRecorderBar, ChapterMiniPlayer, driveUploadFile } from './VideoStudio.jsx';
+import { trainingRecorderState, startTrainingRecording, markTrainingStep, finishTrainingRecording, retryTrainingUpload, discardTrainingRecording, cancelTrainingRecording } from './trainingRecorder.js';
+import { trainingRecipeTitle } from './domain/trainingChapters.js';
+import { pickChapterVideo } from './domain/videoRecipe.js';
+import { partsVideoFolder } from './domain/partsVideoFolder.js';
 import { GraduationCap } from 'lucide-react';
 // 🎓 E32 新人の級・検定(製品 traineeProgress.js をそのまま写した)。⚠判定は保存しない — 履歴から毎回導出する。
 import {
@@ -8297,7 +8303,7 @@ const ModelQualityInfoPanel = ({ model, stepTitle, info, open, onToggle }) => {
   );
 };
 
-const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [], contactEnabled = false, contactRequests = [], contactGroups = [], contactMembers = {}, notifyPush = null, repairContactOnNg = false, reworkContactSkip = null }) => {
+const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [], contactEnabled = false, contactRequests = [], contactGroups = [], contactMembers = {}, notifyPush = null, repairContactOnNg = false, reworkContactSkip = null, videoRecipes = [], onSaveVideoRecipe = null, onOpenKnowledge = null, knowledgeCourses = [], knowledgeRecords = [] }) => {
   // 📨 P058/P027 連絡・呼出の下書き(不具合報告の「📨 報告して連絡」からも開く)
   const [contactDraft, setContactDraft] = useState(null);
   // 親側で `lots.find(l => l.id === executionLotId)` が undefined を返すケースに備える。
@@ -8467,8 +8473,13 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const [tasks, setTasks] = useState(lot.tasks || {});
   const tasksRef = useRef(lot.tasks || {});
   // 🚦 保存の中継(製品と同じ): 連続操作で次のイベントが再描画より先でも、直前の開始・停止を開始の見張りが見られるようにする
+  // 🎥📚 教材の打刻・必修の案内(下で毎回差し替える最新の関数を呼ぶ)
+  const trainingHooksRef = useRef(null);
   const onSave = useCallback((payload) => {
-    if (payload && payload.tasks) tasksRef.current = payload.tasks;
+    if (payload && payload.tasks) {
+      try { trainingHooksRef.current?.onTasks?.(tasksRef.current || {}, payload.tasks); } catch (e) { console.error('[🎥📚] 打刻/案内に失敗しました(保存は続けます)', e); }
+      tasksRef.current = payload.tasks;
+    }
     // 👤 担当の切替も 購読が返る前の次の操作に効かせる(製品と同じ)
     if (payload && payload.workerId) lastSavedWorkerIdRef.current = payload.workerId;
     return onSaveRaw(payload);
@@ -11425,6 +11436,205 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     return () => unsub();
   }, [db, rotaryConfig?.enabled]);
 
+  // ===== 🎬🎥📚 製品の作業画面から移植(2026-09-27): 手本動画・教材撮影・小窓・必修講座の案内 =====
+  //   ⚠製品 App.jsx(WorkExecutionModal)の同名の仕組みを写した。読みは増やさない:
+  //     手本(video_recipes)は App が既に購読している物を受け取るだけ。講座は App 側で「作業画面を初めて開いた時に1回だけ」張る
+  //     (一度張ったら張りっぱなし=製品の常時購読と同じく1回の読み)。
+  // taskKey -> { step, unitIdx }。キー形式の違いを吸収(製品と同じ)。
+  const resolveTaskKey = (key) => {
+    const step = findStepByTaskKey(key);
+    if (!step) return null;
+    const m = String(key).match(/-(?:lot-)?(\d+)$/);
+    return { step, unitIdx: m ? Number(m[1]) : 0 };
+  };
+  // 🎥 教材の打刻(製品と同じ)。主フックは onSave の差分(タップ/音声/まとめて開始の全経路)。
+  const markTrainingByTaskDiff = (prevTasks, nextTasks) => {
+    if (!trainingRecorderState().active) return;
+    try {
+      const seen = new Set();
+      Object.keys(nextTasks || {}).forEach(key => {
+        const before = (prevTasks || {})[key] || null;
+        const after = nextTasks[key];
+        if (!after || typeof after !== 'object') return;
+        const wasRunning = !!(before && before.startTime);
+        const isRunning = !!after.startTime;
+        if (wasRunning === isRunning) return;
+        const info = resolveTaskKey(key);
+        const sid = info?.step?.id;
+        if (!sid) return;
+        const kind = isRunning ? 'start' : 'end';
+        const dedup = `${sid}|${kind}`;
+        if (seen.has(dedup)) return;
+        seen.add(dedup);
+        markTrainingStep(sid, info.step.title || '', kind);
+      });
+    } catch (e) {
+      console.error('[🎥] 教材の打刻に失敗しました(録画は続けます)', e);
+    }
+  };
+  // 逐次(順序実行)モードは tasks の startTime を通らないので直接打刻する。
+  const markTrainingByStep = (step, kind) => {
+    if (!step?.id) return;
+    if (!trainingRecorderState().active) return;
+    markTrainingStep(step.id, step.title || '', kind);
+  };
+  // 🎓 未修了の必修講座の案内(製品と同じ)。教育中の人だけ計算する。押せない壁は作らない(帯で案内するだけ・開いている間に1回)。
+  const knowledgePending = useMemo(() => {
+    if (!inspectorIsTrainee || !inspectorWorker) return [];
+    try {
+      return pendingRequiredCourses({ courses: knowledgeCourses, records: knowledgeRecords, worker: inspectorWorker });
+    } catch (e) {
+      console.error('[📚] 必修講座の算出に失敗しました', e);
+      return [];
+    }
+  }, [inspectorIsTrainee, inspectorWorker, knowledgeCourses, knowledgeRecords]);
+  const knowledgeNudgeShownRef = useRef(false);
+  const [knowledgeNudge, setKnowledgeNudge] = useState(false);
+  const nudgeKnowledgeOnStart = () => {
+    if (knowledgeNudgeShownRef.current) return;
+    if (!knowledgePending || knowledgePending.length === 0) return;
+    knowledgeNudgeShownRef.current = true;
+    setKnowledgeNudge(true);
+  };
+  const anyStepStarted = (prevTasks, nextTasks) => Object.keys(nextTasks || {}).some(k => {
+    const after = (nextTasks || {})[k];
+    if (!after || typeof after !== 'object') return false;
+    const before = (prevTasks || {})[k] || null;
+    return !!after.startTime && !(before && before.startTime);
+  });
+  // onSave(上で useCallback 済み)から最新の関数を呼べるよう、描くたびに差し替える
+  trainingHooksRef.current = {
+    onTasks: (prev, next) => { markTrainingByTaskDiff(prev, next); if (anyStepStarted(prev, next)) nudgeKnowledgeOnStart(); },
+  };
+  // 🎬 エースの手本動画(この工程に紐づくレシピ。品目コードが付いたレシピは同じ品目コードだけ)
+  const [aceStudio, setAceStudio] = useState(null);
+  const [acePick, setAcePick] = useState(null);
+  const aceFor = (sid) => (videoRecipes || []).filter(r => (r.stepKeys || []).includes(sid) && (!r.model || r.model === lot.model));
+  const openAce = (sid) => { const rs = aceFor(sid); if (!rs.length) return; if (rs.length === 1) setAceStudio(rs[0]); else setAcePick(rs); };
+  // 🎥 教材として撮影(実体は src/trainingRecorder.js。ここは入口と Drive+video_recipes への保存だけ。Drive は 部品/テンプレ/<テンプレ名>)
+  const performTrainingSave = async ({ blob, fileName, chapters, events, stepKeys, durationSec, meta, onProgress }) => {
+    if (typeof onSaveVideoRecipe !== 'function') throw new Error('この画面からは教材を保存できません(設定が渡っていません)');
+    const tplName = meta?.templateName || lotTemplate?.name || 'テンプレ';
+    const up = await driveUploadFile(new File([blob], fileName, { type: blob.type || 'video/webm' }), partsVideoFolder(tplName), onProgress);
+    if (!up?.id) throw new Error('Driveの保存先(ファイルID)が返ってきませんでした');
+    await onSaveVideoRecipe(up.id, {
+      fileId: up.id,
+      fileName: up.name || fileName,
+      title: trainingRecipeTitle({ model: meta?.model || lot.model, at: meta?.startedAt || Date.now(), workerName: meta?.workerName || inspectorName }),
+      model: meta?.model || lot.model || '',
+      stepKeys,
+      chapters,
+      events,
+      durationSec,
+      recordedAt: meta?.startedAt || Date.now(),
+      recordedBy: meta?.workerName || inspectorName || '',
+      lotId: meta?.lotId || lot.id || '',
+      source: 'auto',
+    });
+  };
+  const trainingSaveRef = useRef(null);
+  trainingSaveRef.current = performTrainingSave;
+  useEffect(() => () => {
+    if (!trainingRecorderState().active) return;
+    finishTrainingRecording((args) => trainingSaveRef.current(args)).catch(e => console.error('[🎥] 画面終了時の教材保存に失敗しました', e));
+  }, []);
+  const startTrainingCapture = async () => {
+    const st = trainingRecorderState();
+    if (st.busy) { alert(st.hasPending ? 'まだ保存できていない教材があります。バーで「もう一度送る」か「捨てる」を選んでください。' : 'すでに撮影中です。'); return; }
+    if (typeof onSaveVideoRecipe !== 'function') { alert('この画面からは教材を保存できません。管理者に連絡してください。'); return; }
+    if (!window.confirm(`この作業を「手本」として撮影します。\n\n・${lot.model || ''} / ${lotTemplate?.name || 'テンプレ'}\n・いつもどおり作業してください。工程の開始・完了から「章」が自動で付きます\n・終わったらバーの「⏹ 終了して教材にする」を押してください\n\n始めますか？`)) return;
+    const withAudio = window.confirm('音声も録りますか？\n\n「OK」= コツを喋りながら作業する（おすすめ）\n「キャンセル」= 映像だけ');
+    try {
+      await startTrainingRecording({
+        lotId: lot.id || '', model: lot.model || '', templateId: lot.templateId || '',
+        templateName: lotTemplate?.name || 'テンプレ', workerName: inspectorName, withAudio,
+      });
+    } catch (e) {
+      alert('撮影を開始できませんでした:\n\n' + (e?.message || e));
+      return;
+    }
+    try {
+      Object.entries(tasksRef.current || {}).forEach(([k, t]) => {
+        if (!t || !t.startTime) return;
+        const info = resolveTaskKey(k);
+        if (info?.step?.id) markTrainingStep(info.step.id, info.step.title || '', 'start');
+      });
+      if (executionType === 'sequential' && isTimerRunning) markTrainingByStep(currentStep, 'start');
+    } catch (e) { console.error('[🎥] 進行中工程の打刻に失敗しました', e); }
+    setOrderHint('🎥 教材の撮影を始めました。いつもどおり作業してください（工程ごとの章は自動で付きます）');
+  };
+  const stopTrainingCapture = async () => {
+    const st = trainingRecorderState();
+    if (!st.active) return;
+    const noChapters = st.stepCount === 0;
+    const head = noChapters
+      ? `⚠ 工程の章が1つも付いていません。\n\nこのまま保存すると、工程の🎬には出てきません（テンプレ編集の🎬から手で工程を選ぶ必要があります）。\n\n`
+      : '';
+    const el = Math.max(0, Math.floor(st.elapsedSec || 0));
+    if (!window.confirm(`${head}撮影を終了して教材にします。\n\n・長さ ${Math.floor(el / 60)}:${String(el % 60).padStart(2, '0')} / 章 ${st.stepCount}件${st.breakCount ? ` / 休憩 ${st.breakCount}件` : ''}\n・Driveへ保存し、工程の🎬から見られるようになります\n\nよろしいですか？`)) return;
+    const ok = await finishTrainingRecording(performTrainingSave);
+    setOrderHint(ok
+      ? (noChapters
+        ? '🎥 教材を保存しました。⚠ただし工程に紐づいていません（テンプレ編集の🎬から工程を選んでください）'
+        : '🎥 教材を保存しました。工程の🎬から見られます')
+      : '⚠ 教材の保存に失敗しました。バーから もう一度送れます（動画は残っています）');
+  };
+  const cancelTrainingCapture = async () => {
+    if (!window.confirm('撮影をやめます。ここまでの映像は保存されません。\nよろしいですか？')) return;
+    await cancelTrainingRecording();
+    setOrderHint('🎥 撮影をやめました（保存していません）');
+  };
+  const discardTrainingCapture = () => {
+    if (!window.confirm('保存できていない教材の動画を捨てます。元に戻せません。\nよろしいですか？')) return;
+    discardTrainingRecording();
+  };
+  // 🎬 教育中の人が工程を開始したら、その工程の場面を小窓(たたんだチップ)で出す。自動では開かない(製品と同じ)。
+  const [miniPlayer, setMiniPlayer] = useState(null);
+  const [miniOpen, setMiniOpen] = useState(false);
+  const [miniAttention, setMiniAttention] = useState(false);
+  const autoPlayedRef = useRef(new Set());
+  const autoPrevTasksRef = useRef(null);
+  const tryAutoPlayFor = (step) => {
+    if (!inspectorIsTrainee) return;
+    const sid = step?.id;
+    if (!sid || autoPlayedRef.current.has(sid)) return;
+    const picked = pickChapterVideo({ recipes: videoRecipes || [], stepKey: sid, model: lot.model || '' });
+    if (!picked) return;
+    autoPlayedRef.current.add(sid);
+    setMiniPlayer({ recipe: picked.recipe, chapter: picked.chapter, stepKey: sid, label: step.title || '' });
+    setMiniOpen(false);
+    setMiniAttention(true);
+  };
+  useEffect(() => {
+    if (!miniAttention) return;
+    const t = setTimeout(() => setMiniAttention(false), 8000);
+    return () => clearTimeout(t);
+  }, [miniAttention, miniPlayer]);
+  useEffect(() => {
+    const prev = autoPrevTasksRef.current;
+    autoPrevTasksRef.current = tasks;
+    if (!inspectorIsTrainee || !prev) return;
+    try {
+      Object.keys(tasks || {}).forEach(k => {
+        const before = prev[k];
+        const after = tasks[k];
+        if (!after || typeof after !== 'object') return;
+        if ((before && before.startTime) || !after.startTime) return;
+        const info = resolveTaskKey(k);
+        if (info?.step) tryAutoPlayFor(info.step);
+      });
+    } catch (e) { console.error('[🎬] 手本の自動再生に失敗しました', e); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, inspectorIsTrainee]);
+  // 逐次(順序実行)モード: 進行中の工程が変わったところで 打刻・案内・小窓(tasks の startTime を通らないため)
+  useEffect(() => {
+    if (executionType !== 'sequential' || !isTimerRunning) return;
+    markTrainingByStep(currentStep, 'start');
+    nudgeKnowledgeOnStart();
+    tryAutoPlayFor(currentStep);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [executionType, isTimerRunning, currentStep?.id, inspectorIsTrainee]);
+
   // 全ての hooks 呼び出しが終わったあとで、ロット未定義の場合は何も描画しない
   // (上の useEffect で onClose を呼ぶスケジュールが既に走っている)
   // 🚨 2026-08-23: この行より **後ろ** に hooks が2つ残っていた
@@ -12446,6 +12656,70 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   }
   // Safeguard against empty steps or invalid index
   const displayStep = localSteps[displayStepIdx] || localSteps[0] || { title: 'No Step', description: '', images: [] };
+  // 🎬🎥📚 見た目(製品の 手本ボタン / 講座ボタン+未読の印 / 録画バー / 必修の案内帯 / 小窓 / 手本プレイヤー を部品の作業画面の見合う場所へ)
+  const execAceStepId = isCustom ? displayStep?.id : currentStep?.id;
+  const execAceCount = execAceStepId ? aceFor(execAceStepId).length : 0;
+  const execVideoKnowledgeBtns = (
+    <>
+      {execAceCount > 0 && (
+        <button onClick={() => openAce(execAceStepId)} className="px-3 py-2 bg-sky-600 hover:bg-sky-700 rounded font-bold text-xs flex items-center gap-1 whitespace-nowrap" title="この工程のエースの手本動画を見る">
+          <Play className="w-4 h-4"/> 手本{execAceCount > 1 ? `(${execAceCount})` : ''}
+        </button>
+      )}
+      {typeof onOpenKnowledge === 'function' && (
+        <button onClick={() => onOpenKnowledge(inspectorName)} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 rounded font-bold text-xs flex items-center gap-1 whitespace-nowrap relative" title="知識標準(講座)を開く">
+          <BookOpen className="w-4 h-4"/> 講座
+          {knowledgePending && knowledgePending.length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 rounded-full w-2.5 h-2.5" title={`まだ見ていない必修が ${knowledgePending.length}件あります`} />}
+        </button>
+      )}
+      {typeof onSaveVideoRecipe === 'function' && (
+        <button onClick={startTrainingCapture} className="px-3 py-2 bg-rose-700 hover:bg-rose-800 rounded font-bold text-xs flex items-center gap-1 whitespace-nowrap" title="この作業を手本として撮影する(工程の章は自動で付きます)">🎥 教材として撮影</button>
+      )}
+    </>
+  );
+  const execVideoKnowledgeLayer = (
+    <>
+      {/* 🎥録画バーと📚必修の案内は 左下にまとめて置く(右下は📨連絡・呼出) */}
+      <div className="fixed left-2 bottom-2 z-[320] flex flex-col gap-2 max-w-md pointer-events-none">
+        <div className="pointer-events-auto"><TrainingRecorderBar onStop={stopTrainingCapture} onCancel={cancelTrainingCapture} onRetry={() => retryTrainingUpload()} onDiscard={discardTrainingCapture} /></div>
+        {knowledgeNudge && knowledgePending && knowledgePending.length > 0 && (
+          <div className="pointer-events-auto">
+            <KnowledgeNudgeBand courses={knowledgePending}
+              onOpen={() => { setKnowledgeNudge(false); if (onOpenKnowledge) onOpenKnowledge(inspectorName); }}
+              onDismiss={() => setKnowledgeNudge(false)} />
+          </div>
+        )}
+      </div>
+      {miniPlayer && (
+        <ChapterMiniPlayer
+          recipe={miniPlayer.recipe} chapter={miniPlayer.chapter} stepLabel={miniPlayer.label}
+          raise={!!(measurementFullscreen || checklistFullscreen || detailsFullscreen)} side="left"
+          execFontScale={execFontScale} dock={false}
+          open={miniOpen} onOpenChange={(v) => { setMiniOpen(v); if (v) setMiniAttention(false); }}
+          attention={miniAttention}
+          onExpand={() => { setAceStudio({ ...miniPlayer.recipe, __startAt: miniPlayer.chapter ? Math.max(0, miniPlayer.chapter.start || 0) : 0 }); setMiniPlayer(null); setMiniOpen(false); }}
+          onClose={() => { setMiniPlayer(null); setMiniOpen(false); }}
+        />
+      )}
+      {/* 🎬 作業中の手本再生。⚠見るだけ(編集の入口は出さない) */}
+      {aceStudio && (
+        <RecipePlayer file={{ id: aceStudio.fileId, name: aceStudio.fileName || '' }} recipe={aceStudio} startAt={aceStudio.__startAt || 0}
+          watcherName={inspectorName || ''}
+          onWatched={onSaveVideoRecipe ? ((patch) => onSaveVideoRecipe(aceStudio.fileId, patch)) : null}
+          onClose={() => setAceStudio(null)} />
+      )}
+      {acePick && (
+        <div className="fixed inset-0 z-[550] bg-black/60 flex items-center justify-center p-4" onClick={() => setAcePick(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-3 space-y-1.5" onClick={(e) => e.stopPropagation()}>
+            <div className="text-sm font-bold text-slate-700 mb-1">🎬 手本動画を選ぶ</div>
+            {acePick.map(r => (
+              <button key={r.fileId} onClick={() => { setAcePick(null); setAceStudio(r); }} className="w-full text-left px-3 py-2 rounded-lg border border-slate-200 hover:bg-sky-50 text-sm font-bold text-slate-700 truncate">🎬 {r.title || r.fileName || r.fileId}</button>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   // 🧾 自動終了のお知らせ・軽微不良・気づきの窓は カスタムと順序実行の両方で使う(順序実行ではボタンだけあって窓が出なかった・製品と同じ)
   const sharedAutoEndToast = autoEndToast && (
@@ -12455,6 +12729,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         );
   const sharedReportModals = (
     <>
+        {execVideoKnowledgeLayer}
         {showComplaintModal && (
             <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
@@ -12853,6 +13128,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                    <button onClick={onOpenWorkStandards} className="px-3 py-2 bg-orange-600 hover:bg-orange-700 rounded font-bold text-xs flex items-center gap-1 whitespace-nowrap" title="作業標準ライブラリを開く"><BookOpen className="w-4 h-4"/> 作業標準</button>
                  )}
                  <button onClick={()=>setShowInProgressReport(true)} className="px-3 py-2 bg-teal-600 hover:bg-teal-700 rounded font-bold text-xs flex items-center gap-1 whitespace-nowrap" title="途中経過の成績表を表示 (未入力は空白)"><Printer className="w-4 h-4"/> 成績表</button>
+                 {execVideoKnowledgeBtns}
                  {(() => { const ov = lotTemplate?.overview; const has = ov && (((ov.images?.length) || 0) + ((ov.pdfs?.length) || 0) + ((ov.description || '').trim() ? 1 : 0) > 0); return has ? (
                    <button onClick={()=>setShowOverview(true)} className="px-3 py-2 bg-cyan-600 hover:bg-cyan-700 rounded font-bold text-xs flex items-center gap-1 whitespace-nowrap" title="このテンプレの総合資料(手順書・概要)を見る"><FileText className="w-4 h-4"/> 資料</button>
                  ) : null; })()}
@@ -14381,6 +14657,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
               </button>
               <button onClick={()=>setShowVoiceHelp(true)} className="p-2 rounded-full bg-white/10 text-white/70 hover:bg-white/20 transition-all" title="音声コマンドの使い方"><HelpCircle className="w-5 h-5"/></button>
               <button onClick={()=>setShowInProgressReport(true)} className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 rounded font-bold text-sm flex items-center gap-1" title="途中経過の成績表を表示 (未入力は空白)"><Printer className="w-4 h-4"/> 成績表</button>
+              {execVideoKnowledgeBtns}
             </>
             {/* ⚠✕だけは畳まない(閉じる手段は何があっても画面に残す) */}
             <button onClick={handleSafeClose} title="閉じる（作業中なら一時停止・保存）" className="hover:bg-white/10 rounded-full flex items-center justify-center min-w-11 min-h-11"><X className="w-6 h-6"/></button>
@@ -32263,8 +32540,10 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    const [showWorkStandardsLib, setShowWorkStandardsLib] = useState(false);
    // 📚 P167 知識標準。講座と受講記録は「知識標準のタブ」か「一覧の窓」を開いた時だけ読む(無料枠を守る)。
    const [showKnowledgeLib, setShowKnowledgeLib] = useState(false);
-   const [knowledgeCourses] = useLazyCollection(lazyCtx, KNOWLEDGE_COURSES_COL, activeTab === 'knowledge' || showKnowledgeLib);
-   const [knowledgeRecords] = useLazyCollection(lazyCtx, KNOWLEDGE_RECORDS_COL, activeTab === 'knowledge' || showKnowledgeLib);
+   // 📚 作業画面の必修の案内にも使う。⚠作業画面を初めて開いた時に1回だけ張る(一度張ったら張りっぱなし=開くたびには読まない)。
+   const [knowledgeLibFor, setKnowledgeLibFor] = useState('');
+   const [knowledgeCourses] = useLazyCollection(lazyCtx, KNOWLEDGE_COURSES_COL, activeTab === 'knowledge' || showKnowledgeLib || !!executionLotId);
+   const [knowledgeRecords] = useLazyCollection(lazyCtx, KNOWLEDGE_RECORDS_COL, activeTab === 'knowledge' || showKnowledgeLib || !!executionLotId);
    const [editingWorkStandard, setEditingWorkStandard] = useState(null); // null = 編集モーダル非表示, 'NEW' = 新規, object = 既存編集
    // 📄 P061 資料PDFの中身(work_standard_files)。設定には札しか入っていないので、
    //   資料を開く時にだけ読む(製品 App.jsx と同じ形)。
@@ -36455,9 +36734,9 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
            courses={knowledgeCourses || []}
            records={knowledgeRecords || []}
            workers={workers}
-           currentUserName={currentUserName}
+           currentUserName={knowledgeLibFor || currentUserName}
            saveData={saveData}
-           onClose={() => setShowKnowledgeLib(false)}
+           onClose={() => { setShowKnowledgeLib(false); setKnowledgeLibFor(''); }}
          />
        )}
        {showWorkStandardsLib && (
@@ -36487,6 +36766,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
            lot={lots.find(l => l.id === executionLotId)}
            itemMaster={settings?.itemMaster || null}
            {...contactPropsOf(contactHub)}
+           // 🎬🎥📚 手本動画・教材撮影・必修の案内(製品と同じ入口)。video_recipes は既に購読している物を渡すだけ
+           videoRecipes={videoRecipes}
+           onSaveVideoRecipe={(id, data) => saveData('video_recipes', id, data)}
+           onOpenKnowledge={(name) => { setKnowledgeLibFor(name || ''); setShowKnowledgeLib(true); }}
+           knowledgeCourses={knowledgeCourses}
+           knowledgeRecords={knowledgeRecords}
            // 🚶 掛け持ち案内の「移る」「↩ 戻る」: 作業画面が保存を見届けてから、開くロットを替える(key で画面を作り直す)
            onSwitchLot={(id) => setExecutionLotId(id)}
            // 🚶 区画どうしの片道・2分の決まり(マスタ設定の作業エリアの下で誰でも変えられる)。空なら区画の名前の目安だけ
