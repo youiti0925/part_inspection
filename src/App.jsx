@@ -259,6 +259,7 @@ import { skillColorOf } from './skillColors.js';
 import { WorkerAvatar } from './WorkerAvatar.jsx';
 import { workerToneOf } from './workerTone.js';
 import SignoffModal from './SignoffModal.jsx';
+import { WorkerProfilesEditor } from './WorkerProfilesEditor.jsx'; // 👤 P118 個人ごとの設定(製品の写し)
 // 🎓 E32 新人の級・検定(製品 traineeProgress.js をそのまま写した)。⚠判定は保存しない — 履歴から毎回導出する。
 import {
   BASELINE_SOURCE_LABEL, TRAINEE_BASELINE_MIN_N, normalizeTrainingConfig,
@@ -24725,6 +24726,9 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
                  )}
              </div>
            </details>
+           {/* 👤 P118 個人ごとの設定(時短・直工比率・優先テンプレ・曜日ごとの窓・有給/出張/会議・残業)。製品と同じ置き場 settings.workerProfiles。
+               部品の操業シミュレーション(calendar.js → workerAvailability.js)が読む。今の在席表(workerRoster)はそのまま残す。 */}
+           <WorkerProfilesEditor workers={workers} settings={settings} saveSettings={saveSettings} templates={templates} />
          </div>
          {/* 工程テンプレート管理は専用タブに移動 */}
 
