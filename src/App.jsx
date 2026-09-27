@@ -131,7 +131,7 @@ import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStar
 //   この部品検査アプリは **読むだけ**(登録する画面は製品検査/最終検査にある)。
 import { isWorkdayYmd, makeIsWorkday } from './domain/factoryCalendar.js';
 import { planProgressImport, normalizeSheetMap, DEFAULT_SHEET_MAP, isShippedGrayFills, colToIndex, PS_REASON, PENDING_MAX_ROWS, pendingRowsFromPlan, mergePendingRows, normalizeSheetProfiles, guessProfile, profilesToSettings, sheetMapProblems } from './domain/progressSheet.js';
-import { DEFAULT_IMPORT_OPTIONS } from './domain/importPlan.js';
+import { DEFAULT_IMPORT_OPTIONS, planRowLots } from './domain/importPlan.js';
 import { dueConflict } from './domain/dueConflict.js';
 import { LOT_PRIORITY_CHOICES, LOT_PRIORITY_LABEL, normalizeLotPriority, priorityLabelOf, priorityFromImportText, priorityBadgeOf, priorityFilterStyleOf } from './domain/lotPriority.js';
 import { workerWorkedSecondsInRange, dayRangeOf } from './domain/workerDailyActual.js';
@@ -31228,19 +31228,21 @@ const QuotaStoppedPanel = ({ until }) => (
          m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/); if (m) return realYMD_pl(+m[3], +m[1], +m[2]);
          const d = new Date(s); return isNaN(d) ? '' : toYMD_pl(d);
        };
-       const rows = [];
+       const rawRows = [];
        ws.eachRow((row, rowNum) => {
          if (rowNum === 1) return; // ヘッダースキップ
          const model = row.getCell(C_MODEL).value?.toString?.() || row.getCell(C_MODEL).value;
          const orderNo = row.getCell(C_ORDER).value?.toString?.() || row.getCell(C_ORDER).value;
          if (!model || !orderNo) return; // 空行スキップ
          const qty = parseInt(row.getCell(C_QTY).value) || 1;
-         const templateId = row.getCell(C_TEMPLATE).value?.toString?.() || 'demo';
+         // 🧩 P125 テンプレID列が空なら 'demo' にせず、下で品質規格のテンプレへ展開する(planRowLots)
+         const templateIdRaw = String(row.getCell(C_TEMPLATE).value?.toString?.() || '').trim();
          const priorityRaw = row.getCell(C_PRIORITY).value?.toString?.() || '通常';
          const priority = priorityFromImportText(priorityRaw);
          const dueDate = parseDueYMD_pl(row.getCell(C_DUE).value);
-         // 入庫日時: 入力があればそれ(Date型セルも安全に)。空欄なら「納期の3日前 08:30」(納期あり時)=製品と同じ既定。
+         // 入庫日時: 入力があればそれ(Date型セルも安全に)。空欄なら下の planRowLots が 品質規格の「入荷は納期の N日前」(無ければ3日前)と工場の暦で決める。
          const entryAtRaw = row.getCell(C_ENTRY).value;
+         const entryGiven = entryAtRaw != null && entryAtRaw !== '';
          let entryAt;
          if (entryAtRaw != null && entryAtRaw !== '') {
            const sRaw = String(entryAtRaw).trim();
@@ -31266,16 +31268,35 @@ const QuotaStoppedPanel = ({ until }) => (
            const sn = row.getCell(C_SERIAL_START + i).value?.toString?.() || '';
            serials.push(sn || `#${i + 1}`);
          }
-         rows.push({ model, modelText, orderNo, qty, templateId, priority, dueDate, entryAt, serials });
+         rawRows.push({ model, modelText, orderNo, qty, templateIdRaw, priority, dueDate, entryAt, entryGiven, serials });
        });
 
-       if (rows.length === 0) { alert('有効なデータ行がありません'); return; }
+       // 🧩 P125 入荷登録Excel 1行 → 何ロットになるかは純関数 planRowLots が決める(製品と同じ)。
+       //   テンプレID列があればそれ1本。空なら 品目コード → 品質規格 のテンプレ全部へ展開する(部品には型式マスタが無いので modelMasters は {})。
+       //   入荷は Excel に書いてあればそれ、無ければ 品質規格の日数と工場の暦から。
+       const pad2x = (n) => String(n).padStart(2, '0');
+       const msToYmdHm = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad2x(d.getMonth() + 1)}-${pad2x(d.getDate())} ${pad2x(d.getHours())}:${pad2x(d.getMinutes())}`; };
+       const rows = [];
+       const expandSkipped = [];
+       for (const r of rawRows) {
+         const res = planRowLots(
+           { model: String(r.model), orderNo: String(r.orderNo), qty: r.qty, dueYMD: r.dueDate, entryRaw: r.entryGiven ? msToYmdHm(r.entryAt) : '', templateIdFromExcel: r.templateIdRaw },
+           { modelMasters: {}, qualityStandards: settings.qualityStandards || {}, modelStandardMap: settings.modelStandardMap || {}, templates, options: { calendar: factoryCalendar || null } },
+         );
+         for (const sk of res.skipped) expandSkipped.push(`⏭ ${r.orderNo} ${r.model} — ${sk.reason === '型式マスタにこの型式の登録がありません' ? '品質規格マスタに品目コードの紐付けがありません' : sk.reason === '型式マスタにテンプレートが割り当てられていません' ? '品質規格にテンプレートが割り当てられていません' : sk.reason}`);
+         for (const l of res.lots) {
+           rows.push({ model: r.model, modelText: r.modelText, orderNo: r.orderNo, qty: r.qty, templateId: l.templateId, priority: r.priority,
+             dueDate: l.dueYMD || r.dueDate, entryAt: Number.isFinite(l.entryAt) ? l.entryAt : (r.entryGiven ? r.entryAt : Date.now()), serials: r.serials });
+         }
+       }
+
+       if (rows.length === 0) { alert('有効なデータ行がありません' + (expandSkipped.length ? '\n\n' + expandSkipped.slice(0, 20).join('\n') : '')); return; }
 
        // ===== パス1: 計画づくり(書き込みは一切しない) =====
        //   旧実装は保存し終えた後に confirm「OKで確定」を出しており、キャンセルしても取り消せない嘘UIだった(監査確定)。
        //   先に計画+プレビューを見せ、OKされてから書き込む。
-       let newCount = 0, updateCount = 0, skipCount = 0;
-       const details = [];
+       let newCount = 0, updateCount = 0, skipCount = expandSkipped.length;
+       const details = [...expandSkipped];
        const plan = [];
        const processedKeys = new Set(); // このバッチで作成予定の「指図+テンプレID」(二重作成防止)
        for (const row of rows) {
