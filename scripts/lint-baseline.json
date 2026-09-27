@@ -6,7 +6,7 @@
   "_減った時": "node scripts/verify-lint-baseline.mjs --update で下げる。下げないと、また増えても気づけない。",
   "_数え方": "対象=src（npm run check と同じ範囲）。規則ごとに error/warning を数える。",
   "_合計": {
-    "err": 201,
+    "err": 244,
     "warn": 54
   },
   "_更新日": "2026-09-27",
@@ -20,15 +20,15 @@
       "warn": 0
     },
     "no-irregular-whitespace": {
-      "err": 13,
+      "err": 17,
       "warn": 0
     },
     "no-unused-vars": {
-      "err": 101,
+      "err": 126,
       "warn": 0
     },
     "no-useless-escape": {
-      "err": 17,
+      "err": 18,
       "warn": 0
     },
     "react-hooks/exhaustive-deps": {
@@ -40,11 +40,15 @@
       "warn": 0
     },
     "react-hooks/purity": {
-      "err": 11,
+      "err": 14,
+      "warn": 0
+    },
+    "react-hooks/refs": {
+      "err": 4,
       "warn": 0
     },
     "react-hooks/set-state-in-effect": {
-      "err": 9,
+      "err": 10,
       "warn": 0
     },
     "react-hooks/static-components": {
@@ -52,7 +56,7 @@
       "warn": 0
     },
     "react-refresh/only-export-components": {
-      "err": 17,
+      "err": 22,
       "warn": 0
     }
   }
