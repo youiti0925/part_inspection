@@ -29718,6 +29718,34 @@ const QuotaStoppedPanel = ({ until }) => (
      }
    };
 
+   // 🚶 別のロットにいる間に時間が来た自動測定を、この端末が後追いで完了にする(製品 2026-09-26 と同じ)。
+   //   前は作業画面を開き直すまで processing のまま残り、マップ・リスト・掛け持ち案内の判断が古かった。
+   //   書くのは「端末で選んだ名前の作業者の担当ロット」だけ・今開いているロットは作業画面の1秒タイマーに任せる・同じロットは30秒に1回まで。
+   //   ⚠部品には buildLotSave(作業区間・機械の運転記録)が無いので tasks と status だけを書く。
+   const juggleAutoEndRef = useRef(new Map());
+   const saveDataForJuggleRef = useRef(null);
+   saveDataForJuggleRef.current = saveData;
+   useEffect(() => {
+     const iv = setInterval(() => {
+       if (!lotsLoadedRef.current) return;
+       const me = String(currentUserName || '').trim();
+       const mine = (workers || []).find(w => w && w.name === me);
+       if (!mine || !mine.id) return;
+       const now = Date.now();
+       (lots || []).forEach((l) => {
+         if (!l || !l.id || l.id === executionLotId || l.status === 'completed' || l.workerId !== mine.id) return;
+         const last = juggleAutoEndRef.current.get(l.id) || 0; if (now - last < 30000) return;
+         const tplSteps = ((templates || []).find(t => t.id === l.templateId)?.steps) || [];
+         const r = autoCatchUp({ lot: l, tplSteps, now, isAuto: isAutoStep, inspectorName: me });
+         if (!r.tasks) return;
+         juggleAutoEndRef.current.set(l.id, now);
+         Promise.resolve(saveDataForJuggleRef.current?.('lots', l.id, { tasks: r.tasks, ...(l.status === 'paused' ? {} : { status: 'processing' }) }))
+           .catch((e) => console.error('[掛け持ち] 後追いの自動終了の保存に失敗', e));
+       });
+     }, 5000);
+     return () => clearInterval(iv);
+   }, [lots, executionLotId, currentUserName, workers, templates]);
+
    const retryLastSave = async () => {
      const p = lastFailedPayloadRef.current;
      if (!p) { setSyncStatus('idle'); return; }
