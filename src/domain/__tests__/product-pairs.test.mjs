@@ -266,6 +266,8 @@ const PAIRS = [
   { file: 'StandardChangeBanner.jsx', product: 'product-inspection-app/src/StandardChangeBanner.jsx', md5: '792c555dd86477ff5cf43d91dd5e27f2' },
   { file: 'MimamoriCard.jsx', product: 'product-inspection-app/src/MimamoriCard.jsx', md5: 'a3c8c16f7efe8451677ffb1cf1535995' },
   { file: 'KnowledgeCourses.jsx', product: 'product-inspection-app/src/KnowledgeCourses.jsx', md5: '4c79dbce66ef2a6324aa0fbcb9d1a129' },
+  // 試験の写し(2026-09-27): completeSplit の試験は1バイト同じ。completeWindowOpen は読み先だけ部品向け(ContactHub.jsx)なので対に入れない
+  { file: 'domain/__tests__/completeSplit.test.mjs', product: 'product-inspection-app/src/domain/__tests__/completeSplit.test.mjs', md5: '83be3d97ee446097186d9d97d5ecaf16' },
 ];
 
 for (const p of PAIRS) {
