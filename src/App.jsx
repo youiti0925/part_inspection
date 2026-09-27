@@ -108,7 +108,7 @@ import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from './do
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
 // 🤖 自動工程の判定・開始ガードの唯一の正(製品検査 src/domain/workExecution.js と md5 一致の写し)
-import { isAutoStep } from './domain/workExecution.js';
+import { isAutoStep as isAutoStepShared, buildStepMasterIndex } from './domain/workExecution.js';
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
 import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGuide.js';
 import { setEstimatedSession } from './domain/workSessions.js';
@@ -375,6 +375,13 @@ const INITIAL_MAP_ZONES = [
   // 未該当エリア (不良品・残ロット待ちなどの一時置き場)
   { id: 'zone_unassigned', name: '未該当エリア', x: 2, y: 92, w: 96, h: 7, color: 'bg-slate-100/80 border-slate-400', isUnassigned: true },
 ];
+
+// 現行マスタ索引(案②): templates購読で更新する。module-levelの純関数からも参照できるようにするため
+//   Reactのstateではなくモジュール変数に置く(読み取り専用・判定のためだけに使う)。
+let STEP_MASTER_INDEX = null;
+const refreshStepMasterIndex = (templates) => { try { STEP_MASTER_INDEX = buildStepMasterIndex(templates); } catch { STEP_MASTER_INDEX = null; } };
+// アプリ全体はこの1関数だけを使う (索引は自動で効く)
+const isAutoStep = (step) => isAutoStepShared(step, STEP_MASTER_INDEX);
 
 // 🔁 修正(やり直し)を始めるとき「理由を記録せず開始」を押した、という合図。
 //   なぜ要るか:
@@ -7166,7 +7173,7 @@ const ModelQualityInfoPanel = ({ model, stepTitle, info, open, onToggle }) => {
   );
 };
 
-const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [] }) => {
+const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [] }) => {
   // 親側で `lots.find(l => l.id === executionLotId)` が undefined を返すケースに備える。
   // ※ React Hooks ルール準拠: hooks を条件分岐の上に置くと「hooks 呼び出し回数の不一致」エラーになるため、
   //   lot 自体は空 object でフォールバックして hooks を常に同じ回数呼ぶ。実際の render は最後に guard する。
@@ -7274,6 +7281,11 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const [lotNoteBannerDismissed, setLotNoteBannerDismissed] = useState(0);
   const [tasks, setTasks] = useState(lot.tasks || {});
   const tasksRef = useRef(lot.tasks || {});
+  // 🚦 保存の中継(製品と同じ): 連続操作で次のイベントが再描画より先でも、直前の開始・停止を開始の見張りが見られるようにする
+  const onSave = useCallback((payload) => {
+    if (payload && payload.tasks) tasksRef.current = payload.tasks;
+    return onSaveRaw(payload);
+  }, [onSaveRaw]);
   useEffect(() => { tasksRef.current = tasks; }, [tasks]);
 
   // 🚨🚨🚨 「済み」の嘘を止める見張り。
@@ -8063,7 +8075,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     const workerId = ctx.lot.workerId
       || (ctx.workers || []).find(w => w.name === ctx.currentUserName)?.id || null;
     return guardLotTaskStart({ lots: ctx.lots || [], workerId, targetStep, excludeKey,
-      workers: ctx.workers || [],
+      masterIndex: STEP_MASTER_INDEX, workers: ctx.workers || [],
       currentLot: { ...ctx.lot, steps: ctx.localSteps, tasks: currentTasks,
         executionType: ctx.executionType, currentStepIndex: ctx.currentStepIdx,
         ...(ctx.executionType === 'sequential' ? {
@@ -29213,7 +29225,7 @@ const QuotaStoppedPanel = ({ until }) => (
      const watch = (colName, cb) => P.watchCollection(APP_DATA_ID, colName, (rows, snap) => { meter(colName, snap); readOk(colName); cb(rows, snap); }, { onError: readFailed(colName) });
 
      unsubs = [
-       P.watchCollection(APP_DATA_ID, 'templates', (rows, snap) => { meter('templates', snap); readOk('templates'); setTemplates(rows); }, { includeMetadataChanges: true, onError: readFailed('templates') }),
+       P.watchCollection(APP_DATA_ID, 'templates', (rows, snap) => { meter('templates', snap); readOk('templates'); refreshStepMasterIndex(rows); setTemplates(rows); }, { includeMetadataChanges: true, onError: readFailed('templates') }),
        P.watchCollection(APP_DATA_ID, 'workers', (rows, snap) => { meter('workers', snap); readOk('workers'); setWorkers(rows); }, { includeMetadataChanges: true, onError: readFailed('workers') }),
        // ⚠notes / announcements はヘッダーのバッジ(未読件数)で **常に** 使う。外すと数字が黙って0になる。
        watch('notes', (rows) => setNotes(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
