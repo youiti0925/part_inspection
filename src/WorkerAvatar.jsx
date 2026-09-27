@@ -1,13 +1,8 @@
 // 👤 人の色の丸 + 頭文字(部品検査・P084)。
 //  製品 src/opsim/vizKit.jsx の Avatar と同じ形。vizKit は操業シミュの計算を連れて来るので写さず、丸だけをここに置く。
-//  🚨 色は呼ぶ側が workerToneOf(workers, name) で決めて渡す(名簿全体から1か所で配る = 同じ人が画面ごとに違う色にならない)。
+//  🚨 色は呼ぶ側が src/workerTone.js の workerToneOf(workers, name) で決めて渡す(名簿全体から1か所で配る = 同じ人が画面ごとに違う色にならない)。
 //  🚨 7人目から色が重なるので、色だけで見分けさせない(showName 既定 true)。
 import React from 'react';
-import { buildWorkerColors, toneOf } from './opsim/workerColors.js';
-
-/** 名簿から人の色を引く唯一の入口(製品 App.jsx の vizWorkerTone と同じ式)。名簿に居ない名前は灰色。 */
-export const workerToneOf = (workers, name) =>
-  toneOf(buildWorkerColors((workers || []).map((w) => (w && w.name) || '')), name);
 
 export function WorkerAvatar({ name, tone = null, size = 'w-7 h-7', showName = true, className = '' }) {
   const nm = typeof name === 'string' ? name.trim() : '';

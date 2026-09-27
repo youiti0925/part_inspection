@@ -1,7 +1,3 @@
-            {handleAllTemplatesDownload && (<>
-              <button onClick={handleAllTemplatesDownload} className="text-xs flex items-center gap-1 bg-indigo-600 text-white px-3 py-2 rounded border border-indigo-700 hover:bg-indigo-700 font-bold"><FileSpreadsheet className="w-4 h-4"/> 全テンプレExcel</button>
-              <label className="text-xs flex items-center gap-1 cursor-pointer bg-indigo-50 text-indigo-700 px-3 py-2 rounded border border-indigo-200 hover:bg-indigo-100 font-bold"><FileUp className="w-4 h-4"/> まとめて取込<input type="file" ref={allTplInputRef} accept=".xlsx" onChange={handleAllTemplatesImport} className="hidden"/></label>
-            </>)}
 /* global __firebase_config, __initial_auth_token */
 // ⚠ この2つは Canvas プレビューが外から差し込む名前。ビルドにも .env にも入らない。
 //   コードでは必ず `typeof __firebase_config !== 'undefined'` で包んでから読んでいる(288行/27341行)ので
@@ -156,8 +152,12 @@ import { HelpManualModal, PRODUCT_HELP_SECTIONS } from './HelpManual.jsx';
 // 厳密モードの一元管理（品目×テンプレ・エビデンス・変更履歴）
 import { StrictModeManagerModal, computeStrictEvidence, strictComboKey, MultiUnitGantt } from './StrictModeManager.jsx';
 // スキルマップ（作業者×スキル：レベル＋回数）
-import { SkillMapView, DEFAULT_SKILLS, skillColorOf } from './SkillMap.jsx';
-import { WorkerAvatar, workerToneOf } from './WorkerAvatar.jsx';
+import { SkillMapView, DEFAULT_SKILLS } from './SkillMap.jsx';
+import { skillColorOf } from './skillColors.js';
+import { WorkerAvatar } from './WorkerAvatar.jsx';
+import { workerToneOf } from './workerTone.js';
+import SignoffModal from './SignoffModal.jsx';
+import { stampTrainee } from './domain/lotSavePipeline.js';
 import { normalizeRequiredSkills, requiredSkillIdsForStep, toggleSkillOnStep, attachSkill, detachSkill, upsertSkill, newSkillId, SKILL_SCOPE } from './domain/skillRegistry.js';
 
 // --- 一度だけ実行: 管理者未承認の厳密モード(localStorageの古い残骸)を全消去して既定OFFに戻す ---
@@ -608,7 +608,7 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
         const t = (l.tasks || {})[k];
         if (!t) return;
         if (t.status !== 'completed' && t.status !== 'ng') return;
-        if (t.samplingSkipped) return;
+        if (t.samplingSkipped || t.trainee === true) return; // 🎓教育中の記録はものさしから外す(製品 isStatTask)
         const d = t.duration || 0; if (d <= 0) return;
         const ms = toMsAny(t.endTime) || lotMs;
         if (ms == null || ms < startMs || ms > endMs) return;
@@ -785,7 +785,7 @@ const profitDetail = (lots, settings, { model, stepKey, startMs = 0, endMs = Inf
       if (sk !== stepKey && !sameTitle) return;
       const keys = step.lotOnce ? lotOnceKeysOf(l.tasks || {}, step) : Array.from({ length: l.quantity || 1 }, (_, i) => (l.tasks || {})[`${step.id}-${i}`] !== undefined ? `${step.id}-${i}` : `${idx}-${i}`);
       const durs = [];
-      keys.forEach(k => { const t = (l.tasks || {})[k]; if (!t) return; if (t.status !== 'completed' && t.status !== 'ng') return; if (t.samplingSkipped) return; const d = t.duration || 0; if (d <= 0) return; const ms = toMsAny(t.endTime) || lotMs; if (ms == null || ms < startMs || ms > endMs) return; durs.push(d); });
+      keys.forEach(k => { const t = (l.tasks || {})[k]; if (!t) return; if (t.status !== 'completed' && t.status !== 'ng') return; if (t.samplingSkipped || t.trainee === true) return; const d = t.duration || 0; if (d <= 0) return; const ms = toMsAny(t.endTime) || lotMs; if (ms == null || ms < startMs || ms > endMs) return; durs.push(d); });
       if (!durs.length) return;
       if (sameTitle) (byModel[l.model] = byModel[l.model] || []).push(...durs);
       if (sk === stepKey && l.model === model) {
@@ -816,7 +816,7 @@ const stepBreakdown = (lots, { model, templateId, startMs = 0, endMs = Infinity,
       keys.forEach(k => {
         const t = (l.tasks || {})[k]; if (!t) return;
         if (t.status !== 'completed' && t.status !== 'ng') return;
-        if (t.samplingSkipped) return;
+        if (t.samplingSkipped || t.trainee === true) return; // 🎓教育中の記録はものさしから外す(製品 isStatTask)
         const d = t.duration || 0; if (d <= 0) return;
         const ms = toMsAny(t.endTime) || lotMs; if (ms == null || ms < startMs || ms > endMs) return;
         let e = byStep.get(sk);
@@ -857,7 +857,7 @@ const obsElementStats = (lots, { model, templateId, stepKey, plan }) => {
         const t = (l.tasks || {})[`${step.id}-${u}`] || (l.tasks || {})[`${idx}-${u}`];
         // 該当なし(skipped)/抜取スキップ/未完了の台は時間統計(stepBreakdown/measureWindow)と対称に除外。
         // 完了→該当なし変換しても elementDurations が残るため、status を見ないと内訳に古い値が居座る。
-        if (!t || t.status !== 'completed' || t.samplingSkipped || !t.elementDurations) continue;
+        if (!t || t.status !== 'completed' || t.samplingSkipped || t.trainee === true || !t.elementDurations) continue;
         const entries = Object.entries(t.elementDurations).filter(([, sec]) => sec > 0);
         if (!entries.length) continue;
         observedUnits++; // この台は内訳ありの1観測
@@ -16453,7 +16453,7 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
         for (let u = 0; u < qty; u++) {
           const t = tasks[st.id ? `${st.id}-${u}` : `${si}-${u}`] || tasks[`${si}-${u}`];
           if (!t || (t.status !== 'completed' && t.status !== 'ng')) continue;
-          if (t.samplingSkipped) continue;
+          if (t.samplingSkipped || t.trainee === true) continue;
           const d = t.duration || 0; if (d <= 0) continue;
           const ms = toMs(t.endTime) || lotMs; if (!ms) continue;
           out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt });
@@ -22072,6 +22072,10 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
         <div className="flex justify-between items-center mb-4">
           <h3 className="font-bold text-base flex items-center gap-2"><ClipboardList className="w-5 h-5" /> 工程テンプレート管理</h3>
           <div className="flex gap-2">
+            {handleAllTemplatesDownload && (<>
+              <button onClick={handleAllTemplatesDownload} className="text-xs flex items-center gap-1 bg-indigo-600 text-white px-3 py-2 rounded border border-indigo-700 hover:bg-indigo-700 font-bold"><FileSpreadsheet className="w-4 h-4"/> 全テンプレExcel</button>
+              <label className="text-xs flex items-center gap-1 cursor-pointer bg-indigo-50 text-indigo-700 px-3 py-2 rounded border border-indigo-200 hover:bg-indigo-100 font-bold"><FileUp className="w-4 h-4"/> まとめて取込<input type="file" ref={allTplInputRef} accept=".xlsx" onChange={handleAllTemplatesImport} className="hidden"/></label>
+            </>)}
             <label className="text-xs flex items-center gap-1 cursor-pointer bg-green-50 text-green-700 px-3 py-2 rounded border border-green-200 hover:bg-green-100"><FileUp className="w-4 h-4"/> Excel取込<input type="file" ref={excelInputRef} accept=".xlsx" onChange={handleExcelImport} className="hidden"/></label>
             <button onClick={handleBackupExport} className="text-xs flex items-center gap-1 bg-slate-100 text-slate-600 px-3 py-2 rounded border hover:bg-slate-200"><DownloadCloud className="w-4 h-4"/> バックアップ</button>
             <label className="text-xs flex items-center gap-1 cursor-pointer bg-slate-100 text-slate-600 px-3 py-2 rounded border hover:bg-slate-200"><RefreshCw className="w-4 h-4"/> 復元<input type="file" ref={backupInputRef} accept=".json" onChange={handleBackupImport} className="hidden"/></label>
@@ -22194,6 +22198,25 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
   );
 };
 
+ // 🎓 教育中フラグの入切 (2026-08-08)。
+ //   ⚠これは「人の判断」なので端末ローカルに置かない。workers doc(共有)に書くことで
+ //     どの端末から見ても同じ札が出て、その人の記録が「ものさし」から外れる。
+ //   ⚠卒業は trainee キーを消すのではなく **false を書く**。
+ //     merge:true では「送らなかったキー」が残るため、消すやり方だと次の同期で教育中に戻る。
+ const toggleWorkerTrainee = (w, { saveData, byName = '', onGraduated = null } = {}) => {
+   if (!w || !saveData) return;
+   const now = Date.now();
+   if (w.trainee === true) {
+     if (!window.confirm(`「${w.name}」さんを🎓教育中から卒業させます。\n\n・これから記録する作業時間は、みんなと同じ「ものさし」(標準時間・スキル比較・改善効果)に入ります。\n・今までの🎓が付いた記録はそのまま残ります(過去の集計は変わりません)。\n\nよろしいですか？`)) return;
+     saveData('workers', w.id, { trainee: false, graduatedAt: now, graduatedBy: byName || '' });
+     // 🏅卒業の瞬間だけサインオフ(横で見た先輩+ロットを1タップで残す)を開く。教育中にする側では呼ばない
+     if (onGraduated) onGraduated(w);
+   } else {
+     if (!window.confirm(`「${w.name}」さんを🎓教育中にします。\n\nこれから記録する作業時間は「ものさし」から外れます。\n(実際にかかった人件費・必要人数・月次レポートには今までどおり入ります)\n\nよろしいですか？`)) return;
+     saveData('workers', w.id, { trainee: true, traineeSince: now });
+   }
+ };
+
 // ⚠⚠ 2026-08-05 クラッシュ修正: 「厳密モード 一元管理を開く」ボタンは
 //   TemplateListSection ではなく **この TemplatesView の中**にある(下の方の設定パネル群)。
 //   前回 onOpenStrictManager を TemplateListSection 側だけに足したので、
@@ -22217,7 +22240,9 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
    saveData('workers', w.id, resumePatch(Date.now()));
  };
 
- const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null, parentTabs = null }) => {
+ const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null, parentTabs = null, currentUserName = '' }) => {
+  // 🏅 P117 卒業の直後に開く「独り立ちの記録」(SignoffModal)の相手。hooks は関数の先頭
+  const [signoffFor, setSignoffFor] = useState(null);
   const [newProcessOpt, setNewProcessOpt] = useState('');
   const defectProcessOptions = settings?.defectProcessOptions || DEFAULT_DEFECT_PROCESS_OPTIONS;
   const [localZones, setLocalZones] = useState(mapZones || INITIAL_MAP_ZONES);
@@ -22337,12 +22362,21 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
              <input id="workerInput" className="border rounded px-3 py-2 text-sm flex-1" placeholder="新しい作業者名" />
              <button onClick={() => { const input = document.getElementById('workerInput'); if(input && input.value) { saveData('workers', generateId(), { name: input.value }); input.value = ''; } }} className="bg-slate-800 text-white px-4 py-2 rounded text-sm font-bold">追加</button>
            </div>
+           <p className="text-xs text-slate-500 mb-2">🎓 = 教育中。教育中の人の作業時間は「ものさし」(標準時間・達成率・要素作業)から外れます。</p>
+           {signoffFor && <SignoffModal worker={signoffFor.name} workers={workers} lots={lots} by={currentUserName} onSave={(doc) => saveData('education_events', doc.id, doc)} onClose={() => setSignoffFor(null)} />}
            <div className="flex flex-wrap gap-2">
              {activeWorkersOf(workers).map(w => (
-               <div key={w.id} className="bg-slate-50 border px-3 py-1.5 rounded-full flex items-center gap-2 text-sm">
+               <div key={w.id} className={`border px-3 py-1.5 rounded-full flex items-center gap-2 text-sm ${w.trainee === true ? 'bg-amber-50 border-amber-300 text-amber-800 font-bold' : 'bg-slate-50'}`}>
                  {/* 👤 人の色の丸(P084)。現場マップと同じ色。名前は横の {w.name} が出すので showName={false} */}
                  <WorkerAvatar name={w.name} tone={workerToneOf(workers, w.name)} size="w-6 h-6" showName={false} />
+                 {w.trainee === true && <span title={w.traineeSince ? `教育開始: ${new Date(w.traineeSince).toLocaleDateString('ja-JP')}` : '教育中'}>🎓</span>}
                  {w.name}
+                 {/* 🎓 P117 教育中の入切。卒業の時だけ独り立ちの記録(SignoffModal)を開く */}
+                 <button
+                   onClick={() => toggleWorkerTrainee(w, { saveData, byName: currentUserName, onGraduated: (ww) => setSignoffFor(ww) })}
+                   title={w.trainee === true ? '教育中から卒業させる' : '教育中にする'}
+                   className={`text-xs px-3 min-h-[36px] rounded border flex items-center ${w.trainee === true ? 'border-amber-400 text-amber-700 hover:bg-amber-100' : 'border-slate-300 text-slate-500 hover:bg-slate-100'}`}
+                 >{w.trainee === true ? '卒業' : '🎓教育中'}</button>
                  <button
                    onClick={() => pauseWorker(w, { saveData, lots })}
                    title={`「${w.name}」を休止にして、担当を選ぶ所・マップのレーンから外す（消えません。いつでも復帰できます）`}
@@ -32270,7 +32304,7 @@ const QuotaStoppedPanel = ({ until }) => (
            )
          )}
          {activeTab === 'measurement-settings' && <MeasurementSettingsView settings={settings} saveSettings={saveSettings} comboPresets={settings?.comboPresets || []} templates={templates} />}
-         {activeTab === 'templates' && <TemplatesView editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
+         {activeTab === 'templates' && <TemplatesView editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
          </div>
        </main>
        
@@ -32435,6 +32469,16 @@ const QuotaStoppedPanel = ({ until }) => (
            //     console が二重に鳴る。画面への表示は saveData が既にやっている
            //     (alert / 保存失敗バナー / failedSaves の「全部送り直す」)。
            onSave={(updates) => {
+             // 🎓 P117: 担当が教育中なら、この保存で実測が生まれた台に trainee:true を焼き付ける(ものさしから外すため)。
+             //   式は製品と同じ stampTrainee(開始しただけ・他人の確定済みの実測には付けない)。前の姿は購読中のロット。
+             try {
+               const cur = (lots || []).find((l) => l && l.id === executionLotId);
+               const wid = (updates && updates.workerId) || (cur && cur.workerId) || null;
+               const w = (workers || []).find((x) => x && x.id === wid) || (workers || []).find((x) => x && x.name === String(currentUserName || '').trim());
+               if (updates && updates.tasks && w && w.trainee === true) {
+                 updates = { ...updates, tasks: stampTrainee({ prev: (cur && cur.tasks) || {}, next: updates.tasks, trainee: true }) };
+               }
+             } catch (e) { console.error('🎓 教育中の印を付けられませんでした', e); }
              const p = saveData('lots', executionLotId, updates);
              p.catch((e) => { console.error('🚨 ロットの保存が通りませんでした', executionLotId, e); });
              return p;
