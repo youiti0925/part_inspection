@@ -153,6 +153,11 @@ import { HelpManualModal, PRODUCT_HELP_SECTIONS } from './HelpManual.jsx';
 import { StrictModeManagerModal, computeStrictEvidence, strictComboKey, MultiUnitGantt } from './StrictModeManager.jsx';
 // スキルマップ（作業者×スキル：レベル＋回数）
 import { SkillMapView, DEFAULT_SKILLS } from './SkillMap.jsx';
+// P028/P099: アプリへの要望・不具合の箱と更新のお知らせ(製品から1バイト同じで写した・置き場所は contact-shared-v1 の共通の箱)
+import { FeedbackButton, FeedbackModal, FeedbackList, feedbackDeviceId } from './AppFeedback.jsx';
+import { FEEDBACK_COL, openFeedbackCount, feedbackConfigOf, toggleAgreePatch } from './domain/appFeedback.js';
+import { NoticePopup } from './AppNotice.jsx';
+import { NOTICE_COL, noticeConfigOf } from './domain/appNotices.js';
 
 // --- 一度だけ実行: 管理者未承認の厳密モード(localStorageの古い残骸)を全消去して既定OFFに戻す ---
 // 厳密モードは「厳密モード一元管理(settings.strictModeRules)」での承認のみを正とする方針。
@@ -322,6 +327,7 @@ const APP_DATA_ID = "parts-inspection-v1"; // 部品検査アプリ専用の名�
 // 検査アプリ共通の棚。工場の暦(祝日表)はここに1つだけ置く = どのアプリで登録しても全部に効く。
 //   🚨 このアプリは **読むだけ**。登録する画面は製品検査/最終検査にある(1つの物を2か所で直させない)。
 //   ⚠ 新しいコレクションも名前空間も作らない(firestore.rules の knownApp に既に載っている)。
+//   ⚠ 例外は要望箱(app_feedback)だけ: 1件ずつ足す・返事を足す(P028)。暦の在る settings/config へは書かない。
 const CONTACT_SHARED_NS = 'contact-shared-v1';
 
 // Firebase: 製品・最終検査アプリと「同じプロジェクト」を再利用 (inspection-time-c4fd3)。
@@ -28704,6 +28710,10 @@ const QuotaStoppedPanel = ({ until }) => (
    // 工場の暦(祝日・全社休業・休日出勤)。null = まだ読めていない / 登録なし。
    //   🚨 null でも「登録が空」と同じ答えになる(月〜金)。読めるまで画面が止まる事は無い。
    const [factoryCalendar, setFactoryCalendar] = useState(null);
+   const [contactShared, setContactShared] = useState(null); // 検査アプリ共通の連絡設定(宛先グループ/班メンバー)。null=未ロード(P026)
+   const [appFeedback, setAppFeedback] = useState([]); // P028: アプリへの要望・不具合(4アプリ共通の箱)
+   const [appNotices, setAppNotices] = useState([]);   // P099: 更新のお知らせ(同じ共通の箱)
+   const [feedbackOpen, setFeedbackOpen] = useState(false);
    const [settings, setSettings] = useState({ mapImage: null, mapZones: INITIAL_MAP_ZONES, defectProcessOptions: DEFAULT_DEFECT_PROCESS_OPTIONS, breakAlerts: [], complaintOptions: DEFAULT_COMPLAINT_OPTIONS, customTargetTimes: {}, targetTimeHistory: [], customLayouts: {}, measurementOverrides: {} });
 
    // 勤務表 + 工場の暦 を1つにした物(WorkScheduleContext に流す)。
@@ -28843,9 +28853,10 @@ const QuotaStoppedPanel = ({ until }) => (
        { id: 'templates', label: 'マスタ設定', icon: Settings },
        { id: 'template-mgr', label: '工程テンプレート', icon: ClipboardList },
        { id: 'measurement-settings', label: '測定設定', icon: Ruler },
+       { id: 'app-feedback', label: 'アプリへの要望', icon: Lightbulb },
      ],
    };
-   const TAB_PARENT = { inspection: 'inspection', history: 'inspection', analysis: 'analysis', optimize: 'analysis', templates: 'templates', 'template-mgr': 'templates', 'measurement-settings': 'templates' };
+   const TAB_PARENT = { inspection: 'inspection', history: 'inspection', analysis: 'analysis', optimize: 'analysis', templates: 'templates', 'template-mgr': 'templates', 'measurement-settings': 'templates', 'app-feedback': 'templates' };
    // 親タブ(検査リスト|完了履歴 / 分析|作業最適化 / マスタ設定|…)のボタン。
    // 🚨 2026-09-07: 分析・作業最適化の画面では、この帯を下の大分類の帯へ**合流**させて1本減らす。
    //    同じ物を出す為に作り方をここ1か所にまとめた。札の名前・順番・押した時の行き先は変えていない。
@@ -28853,8 +28864,48 @@ const QuotaStoppedPanel = ({ until }) => (
      <button key={s.id} onClick={() => setActiveTab(s.id)}
        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t-md text-sm font-bold border-b-2 transition-all ${activeTab === s.id ? 'border-blue-600 text-blue-600 bg-blue-50' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
        <s.icon className="w-4 h-4" /> {s.label}
+       {s.id === 'app-feedback' && openFeedbackCount(appFeedback) > 0 && <span className="bg-amber-500 text-white text-xs rounded-full min-w-4 h-4 px-1 flex items-center justify-center font-black" title="まだ終わっていない要望の数">{openFeedbackCount(appFeedback)}</span>}
      </button>
    ));
+   // ---- P028: 要望箱の保存の口(製品 App.jsx から写し)。置き場所は contact-shared-v1/app_feedback ----
+   // アプリへの要望・不具合。⚠エラーを握りつぶさない(「送れたつもり」が一番困る)ので throw する。
+   const saveFeedback = async (row) => {
+     if (!db) throw new Error('まだつながっていません');
+     await DATA(db).save(CONTACT_SHARED_NS, FEEDBACK_COL, row.id, cleanUndefined(row));
+   };
+   const setFeedbackStatus = async (row, status) => {
+     try { await DATA(db).save(CONTACT_SHARED_NS, FEEDBACK_COL, row.id, cleanUndefined({ status, updatedAt: Date.now(), updatedBy: currentUserName || '' })); }
+     catch (e) { console.error(e); setErrorMsg(e.message || '要望の状態を変えられませんでした'); }
+   };
+   // ⚠旧「返事」(1行だけ)は やりとり(comments)に置き換えた。既存データの reply は
+   //   commentsOf() が最初の1件として拾うので消えない。
+   const deleteFeedback = async (row) => {
+     try { await DATA(db).remove(CONTACT_SHARED_NS, FEEDBACK_COL, row.id); }
+     catch (e) { console.error(e); setErrorMsg(e.message || '要望を消せませんでした'); }
+   };
+   // やりとり(返事)。⚠**1件だけ**を送る。map に足すので、2人が同時に書いても両方残る。
+   //   配列で持って丸ごと書き戻すと、後から保存した方で片方が黙って消える。
+   const addFeedbackComment = async (row, comment) => {
+     if (!db) throw new Error('まだつながっていません');
+     await DATA(db).save(CONTACT_SHARED_NS, FEEDBACK_COL, row.id, cleanUndefined({
+       comments: { [comment.id]: comment }, updatedAt: Date.now(),
+     }));
+   };
+   // 「同じこと思ってた」。⚠取り消しは送らないだけでは消えない → 消す印を付ける(toggleAgreePatch)。
+   //   ⚠cleanUndefined を通さない。__deleteMapKeys の印を潰さないため(番兵は素のオブジェクト)。
+   const toggleFeedbackAgree = async (row, key, byName) => {
+     // ⚠名前は **押した画面から** もらう。ここの currentUserName を使うと、組立ポータルでは
+     //   本人が入れた名前と食い違う(実測で「片山が押したのに管理者と記録」された)。
+     const patch = toggleAgreePatch(row, key, byName || currentUserName || '', Date.now());
+     if (!patch) return;
+     try { await DATA(db).save(CONTACT_SHARED_NS, FEEDBACK_COL, row.id, patch); }
+     catch (e) { console.error(e); setErrorMsg(e.message || 'うまく押せませんでした'); }
+   };
+   // みんなの一覧から隠す/戻す(消さない)。⚠まずい書き込みへの逃げ道。管理グループだけ。
+   const setFeedbackHidden = async (row, hidden) => {
+     try { await DATA(db).save(CONTACT_SHARED_NS, FEEDBACK_COL, row.id, cleanUndefined({ hidden: !!hidden, updatedAt: Date.now(), updatedBy: currentUserName || '' })); }
+     catch (e) { console.error(e); setErrorMsg(e.message || '隠せませんでした'); }
+   };
    // ヘッダーのまとめメニュー (間接作業/日次集計, 作業標準/ノート)。overflowで切れないよう fixed配置。
    const [hdrMenu, setHdrMenu] = useState(null); // { type:'time'|'docs', top, right }
    const openHdrMenu = (type, e) => { const r = e.currentTarget.getBoundingClientRect(); setHdrMenu(prev => prev && prev.type === type ? null : { type, top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) }); };
@@ -29196,7 +29247,11 @@ const QuotaStoppedPanel = ({ until }) => (
          countReads('contact_shared/settings', 1, { attach: !firstSeen.has('contact_shared/settings') });
          firstSeen.add('contact_shared/settings');
          setFactoryCalendar((data && data.factoryCalendar) || null);
-       }, { onError: readFailed('contact_shared/settings') })
+         setContactShared(data || {}); // P026: 班・メンバーも同じ書類から受け取る(読むだけ)
+       }, { onError: readFailed('contact_shared/settings') }),
+       // P028/P099: 要望箱とお知らせ(検査アプリ共通の箱)。全件を読む(未対応の数・未読の判定が全件で行うため)。
+       P.watchCollection(CONTACT_SHARED_NS, FEEDBACK_COL, (rows) => setAppFeedback(rows || []), { onError: readFailed(FEEDBACK_COL) }),
+       P.watchCollection(CONTACT_SHARED_NS, NOTICE_COL, (rows) => setAppNotices(rows || []), { onError: readFailed(NOTICE_COL) })
      ];
      // 張った事は0件でも残す(「読んでいない」と「そもそも購読していない」を人が見分けられるように)。
      ['templates', 'workers', 'notes', 'announcements', 'observationPlans', 'settings/config', 'contact_shared/settings'].forEach(c => countReads(c, 0, { attach: true }));
@@ -31810,6 +31865,8 @@ const QuotaStoppedPanel = ({ until }) => (
               ))}
            </div>
            <div className="flex items-center gap-1">
+             {/* 💡 P028 アプリへの要望・不具合。設定でOFFにしたら入口ごと消える */}
+             {feedbackConfigOf(contactShared).enabled && <FeedbackButton compact onClick={() => setFeedbackOpen(true)} />}
              <button onClick={(e) => openHdrMenu('docs', e)} className="relative bg-slate-600 hover:bg-slate-500 text-white px-2 py-1.5 rounded-md shadow-sm flex items-center gap-0.5" title="資料 (作業標準 / ノート)">
                <BookOpen className="w-4 h-4" /><ChevronDown className="w-3 h-3" />
                {notes.filter(n => n.isPersonal && n.author === currentUserName).length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-xs text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{notes.filter(n => n.isPersonal && n.author === currentUserName).length}</span>}
@@ -32015,6 +32072,27 @@ const QuotaStoppedPanel = ({ until }) => (
                onOpenStrictManager={() => setShowStrictManager(true)}
              />
            )
+         )}
+         {activeTab === 'app-feedback' && (
+           <div className="h-full overflow-y-auto">
+             <div className="flex items-center gap-2 mb-3 flex-wrap">
+               <h2 className="text-lg font-black text-slate-800">💡 アプリへの要望・不具合</h2>
+               <span className="text-xs text-slate-500">部品検査・製品検査・最終検査・組立ポータルから出たものが、ここに全部集まります</span>
+               <div className="ml-auto"><FeedbackButton onClick={() => setFeedbackOpen(true)} /></div>
+             </div>
+             {/* 既定: 見せ方の入切(共通の棚の設定)は製品検査・最終検査の画面で変える。部品は共通の棚の設定を書かない(読むだけ)。 */}
+             <FeedbackList
+               items={appFeedback}
+               config={feedbackConfigOf(contactShared)}
+               admin={currentUserName === '管理者'}
+               me={{ deviceId: feedbackDeviceId(), name: currentUserName || '', app: 'parts' }}
+               onComment={addFeedbackComment}
+               onAgree={toggleFeedbackAgree}
+               onSetStatus={setFeedbackStatus}
+               onToggleHidden={setFeedbackHidden}
+               onDelete={deleteFeedback}
+             />
+           </div>
          )}
          {activeTab === 'measurement-settings' && <MeasurementSettingsView settings={settings} saveSettings={saveSettings} comboPresets={settings?.comboPresets || []} templates={templates} />}
          {activeTab === 'templates' && <TemplatesView editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
@@ -32536,6 +32614,26 @@ const QuotaStoppedPanel = ({ until }) => (
          </div>
        )}
 
+       {/* 💡 P028 アプリへの要望・不具合(書く + みんなの声) */}
+       <FeedbackModal
+         open={feedbackOpen}
+         onClose={() => setFeedbackOpen(false)}
+         onSubmit={saveFeedback}
+         app="parts"
+         side="app"
+         defaultBy={currentUserName || ''}
+         places={['検査リスト', '作業画面', '現場マップ', '分析', '作業最適化', 'マスタ設定', '工程テンプレート', '測定設定', '日次集計']}
+         items={appFeedback}
+         shared={contactShared}
+         admin={currentUserName === '管理者'}
+         onComment={addFeedbackComment}
+         onAgree={toggleFeedbackAgree}
+         onSetStatus={setFeedbackStatus}
+         onToggleHidden={setFeedbackHidden}
+         onDelete={deleteFeedback}
+       />
+       {/* 📣 P099 更新のお知らせ。開いた時に1回だけ出る(端末ごとに覚える)。書く所は製品・最終に置く */}
+       <NoticePopup notices={appNotices} app="parts" side="app" enabled={noticeConfigOf(contactShared).enabled} />
      </div>
      </LotCardDisplayContext.Provider>
      </WorkScheduleContext.Provider>
