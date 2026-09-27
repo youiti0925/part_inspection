@@ -32,6 +32,7 @@ import TemplateSkipPanel from './TemplateSkipPanel.jsx';
 import DuplicateLotsPanel from './DuplicateLotsPanel.jsx';
 import ProgressImportExtras from './ProgressImportExtras.jsx';
 import { auditProgressRows } from './domain/progressSheetAudit.js';
+import { orderNosOfRows, orderNoChunks, orderNoLotsSpec, mergeLotsForImport, dropAlreadyExisting } from './domain/importExistingCheck.js';
 import { judgeTemplateSkip, buildTemplateSkippedTasks, isTemplateSkippedLot } from './domain/templateSkip.js';
 // 🏷 品目名簿 (品目コード → 品名)。2026-09-21 清水さん「品目テキストという枠が必要なぐらい」。
 //   直す前は読む所が3箇所あるのに書く所が0で、名簿は「在るのに永久に空」だった。
@@ -44,7 +45,7 @@ import {
 import { initializeApp } from "firebase/app";
 import {
   getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot,
-  serverTimestamp, query, orderBy, limit, where, getDocs, getDoc, updateDoc,
+  serverTimestamp, query, orderBy, limit, where, getDocs, getDocsFromServer, getDoc, updateDoc,
   deleteField, runTransaction,
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   connectFirestoreEmulator
@@ -141,7 +142,7 @@ import {
   pausePatch, resumePatch, remainingWorkOf, pauseConfirmText, resumeConfirmText,
   pausedSummaryLabel, pausedSinceLabel,
 } from './domain/workerPause.js';
-const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
+const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDocsFromServer, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
 const DATA = (db) => providerFor(db, FS_API);
 import {
   getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject
@@ -30767,6 +30768,18 @@ const QuotaStoppedPanel = ({ until }) => (
    // === 工機進捗管理表 取込: パース → プレビュー ===
    // === 工機進捗管理表 取込(P022): 判定は domain/progressSheet.js の planProgressImport(製品と同じ純関数)。ここはセルを読むだけ。
    //   部品には型式マスタが無いので modelMasters は {}(品目コード → 品質規格 → テンプレに落ちる)。到着予定も無いので entryPinned は {}。
+   // 🛡 P052 表に載っている指図のロットをサーバから取り寄せて、画面に読めている物と1つにする(読むだけ・30指図ずつ)。
+   //   🚨 失敗したら投げる(呼ぶ側が取込を止める)。分からないまま「無い」と決めて作らない。
+   const fetchLotsForImport = async (rows) => {
+     const orderNos = orderNosOfRows(rows);
+     const got = [];
+     for (const chunk of orderNoChunks(orderNos)) {
+       const page = await DATA(db).getPage(APP_DATA_ID, 'lots', orderNoLotsSpec(chunk), { source: 'server' });
+       got.push(...((page && page.rows) || []));
+     }
+     const merged = mergeLotsForImport(lots, got);
+     return { ...merged, check: { asked: orderNos.length, added: merged.added.length, addedOpen: merged.addedOpen, addedDone: merged.addedDone } };
+   };
    const progressPlanCtx = () => ({
      lots,
      modelMasters: {},
@@ -30775,8 +30788,9 @@ const QuotaStoppedPanel = ({ until }) => (
      templates,
      today: localYMD(new Date()),
    });
-   const replanProgress = (rows, opts, smap) => planProgressImport(rows, {
+   const replanProgress = (rows, opts, smap, ctxOverride = null) => planProgressImport(rows, {
      ...progressPlanCtx(),
+     ...(ctxOverride && typeof ctxOverride === 'object' ? ctxOverride : {}),
      options: {
        calendar: factoryCalendar || null,
        includeProvisional: !!opts.includeProvisional,
@@ -30843,7 +30857,7 @@ const QuotaStoppedPanel = ({ until }) => (
      setProgressImportPreview(prev => {
        if (!prev) return prev;
        const opts = { ...prev.opts, ...patch };
-       return { ...prev, ...replanProgress(prev.rows, opts, prev.sheetMap), opts };
+       return { ...prev, ...replanProgress(prev.rows, opts, prev.sheetMap, { lots: prev.knownLots || lots }), opts };
      });
    };
    // 🏁 確定した時に本当に作る行(既定ではアプリで検査済みの指図×テンプレは作らない)
@@ -30922,9 +30936,16 @@ const QuotaStoppedPanel = ({ until }) => (
        // 既定: 日付の無い行は仮で作らない・納期は直す・アプリで検査済みの指図は作らない(製品と同じ)
        // 🗑 P095 表では終わっている物を消すは既定 ON(製品と同じ)。消すのは作業記録の無い物だけ・確定の前に一覧を見せてもう一度聞く
        const opts = { includeProvisional: false, updateDue: true, deleteStale: true, createDone: false };
-       const plan = replanProgress(rows, opts, smap);
+       // 🛡 P052 在る／無いを決める前に、サーバへ指図番号で問い合わせる(画面に読めていないロットも「在る」に入れる)
+       let known = null;
+       try { known = await fetchLotsForImport(rows); } catch (err) {
+         console.error('[取込] サーバへの問い合わせに失敗', err);
+         alert('サーバに在るロットを確かめられなかったので、取込を止めました（何も作っていません）。\n電波の良い所でもう一度お試しください。\n\n' + (err && err.message ? err.message : ''));
+         return;
+       }
+       const plan = replanProgress(rows, opts, smap, { lots: known.lots });
        // 🚨 安全弁: 消す対象が検査リストの未完了ロットの3割を超えたら、既定を OFF に落とす(列やシートが合っていない時にごっそり消さない)
-       const openLotCount = (lots || []).filter(l => !(l.status === 'completed' || l.location === 'completed')).length;
+       const openLotCount = (known.lots || []).filter(l => !(l.status === 'completed' || l.location === 'completed')).length;
        const deletable = plan.counts?.staleDeletable || 0;
        const guardLimit = Math.floor(openLotCount * STALE_DELETE_MAX_RATIO);
        const staleGuard = (deletable > 0 && deletable > guardLimit)
@@ -30933,7 +30954,7 @@ const QuotaStoppedPanel = ({ until }) => (
        if (staleGuard) opts.deleteStale = false;
        // 🔎 P152 元表の食い違い。数えるだけ(取込は止めない)
        const audit = auditProgressRows(rows, { today: new Date(), labels: smap.cols, k33Means: smap.k33Means, startHeader: strAt(sheet.getRow(1), 'start'), sourceEndHeader: '' });
-       setProgressImportPreview({ ...plan, rows, opts, staleGuard, audit, fileName: file.name, reader: wb.reader, sheetMap: smap });
+       setProgressImportPreview({ ...plan, knownLots: known.lots, serverCheck: known.check, rows, opts, staleGuard, audit, fileName: file.name, reader: wb.reader, sheetMap: smap });
      } catch (err) {
        console.error('Progress Mgmt parse error:', err);
        alert('取込み中にエラーが発生しました: ' + (err.message || err));
@@ -30946,7 +30967,7 @@ const QuotaStoppedPanel = ({ until }) => (
    const confirmProgressImport = async () => {
      if (!progressImportPreview) return;
      const { updateLots, stale = [], opts = {} } = progressImportPreview;
-     const createLots = progressCreateList(progressImportPreview);
+     let createLots = progressCreateList(progressImportPreview);
      const applyUpdates = opts.updateDue === false ? [] : updateLots;
      // 🗑 P095 表では終わっているのに検査リストに残っている物のうち 作業記録の無い物だけ。消す前に一覧を見せて確認する
      const toDelete = opts.deleteStale ? stale.filter(x => !x.hasTasks) : [];
@@ -30954,6 +30975,20 @@ const QuotaStoppedPanel = ({ until }) => (
        const list = toDelete.slice(0, 12).map(x => `・${x.orderNo} ${x.model}`).join('\n') + (toDelete.length > 12 ? `\n…ほか ${toDelete.length - 12}件` : '');
        const delOrders = new Set(toDelete.map(x => String(x.orderNo || '').trim())).size;
        if (!window.confirm(`進捗管理表では終わっている ${toDelete.length}件（${delOrders}指図）を検査リストから消します（作業記録の無い物だけ）。\n${list}\n\n※ この操作は取り消せません。よろしいですか？`)) return;
+     }
+     // 🛡 P052 書く直前にもう一度サーバへ確かめる(プレビューを開いている間に別の端末が同じ表を取り込んだ時も二重に作らない)
+     if (createLots.length) {
+       try {
+         const fresh = await fetchLotsForImport(progressImportPreview.rows);
+         const freshPlan = replanProgress(progressImportPreview.rows, opts, progressImportPreview.sheetMap, { lots: fresh.lots });
+         const r = dropAlreadyExisting(createLots, progressCreateList({ ...freshPlan, opts }));
+         if (r.dropped.length) alert(`確かめ直したら ${r.dropped.length}件は もう検査リストに在りました。その分は作りません。\n` + r.dropped.slice(0, 10).map(c => `・${c.orderNo} ${c.model}`).join('\n'));
+         createLots = r.keep;
+       } catch (err) {
+         console.error('[取込] 書く直前の確かめに失敗', err);
+         alert('サーバに在るロットを確かめ直せなかったので、取込を止めました（何も書いていません）。');
+         return;
+       }
      }
      setProgressImportPreview(null);
      const totalWrites = createLots.length + applyUpdates.length + toDelete.length;

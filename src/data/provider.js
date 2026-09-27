@@ -162,7 +162,14 @@ export const createFirebaseBackend = (db, fs) => {
         opts.includeMetadataChanges ? { includeMetadataChanges: true } : null),
     /** 1ページ分。戻りの cursor を次の spec.after に渡すと続きが取れる。 */
     getPage: async (ns, col, spec = {}, opts = {}) => {
-      const snap = await fs.getDocs(queryRef(ns, col, { ...opts, ...spec }));
+      // 🛡 P052 opts.source === 'server': サーバの答えだけを受け取る(取込の在る／無いの確かめ用・製品 productOps.js と同じ)。
+      //   getDocs は手元の控えから黙って答える事があるので、届かなければ投げる。
+      const fromServer = opts.source === 'server';
+      const q = queryRef(ns, col, { ...opts, ...spec });
+      const snap = await ((fromServer && typeof fs.getDocsFromServer === 'function') ? fs.getDocsFromServer(q) : fs.getDocs(q));
+      if (fromServer && snap && snap.metadata && snap.metadata.fromCache) {
+        throw new Error('サーバに繋がっていません（手元の控えしか読めませんでした）');
+      }
       return { rows: snap.docs.map(opts.map || ROW_DOCID_WINS), cursor: snap.docs.length ? snap.docs[snap.docs.length - 1] : null };
     },
 
