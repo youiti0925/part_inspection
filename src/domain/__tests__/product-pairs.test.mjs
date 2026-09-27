@@ -242,6 +242,7 @@ const PAIRS = [
   { file: 'videoDraft.js', product: 'product-inspection-app/src/videoDraft.js', md5: '93a9980d13aa6637ffc725a5790c2234' },
   { file: 'StandardChangeBanner.jsx', product: 'product-inspection-app/src/StandardChangeBanner.jsx', md5: '792c555dd86477ff5cf43d91dd5e27f2' },
   { file: 'MimamoriCard.jsx', product: 'product-inspection-app/src/MimamoriCard.jsx', md5: 'a3c8c16f7efe8451677ffb1cf1535995' },
+  { file: 'KnowledgeCourses.jsx', product: 'product-inspection-app/src/KnowledgeCourses.jsx', md5: '4c79dbce66ef2a6324aa0fbcb9d1a129' },
 ];
 
 for (const p of PAIRS) {

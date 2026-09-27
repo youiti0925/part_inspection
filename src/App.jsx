@@ -260,6 +260,10 @@ import { WorkerAvatar } from './WorkerAvatar.jsx';
 import { workerToneOf } from './workerTone.js';
 import SignoffModal from './SignoffModal.jsx';
 import { WorkerProfilesEditor } from './WorkerProfilesEditor.jsx'; // 👤 P118 個人ごとの設定(製品の写し)
+// 📚 P167 知識標準(講座)の登録と受講(製品 KnowledgeCourses.jsx をそのまま写した)
+import { KnowledgePanel, KnowledgeLibraryModal } from './KnowledgeCourses.jsx';
+import { KNOWLEDGE_COURSES_COL, KNOWLEDGE_RECORDS_COL } from './domain/knowledgeCourses.js';
+import { GraduationCap } from 'lucide-react';
 // 🎓 E32 新人の級・検定(製品 traineeProgress.js をそのまま写した)。⚠判定は保存しない — 履歴から毎回導出する。
 import {
   BASELINE_SOURCE_LABEL, TRAINEE_BASELINE_MIN_N, normalizeTrainingConfig,
@@ -31521,9 +31525,11 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        { id: 'app-feedback', label: 'アプリへの要望', icon: Lightbulb },
        { id: 'quality-standards', label: '品目マスタ', icon: ClipboardCheck }, // 📋 P064
        { id: 'contact-settings', label: '工程連絡', icon: MessageCircle }, // 📨 P070 ⑥ 連絡の入切
+       // 📚 P167 作業標準(手順書)とは別の、基礎知識を学ぶ教材(製品と同じ)。
+       { id: 'knowledge', label: '知識標準', icon: GraduationCap },
      ],
    };
-   const TAB_PARENT = { inspection: 'inspection', history: 'inspection', analysis: 'analysis', optimize: 'analysis', templates: 'templates', 'template-mgr': 'templates', 'measurement-settings': 'templates', 'app-feedback': 'templates', 'quality-standards': 'templates' };
+   const TAB_PARENT = { inspection: 'inspection', history: 'inspection', analysis: 'analysis', optimize: 'analysis', templates: 'templates', 'template-mgr': 'templates', 'measurement-settings': 'templates', 'app-feedback': 'templates', 'quality-standards': 'templates', knowledge: 'templates' };
    TAB_PARENT['contact-settings'] = 'templates'; // 📨 P070
    TAB_PARENT.contact = 'contact';
    // 親タブ(検査リスト|完了履歴 / 分析|作業最適化 / マスタ設定|…)のボタン。
@@ -31702,6 +31708,10 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    const [showNoteModal, setShowNoteModal] = useState(false);
    const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
    const [showWorkStandardsLib, setShowWorkStandardsLib] = useState(false);
+   // 📚 P167 知識標準。講座と受講記録は「知識標準のタブ」か「一覧の窓」を開いた時だけ読む(無料枠を守る)。
+   const [showKnowledgeLib, setShowKnowledgeLib] = useState(false);
+   const [knowledgeCourses] = useLazyCollection(lazyCtx, KNOWLEDGE_COURSES_COL, activeTab === 'knowledge' || showKnowledgeLib);
+   const [knowledgeRecords] = useLazyCollection(lazyCtx, KNOWLEDGE_RECORDS_COL, activeTab === 'knowledge' || showKnowledgeLib);
    const [editingWorkStandard, setEditingWorkStandard] = useState(null); // null = 編集モーダル非表示, 'NEW' = 新規, object = 既存編集
    // 作業標準の保存・削除ヘルパー (settings.workStandards 配列を更新)
    const saveWorkStandard = async (item) => {
@@ -35325,6 +35335,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
              </>)}
              {hdrMenu.type === 'docs' && (<>
                <button onClick={() => { setHdrMenu(null); setShowWorkStandardsLib(true); }} className="w-full text-left px-3 py-2 hover:bg-orange-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><BookOpen className="w-4 h-4 text-orange-600" /> 作業標準</button>
+               <button onClick={() => { setHdrMenu(null); setShowKnowledgeLib(true); }} className="w-full text-left px-3 py-2 hover:bg-indigo-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><GraduationCap className="w-4 h-4 text-indigo-600" /> 知識標準</button>
                <button onClick={() => { setHdrMenu(null); setShowNoteModal(true); }} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 text-sm font-bold"><FileText className="w-4 h-4 text-slate-600" /> ノート{notes.filter(n => n.isPersonal && n.author === currentUserName).length > 0 && <span className="ml-auto bg-amber-400 text-xs text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{notes.filter(n => n.isPersonal && n.author === currentUserName).length}</span>}</button>
              </>)}
              {hdrMenu.type === 'more' && (<>
@@ -35498,6 +35509,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                <div className="text-xs text-slate-500">既定は OFF です。相手（組立・機械加工）が部品検査の連絡を受け取る画面は、連絡ポータル（この住所の後ろに <b>?renraku=1</b>）です。宛先の班は製品検査・最終検査と共通です。</div>
                <InstallAppButton />
              </div>
+           </div>
+         )}
+         {activeTab === 'knowledge' && (
+           <div className="h-full min-h-0">
+             <KnowledgePanel courses={knowledgeCourses || []} records={knowledgeRecords || []} workers={workers}
+               currentUserName={currentUserName} saveData={saveData} deleteData={deleteData} />
            </div>
          )}
          {activeTab === 'app-feedback' && (
@@ -35702,6 +35719,16 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        )}
 
        {/* 作業標準ライブラリ */}
+       {showKnowledgeLib && (
+         <KnowledgeLibraryModal
+           courses={knowledgeCourses || []}
+           records={knowledgeRecords || []}
+           workers={workers}
+           currentUserName={currentUserName}
+           saveData={saveData}
+           onClose={() => setShowKnowledgeLib(false)}
+         />
+       )}
        {showWorkStandardsLib && (
          <WorkStandardsLibraryModal
            standards={settings.workStandards || []}
