@@ -13535,7 +13535,8 @@ const ArrivalPlanningView = ({ onBack, lots, workers, templates, handleMoveLot, 
       <div className="col-span-3 flex flex-col h-full border-r pr-4 min-h-0">
         <button onClick={onBack} className="mb-2 text-slate-500 hover:text-slate-800 flex items-center gap-1"><ArrowRight className="w-4 h-4 rotate-180"/> 戻る</button>
         <ZoneList id="arrival" title="入荷待ちリスト" icon={Package} color="bg-white" border="border-slate-300" onDropLot={(id) => handleMoveLot(id, 'arrival')} active={true}>
-          {lots.filter(l => l.location === 'arrival').map(lot => <LotCard key={lot.id} lot={lot} workers={workers} templates={templates} mapZones={mapZones} onOpenExecution={()=>{}} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} onEdit={onEditLot} onDelete={onDeleteLot} minimal={false}/>)}
+          {/* 🚚 P168 入荷待ちは入庫(entryAt=表の入荷の日)の早い順の棚。入庫の無いロットは最後(既定: 組立からの到着連絡は作らない) */}
+          {lots.filter(l => l.location === 'arrival').slice().sort((a, b) => (Number(a.entryAt) || Infinity) - (Number(b.entryAt) || Infinity)).map(lot => <LotCard key={lot.id} lot={lot} workers={workers} templates={templates} mapZones={mapZones} onOpenExecution={()=>{}} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} onEdit={onEditLot} onDelete={onDeleteLot} minimal={false}/>)}
         </ZoneList>
       </div>
       <div className="col-span-9 flex flex-col h-full min-h-0">
