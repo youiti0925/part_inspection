@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 // 🧾 品目×テンプレ単位の抜取／スキップ(2026-09-06 清水さん「部品検査にもこの機能が要る」)。製品検査と同じ純関数・同じ画面。
 import TemplateSkipPanel from './TemplateSkipPanel.jsx';
+import DuplicateLotsPanel from './DuplicateLotsPanel.jsx';
 import { judgeTemplateSkip, buildTemplateSkippedTasks, isTemplateSkippedLot } from './domain/templateSkip.js';
 // 🏷 品目名簿 (品目コード → 品名)。2026-09-21 清水さん「品目テキストという枠が必要なぐらい」。
 //   直す前は読む所が3箇所あるのに書く所が0で、名簿は「在るのに永久に空」だった。
@@ -22768,6 +22769,9 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          {/* 🏷 品目名簿 (品目コード → 品名)。品質規格マスタより先に置く:
              品目コードに名前が付いていないと、その下の規格マッピングが読めないため。 */}
          <ItemMasterPanel lots={lots} itemMaster={settings.itemMaster || {}} saveSettings={saveSettings} />
+
+         {/* 🧯 P098 同じ指図×品目コード×テンプレの未完了ロットの重複(無ければ何も出さない) */}
+         <DuplicateLotsPanel lots={lots} templates={templates} deleteData={deleteData} />
 
          {/* 品質規格マスタ (新方式: 品目コード → 品質規格 → 公差/測定条件) */}
          <div data-qs-panel>
