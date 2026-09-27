@@ -278,7 +278,9 @@ export const STARTUP = {
              // ⭐星取表の指名の印+🎓教育の出来事(2026-08-29)。新しい順500件のみ購読(App側にlimit:500)
              'skill_marks', 'education_events'],
     docs: [['final-inspection-v1', 'settings'], ['contact-shared-v1', 'settings']],
-    shared: [['contact-shared-v1', 'app_feedback'], ['contact-shared-v1', 'app_notices']],
+    shared: [['contact-shared-v1', 'app_feedback'], ['contact-shared-v1', 'app_notices'],
+             // 📦 2026-09-17 共有棚(両方の工場の負荷・曜日/営業日の配置)を 1回読み→購読 に(清水さん「スーパーリロードしないと計算できない」)
+             ['capacity-shared-v1', 'daily_load'], ['capacity-shared-v1', 'placement_rules']],
     // 🚦 2026-08-30: 写真の購読を **開いているロットの分だけ**(where lotId in …)へ移した。
     //   ⚠ここに出る件数は棚ぜんぶ(実測2,355件)＝**上振れの見積り**。
     //     「開いた1台に何枚あるか」は書類の中身を見ないと数えられず、この見張りは件数の控えしか持たない。
@@ -295,7 +297,9 @@ export const STARTUP = {
              // ⭐星取表の指名の印+🎓教育の出来事(2026-08-29)。どちらも新しい順500件のみ購読(App.jsx側にlimit:500)
              'skill_marks', 'education_events'],
     docs: [['product-inspection-v1', 'settings'], ['contact-shared-v1', 'settings']],
-    shared: [['contact-shared-v1', 'app_feedback'], ['contact-shared-v1', 'app_notices']],
+    shared: [['contact-shared-v1', 'app_feedback'], ['contact-shared-v1', 'app_notices'],
+             // 📦 2026-09-17 共有棚(両方の工場の負荷・曜日/営業日の配置)を 1回読み→購読 に(清水さん「スーパーリロードしないと計算できない」)
+             ['capacity-shared-v1', 'daily_load'], ['capacity-shared-v1', 'placement_rules']],
     // 🚨 2026-09-02 直した: logs は 2026-08-18 に起動時の購読から外れ、**分析タブを開いた時だけ**
     //   張る形(logsWanted)に移っていた。実コード src/App.jsx:42622-42629 で確認:
     //     const [logsWanted, setLogsWanted] = useState(false);
