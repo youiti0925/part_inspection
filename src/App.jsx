@@ -173,6 +173,8 @@ import { annualOccurrencesOf, laborSecOf, machineSecOf } from './domain/goal/occ
 import { juggleCandidates, autoLimitSecOf, autoCatchUp, manualRunningOn } from './domain/juggleGuide.js';
 import { setEstimatedSession } from './domain/workSessions.js';
 import ZoneTravelSettings from './ZoneTravelSettings.jsx';
+import { JuggleGuideSwitch } from './JuggleGuideSwitch.jsx'; // 🚶 掛け持ち案内の ON/OFF(既定 OFF)
+import { juggleGuideOn } from './domain/juggleGuideSwitch.js';
 import { taskTimeQualityOf, hasUsableInterval } from './domain/taskTimeQuality.js';
 // 🚶 掛け持ち案内の枠(製品検査 src/workscreen/JuggleGuide.jsx と md5 一致の写し。描くだけ)
 import { JuggleGuide } from './workscreen/JuggleGuide.jsx';
@@ -8303,7 +8305,7 @@ const ModelQualityInfoPanel = ({ model, stepTitle, info, open, onToggle }) => {
   );
 };
 
-const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [], contactEnabled = false, contactRequests = [], contactGroups = [], contactMembers = {}, notifyPush = null, repairContactOnNg = false, reworkContactSkip = null, videoRecipes = [], onSaveVideoRecipe = null, onOpenKnowledge = null, knowledgeCourses = [], knowledgeRecords = [] }) => {
+const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, juggleEnabled = false, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [], contactEnabled = false, contactRequests = [], contactGroups = [], contactMembers = {}, notifyPush = null, repairContactOnNg = false, reworkContactSkip = null, videoRecipes = [], onSaveVideoRecipe = null, onOpenKnowledge = null, knowledgeCourses = [], knowledgeRecords = [] }) => {
   // 📨 P058/P027 連絡・呼出の下書き(不具合報告の「📨 報告して連絡」からも開く)
   const [contactDraft, setContactDraft] = useState(null);
   // 親側で `lots.find(l => l.id === executionLotId)` が undefined を返すケースに備える。
@@ -11012,6 +11014,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   //   me: 端末で選んだ名前の作業者。フリー・管理者は担当で絞らない(見るだけ)。
   //   travelCfg = settings.opsim.zoneTravel(マスタ設定の作業エリアの下で入れる区画どうしの片道・2分の決まり)。空なら区画の名前の目安(中間・完品 10秒 等)・無ければ「不明」。
   const juggle = useMemo(() => {
+    // 🚶 2026-09-27 清水さん: 既定 OFF(マスタ設定で ON にした時だけ出す・計算もしない)
+    if (!juggleEnabled) return null;
     const ra = liveParallelGuide && liveParallelGuide.runningAuto;
     if (!ra) return null;
     const tplSteps = (templates.find(t => t.id === lot.templateId)?.steps) || [];
@@ -11020,7 +11024,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     const meId = (workers.find(w => w && w.name === String(currentUserName || '').trim())?.id) || null;
     const cands = juggleCandidates({ lots: lots || [], currentLot: { id: lot.id, mapZoneId: lot.mapZoneId }, me: { workerId: meId }, remainingSec, zones: mapZones || [], travel: travelCfg, isAuto: isAutoStep, maxItems: 3 });
     return { runningAuto: ra, remainingSec, cands };
-  }, [liveParallelGuide, lots, lot.id, lot.mapZoneId, lot.templateId, templates, workers, currentUserName, mapZones, travelCfg]);
+  }, [juggleEnabled, liveParallelGuide, lots, lot.id, lot.mapZoneId, lot.templateId, templates, workers, currentUserName, mapZones, travelCfg]);
   const juggleBlocked = !onSwitchLot ? 'この画面からは移れません' : isManualTaskRunning ? '手作業が動いています。完了か停止してから移ってください' : null;
   // 🚶 別のロットへ移る(掛け持ち)。閉じる(✕)と同じ保存をしてから 親に切り替えを頼む(製品と同じ)。
   //   ⚠手作業が動いている時は移らない。
@@ -26050,6 +26054,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          </div>
 
          {/* 🚶 区画どうしの片道・掛け持ちの決まり(settings.opsim.zoneTravel・作業画面の掛け持ち案内が読む) */}
+         {/* 🚶 掛け持ち案内の ON/OFF(既定 OFF・2026-09-27 清水さん) */}
+         <JuggleGuideSwitch settings={settings} saveSettings={saveSettings} />
          <ZoneTravelSettings settings={settings} saveSettings={saveSettings} zones={localZones} />
 
          {/* 音声アシスタント設定 */}
@@ -36773,7 +36779,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
            knowledgeCourses={knowledgeCourses}
            knowledgeRecords={knowledgeRecords}
            // 🚶 掛け持ち案内の「移る」「↩ 戻る」: 作業画面が保存を見届けてから、開くロットを替える(key で画面を作り直す)
-           onSwitchLot={(id) => setExecutionLotId(id)}
+           onSwitchLot={juggleGuideOn(settings) ? ((id) => setExecutionLotId(id)) : null}
+           juggleEnabled={juggleGuideOn(settings)}
            // 🚶 区画どうしの片道・2分の決まり(マスタ設定の作業エリアの下で誰でも変えられる)。空なら区画の名前の目安だけ
            travelCfg={settings?.opsim?.zoneTravel || null}
            onClose={() => setExecutionLotId(null)}
