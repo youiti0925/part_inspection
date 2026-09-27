@@ -1,3 +1,7 @@
+            {handleAllTemplatesDownload && (<>
+              <button onClick={handleAllTemplatesDownload} className="text-xs flex items-center gap-1 bg-indigo-600 text-white px-3 py-2 rounded border border-indigo-700 hover:bg-indigo-700 font-bold"><FileSpreadsheet className="w-4 h-4"/> 全テンプレExcel</button>
+              <label className="text-xs flex items-center gap-1 cursor-pointer bg-indigo-50 text-indigo-700 px-3 py-2 rounded border border-indigo-200 hover:bg-indigo-100 font-bold"><FileUp className="w-4 h-4"/> まとめて取込<input type="file" ref={allTplInputRef} accept=".xlsx" onChange={handleAllTemplatesImport} className="hidden"/></label>
+            </>)}
 /* global __firebase_config, __initial_auth_token */
 // ⚠ この2つは Canvas プレビューが外から差し込む名前。ビルドにも .env にも入らない。
 //   コードでは必ず `typeof __firebase_config !== 'undefined'` で包んでから読んでいる(288行/27341行)ので
@@ -21982,7 +21986,7 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
 
 // テンプレート管理: 検索 / フィルタ / 並び替えサポート
 // ⚠⚠ 2026-08-05 クラッシュ修正: 中で setShowStrictManager を呼んでいたが受け取っていなかった(製品検査と同じ)。
-const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplate, deleteData, handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, onOpenStrictManager = null }) => {
+const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplate, deleteData, handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, onOpenStrictManager = null, handleAllTemplatesDownload = null, handleAllTemplatesImport = null, allTplInputRef = null }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('name_asc'); // name_asc | name_desc | steps_desc | steps_asc | recent | usage_desc
   // フィルタ (multi-select)
@@ -28985,6 +28989,7 @@ const QuotaStoppedPanel = ({ until }) => (
    useEffect(() => { window.__setMoveLot = setMoveLot; return () => { delete window.__setMoveLot; }; }, []);
    const lotExcelInputRef = useRef(null);
    const excelInputRef = useRef(null);
+   const allTplInputRef = useRef(null);
    const backupInputRef = useRef(null);
    const progressMgmtInputRef = useRef(null);
    const [progressImportPreview, setProgressImportPreview] = useState(null);  // 工機進捗管理表 取込プレビュー結果
@@ -30136,6 +30141,131 @@ const QuotaStoppedPanel = ({ until }) => (
        console.error(err);
        alert('Excelファイルの生成に失敗しました');
      }
+   };
+
+   // 1c. 全テンプレまとめて Excel ダウンロード (1シート・1行=1工程・テンプレIDでグループ)
+   const TPL_CHK_COLS = 10; // チェック項目の列数(最大10)
+   const tplResLabel = (wr) => wr === 'measurement-machine' ? '測定機占有' : (wr === 'jig-shared' ? '治具占有' : (wr || ''));
+   const tplResValue = (l) => { const s = (l || '').trim(); if (/測定機/.test(s)) return 'measurement-machine'; if (/治具/.test(s)) return 'jig-shared'; return s; };
+   const handleAllTemplatesDownload = async () => {
+     try {
+       const ExcelJS = await loadExcelJS();
+       const wb = new ExcelJS.Workbook();
+       const ws = wb.addWorksheet('全テンプレート');
+       const thin = { style: 'thin', color: { argb: 'FF000000' } };
+       const bd = { top: thin, bottom: thin, left: thin, right: thin };
+       const headers = ['テンプレID', 'テンプレ名', '工程ID', 'No', '工程名', '作業内容/注意事項', '目標時間(秒)', '種別', '段取り(ロット1回)', '実行モード', '占有リソース', '自動終了(秒)', ...Array.from({ length: TPL_CHK_COLS }, (_, i) => `チェック項目${i + 1}`), '画像枚数(参考)'];
+       const NC = headers.length;
+       ws.mergeCells(1, 1, 1, NC);
+       const t1 = ws.getCell('A1'); t1.value = '全テンプレート一覧（まとめて編集用）'; t1.font = { bold: true, size: 14 };
+       ws.mergeCells(2, 1, 2, NC);
+       const t2 = ws.getCell('A2');
+       t2.value = '※この行より下を編集→「まとめて取込」で反映。●テンプレID/工程IDは変更しない(空欄=新規追加)。●同じテンプレIDの行が1つのテンプレの工程群。新規テンプレはテンプレID空欄+同じテンプレ名を複数行。●種別=normal/important/danger/measurement。段取り=○。実行モード=手動/自動。●チェック項目は先頭★で必須(最大10)。●測定図の詳細/画像/PDFはアプリ側で保持(ここでは編集しません)。●Excelから消したテンプレは削除されません(削除は一覧のゴミ箱で)。';
+       t2.font = { italic: true, size: 9, color: { argb: 'FF666666' } }; ws.getRow(2).height = 54; t2.alignment = { vertical: 'middle', wrapText: true };
+       const hr = ws.getRow(3);
+       headers.forEach((h, i) => { const c = hr.getCell(i + 1); c.value = h; c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } }; c.border = bd; c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }; });
+       const widths = [16, 24, 14, 5, 26, 40, 12, 13, 14, 13, 14, 12, ...Array(TPL_CHK_COLS).fill(18), 11];
+       widths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+       let r = 4;
+       const sorted = [...templates].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ja'));
+       sorted.forEach(tpl => {
+         const steps = tpl.steps || [];
+         const emit = (s, idx) => {
+           const row = ws.getRow(r);
+           row.getCell(1).value = tpl.id || '';
+           row.getCell(2).value = tpl.name || '';
+           row.getCell(3).value = s ? (s.id || '') : '';
+           row.getCell(4).value = s ? (idx + 1) : '';
+           row.getCell(5).value = s ? (s.title || '') : '';
+           row.getCell(6).value = s ? (s.description || '') : '';
+           row.getCell(7).value = s ? (s.targetTime || 0) : '';
+           row.getCell(8).value = s ? (s.type || 'normal') : '';
+           row.getCell(9).value = s && s.lotOnce ? '○' : '';
+           row.getCell(10).value = s ? (s.executionMode === 'batch' ? '自動(バッチ)' : '手動') : '';
+           row.getCell(11).value = s ? tplResLabel(s.workResource) : '';
+           row.getCell(12).value = s && s.autoEndEnabled && s.autoEndSec ? s.autoEndSec : '';
+           const chk = (s && s.checklistItems) || [];
+           for (let i = 0; i < TPL_CHK_COLS; i++) { const it = chk[i]; row.getCell(13 + i).value = it ? ((it.required ? '★' : '') + (it.label || '')) : ''; }
+           row.getCell(13 + TPL_CHK_COLS).value = s ? (s.images ? s.images.length : 0) : '';
+           for (let c = 1; c <= NC; c++) { row.getCell(c).border = bd; row.getCell(c).alignment = { vertical: 'middle', wrapText: c === 6 }; }
+           r++;
+         };
+         if (steps.length) steps.forEach((s, i) => emit(s, i)); else emit(null, 0);
+       });
+       const buf = await wb.xlsx.writeBuffer();
+       const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '全テンプレート一覧.xlsx'; a.click();
+     } catch (err) { console.error(err); alert('全テンプレExcelの生成に失敗しました: ' + (err && err.message || err)); }
+   };
+
+   // 1d. 全テンプレまとめて Excel 取込 (グループ→upsert・非編集項目は工程IDで保持・削除はしない)
+   const handleAllTemplatesImport = async (e) => {
+     const file = e.target.files?.[0];
+     if (!file) { return; }
+     try {
+       const ExcelJS = await loadExcelJS();
+       const wb = new ExcelJS.Workbook();
+       await wb.xlsx.load(file);
+       const ws = wb.getWorksheet(1);
+       if (!ws) throw new Error('シートが見つかりません');
+       const cellTxt = (cell) => { const v = cell == null ? null : cell.value; if (v == null) return ''; if (typeof v === 'object') { if (v.text != null) return String(v.text); if (v.result != null) return String(v.result); if (Array.isArray(v.richText)) return v.richText.map(t => t.text).join(''); if (v.hyperlink) return String(v.text || v.hyperlink); return ''; } return String(v); };
+       const recs = [];
+       ws.eachRow((row, idx) => {
+         if (idx < 4) return;
+         const g = (c) => cellTxt(row.getCell(c)).trim();
+         const rec = { tplId: g(1), tplName: g(2), stepId: g(3), title: g(5), description: cellTxt(row.getCell(6)), targetTime: parseInt(g(7)) || 0, type: (g(8) || 'normal'), lotOnce: /^(○|◯|✓|はい|yes|true|1|y)$/i.test(g(9)), execMode: /自動|batch/i.test(g(10)) ? 'batch' : 'manual', res: g(11), autoEndSec: parseInt(g(12)) || 0, chk: [] };
+         for (let i = 0; i < TPL_CHK_COLS; i++) { const raw = g(13 + i); if (raw) { const required = /^[★*]/.test(raw); rec.chk.push({ label: raw.replace(/^[★*]\s*/, ''), required }); } }
+         if (!rec.tplId && !rec.tplName && !rec.title) return; // 空行
+         recs.push(rec);
+       });
+       if (!recs.length) { alert('有効なデータが見つかりませんでした（4行目以降を確認）'); e.target.value = ''; return; }
+       // テンプレ単位にグループ (IDあり=既存/ID空=テンプレ名で新規)
+       const groups = new Map();
+       recs.forEach(rec => {
+         const key = rec.tplId ? ('ID::' + rec.tplId) : ('NEW::' + (rec.tplName || '無題'));
+         if (!groups.has(key)) groups.set(key, { tplId: rec.tplId, tplName: rec.tplName, recs: [] });
+         const grp = groups.get(key); if (!grp.tplName && rec.tplName) grp.tplName = rec.tplName; grp.recs.push(rec);
+       });
+       let created = 0, updated = 0; const ops = [];
+       groups.forEach(grp => {
+         const existing = grp.tplId ? templates.find(t => t.id === grp.tplId) : null;
+         const templateId = grp.tplId || generateId();
+         const name = grp.tplName || (existing && existing.name) || '無題テンプレート';
+         const _seenIds = new Set();
+         const steps = grp.recs.filter(rec => rec.title && rec.title.trim()).map(rec => {
+           // 工程IDで既存stepを引く。別テンプレへ移動した行でも全テンプレ横断で探し、高度設定(observationElements/measurementConfig等)を保持。
+           let orig = rec.stepId ? ((existing && (existing.steps || []).find(s => s.id === rec.stepId)) || (templates || []).map(t => (t.steps || []).find(s => s.id === rec.stepId)).find(Boolean)) : null;
+           // 工程IDが空でも、同テンプレ内に同名工程が1つだけあれば母体として継承(measurementConfig/observation等の消失を防ぐ)
+           if (!orig && existing && rec.title && rec.title.trim()) { const _cand = (existing.steps || []).filter(s => (s.title || '').trim() === rec.title.trim()); if (_cand.length === 1) orig = _cand[0]; }
+           const base = orig ? { ...orig } : {};
+           const chkItems = rec.chk.map((c, ci) => ({ id: (orig && orig.checklistItems && orig.checklistItems[ci] && orig.checklistItems[ci].id) || generateId(), label: c.label, required: !!c.required }));
+           let _sid = (orig && orig.id) || rec.stepId || generateId();
+           if (_seenIds.has(_sid)) _sid = generateId();
+           _seenIds.add(_sid);
+           const st = {
+             ...base,
+             id: _sid,
+             title: rec.title.trim(),
+             description: rec.description || '',
+             targetTime: rec.targetTime,
+             type: ['normal', 'important', 'danger', 'measurement'].includes(rec.type) ? rec.type : 'normal',
+             lotOnce: rec.lotOnce,
+             executionMode: rec.execMode,
+             workResource: tplResValue(rec.res),
+             checklistItems: chkItems,
+           };
+           if (rec.autoEndSec > 0) { st.autoEndEnabled = true; st.autoEndSec = rec.autoEndSec; } else { st.autoEndEnabled = false; }
+           return st;
+         });
+         const doc = { id: templateId, name, steps, overview: (existing && existing.overview) || null, createdAt: (existing && existing.createdAt) || Date.now(), updatedAt: Date.now() };
+         ops.push([templateId, doc]);
+         if (existing) updated++; else created++;
+       });
+       if (!window.confirm(`まとめて反映します。\n新規テンプレ: ${created}件 / 更新: ${updated}件\n（工程ID空=新規工程、テンプレID空=新規テンプレとして登録。Excelに無いテンプレは削除しません）\nよろしいですか？`)) { e.target.value = ''; return; }
+       for (const [id, doc] of ops) { await saveData('templates', id, doc); }
+       alert(`反映しました（新規${created}件・更新${updated}件）`);
+     } catch (err) { console.error(err); alert('まとめて取込に失敗しました: ' + (err && err.message || err)); }
+     e.target.value = '';
    };
 
    // 2. Backup Export
@@ -32127,6 +32257,9 @@ const QuotaStoppedPanel = ({ until }) => (
                excelInputRef={excelInputRef}
                backupInputRef={backupInputRef}
                onOpenStrictManager={() => setShowStrictManager(true)}
+               handleAllTemplatesDownload={handleAllTemplatesDownload}
+               handleAllTemplatesImport={handleAllTemplatesImport}
+               allTplInputRef={allTplInputRef}
              />
            )
          )}
