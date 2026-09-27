@@ -58,7 +58,7 @@ export function fullPairJobsOf({ lotKey, lot, times, machineId, conditions = FUL
   const steps = Array.isArray(lot && lot.steps) ? lot.steps : [];
   const tasks = lot && lot.tasks && typeof lot.tasks === 'object' ? lot.tasks : {};
   const q = unitsOf(lot);
-  const jobs = []; const missing = new Set(); const mergedSteps = new Set(); const blocked = new Set();
+  const jobs = []; const missing = new Set(); const mergedSteps = new Set(); const blocked = new Set(); const held = new Set();
   let inProgress = 0;
   const frontier = Array.from({ length: q }, () => []);
   const pending = Array.from({ length: q }, () => null); // 台ごとの 続いている手作業の塊
@@ -112,7 +112,9 @@ export function fullPairJobsOf({ lotKey, lot, times, machineId, conditions = FUL
       if (stateOf(taskOf(tasks, s, idx, u)) === 'done') {
         const next = times?.[idx + 1];
         if (c.holdToNext && t.machine && next?.machine && !DONE.has(str(taskOf(tasks, steps[idx + 1], idx + 1, u)?.status))) {
-          blocked.add('機械を使う工程の途中です。設備占有状態が未確認のため比較を止めました');
+          // 🔧 2026-09-27: 別の機械なら取り合わないので止めない(載せたまま次の工程から続けると仮定して計算する)。同じ機械を取り合う時だけ止める。
+          if (c.sameMachine) blocked.add('機械を使う工程の途中です。設備占有状態が未確認のため比較を止めました');
+          else held.add(`${u + 1}台目は機械に載せたまま、次の「${str(next.title)}」から続ける`);
         }
         continue;
       }
@@ -133,7 +135,7 @@ export function fullPairJobsOf({ lotKey, lot, times, machineId, conditions = FUL
     }
   });
   for (let u = 0; u < q; u += 1) flush(u);
-  return { jobs, missing: [...missing], blocked: [...blocked], inProgress, merged: mergedSteps.size };
+  return { jobs, missing: [...missing], blocked: [...blocked], held: [...held], inProgress, merged: mergedSteps.size };
 }
 
 /**
@@ -161,6 +163,8 @@ export function fullPairInputOf({ A, B, travelMin = null, sameZone = false, trav
   const [ja, jb] = build(false);
   const merged = false;
   errors.push(...ja.blocked.map(x => `A: ${x}`), ...jb.blocked.map(x => `B: ${x}`));
+  (ja.held || []).forEach(x => assumptions.push(`A: ${x}(機械の途中から・仮定)`));
+  (jb.held || []).forEach(x => assumptions.push(`B: ${x}(機械の途中から・仮定)`));
   if (ja.missing.length) errors.push(`Aに時間が分からない工程があります: ${ja.missing.slice(0, 4).join('・')}${ja.missing.length > 4 ? ` ほか${ja.missing.length - 4}件` : ''}`);
   if (jb.missing.length) errors.push(`Bに時間が分からない工程があります: ${jb.missing.slice(0, 4).join('・')}${jb.missing.length > 4 ? ` ほか${jb.missing.length - 4}件` : ''}`);
   if (!ja.jobs.length) errors.push('Aに残りの工程がありません');

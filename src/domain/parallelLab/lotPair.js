@@ -53,8 +53,11 @@ export function stepTimesOf({ lot, stats = null, customTargetTimes = null, model
   return steps.map((s, idx) => {
     const auto = isAutoStep(s, masterIndex);
     const byRes = str(s && s.workResource) === 'measurement-machine';
-    const byTitle = !auto && !byRes && MACHINE_TITLE_RE.test(str(s && s.title));
-    const base = { id: str(s && s.id) || `idx-${idx}`, idx, title: str(s && s.title) || `工程${idx + 1}`, auto, lotOnce: !!(s && s.lotOnce), machine: auto || byRes || byTitle, machineBy: auto ? 'auto' : byRes ? 'resource' : byTitle ? 'title' : null };
+    // 🔧 2026-09-27 清水さん「テンプレに書いてた」: 欄 workResource が在って空(null/'')なら『機械を使わない』とテンプレで決めてある
+    //   (作業画面の並行判定 App.jsx の「(b1) 明示『機械独立』」と同じ決まり)。欄そのものが無い古いテンプレだけ『分からない』。
+    const benchByTpl = !auto && !byRes && !!s && Object.prototype.hasOwnProperty.call(s, 'workResource') && (s.workResource == null || str(s.workResource) === '');
+    const byTitle = !auto && !byRes && !benchByTpl && MACHINE_TITLE_RE.test(str(s && s.title));
+    const base = { id: str(s && s.id) || `idx-${idx}`, idx, title: str(s && s.title) || `工程${idx + 1}`, auto, lotOnce: !!(s && s.lotOnce), machine: auto || byRes || byTitle, machineBy: auto ? 'auto' : byRes ? 'resource' : benchByTpl ? 'resource-none' : byTitle ? 'title' : null };
     if (auto) {
       const set = Number(s && s.autoEndSec);
       if (Number.isFinite(set) && set > 0) return { ...base, sec: set, source: 'setting', why: `設定の自動時間 ${r1(set / 60)}分` };

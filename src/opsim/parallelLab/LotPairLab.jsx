@@ -232,7 +232,7 @@ export default function LotPairLab({ lots = [], templatesById = new Map(), setti
   const pairInputOf = (bRow, travelMin, travelNote) => {
     const zb = bRow === B ? zoneB : bRow.zone.zoneId;
     const timesOf = row => row.times.map(t => ({ ...t, machine: t.auto || (stepResources[row.id + ':' + t.id] ?? t.machine),
-      machineConfirmed: t.auto || t.machineBy === 'resource' || Object.prototype.hasOwnProperty.call(stepResources, row.id + ':' + t.id) }));
+      machineConfirmed: t.auto || t.machineBy === 'resource' || t.machineBy === 'resource-none' || Object.prototype.hasOwnProperty.call(stepResources, row.id + ':' + t.id) }));
     return fullPairInputOf({
       A: { id: A.id, lot: A.lot, times: timesOf(A), zoneId: zoneA, zoneName: zoneName(zoneA), label: shortLabel(A) },
       B: { id: bRow.id, lot: bRow.lot, times: timesOf(bRow), zoneId: zb, zoneName: zoneName(zb), label: shortLabel(bRow) },
