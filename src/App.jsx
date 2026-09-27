@@ -109,6 +109,10 @@ import {
   PDCA_KPIS, PDCA_MIN_N, PDCA_THRESHOLD_PCT, PDCA_STALE_DAYS,
   pdcaWindowDays, pdcaKpiValue, computeVerdict
 } from './domain/goal/verdictEngine.js';
+// 「効果あり」で閉じてよいかの門・30日定着確認・品質ガード(製品と同じ純関数)
+import {
+  SUSTAIN_DAYS, qualityGuardOf, canCloseEffective, sustainCheckDue, sustainVerdict, cardStageOf
+} from './domain/goal/effectiveGate.js';
 import { SjhGuide } from './SjhGuide.jsx';
 // 中断(不具合・軽微不良・気づき)は1件ずつ鍵つきで書く(製品と同じ純関数)
 import { intKeyOf, withInterruptionLog, intWritePatch, intDeletePatch, stopIntEntry, mergePendingInts, dropSettledPending } from './domain/interruptionLog.js';
@@ -17209,11 +17213,13 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
     changeNote: card.changeNote || '', changeOld: card.changeOld || '', changeNew: card.changeNew || '',
   });
   const [busy, setBusy] = useState(false);
+  // 30日定着確認ができるかを見る「いま」。描画のたびに Date.now() を呼ばない(開いた時刻で足りる)
+  const [openedAt] = useState(() => Date.now());
   const isClosed = ['effective', 'noeffect', 'worse', 'rolledback'].includes(card.status);
   // 実施後の統計: 閉じたカルテは凍結値、それ以外はライブ計算
   const afterLive = useMemo(() => card.actionDate ? measureWindow(lots, { model: card.model, stepKey: card.stepKey, customTargetTimes, modelGroups, startMs: card.actionDate, endMs: Date.now() }) : null, [lots, card.actionDate, card.model, card.stepKey, customTargetTimes, modelGroups]);
   const after = (isClosed && card.afterFrozen) ? card.afterFrozen : afterLive;
-  const verdict = useMemo(() => (card.actionDate && card.baseline) ? ((isClosed && card.verdictFrozen) ? card.verdictFrozen : computeVerdict(card.baseline, after, edit.kpi)) : null, [card, after, edit.kpi, isClosed]);
+  const verdict = useMemo(() => (card.actionDate && (card.actionBaseline || card.baseline)) ? ((isClosed && card.verdictFrozen) ? card.verdictFrozen : computeVerdict(card.actionBaseline || card.baseline, after, edit.kpi)) : null, [card, after, edit.kpi, isClosed]);
 
   const patch = async (p, logEntry) => {
     setBusy(true);
@@ -17228,7 +17234,15 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
     // 既に実施日があるのに再度押すと効果測定がリセットされるため確認 (初回=actionDate無しは確認なし)
     if (card.actionDate && !confirm('対策実施日を今日に変更すると、これまでの効果測定がリセットされます。よろしいですか？')) return;
     const now = Date.now();
-    patch({ status: 'measuring', actionDate: now, kpi: edit.kpi, changeNote: edit.changeNote, changeOld: edit.changeOld, changeNew: edit.changeNew }, { type: 'do', note: `対策を実施 (${edit.changeNote || '内容未記入'})` });
+    // ⚠実施時ベースライン再凍結: 起票から実施まで日が空くと起票時の90日窓は「対策直前の状態」とズレる。
+    //   効果判定は actionBaseline(実施直前90日) を使い、起票時の値は discoverySnapshot として証拠に残す(仕様4.7)。
+    const abStart = now - 90 * 86400000;
+    const abStat = measureWindow(lots, { model: card.model, stepKey: card.stepKey, customTargetTimes, modelGroups, startMs: abStart, endMs: now });
+    const actionBaseline = { ...abStat, startMs: abStart, endMs: now };
+    patch({
+      status: 'measuring', actionDate: now, kpi: edit.kpi, changeNote: edit.changeNote, changeOld: edit.changeOld, changeNew: edit.changeNew,
+      actionBaseline, discoverySnapshot: card.discoverySnapshot || card.baseline || null,
+    }, { type: 'do', note: `対策を実施 (${edit.changeNote || '内容未記入'})・実施直前90日をベースラインに再凍結(中央値${pdcaFmtSec(actionBaseline.median)}・${actionBaseline.n}台)` });
   };
   const closeWith = (status) => {
     // 「効果あり/悪化」は実施後の標本が一定数たまるまで判定させない (無意味な0台凍結を防ぐ。defectRateは件数ベースなので除外)
@@ -17236,11 +17250,44 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
       alert(`実施後の標本が ${afterLive?.n || 0}台 です。${PDCA_MIN_N}台たまってから「効果あり／悪化」を判定してください。（「効果なし」「元に戻す」での完了は可能です）`);
       return;
     }
-    // 実施後統計と判定を凍結して恒久エビデンス化 (窓情報も保存=後で日あたり率の再計算が可能)。kpiも永続化して凍結判定と一致させる。
+    // 実施後統計と判定を凍結して恒久エビデンス化 (窓情報も保存=後で率の再計算が可能)。kpiも永続化して凍結判定と一致させる。
+    // ベースラインは実施時再凍結(actionBaseline)を最優先 (起票から実施まで空くと直前の状態とズレるため)。
+    const before = card.actionBaseline || card.baseline;
     const frozen = afterLive ? { ...afterLive, startMs: card.actionDate, endMs: Date.now() } : null;
-    const v = (card.baseline && frozen) ? computeVerdict(card.baseline, frozen, edit.kpi) : null;
+    const v = (before && frozen) ? computeVerdict(before, frozen, edit.kpi) : null;
+    // 🚦効果確定ゲート: 「効果あり」は 自動判定improved+前後標本+品質ガード+必須項目 を全部通過した時だけ。
+    //   (5%未満の小改善=flat が正の金額のまま確定へ入る抜け道と、前標本不足の抜け道をここで塞ぐ)
+    let quality = null;
+    if (status === 'effective') {
+      quality = qualityGuardOf({
+        beforeDefects: before?.defectCount || 0, beforeUnits: before?.unitsSeen ?? before?.n ?? 0,
+        afterDefects: frozen?.defectCount || 0, afterUnits: frozen?.unitsSeen ?? frozen?.n ?? 0,
+      });
+      const gate = canCloseEffective({ verdict: v, before, after: frozen, quality, kpi: edit.kpi, action: card.action || edit.changeNote || card.changeNote || '', owner: card.owner || '', actionDate: card.actionDate });
+      if (!gate.ok) {
+        alert(`「効果あり」にはまだできません:\n・${gate.reasons.join('\n・')}\n\n(「効果なし」「悪化」「元に戻す」での完了は可能です)`);
+        return;
+      }
+    }
     const label = PDCA_STATUS_META[status]?.label || status;
-    patch({ status, kpi: edit.kpi, afterFrozen: frozen, verdictFrozen: v, closedAt: Date.now(), closedBy: currentUserName || '?' }, { type: 'close', note: `判定: ${label}` });
+    patch({
+      status, kpi: edit.kpi, afterFrozen: frozen, verdictFrozen: v, closedAt: Date.now(), closedBy: currentUserName || '?',
+      ...(status === 'effective' ? { verifiedStage: 'provisional', qualityFrozen: quality } : {}),
+    }, { type: 'close', note: `判定: ${label}${status === 'effective' ? '（暫定・30日定着確認待ち）' : ''}` });
+  };
+  // 🔁 30日定着確認: 効果あり(暫定)から30日後、直近4週の実測で定着していれば「確定」へ。崩れていたら「要再確認」。
+  const sustainCheck = () => {
+    const recent = measureWindow(lots, { model: card.model, stepKey: card.stepKey, customTargetTimes, modelGroups, startMs: Date.now() - 28 * 86400000, endMs: Date.now() });
+    const sv = sustainVerdict({ afterVal: Number(card.verdictFrozen?.afterVal) || 0, recentMedian: recent.median, recentN: recent.n });
+    if (sv.result === 'unknown') { alert(`まだ判定できません: ${sv.reason}`); return; }
+    const label = sv.result === 'sustained' ? '✅ 定着を確認 → 確定に入ります' : `⚠ 崩れています: ${sv.reason}\n「要再確認」になり、確定から外れます`;
+    if (!window.confirm(`30日定着確認\n定着時 ${pdcaFmtSec(Number(card.verdictFrozen?.afterVal) || 0)} → 直近4週 ${pdcaFmtSec(recent.median)}（${recent.n}台）\n\n${label}\nよろしいですか？`)) return;
+    patch({
+      verifiedStage: sv.result === 'sustained' ? 'verified' : 'broken',
+      sustainedAt: Date.now(), sustainStat: { ...recent, startMs: Date.now() - 28 * 86400000, endMs: Date.now() },
+    }, { type: 'sustain', note: sv.result === 'sustained' ? '30日定着確認OK → 確定' : `30日定着確認NG(${sv.reason}) → 要再確認` });
+    // 定着チェックリスト(仕様7): 確定にしたら標準側も揃える(カルテと標準更新を切り離さない)
+    if (sv.result === 'sustained') alert('✅ 確定にしました。仕上げの3点を忘れずに:\n① 目標時間をこの実測に更新（分析→目標時間・厳密モードへ）\n② テンプレ・工程手順を新しいやり方に更新\n③ 対象の作業者へ共有・教育');
   };
   const reopen = () => patch({ status: 'measuring', closedAt: null, closedBy: null, afterFrozen: null, verdictFrozen: null }, { type: 'status', note: '再オープン(効果測定中へ)' });
   const doDelete = async () => { if (!deleteData) return; if (!confirm('このカルテを削除しますか？(元に戻せません)')) return; await deleteData('improvements', card.id); onClose(); };
@@ -17317,7 +17364,7 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
               ベースライン期間: {card.baseline ? `${pdcaFmtDate(card.baseline.startMs)} 〜 ${pdcaFmtDate(card.baseline.endMs)}` : '—'}
               {card.actionDate ? ` ／ 実施後: ${pdcaFmtDate(card.actionDate)} 〜 ${isClosed && card.closedAt ? pdcaFmtDate(card.closedAt) : '現在'}` : ' ／ 実施後: 未実施'}
             </div>
-            <StatRows b={card.baseline} a={after} kpi={edit.kpi} />
+            <StatRows b={card.actionBaseline || card.baseline} a={after} kpi={edit.kpi} />
             <div className="pt-1">
               <div className="text-xs text-slate-400 mb-0.5">月次推移 ({PDCA_KPIS[edit.kpi] || PDCA_KPIS.time}) — 対策実施を境に色が変わります</div>
               <PdcaMiniTrend lots={lots} model={card.model} stepKey={card.stepKey} kpi={edit.kpi} customTargetTimes={customTargetTimes} modelGroups={modelGroups} actionDate={card.actionDate} />
@@ -17325,7 +17372,7 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
             {verdict && (
               <div className="flex items-center gap-2 text-xs bg-slate-50 border rounded p-2">
                 <PdcaVerdictBadge v={verdict} />
-                <span className="text-slate-600">{verdict.label}: {pdcaKpiDisplay(card.baseline, edit.kpi)} → {pdcaKpiDisplay(after, edit.kpi)}{verdict.reason ? ` (${verdict.reason})` : ''}</span>
+                <span className="text-slate-600">{verdict.label}: {pdcaKpiDisplay(card.actionBaseline || card.baseline, edit.kpi)} → {pdcaKpiDisplay(after, edit.kpi)}{verdict.reason ? ` (${verdict.reason})` : ''}</span>
               </div>
             )}
           </div>
@@ -17361,9 +17408,24 @@ const ImprovementCardModal = ({ card, lots = [], customTargetTimes = {}, modelGr
             </div>
           )}
           {isClosed && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500">判定: {pdcaFmtDateTime(card.closedAt)} ・ {card.closedBy}</span>
-              {!busy && <button onClick={reopen} className="text-xs px-2 py-1 border rounded text-slate-600 hover:bg-slate-50">再オープン</button>}
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-slate-500">判定: {pdcaFmtDateTime(card.closedAt)} ・ {card.closedBy}</span>
+                {card.status === 'effective' && (
+                  cardStageOf(card) === 'verified' ? <span className="fi-tap-text px-2 py-0.5 rounded bg-emerald-600 text-white font-bold">✅ 確定（30日定着済）</span>
+                  : cardStageOf(card) === 'broken' ? <span className="fi-tap-text px-2 py-0.5 rounded bg-rose-500 text-white font-bold">⚠ 要再確認（定着崩れ）</span>
+                  : <span className="fi-tap-text px-2 py-0.5 rounded bg-teal-500 text-white font-bold">⏳ 暫定（30日定着確認待ち）</span>
+                )}
+                {!busy && <button onClick={reopen} className="fi-tap-text px-2 py-1 border rounded text-slate-600 hover:bg-slate-50">再オープン</button>}
+              </div>
+              {card.status === 'effective' && cardStageOf(card) === 'provisional' && (
+                sustainCheckDue(card, openedAt)
+                  ? <button onClick={sustainCheck} disabled={busy} className="text-xs px-3 py-1.5 bg-emerald-600 text-white rounded font-bold">🔁 30日定着確認をする（直近4週の実測で判定）</button>
+                  : <div className="fi-tap-text text-slate-400">判定から{SUSTAIN_DAYS}日たつと「30日定着確認」ができます（確認して定着していれば貯金箱の「確定」に入ります）。</div>
+              )}
+              {card.status === 'effective' && cardStageOf(card) === 'broken' && (
+                <button onClick={sustainCheck} disabled={busy} className="text-xs px-3 py-1.5 bg-amber-500 text-white rounded font-bold">🔁 再度 定着確認をする</button>
+              )}
             </div>
           )}
 
