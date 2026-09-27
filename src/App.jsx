@@ -214,6 +214,9 @@ import { MasterPropagateModal, MasterPropagateBusy, ModelTemplateEditorOverlay }
 import { makeModelTemplateActions, isUntouchedLot as mtIsUntouchedLot } from './modelTemplateActions.js';
 import { resolveModelEntry, findModelTemplate } from './domain/modelMaster.js';
 import { diffTemplate as tsDiff, syncPolicyOf as tsPolicy } from './domain/templateSync.js';
+// 🧍 P135(一部) 一人しかできない工程(実績から数える・スキルの言葉に依らない)。製品 SoloDependencyPanel をそのまま写した
+import { SoloDependencyPanel } from './SoloDependencyPanel.jsx';
+import { ErrorBoundary as SoloErrorBoundary } from './ErrorBoundary.jsx';
 // ⭐ P116 星取表 / 👀 P161 独り立ち直後の見守り(製品の画面を写し・純関数は写し済み)
 import StarChartView from './StarChartView.jsx';
 import MimamoriCard from './MimamoriCard.jsx';
@@ -34287,6 +34290,7 @@ const QuotaStoppedPanel = ({ until }) => (
                  <button onClick={() => setOptimizeView('skill')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'skill' ? 'bg-white shadow text-orange-600' : 'text-slate-500 hover:text-slate-700'}`}><Award className="w-4 h-4" /> スキルマップ</button>
                  <button onClick={() => setOptimizeView('modelgroup')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'modelgroup' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}><Layers className="w-4 h-4" /> 品目グループ</button>
                  <button onClick={() => setOptimizeView('star')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'star' ? 'bg-white shadow text-amber-600' : 'text-slate-500 hover:text-slate-700'}`}><Award className="w-4 h-4" /> ⭐星取表</button>
+                 <button onClick={() => setOptimizeView('solo')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'solo' ? 'bg-white shadow text-rose-600' : 'text-slate-500 hover:text-slate-700'}`}><Users className="w-4 h-4" /> 一人しかできない工程</button>
                  <button onClick={() => setOptimizeView('tskip')} data-optimize-tab="tskip" className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'tskip' ? 'bg-white shadow text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 抜取/スキップ</button>
                </div>
                {/* 🚨 説明文は消していない。？ を押すと全文が出る(畳んだだけ)。
@@ -34317,7 +34321,8 @@ const QuotaStoppedPanel = ({ until }) => (
                {!quotaBlock && lotsHistoryReady && optimizeView === 'strict' && (currentUserName === '管理者' ? <StrictModeManagerModal embedded lots={lots} templates={templates} rules={settings.strictModeRules || {}} history={strictModeHistory} currentUserName={currentUserName} maturityUnits={strictMaturityUnits} onSetMaturity={(n) => saveSettings({ strictMaturityUnits: n })} onDecide={handleStrictDecide} optimalByCombo={optimalByCombo} onDecideOptimal={handleOptimalDecide} onOpenAnalysis={(row) => setAnalysisCombo({ model: row.model, templateId: row.templateId, templateName: row.templateName })} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">厳密モードの管理は管理者のみです。ヘッダー左上で「管理者」を選択してください。</div>)}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'skill' && <SkillMapView lots={lots} templates={templates} workers={workers} skills={settings.skills && settings.skills.length ? settings.skills : DEFAULT_SKILLS} workerSkills={settings.workerSkills || {}} canEdit={currentUserName === '管理者'} onSaveSkills={(list) => saveSettings({ skills: list })} onSaveWorkerSkill={(wn, sid, level) => { const ws = settings.workerSkills || {}; saveSettings({ workerSkills: { ...ws, [wn]: { ...(ws[wn] || {}), [sid]: level } } }); }} onSaveTemplateSkills={(tplId, reqSkills) => saveData('templates', tplId, { requiredSkills: reqSkills })} />}
                {/* 🧾 品目×テンプレ単位の抜取／スキップ。決めるのは管理者。数字は domain/templateSkip.js が実測から出す。 */}
-               {!quotaBlock && lotsHistoryReady && optimizeView === 'star' && <StarChartView lots={lots} workers={workers} templates={templates} settings={settings} skillMarks={skillMarks || []} canEdit={currentUserName === '管理者'} currentUserName={currentUserName} onSaveMark={(doc) => saveData('skill_marks', doc.id, doc)} />}
+               {!quotaBlock && lotsHistoryReady && optimizeView === 'solo' && <SoloErrorBoundary><SoloDependencyPanel lots={lots} templates={templates} workers={workers} /></SoloErrorBoundary>}
+              {!quotaBlock && lotsHistoryReady && optimizeView === 'star' && <StarChartView lots={lots} workers={workers} templates={templates} settings={settings} skillMarks={skillMarks || []} canEdit={currentUserName === '管理者'} currentUserName={currentUserName} onSaveMark={(doc) => saveData('skill_marks', doc.id, doc)} />}
               {!quotaBlock && lotsHistoryReady && optimizeView === 'tskip' && <TemplateSkipPanel unitLabel="品目" lots={lots} templates={templates} settings={settings} saveSettings={saveSettings} canEdit={currentUserName === '管理者'} currentUserName={currentUserName} />}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'modelgroup' && (currentUserName === '管理者' ? <ModelGroupManager lots={lots} settings={settings} saveSettings={saveSettings} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">品目グループの管理は管理者のみです。</div>)}
              </div>
