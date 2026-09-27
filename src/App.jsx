@@ -213,6 +213,8 @@ import { FeedbackButton, FeedbackModal, FeedbackList, feedbackDeviceId } from '.
 import { FEEDBACK_COL, openFeedbackCount, feedbackConfigOf, toggleAgreePatch } from './domain/appFeedback.js';
 import { NoticePopup } from './AppNotice.jsx';
 import { LotImportOptionsPanel, LotImportPreviewModal } from './LotImportPanels.jsx'; // 📥 P034/P035
+import { QsDaysPropagateModal } from './QsDaysPropagate.jsx';
+import { planQsDaysChange } from './domain/qsDaysPropagate.js'; // 🧾➡📋 P109
 import { Bar as VizBar, Dots as VizDots } from './opsim/vizKit.jsx'; // 📊 P107 台数の点・進捗の棒
 // 📱 P108 PC/スマホの切替1本(製品と同じ layoutMode.js)。layoutInfo() は { wide, narrow, short } を返す。short(スマホ横)は narrow の仲間
 import { layoutInfo, nextLayoutMode, readLayoutMode, saveLayoutMode, layoutModeLabel } from './domain/layoutMode.js';
@@ -14817,7 +14819,13 @@ const WorkScheduleSettingsPanel = ({ workSchedule, saveSettings, workloadEffecti
     );
 };
 
-const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandardMap, saveSettings, deleteSettingsFields }) => {
+const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandardMap, saveSettings, deleteSettingsFields, onEntryDaysChanged = null }) => {
+    // 🧾➡📋 P109 日数の欄に入った時の値を控え、出た時に変わっていれば親へ知らせる(検査リストの波及の窓)
+    const daysSnapRef = useRef(null);
+    const pickDays = (e) => ({ daysBefore: e?.daysBefore ?? null, shipDaysBefore: e?.shipDaysBefore ?? null, entryDaysBefore: e?.entryDaysBefore ?? null });
+    const daysFocus = (entry) => { daysSnapRef.current = { standardId: selectedQsId, templateId: entry?.templateId || '', before: pickDays(entry), after: pickDays(entry) }; };
+    const daysEdit = (patch) => { if (daysSnapRef.current) daysSnapRef.current.after = { ...daysSnapRef.current.after, ...patch }; };
+    const daysBlur = () => { const sn = daysSnapRef.current; daysSnapRef.current = null; if (!sn || !onEntryDaysChanged) return; if (JSON.stringify(sn.before) !== JSON.stringify(sn.after)) onEntryDaysChanged(sn); };
     const [selectedQsId, setSelectedQsId] = useState('');
     const [showCreate, setShowCreate] = useState(false);
     const [newStandardNo, setNewStandardNo] = useState('');
@@ -15307,7 +15315,9 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                                 onChange={e => {
                                                     const v = e.target.value === '' ? null : parseInt(e.target.value) || 0;
                                                     setEntryDaysBefore(entryIdx, v);
+                                                    daysEdit({ daysBefore: v });
                                                 }}
+                                                onFocus={() => daysFocus(entry)} onBlur={daysBlur}
                                                 className="w-12 border rounded p-0.5 text-xs text-center font-mono bg-white"
                                             />
                                             <span className="text-xs text-emerald-700">日</span>
@@ -15316,7 +15326,8 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                         <label className="flex items-center gap-1 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5" title="進捗管理表の出荷日(AD列)の何日前を納期にするか。空なら取込の既定(1日前)">
                                             <span className="text-xs text-rose-700 font-bold">出荷日の</span>
                                             <input type="number" value={entry.shipDaysBefore ?? ''} placeholder="1"
-                                                onChange={e => setEntryField(entryIdx, { shipDaysBefore: e.target.value === '' ? null : parseInt(e.target.value) || 0 })}
+                                                onChange={e => { const v = e.target.value === '' ? null : parseInt(e.target.value) || 0; setEntryField(entryIdx, { shipDaysBefore: v }); daysEdit({ shipDaysBefore: v }); }}
+                                                onFocus={() => daysFocus(entry)} onBlur={daysBlur}
                                                 className="w-12 border rounded p-0.5 text-xs text-center font-mono bg-white" />
                                             <span className="text-xs text-rose-700">日前</span>
                                         </label>
@@ -15324,7 +15335,8 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                         <label className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title="入荷の日が表に無い時、入荷は納期の何日前とするか。空なら取込の既定(3日前)">
                                             <span className="text-xs text-amber-700 font-bold">入荷は納期の</span>
                                             <input type="number" value={entry.entryDaysBefore ?? ''} placeholder="3"
-                                                onChange={e => setEntryField(entryIdx, { entryDaysBefore: e.target.value === '' ? null : parseInt(e.target.value) || 0 })}
+                                                onChange={e => { const v = e.target.value === '' ? null : parseInt(e.target.value) || 0; setEntryField(entryIdx, { entryDaysBefore: v }); daysEdit({ entryDaysBefore: v }); }}
+                                                onFocus={() => daysFocus(entry)} onBlur={daysBlur}
                                                 className="w-12 border rounded p-0.5 text-xs text-center font-mono bg-white" />
                                             <span className="text-xs text-amber-700">日前</span>
                                         </label>
@@ -23598,7 +23610,41 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
    saveData('workers', w.id, resumePatch(Date.now()));
  };
 
- const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onRegisterPending = null, onRemovePending = null, onOpenStrictManager = null, currentUserName = '', parentTabs = null }) => {
+ const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onRegisterPending = null, onRemovePending = null, onOpenStrictManager = null, currentUserName = '', factoryCalendar = null, parentTabs = null }) => {
+  // 🧾➡📋 P109 品質規格の日数を直した → 検査リストの関係するロットの納期・入庫も直す(押す前に全部見せる・0件なら出さない)
+  const [qsPropagate, setQsPropagate] = useState(null);
+  const [qsPropagateBusy, setQsPropagateBusy] = useState('');
+  const openQsPropagate = ({ standardId, templateId, before, after }) => {
+    const { profiles, activeId } = normalizeSheetProfiles(settings || {}, DEFAULT_SHEET_MAP);
+    const smap = (profiles.find(p => p.id === activeId) || profiles[0] || {}).map || {};
+    const plan = planQsDaysChange({ standardId, templateId, before, after, lots, modelStandardMap: (settings && settings.modelStandardMap) || {},
+      calendar: factoryCalendar || null, defaultEntryDaysBefore: DEFAULT_IMPORT_OPTIONS.defaultEntryDaysBefore, entryHHMM: DEFAULT_IMPORT_OPTIONS.entryHHMM, defaultShipDaysBefore: smap.shipDaysBefore });
+    if (!plan.updates.length) return;
+    setQsPropagate({ ...plan, standardNo: (settings && settings.qualityStandards && settings.qualityStandards[standardId] && settings.qualityStandards[standardId].standardNo) || '' });
+  };
+  const applyQsPropagate = async () => {
+    if (!qsPropagate) return;
+    const list = qsPropagate.updates;
+    try {
+      let done = 0;
+      setQsPropagateBusy(`検査リストを直しています… 0/${list.length}`);
+      for (const u of list) {
+        const patch = {};
+        if (u.dueChange) patch.dueDate = u.newDueDate;
+        if (u.entryChange && u.newEntryAt) patch.entryAt = u.newEntryAt;
+        if (Object.keys(patch).length) await saveData('lots', u.lotId, patch);
+        done++;
+        setQsPropagateBusy(`検査リストを直しています… ${done}/${list.length}`);
+      }
+      setQsPropagate(null);
+      alert(`✓ 検査リストの ${done}件 を直しました`);
+    } catch (err) {
+      console.error(err);
+      alert('検査リストの更新中にエラーが発生しました: ' + (err.message || err));
+    } finally {
+      setQsPropagateBusy('');
+    }
+  };
   // 🏅 P117 卒業の直後に開く「独り立ちの記録」(SignoffModal)の相手。hooks は関数の先頭
   const [signoffFor, setSignoffFor] = useState(null);
   const [newProcessOpt, setNewProcessOpt] = useState('');
@@ -24288,7 +24334,9 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
              modelStandardMap={settings.modelStandardMap || {}}
              saveSettings={saveSettings}
              deleteSettingsFields={deleteSettingsFields}
+             onEntryDaysChanged={openQsPropagate}
            />
+           <QsDaysPropagateModal plan={qsPropagate} busy={qsPropagateBusy} onApply={applyQsPropagate} onCancel={() => { if (!qsPropagateBusy) setQsPropagate(null); }} />
          </div>
 
          {/* ロットカード表示項目設定 */}
@@ -34171,7 +34219,7 @@ const QuotaStoppedPanel = ({ until }) => (
            </div>
          )}
          {activeTab === 'measurement-settings' && <MeasurementSettingsView settings={settings} saveSettings={saveSettings} comboPresets={settings?.comboPresets || []} templates={templates} />}
-         {activeTab === 'templates' && <TemplatesView onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel} editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
+         {activeTab === 'templates' && <TemplatesView onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel} editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} factoryCalendar={factoryCalendar} />}
          </div>
        </main>
        
