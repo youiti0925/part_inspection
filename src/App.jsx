@@ -8981,7 +8981,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     if (inputs.length === 0) return;
 
     await speakAsyncWithLog('測定入力を開始します');
-    const currentValues = { ...(measurementResults[`${step.id}-values`] || {}) };
+    // 🖐 順序実行も台ごとに書く(前はいつも1台目の欄)。ロット1回は0(製品と同じ)
+    const vUnit = step.lotOnce ? 0 : currentUnitIdx;
+    const currentValues = { ...(measurementResults[`${step.id}-${vUnit}-values`] || (vUnit === 0 ? measurementResults[`${step.id}-values`] : null) || {}) };
 
     for (let i = 0; i < inputs.length; i++) {
       if (!voiceActiveRef.current) return;
@@ -9042,12 +9044,12 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           const measData = { values: currentValues, calcResults, timestamp: Date.now() };
           const newMR = {
             ...measurementResults,
-            [`${stepKey}-0-values`]: currentValues,
-            [`${stepKey}-0`]: measData,
+            [`${stepKey}-${vUnit}-values`]: currentValues,
+            [`${stepKey}-${vUnit}`]: measData,
           };
-          // 旧キーが既存データに残っている場合のみ更新（互換用）
-          if (measurementResults[`${stepKey}-values`] !== undefined) newMR[`${stepKey}-values`] = currentValues;
-          if (measurementResults[stepKey] !== undefined) newMR[stepKey] = measData;
+          // 旧キーが既存データに残っている場合のみ更新（互換用・1台目だけ）
+          if (vUnit === 0 && measurementResults[`${stepKey}-values`] !== undefined) newMR[`${stepKey}-values`] = currentValues;
+          if (vUnit === 0 && measurementResults[stepKey] !== undefined) newMR[stepKey] = measData;
           setMeasurementResults(newMR);
 
           if (i < inputs.length - 1) {
@@ -9114,8 +9116,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         const taskKey = step.lotOnce && step.id ? `${step.id}-lot-${u}` : (step.id ? `${step.id}-${u}` : `${sIdx}-${u}`);
         const t = tasksRef.current[taskKey];
         const taskNeeded = !t || (t.status !== 'skipped' && t.status !== 'completed');
-        // sequential モードでは 1台目で代表
-        const isCurrentStep = (executionType === 'sequential') ? (u === 0) : taskNeeded;
+        // 🖐 順序実行も台ごとに入れる様になったので 台ごとに見る(該当なし・済の台は見ない)。前は1台目で代表。両方の画面で同じ
+        const isCurrentStep = taskNeeded;
         if (missing.length > 0 && isCurrentStep) {
           incomplete.push({ stepIdx: sIdx, stepTitle: step.title, unitIdx: u, missingItems: missing.map(m => m.label || '(無題)') });
         }
@@ -9134,7 +9136,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       const incompleteChks = findIncompleteChecklists();
       if (incompleteChks.length > 0) {
           const summary = incompleteChks.slice(0, 5).map(c =>
-              `・${c.stepTitle}${executionType !== 'sequential' ? ` (#${c.unitIdx + 1})` : ''}: ${c.missingItems.slice(0, 3).join(', ')}${c.missingItems.length > 3 ? '...' : ''}`
+              `・${c.stepTitle} (${localSteps[c.stepIdx]?.lotOnce ? `${c.unitIdx + 1}回目` : `${c.unitIdx + 1}台目`}): ${c.missingItems.slice(0, 3).join(', ')}${c.missingItems.length > 3 ? '...' : ''}`
           ).join('\n');
           alert(`⚠ 確認チェック未完了の工程があります。先にチェックを完了してください:\n\n${summary}${incompleteChks.length > 5 ? `\n他 ${incompleteChks.length - 5} 件` : ''}`);
           completeBlockReasonRef.current = 'checklist';
@@ -12806,7 +12808,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
              />
              {Array.isArray(currentStep.checklistItems) && currentStep.checklistItems.length > 0 && currentStep.type !== 'measurement' ? (() => {
                // チェックリスト単独工程 (順序実行モード、測定なし)
-               const chkKey = `${currentStep.id}-0-checklist`;  // 順序実行は 1台目で代表
+               const chkKey = `${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}-checklist`;  // 順序実行も台ごと(ロット1回は0・handleNext の見張りと同じ鍵)
                const checked = measurementResults[chkKey] || {};
                const items = currentStep.checklistItems;
                const requiredItems = items.filter(it => it.required !== false);
@@ -12924,14 +12926,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                  <div className="flex-1 min-h-0 overflow-y-auto">
                    <MeasurementInputPanel
                      config={currentStep.measurementConfig}
-                     values={measurementResults[`${currentStep.id}-0-values`] || measurementResults[`${currentStep.id}-values`] || {}}
+                     values={measurementResults[`${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}-values`] || measurementResults[`${currentStep.id}-values`] || {}}
                      onChange={(newValues) => {
                        const resultVal = calculateMeasurementResult(newValues, currentStep.measurementConfig);
                        const crossVals = collectCrossStepValues(lot, currentStep.id);
                        const calcResults = calculateMeasurementResults(newValues, currentStep.measurementConfig, crossVals);
                        const measData = { values: newValues, result: resultVal, calcResults, timestamp: Date.now() };
                        // 統一キー方針: ${id}-${unit}-values と ${id}-${unit}
-                       const newResults = { ...measurementResults, [`${currentStep.id}-0-values`]: newValues, [`${currentStep.id}-0`]: measData };
+                       const newResults = { ...measurementResults, [`${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}-values`]: newValues, [`${currentStep.id}-${currentStep.lotOnce ? 0 : currentUnitIdx}`]: measData };
                        // 旧キーがあれば互換維持
                        if (measurementResults[`${currentStep.id}-values`] !== undefined) newResults[`${currentStep.id}-values`] = newValues;
                        if (measurementResults[`${currentStep.id}-result`] !== undefined) newResults[`${currentStep.id}-result`] = measData;
@@ -13032,7 +13034,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       {measurementFullscreen && (() => {
         const activeStep = executionType === 'sequential' ? currentStep : (localSteps[displayStepIdx] || currentStep);
         if (!activeStep || activeStep.type !== 'measurement' || !activeStep.measurementConfig) return null;
-        const activeUnitIdx = executionType === 'sequential' ? 0 : displayUnitIdx;
+        const activeUnitIdx = executionType === 'sequential' ? (activeStep.lotOnce ? 0 : currentUnitIdx) : displayUnitIdx;
         return (
           <div data-fs="measurement" className="fixed inset-0 z-[300] bg-slate-900/95 flex flex-col">
             <div className="bg-slate-800 text-white p-3 flex justify-between items-center shrink-0">
