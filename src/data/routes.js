@@ -90,6 +90,9 @@ export const COLLECTION_AREA = Object.freeze({
 
   // --- 連絡(Firebaseに残す) ------------------------------------------------
   contact_requests: 'contact',
+  // 要望箱とお知らせ(contact-shared-v1 の共通の箱・P028/P099)
+  app_feedback: 'contact',
+  app_notices: 'contact',
   arrival_times: 'contact',
   // --- 到着の実績(検査側だけの棚) -------------------------------------------
   //   ⚠⚠ **組立には見せない。** 清水さん「これはあくまで検査側の予測だけで使うやつで、
@@ -143,7 +146,7 @@ export const COLLECTION_APPS = Object.freeze({
   skip_evidence: ['final'],
   logs: ['product', 'parts', 'overview'],
   strict_mode_history: ['product', 'parts', 'overview'],
-  minor_reports: ['product'],
+  minor_reports: ['product', 'parts'],
   controllers: ['product'],
   motor_ledger: ['product'],
   order_motors: ['product'],
@@ -168,6 +171,8 @@ export const COLLECTION_APPS = Object.freeze({
   arrival_times: ['final', 'product'],
   arrival_actuals: ['final', 'product'],
   push_tokens: ['final', 'product'],
+  app_feedback: ['final', 'product', 'parts'],
+  app_notices: ['final', 'product', 'parts'],
   weekly_briefs: ['final', 'product'],
   daily_load: ['final', 'product', 'parts'],
   placement_rules: ['final', 'product', 'parts'],

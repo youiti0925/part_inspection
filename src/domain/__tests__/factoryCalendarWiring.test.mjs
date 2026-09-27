@@ -79,6 +79,8 @@ test('W04 共通の棚から暦を読む配線がある(読むだけ・書かな
   const bad = SRC.split('\n')
     .map((l, i) => [i + 1, l])
     .filter(([, l]) => l.includes('CONTACT_SHARED_NS')
+      // P028(2026-09-27): 要望箱(app_feedback)へ1件ずつ書くのだけは許す。暦の在る settings/config へは今も書かせない
+      && !/FEEDBACK_COL/.test(l)
       && /\.save\(|\.setFields\(|\.remove\(|setDoc\(|updateDoc\(|deleteDoc\(/.test(l))
     .map(([n, l]) => `${n}: ${l.trim()}`);
   assert.deepEqual(bad, [], '部品検査アプリから共通の棚へ書く道ができています(登録は製品検査/最終検査だけ)');

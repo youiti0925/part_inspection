@@ -77,7 +77,7 @@ test('PP7 音声: 「全作業完了」が弾かれても聞き取りを止め�
   assert.ok(voiceArea.length > 1000, '音声の範囲が見つからない');
   assert.doesNotMatch(voiceArea, /handleCompleteTrigger\(\)/, '音声から handleCompleteTrigger を直に呼んでいる(弾かれると音声が死ぬ)');
   assert.ok((voiceArea.match(/\(voiceLatestRef\.current\.voiceTryCompleteAll \|\| voiceTryCompleteAll\)\(\)/g) || []).length >= 7, '音声の「全作業完了」が voiceTryCompleteAll の最新を通っていない');
-  assert.match(voiceArea, /if \(lu\.pendingUndo \?\? pendingUndo\) \{ \(lu\.handleUndo \|\| handleUndo\)\(\);/, '音声の取り消しが古い控えを読んでいる');
+  assert.match(voiceArea, /if \('pendingUndo' in lu \? lu\.pendingUndo : pendingUndo\) \{ \(lu\.handleUndo \|\| handleUndo\)\(\);/, '音声の取り消しが古い控えを読んでいる');
   const hc = bodyOf('const handleCompleteTrigger = (skipTimeCheck = false) => {', 3500);
   assert.match(hc, /completeBlockReasonRef\.current = 'checklist';\s*return false;/, '確認チェックで弾いた時に false を返していない');
   assert.match(hc, /completeBlockReasonRef\.current = 'timecheck'; return false;/, '時間の確認で弾いた時に false を返していない');
@@ -136,5 +136,6 @@ test('PP11 掛け持ち案内: 候補は juggleCandidates・移る/戻るは保�
   assert.match(app, /<JuggleGuide cands=\{juggle\.cands\}/, '作業画面に掛け持ち案内を出していない');
   assert.match(app, /key=\{executionLotId\}/, '別のロットへ移った時に作業画面を作り直していない(前のロットの状態が残る)');
   assert.match(app, /onSwitchLot=\{\(id\) => setExecutionLotId\(id\)\}/, '親が移る口を渡していない');
-  assert.match(app, /travelCfg=\{null\}/, '部品に無い区画の表を渡している');
+  // X1(2026-09-27): 区画どうしの片道はマスタ設定で入れる(settings.opsim.zoneTravel)。空なら null(名前の目安だけ)
+  assert.match(app, /travelCfg=\{settings\?\.opsim\?\.zoneTravel \|\| null\}/, '区画どうしの片道を作業画面へ渡していない');
 });

@@ -196,7 +196,8 @@ export const CHECKS = {
     // 🚨 押す物と行き先は1ミリも変えていない
     assert.ok(v.includes('<button onClick={handleSaveZoneSettings} className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold shadow-lg hover:bg-blue-700 flex items-center gap-2"><Save className="w-5 h-5" /> 全設定を保存する</button>'),
       '「全設定を保存する」の押す物か行き先が変わっている');
-    assert.ok(v.includes("saveSettings({ mapZones: localZones, breakAlerts: localBreakAlerts, complaintOptions: newComplaintOptions, comboPresets: localComboPresets, voiceSettings: localVoiceSettings, voiceCommands: localVoiceCommands });"),
+    // 2026-09-27 P075: 種別(complaintKinds)と種別の語彙(reworkKindOptions)・消す印を足した(足しただけ・今までの中身は同じ)
+    assert.ok(v.includes("saveSettings({ mapZones: localZones, breakAlerts: localBreakAlerts, complaintOptions: newComplaintOptions, complaintKinds: newComplaintKinds, reworkKindOptions: newReworkKindOptions, comboPresets: localComboPresets, voiceSettings: localVoiceSettings, voiceCommands: localVoiceCommands, ...(deadKinds.length ? { __deleteMapKeys: deadKinds } : {}) });"),
       '「全設定を保存する」が保存する中身が変わっている');
     assert.ok(!/<div className="flex justify-end">\s*<button onClick=\{handleSaveZoneSettings\}/.test(v),
       '押す物だけの行が復活している');

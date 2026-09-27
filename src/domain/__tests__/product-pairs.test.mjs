@@ -31,6 +31,9 @@ const PAIRS = [
   { file: 'domain/lotStartGuard.js', product: 'product-inspection-app/src/domain/lotStartGuard.js', md5: '2b9f3cd0a88768187d443ab3cd6439ee' },
   { file: 'workscreen/JuggleGuide.jsx', product: 'product-inspection-app/src/workscreen/JuggleGuide.jsx', md5: 'cb31c826b0e678527c8343bdab167e0a' },
   // 2026-09-27 土台: 他の区画が使う製品の純関数を先にまとめて写した(src/opsim は除く・usageRollup は部品の readBudget が別物なので P101 で)
+  // P028/P099: 画面の部品も1バイト同じで写した(製品・最終と同じ md5)
+  { file: 'AppFeedback.jsx', product: 'product-inspection-app/src/AppFeedback.jsx', md5: '036ca1aa1cfebf2b6c0d9459df0408f3' },
+  { file: 'AppNotice.jsx', product: 'product-inspection-app/src/AppNotice.jsx', md5: 'bfbd309c21ecfc561606cd69944931a1' },
   { file: 'domain/appFeedback.js', product: 'product-inspection-app/src/domain/appFeedback.js', md5: 'b571e66b4d2b45d2da493dd8d06db336' },
   { file: 'domain/appNotices.js', product: 'product-inspection-app/src/domain/appNotices.js', md5: '7d902fa95bfa54afda2fbb6d6cfe00d5' },
   { file: 'domain/arrivalActual.js', product: 'product-inspection-app/src/domain/arrivalActual.js', md5: '21a3bdfa635f8a4090bddab4273c0561' },
@@ -131,6 +134,10 @@ const PAIRS = [
   { file: 'domain/quotaMeter.js', product: 'product-inspection-app/src/domain/quotaMeter.js', md5: 'c9675844bb1b72d3bf2780487e88e26b' },
   { file: 'domain/reworkAnalysis.js', product: 'product-inspection-app/src/domain/reworkAnalysis.js', md5: '3949e25f4036608511ef3a8683b50709' },
   { file: 'domain/skillRegistry.js', product: 'product-inspection-app/src/domain/skillRegistry.js', md5: '0ce4618ca50823c5b35282ecc9f5842a' },
+  // P084: 人の色(名簿全体から1か所で配る)。操業シミュの他の物は写さない
+  { file: 'opsim/workerColors.js', product: 'product-inspection-app/src/opsim/workerColors.js', md5: '696de0aa786fa1bbf3c27d5ba1304348' },
+  // P117: 卒業の直後の独り立ちの記録(画面)。react・lucide・educationEvents・settleSave だけ
+  { file: 'SignoffModal.jsx', product: 'product-inspection-app/src/SignoffModal.jsx', md5: '36d14e813434d2d523192a7912c0a0dd' },
   { file: 'domain/soloDependency.js', product: 'product-inspection-app/src/domain/soloDependency.js', md5: 'b7ac8c5e40dd5ffaf74820fb471dda82' },
   { file: 'domain/starChart.js', product: 'product-inspection-app/src/domain/starChart.js', md5: '07e6081e2e44c7bdbf9d019ca60ef33b' },
   { file: 'domain/taskTimeQuality.js', product: 'product-inspection-app/src/domain/taskTimeQuality.js', md5: '5e9ae0e3d6a186f43084e05dbe379078' },
@@ -143,6 +150,7 @@ const PAIRS = [
   { file: 'domain/workClock.js', product: 'product-inspection-app/src/domain/workClock.js', md5: '67253d9ef3e0b53325ca6f146cf89049' },
   { file: 'domain/workSessions.js', product: 'product-inspection-app/src/domain/workSessions.js', md5: 'e03d0ca73c84520b58f4760bbc2dd192' },
   { file: 'domain/workerDailyActual.js', product: 'product-inspection-app/src/domain/workerDailyActual.js', md5: 'c2f19376c2a6608a1e4e1eb87ca091ea' },
+  { file: 'ShrinkConfirm.jsx', product: 'product-inspection-app/src/ShrinkConfirm.jsx', md5: 'd7ca21dec7173fad2662b68a54a4bf0a' },
   { file: 'domain/workerPlan.js', product: 'product-inspection-app/src/domain/workerPlan.js', md5: '813226cf8606115a270a27cf07181b5f' },
   // 2026-09-27 opsim-engine: 製品の操業シミュレーション「エンジン(画面につながない計算)」だけを部品へ先に写した(.jsx画面は除く)
   { file: 'domain/planControl/submissionEvidence.js', product: 'product-inspection-app/src/domain/planControl/submissionEvidence.js', md5: '549adbb062dc7d11e94d70d06b020834' },
@@ -204,6 +212,18 @@ const PAIRS = [
   { file: 'opsim/parallelLab/fieldMode.mjs', product: 'product-inspection-app/src/opsim/parallelLab/fieldMode.mjs', md5: '71ea4982676fd190d79f5a896920c735' },
   { file: 'opsim/parallelLab/inspectionInput.mjs', product: 'product-inspection-app/src/opsim/parallelLab/inspectionInput.mjs', md5: '1b50df4bea55654327375c36aafda4d5' },
   { file: 'opsim/skillGrid/index.js', product: 'product-inspection-app/src/opsim/skillGrid/index.js', md5: '472953be8e6617627d5b6c2102072eac' },
+  // X8 2026-09-27: 直工(検査以外の直接作業)の時間取り
+  { file: 'domain/directWork.js', product: 'product-inspection-app/src/domain/directWork.js', md5: '7bcf6e2788af15a79d158ba3a9500e8b' },
+  // 2026-09-27 a6: 自動運転中に取れたはずの時間(画面は機械区間の記録が入ってから)
+  { file: 'domain/timeIntervals.js', product: 'product-inspection-app/src/domain/timeIntervals.js', md5: 'addcd2103b26b2ca667e2261e6d96b5f' },
+  { file: 'domain/autoOpportunity.js', product: 'product-inspection-app/src/domain/autoOpportunity.js', md5: 'a4e9cad00dcd48bf5b49e17c03bf85f9' },
+  { file: 'domain/autoOpportunityReport.js', product: 'product-inspection-app/src/domain/autoOpportunityReport.js', md5: '2f36d0be599423c13d967907c506f702' },
+  // 2026-09-27 a6 P047: 絵の部品(帯・信号・点)。idleTone が読む idleReason.js は土台で写し済み
+  { file: 'opsim/vizKit.jsx', product: 'product-inspection-app/src/opsim/vizKit.jsx', md5: 'ea1bfb4913579d73584f868fa64d2c3a' },
+  // P074: 画面部品。製品・最終と md5 一致(d7ca21de…)
+  // P112: 印を描く道具(画面部品)。描き方は製品と同じ
+  { file: 'MarkCanvas.jsx', product: 'product-inspection-app/src/MarkCanvas.jsx', md5: '8845eaaf8481df33679e06b52259ef8b' },
+  { file: 'RecipeMarks.jsx', product: 'product-inspection-app/src/RecipeMarks.jsx', md5: '30c5884e352229a0f896ca4fb6474f2c' },
 ];
 
 for (const p of PAIRS) {
