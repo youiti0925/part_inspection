@@ -31292,6 +31292,13 @@ const QuotaStoppedPanel = ({ until }) => (
 
        if (rows.length === 0) { alert('有効なデータ行がありません' + (expandSkipped.length ? '\n\n' + expandSkipped.slice(0, 20).join('\n') : '')); return; }
 
+       // 🛡 P052 在る／無いを決める前に、サーバへ指図番号で問い合わせる(画面に読めていないロットも「在る」に入れる)。失敗したら止める
+       let knownLots = lots;
+       try { knownLots = (await fetchLotsForImport(rows)).lots; } catch (err) {
+         console.error('[入荷登録Excel] サーバへの問い合わせに失敗', err);
+         alert('サーバに在るロットを確かめられなかったので、取込を止めました（何も作っていません）。電波の良い所でもう一度お試しください。');
+         return;
+       }
        // ===== パス1: 計画づくり(書き込みは一切しない) =====
        //   旧実装は保存し終えた後に confirm「OKで確定」を出しており、キャンセルしても取り消せない嘘UIだった(監査確定)。
        //   先に計画+プレビューを見せ、OKされてから書き込む。
@@ -31303,7 +31310,7 @@ const QuotaStoppedPanel = ({ until }) => (
          // 重複判定は「指図番号 + テンプレートID」で行う。
          //   こうしないと、同じ指図で複数テンプレ(別ロット)を登録しても1つに潰れてしまう。
          const dupKey = `${row.orderNo}__${row.templateId}`;
-         const existing = lots.find(l => l.orderNo === row.orderNo && l.templateId === row.templateId);
+         const existing = knownLots.find(l => l.orderNo === row.orderNo && l.templateId === row.templateId);
 
          if (existing && existing.status === 'processing') {
            skipCount++;
