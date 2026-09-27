@@ -114,6 +114,7 @@ import { SjhGuide } from './SjhGuide.jsx';
 import { intKeyOf, withInterruptionLog, intWritePatch, intDeletePatch, stopIntEntry, mergePendingInts, dropSettledPending } from './domain/interruptionLog.js';
 import { sjhInsert } from './sjhText.js';
 import ReworkKindEditor from './ReworkKindEditor.jsx';
+import ReworkAnalysisPanel from './ReworkAnalysisPanel.jsx';
 import { UNKNOWN_KIND, UNKNOWN_CAUSE } from './domain/reworkAnalysis.js';
 import { DEFAULT_REWORK_KIND_OPTIONS } from './reworkKinds.js';
 // ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
@@ -19747,6 +19748,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                    </table>
                  </div>
                </div>
+               {/* 🔁 やり直し(再作業)の中身(製品と同じ表・部品は品目コード｜品名で出す) */}
+               <ReworkAnalysisPanel lots={lots} templates={templates} settings={settings} isInPeriod={isInDefectPeriod} />
              </div>
              );
            })()}
