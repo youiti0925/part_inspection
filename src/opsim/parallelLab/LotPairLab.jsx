@@ -6,6 +6,7 @@ import {
 import { FULL_PAIR_CONDITIONS, fullPairInputOf } from '../../domain/parallelLab/fullPairInput.js';
 import { walkSecOf, minTripWorkSecOf } from '../../domain/juggleGuide.js';
 import FullPairComparison from '../fullPair/FullPairComparison.jsx';
+import { stepStripsOf } from '../fullPair/pairPicture.mjs';
 import WorkingHoursFields from '../fullPair/WorkingHoursFields.jsx';
 import { partnerQueue, workingContext, defaultHours } from '../../domain/fullPair/fieldPlan.mjs';
 import { ModelLabel } from '../ModelLabel.jsx';
@@ -245,12 +246,14 @@ export default function LotPairLab({ lots = [], templatesById = new Map(), setti
   // 🔍 2026-09-25 穴探し: 選んだ組が計算に入れられなくても、ほかの候補は計算する。候補ごとに 前提(notes)と探索の幅(options)を持たせる
   const candidates = useMemo(() => {
     if (!A || !B) return [];
-    const out = chosen ? [{ key: B.id, label: `B ${shortLabel(B)}（選んだ組）`, input: chosen.input, errors: chosen.errors, notes: chosen.assumptions, options: chosen.options }] : [];
+    // 🖼 2026-09-27 steps = 工程の札(止まった時に どの工程かを絵で赤く示す。計算には渡らない)
+    const stripOf = (row) => stepStripsOf({ label: shortLabel(A), lot: A.lot, times: A.times }, { label: shortLabel(row), lot: row.lot, times: row.times });
+    const out = chosen ? [{ key: B.id, label: `B ${shortLabel(B)}（選んだ組）`, input: chosen.input, errors: chosen.errors, notes: chosen.assumptions, options: chosen.options, steps: stripOf(B) }] : [];
     for (const x of partnerQueue(A, bList)) {
       if (out.length >= candidateLimit) break;
       if (x.r.id === B.id) continue;
       const p = pairInputOf(x.r, x.travel.min, x.travel.source === 'override' ? '区画どうしの表' : x.travel.source === 'same' ? '同じ区画の中の移動' : `地図で ${x.travel.meters}m`);
-      out.push({ key: x.r.id, label: `B ${shortLabel(x.r)}（${zoneName(x.r.zone.zoneId)}・片道${x.travel.min ?? '未登録'}分）`, input: p.input, errors: p.errors, notes: p.assumptions, options: p.options });
+      out.push({ key: x.r.id, label: `B ${shortLabel(x.r)}（${zoneName(x.r.zone.zoneId)}・片道${x.travel.min ?? '未登録'}分）`, input: p.input, errors: p.errors, notes: p.assumptions, options: p.options, steps: stripOf(x.r) });
     }
     return out;
   }, [chosen, bList, candidateLimit]); // eslint-disable-line react-hooks/exhaustive-deps -- chosen changes with all shared input fields

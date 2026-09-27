@@ -1,26 +1,25 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { timeLabel, workerActions, travelScenarios } from '../../domain/fullPair/fieldPlan.mjs';
 import './fullPair.css';
+import { SavingHero, Gantt, Legend, StopPicture, MiniBar } from './PairPicture.jsx';
 const n = value => Number.isFinite(value) ? Number(value.toFixed(1)) : '—';
-const word = { manual: '手作業', auto: '自動測定', travel: '移動', idle: '人の待ち', monitor: '監視', launch: '自動開始' };
-const color = { manual:'#10756c', auto:'#307ec1', travel:'#d0842b', idle:'#dbe4e9', monitor:'#9361a6', launch:'#307ec1' };
-const describe = j => `${j.lotId || ''} ${j.unit === null ? 'ロット1回' : j.unit == null ? '' : `${j.unit+1}台目`} ${j.label || word[j.kind] || ''}`;
-function Timeline({ plan, input, horizon, title }) {
-  const rows = [{ name: '作業者', events: plan.worker.filter(e=>e.end>e.start) }, ...input.lots.flatMap(l => {
-    const units = [...new Set(plan.jobs.filter(j=>j.lotId===l.id).map(j=>j.unit))].sort((a,b)=>(a??-1)-(b??-1));
-    return units.map(unit=>({name:`${l.id} ${unit===null?'ロット1回':`${unit+1}台目`}`,events:plan.jobs.filter(j=>j.lotId===l.id && j.unit===unit)}));
-  })];
-  const detail = [...plan.jobs, ...plan.worker.filter(s=>s.kind==='travel')].sort((a,b)=>a.start-b.start || a.end-b.end);
-  return <section className="fp-plan"><h3>{title} <strong>{n(plan.metrics.totalMin)}分で全台完了</strong></h3>
-    <div className="fp-scroll"><div className="fp-timeline">
-      <div className="fp-axis"><span>同じ開始時点から</span>{[0,.25,.5,.75,1].map(k=><b key={k} style={{left:`${k*100}%`}}>{n(horizon*k)}分</b>)}</div>
-      {rows.map(row=><div className="fp-row" key={row.name}><div className="fp-label">{row.name}</div><div className="fp-track">{row.events.map((e,i)=><div key={i} className="fp-segment" style={{left:`${e.start/horizon*100}%`,width:`${(e.end-e.start)/horizon*100}%`,background:color[e.kind] || '#506070'}} title={`${describe(e)} ${n(e.start)}〜${n(e.end)}分`}><span>{e.unit!=null?`${e.unit+1}台`:word[e.kind]}</span></div>)}</div></div>)}
-    </div></div>
-    <details><summary>開始から最後の台が終わるまでの全手順（{detail.length}件）</summary><div className="fp-scroll"><table><thead><tr><th>開始→終了</th><th>対象</th><th>作業・自動・移動</th><th>設備</th></tr></thead><tbody>{detail.map((e,i)=><tr key={i}><td>{n(e.start)} → {n(e.end)}分</td><td>{e.lotId} {e.unit===null?'ロット1回':e.unit==null?'':`${e.unit+1}台目`}</td><td>{e.kind==='travel'?`${e.from} → ${e.to}`:`${word[e.kind]}：${e.label}`}</td><td>{e.resourceId || '—'}</td></tr>)}</tbody></table></div></details>
-  </section>;
+/** ④ 前提の札(図の横に小さく) */
+function NoteTags({ notes }) {
+  if (!notes || !notes.length) return null;
+  return (
+    <aside className="flex min-w-0 flex-col gap-1" aria-label="この計算の前提">
+      <div className="text-xs font-black text-amber-900">前提(記録が無い所)</div>
+      <ul className="m-0 flex list-none flex-wrap gap-1 p-0" data-full-pair-assumptions="1">
+        {notes.map((t) => <li key={t} className="rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-xs font-bold leading-snug text-amber-900">{t}</li>)}
+      </ul>
+    </aside>
+  );
 }
+
+/** 1ロットずつの案が どちらを先にしたか(最初に始まる工程のロット) */
+const orderText = plan => { const first = [...(plan.jobs || [])].sort((a, b) => a.start - b.start)[0]?.lotId; return first === 'B' ? 'Bが先' : first ? first + 'が先' : '順に'; };
 /** 組んだ後に 遅れてよい分を越えたロット(組合せ前との差 − 許した分)。scheduler は越えても案として返すので ここで見分ける */
-const overOf = (r, input) => (r.status !== 'ok' ? [] : input.lots.map(l => ({ label: l.label || l.id, delta: r.completionDelta[l.id], allowed: input.maxLotDelay?.[l.id] ?? 0 })).filter(x => x.delta > x.allowed + 1e-6));
+const overOf = (r, input) => (r.status !== 'ok' ? [] : input.lots.map(l => ({ id: l.id, label: l.label || l.id, delta: r.completionDelta[l.id], allowed: input.maxLotDelay?.[l.id] ?? 0 })).filter(x => x.delta > x.allowed + 1e-6));
 const cutOf = (r) => [...(r.errors || []), ...(r.warnings || [])].some(w => /探索上限/.test(w));
 /** 候補の札。短くなるか・遅れてよい分の中か・途中で打ち切ったか を分けて書く(前は どれも「要確認・効果なし」だった) */
 function tagOf(r, input) {
@@ -129,43 +128,55 @@ export default function FullPairComparison({ candidates, example = false, prefer
     {!!rows.length && <section><h2>候補の結果（全台計算成功 {completeCount}／処理済み{rows.length}組）</h2>
       <p className="fp-note">この一覧は全台計算後の短縮順です。未計算の相手や他のAを含む、全体最適の順位ではありません。</p>
       <div className="fp-candidates">{rows.map(row => <button type="button" key={row.key} aria-pressed={row.key === chosen.key} onClick={() => setSelected({ key: row.key, requestKey })}>
-        <b>{row.label}</b><span>{tagOf(row.result, candidates.find(c => c.key === row.key).input)}</span></button>)}</div></section>}
+        <b>{row.label}</b><span>{tagOf(row.result, candidates.find(c => c.key === row.key).input)}</span><MiniBar result={row.result} /></button>)}</div></section>}
     {chosen && <>
-      {r.status !== 'ok' ? <div className="fp-warning" role="status"><h2>{cutOf(r) ? '探索上限・効果は未確定です' : 'この組の効果は未計算です'}</h2><ul>{(r.errors || []).map((e, i) => <li key={i}>{e}</li>)}</ul></div> : <>
+      {/* 🖼 2026-09-27 清水さん「文字だらけでがっかり」: 絵(大きな数字と棒 → 時間の帯2本 → 前提の札)を先に。文の説明は下に畳む */}
+      {r.status !== 'ok' ? <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_15rem]">
+        <StopPicture strips={cand?.steps} errors={r.errors} heading={cutOf(r) ? '探索上限・効果は未確定です' : 'この組の効果は未計算です(計算を止めました)'} />
+        <NoteTags notes={notes} />
+      </div> : <>
+        <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_15rem]">
+          <div className="flex min-w-0 flex-col gap-3">
+            <SavingHero r={r} input={input} />
+            <section className="flex min-w-0 flex-col gap-2 rounded-2xl border border-slate-300 bg-white p-3" data-pair-timeline="1">
+              <Legend />
+              <Gantt plan={r.baseline} input={input} horizon={Math.max(r.baseline.metrics.totalMin, r.paired.metrics.totalMin)} title={'1ロットずつ(' + orderText(r.baseline) + ')'} />
+              <Gantt plan={r.paired} input={input} horizon={Math.max(r.baseline.metrics.totalMin, r.paired.metrics.totalMin)} title="1人で掛け持ち" compareEnd={r.baseline.metrics.totalMin}
+                delayOver={Object.fromEntries(over.map(o => [o.id, o.delta]))} />
+              <p className="m-0 text-xs text-slate-600">▼ = 自動測定を始めた所(人がそこにいる)。縦の黒線 = 全部終わる時刻。{example ? '架空データでの検証。' : '現場確認前の短縮候補・自動採用なし。'}</p>
+            </section>
+            {over.length > 0 && <p className="fp-warning">許した遅れを超えています。この案は勧めません。</p>}
+          </div>
+          <NoteTags notes={notes} />
+        </div>
+        {shownWarnings.length > 0 && <details className="fp-warning"><summary>実行前に確かめること（{shownWarnings.length}件）</summary><ul>{shownWarnings.map((w, i) => <li key={i}>{w}</li>)}</ul></details>}
+        <details><summary>数字の表・作業者が動く順番（文字で見る）</summary>
         <section className={'fp-verdict ' + (r.recommended ? 'fp-good' : 'fp-check')}><div>
           <span>{example ? '架空データでの検証' : '現場確認前の短縮候補・自動採用なし'}</span><h2>{headOf(r, input)}</h2>
           <p>{input.lots.map(l => l.label || l.id).join(' ＋ ')}</p>
           <p>{input.lots.map(l => { const d = r.completionDelta[l.id]; return l.id + '：' + (d === 0 ? '完了は変わらない' : n(Math.abs(d)) + '分' + (d < 0 ? '早い' : '遅い')); }).join(' ／ ')}</p>
-        </div>{r.excludedAlternative
-          ? <div className="fp-saving"><strong>{n(r.excludedAlternative.savingsMin)}<small>分短縮の案あり</small></strong><span>完了時刻の制限を超えるため未採用 ／ 条件内の案は {n(r.savingsMin)}分</span></div>
-          : <div className="fp-saving"><strong>{n(r.savingsMin)}<small>分短縮</small></strong><span>全体の完了まで ／ {n(r.savingsPct)}%</span></div>}</section>
+        </div></section>
         <div className="fp-summary-grid">
           <article><span>組む前 → 組んだ後</span><b>{n(r.baseline.metrics.totalMin)} → {n(r.paired.metrics.totalMin)}分</b><small>同じ開始時点から全台完了まで</small></article>
           <article><span>移動の負担</span><b>{n(r.paired.metrics.travelMin)}分・{r.paired.metrics.travelCount}回</b><small>組む前は{n(r.baseline.metrics.travelMin)}分</small></article>
           <article><span>機械を占有したままの対応待ち</span><b>{n(r.paired.metrics.machineReturnWaitMin)}分</b><small>機械に戻るまでの待ちも計上</small></article>
         </div>
         <p className="fp-note">比較元は、ロット内の並行作業を含めてA→BまたはB→Aと順に処理する案です。すでに行っている別ロットの掛け持ちから、さらに何分改善するかを示した数字ではありません。</p>
-        {r.excludedAlternative && <details className="fp-warning"><summary>未採用の参考案：全体は{n(r.excludedAlternative.savingsMin)}分早いが、完了時刻の制限を超える</summary>
-          <p>{r.excludedAlternative.violations.map(v => `${v.label}：制限を${n(v.excessMin)}分超過`).join(' ／ ')}。許容遅れ・納期は変更していません。この参考案は作業指示には使いません。</p>
-          <Timeline plan={r.excludedAlternative.plan} input={input} horizon={Math.max(r.baseline.metrics.totalMin, r.excludedAlternative.plan.metrics.totalMin)} title="未採用の参考案（全台完了まで）" />
-        </details>}
-        {over.length > 0 && <p className="fp-warning">許した遅れを超えています。この案は勧めません。</p>}
-        {shownWarnings.length > 0 && <details className="fp-warning" open><summary>実行前に確かめること</summary><ul>{shownWarnings.map((w, i) => <li key={i}>{w}</li>)}</ul></details>}
-        <WorkerRoute key={JSON.stringify(['route', requestKey, chosen.key])} plan={r.paired} input={input} />
         <div className="fp-scroll"><table className="fp-metrics"><thead><tr><th>比較する内容</th><th>組合せ前</th><th>組合せ後</th><th>変化</th></tr></thead><tbody>
           {[['全台完了まで', 'totalMin'], ['勤務中の人の待ち', 'workerIdleMin'], ['設備を占有したままの対応待ち', 'machineReturnWaitMin'], ['移動時間の合計', 'travelMin']].map(([label, key]) => <tr key={key}><th>{label}</th><td>{n(r.baseline.metrics[key])}分</td><td>{n(r.paired.metrics[key])}分</td><td>{n(r.paired.metrics[key] - r.baseline.metrics[key])}分</td></tr>)}
           {input.lots.map(l => <tr key={l.id}><th>{l.label || l.id}の完了</th><td>{timeLabel(r.baseline.metrics.lotEnds[l.id], input)}</td><td>{timeLabel(r.paired.metrics.lotEnds[l.id], input)}</td><td>{n(r.completionDelta[l.id])}分</td></tr>)}
         </tbody></table></div>
-        <details><summary>前後の全台タイムラインを見る（同じ縮尺）</summary>
-          <div className="fp-legend">{['manual', 'auto', 'travel', 'idle', 'monitor'].map(k => <span key={k}><i style={{ background: color[k] }} />{word[k]}</span>)}</div>
-          <Timeline plan={r.baseline} input={input} horizon={Math.max(r.baseline.metrics.totalMin, r.paired.metrics.totalMin)} title="組合せ前" />
-          <Timeline plan={r.paired} input={input} horizon={Math.max(r.baseline.metrics.totalMin, r.paired.metrics.totalMin)} title="組合せ後" />
+        <WorkerRoute key={JSON.stringify(['route', requestKey, chosen.key])} plan={r.paired} input={input} />
         </details>
+        {r.excludedAlternative && <details className="fp-warning"><summary>未採用の参考案：全体は{n(r.excludedAlternative.savingsMin)}分早いが、完了時刻の制限を超える</summary>
+          <p>{r.excludedAlternative.violations.map(v => `${v.label}：制限を${n(v.excessMin)}分超過`).join(' ／ ')}。許容遅れ・納期は変更していません。この参考案は作業指示には使いません。</p>
+          <Gantt plan={r.excludedAlternative.plan} input={input} horizon={Math.max(r.baseline.metrics.totalMin, r.excludedAlternative.plan.metrics.totalMin)} title="未採用の参考案" compareEnd={r.baseline.metrics.totalMin}
+            delayOver={Object.fromEntries(r.excludedAlternative.violations.map(v => [v.lotId, v.excessMin]))} />
+        </details>}
         {travelScenarios(input, cand?.options).length > 0 && <DistanceCheck key={JSON.stringify(['distance', requestKey, chosen.key])} input={input} options={cand?.options} />}
         <button type="button" className="fp-download" onClick={download}>条件・全手順・比較結果をJSONで保存</button>
       </>}
-      <details><summary>この組の入力条件・計算の限界</summary>
-        <ul className="fp-notes" data-full-pair-assumptions="1">{notes.map(t => <li key={t}>{t}</li>)}</ul>
+      <details><summary>この組の計算の限界</summary>
         <p>人1人。手作業と移動は途中で分割せず、自動開始時は現地にいる条件です。組む前もロット内の並列を計算し、A→B・B→Aの早い方と比べます。</p>
         <p>探索範囲には上限があり、組む前・後とも最短時間の証明ではありません。{r.searchLimited ? '今回も探索候補を絞っています。' : ''}短縮が0分でも、ほかの順序で短縮できないとは断定しません。設備の号機・技能・実際の残時間との照合が済むまでは現場の指示として使わないでください。</p>
       </details>
