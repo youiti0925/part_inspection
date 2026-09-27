@@ -119,6 +119,8 @@ import { intKeyOf, withInterruptionLog, intWritePatch, intDeletePatch, stopIntEn
 import { sjhInsert } from './sjhText.js';
 import ReworkKindEditor from './ReworkKindEditor.jsx';
 import ReworkAnalysisPanel from './ReworkAnalysisPanel.jsx';
+// 不良・軽微不良・気づきを「どこから数えるか」の1本化(製品と同じ純関数・検査中/NG判定/台帳)
+import { collectQualityRows, filterQuality, sourceNote } from './domain/qualitySources.js';
 import { UNKNOWN_KIND, UNKNOWN_CAUSE } from './domain/reworkAnalysis.js';
 import { DEFAULT_REWORK_KIND_OPTIONS } from './reworkKinds.js';
 // ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
@@ -15914,11 +15916,11 @@ const EXPORT_SOURCES = {
     { k: 'leadDays', label: 'リードタイム(日)' }, { k: 'workers', label: '作業者' },
   ]},
   defect: { label: '不具合', cols: [
-    { k: 'date', label: '日時' }, { k: 'orderNo', label: '指図No' }, { k: 'model', label: '品目コード' },
+    { k: 'date', label: '日時' }, { k: 'src', label: '出所' }, { k: 'orderNo', label: '指図No' }, { k: 'model', label: '品目コード' },
     { k: 'item', label: '項目' }, { k: 'content', label: '内容' }, { k: 'cause', label: '原因工程' }, { k: 'worker', label: '報告者' },
   ]},
   complaint: { label: '軽微不良・気づき', cols: [
-    { k: 'date', label: '日時' }, { k: 'kind', label: '種別' }, { k: 'orderNo', label: '指図No' }, { k: 'model', label: '品目コード' },
+    { k: 'date', label: '日時' }, { k: 'kind', label: '種別' }, { k: 'src', label: '出所' }, { k: 'orderNo', label: '指図No' }, { k: 'model', label: '品目コード' },
     { k: 'item', label: '項目' }, { k: 'content', label: '内容' }, { k: 'worker', label: '報告者' },
   ]},
   worktime: { label: '作業時間（工程×台数）', cols: [
@@ -15934,7 +15936,7 @@ const EXPORT_SOURCES = {
   ]},
 };
 
-const DataExportCenter = ({ lots = [], workers = [], indirectWork = [], settings = {}, currentUserName = '', saveSettings = null }) => {
+const DataExportCenter = ({ lots = [], workers = [], indirectWork = [], settings = {}, currentUserName = '', saveSettings = null, minorReports = [] }) => {
   const toMs = (raw) => { if (raw == null) return null; if (typeof raw === 'number') return raw; if (raw.seconds) return raw.seconds * 1000; const t = new Date(raw).getTime(); return isNaN(t) ? null : t; };
   const wname = (idOrName) => (workers.find(w => w.id === idOrName)?.name) || idOrName || '';
   const pad = (n) => String(n).padStart(2, '0');
@@ -15977,13 +15979,14 @@ const DataExportCenter = ({ lots = [], workers = [], indirectWork = [], settings
         rows.push({ date: fmtDate(cMs), orderNo: l.orderNo || '', model: l.model || '', qty: l.quantity || 1, standard: l.appliedStandard?.standardNo || '', ng: ngCount, leadDays: (cMs && eMs) ? Math.max(0, Math.round((cMs - eMs) / 86400000)) : '', workers: ws, _ts: cMs, _model: l.model || '', _worker: ws, _order: l.orderNo || '' });
       });
     } else if (s === 'defect' || s === 'complaint') {
-      const wantTypes = s === 'defect' ? ['defect'] : ['complaint', 'improvement'];
-      (lots || []).forEach(l => {
-        (l.interruptions || []).filter(i => wantTypes.includes(i.type)).forEach(d => {
-          const w = wname(d.workerName);
-          const kind = d.type === 'improvement' ? '気づき・改善' : (d.type === 'defect' ? '不具合' : '軽微不良');
-          rows.push({ date: fmtDateTime(d.timestamp), kind, orderNo: l.orderNo || '', model: l.model || '', item: d.stepInfo?.title || '全体', content: d.label || d.note || '', cause: d.causeProcess || '', worker: w, _ts: d.timestamp, _model: l.model || '', _worker: w, _order: l.orderNo || '' });
-        });
+      // ⚠3ソース(検査中 interruptions / NG判定 task.ngReason / 台帳 minor_reports)を合流して出す(製品と同じ)。
+      // ⚠サンプル(台帳 sample:true)は出さない。⚠出所(src)列を必ず付ける。
+      const wantKinds = s === 'defect' ? ['defect'] : ['complaint', 'improvement'];
+      const q = collectQualityRows({ lots, ledger: minorReports });
+      filterQuality(q.rows, { kinds: wantKinds }).forEach(r => {
+        const w = wname(r.workerName);
+        const kind = r.kind === 'improvement' ? '気づき・改善' : (r.kind === 'defect' ? '不具合' : '軽微不良');
+        rows.push({ date: fmtDateTime(r.timestamp), kind, src: r.srcLabel, orderNo: r.orderNo || '', model: r.model || '', item: r.stepTitle || '全体', content: r.content || '', cause: r.causeProcess || '', worker: w, _ts: r.timestamp, _model: r.model || '', _worker: w, _order: r.orderNo || '' });
       });
     } else if (s === 'worktime') {
       (lots || []).filter(l => l.status === 'completed' || l.location === 'completed').forEach(l => {
@@ -16159,7 +16162,11 @@ const DataExportCenter = ({ lots = [], workers = [], indirectWork = [], settings
 //  管理者ダッシュボード — 当月KPI(完了台数/不良率/納期遵守率/平均リードタイム/軽微不良)
 //  ＋前月比＋12ヶ月トレンド＋品目別トップ。すべて読み取り集計(書き込み無し)。
 // =============================================================================
-const ManagerDashboard = ({ lots = [], settings = {} }) => {
+// ⚠台帳(minor_reports)を prop で受け取る(台帳ができるまでは空)。
+const ManagerDashboard = ({ lots = [], settings = {}, minorReports = [] }) => {
+  // 3ソース(検査中 interruptions / NG判定 task.ngReason / 台帳 minor_reports)を1本に合流。
+  // ⚠数える場所は domain/qualitySources.js の1か所だけ。ここで数え直さない。
+  const _q = useMemo(() => collectQualityRows({ lots, ledger: minorReports }), [lots, minorReports]);
   const toMs = (raw) => { if (raw == null) return null; if (typeof raw === 'number') return raw; if (raw.seconds) return raw.seconds * 1000; const t = new Date(raw).getTime(); return isNaN(t) ? null : t; };
   const now = new Date();
   const compMs = (l) => toMs(l.completedAt) || toMs(l.updatedAt);
@@ -16184,9 +16191,15 @@ const ManagerDashboard = ({ lots = [], settings = {} }) => {
       const em = toMs(l.entryAt) || toMs(l.createdAt);
       if (em && cm && cm >= em) { leadSum += (cm - em) / 86400000; leadN++; }
     });
-    let minor = 0;
-    (lots || []).forEach(l => (l.interruptions || []).forEach(i => { const it = toMs(i.timestamp); if ((i.type === 'complaint' || i.type === 'improvement') && it != null && it >= s && it < e) minor++; }));
-    return { lots: comp.length, units, defectLots, defectTotal, defectRate: comp.length ? (defectLots / comp.length * 100) : 0, onTime, withDue, dueRate: withDue ? (onTime / withDue * 100) : null, lead: leadN ? (leadSum / leadN) : null, minor, byModel, defByModel };
+    // 軽微不良・気づき = 3ソース。⚠サンプル(台帳 sample:true)は数えない=作り物を管理指標に混ぜない。
+    const minorAll = filterQuality(_q.rows, { kinds: ['complaint', 'improvement'], from: s, to: e, includeSample: true });
+    const minorRows = minorAll.filter(r => !r.sample);
+    const minor = minorRows.length;
+    // ⚠数が変わったことを黙らせない。出所の内訳を画面に出すための一行。
+    const minorNote = sourceNote(minorRows, { mergedNg: _q.mergedNg, excludedSample: minorAll.length - minorRows.length });
+    // 台帳の不良はロットに紐づかないため不良率の分母には入れない。件数だけ別に数えて注記に出す。
+    const ledgerDefects = filterQuality(_q.rows, { kinds: ['defect'], from: s, to: e }).filter(r => r.src === 'ledger').length;
+    return { lots: comp.length, units, defectLots, defectTotal, defectRate: comp.length ? (defectLots / comp.length * 100) : 0, onTime, withDue, dueRate: withDue ? (onTime / withDue * 100) : null, lead: leadN ? (leadSum / leadN) : null, minor, minorNote, ledgerDefects, byModel, defByModel };
   };
   const cur = calcMonth(0), prev = calcMonth(-1);
   const trend = []; for (let i = 11; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); const mm = calcMonth(-i); trend.push({ label: `${d.getMonth() + 1}月`, units: mm.units, defectRate: mm.defectRate }); }
@@ -16250,6 +16263,9 @@ const ManagerDashboard = ({ lots = [], settings = {} }) => {
         </div>
       </div>
       <div className="text-xs text-slate-400">※ 完了=ステータス完了のロット。不良率=不良が出た完了ロット数÷完了ロット数。納期遵守=完了日が納期以内。リードタイム=入荷→完了の日数平均。</div>
+      {/* ⚠数が変わったことを黙らせない。どの出所を何件数えたかを必ず画面に出す */}
+      <div className="fi-tap-text text-slate-500">※ 軽微不良・気づき {cur.minorNote}</div>
+      {cur.ledgerDefects > 0 && <div className="fi-tap-text text-slate-500">※ 台帳に登録された不良 {cur.ledgerDefects}件は、ロットに紐づかないため上の不良率・品目コード別不良件数には入っていません。</div>}
     </div>
   );
 };
@@ -19082,8 +19098,15 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     const isInPrev = getPrevPeriodChecker();
 
     lots.forEach(lot => {
-      const lotComplaints = (lot.interruptions || []).filter(i => i.type === 'complaint');
-      lotComplaints.forEach(c => {
+      const lotComplaints = (lot.interruptions || []).filter(i => i.type === 'complaint').map(i => ({ ...i, _src: 'interruption' }));
+      // カスタムモードの NG判定(理由あり) を軽微不良として合成する(製品と同じ)。
+      //   task.ngReason はどの集計にも入っておらず、「NG→理由記入」した分が丸ごと欠けていた。元データは変えず読むだけ。
+      const _steps = lot.steps || [];
+      const _titleForKey = (key) => { for (const s of _steps) { if (s?.id && String(key).startsWith(`${s.id}-`)) return s.title || '全体'; } const m = /^(\d+)-/.exec(String(key)); if (m && _steps[+m[1]]) return _steps[+m[1]].title || '全体'; return '全体'; };
+      const ngComplaints = Object.entries(lot.tasks || {})
+        .filter(([, t]) => t && typeof t.ngReason === 'string' && t.ngReason.trim())
+        .map(([key, t]) => ({ id: `ng:${lot.id}:${key}`, type: 'complaint', _src: 'ng', source: 'NG判定', label: t.ngReason.trim(), timestamp: toMsAny(t.ngAt) || toMsAny(t.endTime) || null, stepInfo: { title: _titleForKey(key) }, workerName: t.workerName || '' }));
+      [...lotComplaints, ...ngComplaints].forEach(c => {
         // 月別推移用の全期間カウント (期間フィルタに依存しない)
         if (c.timestamp) { const d0 = new Date(c.timestamp); const ym0 = `${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,'0')}`; monthlyCountsAll[ym0] = (monthlyCountsAll[ym0] || 0) + 1; }
         if (isInDefectPeriod(c.timestamp)) {
@@ -20017,8 +20040,11 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <td className="p-3 text-xs text-slate-600 whitespace-nowrap">{d.workerName || ''}</td>
                            <td className="p-3 text-center">
                              <div className="flex items-center justify-center gap-1">
+                               {/* NG判定から合流した行は中断の記録ではない(作業画面の NG 理由)ので、ここでは直さない・消さない */}
+                               {d._src === 'ng' ? <span className="fi-tap-text text-rose-600 font-bold" title="作業画面の NG判定の理由から数えています">NG判定</span> : (<>
                                <button onClick={() => triggerEditInterruption(d, d.lot.id, 'complaint')} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded" title="編集"><Pencil className="w-4 h-4" /></button>
                                <button onClick={() => triggerDeleteInterruption(d.id, d.lot.id, '軽微不良')} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded" title="削除"><Trash2 className="w-4 h-4" /></button>
+                               </>)}
                              </div>
                            </td>
                          </tr>
@@ -27240,7 +27266,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
 // ・PDF (ブラウザ印刷) + Excel (多シート) の両方を出力。
 // ・PLAN は lot.dueDate ベースで当月の予定を集計、ACTUAL は lot.completedAt ベースで当月の実績を集計。
 // =====================================================================================
-const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTargetTimes = {}, targetTimeHistory = [], improvements = [], currentUserName = '', templates = [], indirectWork = [], onSaveSettings }) => {
+const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTargetTimes = {}, targetTimeHistory = [], improvements = [], currentUserName = '', templates = [], indirectWork = [], onSaveSettings, minorReports = [] }) => {
   // ---- 月選択 (既定: 当月) ----
   const ymNow = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
   const [selectedMonth, setSelectedMonth] = useState(ymNow());
@@ -27482,31 +27508,38 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
     const dModel = {}, dStep = {}, dProc = {};
     const cLabel = {}, cStep = {};
     const iKind = {}, iStep = {};
-    lots.forEach(lot => {
-      (lot.interruptions || []).forEach(it => {
-        if (!inMonth(it.timestamp)) return;
-        if (it.type === 'defect') {
-          const wname = resolveWorker(it.workerName);
-          defects.push({ ...it, lot, workerName: wname });
-          const m = lot.model || '不明'; dModel[m] = (dModel[m] || 0) + 1;
-          const st = it.stepInfo ? it.stepInfo.title : '全体'; dStep[st] = (dStep[st] || 0) + 1;
-          const cp = it.causeProcess || '未指定'; dProc[cp] = (dProc[cp] || 0) + 1;
-        } else if (it.type === 'complaint') {
-          const wname = resolveWorker(it.workerName);
-          const main = (it.label || '').split(' : ')[0] || 'その他';
-          const sub = (it.label || '').split(' : ').slice(1).join(' : ');
-          complaints.push({ ...it, lot, workerName: wname, mainLabel: main, subLabel: sub });
-          cLabel[main] = (cLabel[main] || 0) + 1;
-          const st = it.stepInfo ? it.stepInfo.title : '全体'; cStep[st] = (cStep[st] || 0) + 1;
-        } else if (it.type === 'improvement') {
-          const wname = resolveWorker(it.workerName);
-          const kindLabel = IMPROVE_LABELS[it.improvementKind] || 'その他';
-          const reason = (it.label || '').split('：').slice(1).join('：').trim() || it.label || '';
-          improvements.push({ ...it, lot, workerName: wname, kindLabel, reason });
-          iKind[kindLabel] = (iKind[kindLabel] || 0) + 1;
-          const st = it.targetStepTitle || (it.stepInfo ? it.stepInfo.title : '全体'); iStep[st] = (iStep[st] || 0) + 1;
-        }
-      });
+    // ⚠3ソース(検査中 interruptions / NG判定 task.ngReason / 台帳 minor_reports)を1本に合流。
+    //   ここが interruptions だけだったので、会社提出の月次レポートが分析タブより少なく出ていた
+    //   (実測: 2026-05 の軽微不良+気づき 41件 vs 49件 = 8件・16.3%の過少。台帳18件は全件0)。
+    // ⚠期間の判定は既存の inMonth をそのまま使う(月の境界の解釈を勝手に変えない)。
+    // ⚠サンプル(台帳 sample:true)は入れない。提出する書類に作り物の記録を混ぜない。
+    const _q = collectQualityRows({ lots, ledger: minorReports });
+    const _all = filterQuality(_q.rows, { includeSample: true }).filter(r => inMonth(r.timestamp));
+    const _rows = _all.filter(r => !r.sample);
+    const _note = sourceNote(_rows, { mergedNg: _q.mergedNg, excludedSample: _all.length - _rows.length });
+    _rows.forEach(r => {
+      const wname = resolveWorker(r.workerName);
+      const base = { id: r.id, timestamp: r.timestamp, label: r.content, workerName: wname, source: r.srcLabel,
+        causeProcess: r.causeProcess, stepInfo: r.stepTitle ? { title: r.stepTitle } : null,
+        lot: { id: r.lotId, model: r.model, orderNo: r.orderNo } };
+      if (r.kind === 'defect') {
+        defects.push(base);
+        const m = r.model || '不明'; dModel[m] = (dModel[m] || 0) + 1;
+        const st = r.stepTitle || '全体'; dStep[st] = (dStep[st] || 0) + 1;
+        const cp = r.causeProcess || '未指定'; dProc[cp] = (dProc[cp] || 0) + 1;
+      } else if (r.kind === 'complaint') {
+        const main = (r.content || '').split(' : ')[0] || 'その他';
+        const sub = (r.content || '').split(' : ').slice(1).join(' : ');
+        complaints.push({ ...base, mainLabel: main, subLabel: sub });
+        cLabel[main] = (cLabel[main] || 0) + 1;
+        const st = r.stepTitle || '全体'; cStep[st] = (cStep[st] || 0) + 1;
+      } else {
+        const kindLabel = IMPROVE_LABELS[r.improvementKind] || 'その他';
+        const reason = (r.content || '').split('：').slice(1).join('：').trim() || r.content || '';
+        improvements.push({ ...base, kindLabel, reason });
+        iKind[kindLabel] = (iKind[kindLabel] || 0) + 1;
+        const st = r.stepTitle || '全体'; iStep[st] = (iStep[st] || 0) + 1;
+      }
     });
     const sortObj = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
     return {
@@ -27516,8 +27549,10 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
       defectModels: sortObj(dModel), defectSteps: sortObj(dStep), defectProcesses: sortObj(dProc),
       complaintLabels: sortObj(cLabel), complaintSteps: sortObj(cStep),
       improveKinds: sortObj(iKind), improveSteps: sortObj(iStep),
+      sourceNote: _note, // ⚠どの出所を何件数えたか。PDFにもそのまま出す(黙って数を変えない)
     };
-  }, [lots, workers, monthRange]);
+    // ⚠minorReports を依存に足す。忘れると台帳へ登録しても月報が古い件数のまま出る。
+  }, [lots, workers, monthRange, minorReports]);
 
   // 改善PDCA(改善カルテ)の当月集計: 作成/実施/判定/定着/効果なし + 削減時間・不具合減
   const pdcaData = useMemo(() => {
@@ -27693,7 +27728,7 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
     });
     body += `</tbody></table>`;
     // §5 品質サマリー
-    body += `<h2>§5 品質サマリー</h2><div class="kpi-grid">
+    body += `<h2>§5 品質サマリー</h2><p class="muted" style="margin:0 0 6px">${esc(q.sourceNote || '')}</p><div class="kpi-grid">
       <div class="kpi"><div class="v" style="color:#dc2626">${q.defects.length}</div><div class="l">不具合 (件)</div></div>
       <div class="kpi"><div class="v" style="color:#7c3aed">${q.complaints.length}</div><div class="l">軽微不良 (件)</div></div>
       <div class="kpi"><div class="v" style="color:#4f46e5">${q.improvements.length}</div><div class="l">気づき・改善 (件)</div></div>
