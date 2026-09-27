@@ -110,6 +110,8 @@ import {
   pdcaWindowDays, pdcaKpiValue, computeVerdict
 } from './domain/goal/verdictEngine.js';
 import { SjhGuide } from './SjhGuide.jsx';
+// 中断(不具合・軽微不良・気づき)は1件ずつ鍵つきで書く(製品と同じ純関数)
+import { intKeyOf, withInterruptionLog, intWritePatch, intDeletePatch, stopIntEntry, mergePendingInts, dropSettledPending } from './domain/interruptionLog.js';
 import { sjhInsert } from './sjhText.js';
 // ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
@@ -7370,34 +7372,25 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   ];
 
   // Interruptions (Defects/Monitoring)
-  const [interruptions, setInterruptions] = useState(lot.interruptions || []);
-  // 🚨🚨 中断(不具合・軽微不良・気づき)も **開いた瞬間のコピーを握り続けていた**。
-  //   これは配列なので merge:true でも **丸ごと置き換わる** → 後から保存した端末が勝ち、
-  //   他の端末が足した不具合記録が黙って消える(最終検査・③では 2026-08-14 に直した形)。
-  //   ⚠ここは「サーバに在る物」と「まだ届いていない手元の物」を **id で合わせる**。
-  //     ・サーバにしか無い物 → 取り込む(他端末の記録を消さない)
-  //     ・手元にしか無い物   → 残す(まだ送れていない自分の記録を消さない)
-  //     ・進行中(active)     → 手元を優先(秒数が1秒ごとに進んでいる)
-  //   ⚠id が無い古い記録は触らない(消すと台帳から消える)。
-  const serverInts = Array.isArray(lot && lot.interruptions) ? lot.interruptions : null;
-  useEffect(() => {
-    if (!serverInts) return;
-    setInterruptions((prev) => {
-      const byId = new Map();
-      const noId = [];
-      serverInts.forEach((i) => { if (i && i.id) byId.set(i.id, i); else if (i) noId.push(i); });
-      prev.forEach((i) => {
-        if (!i || !i.id) return;
-        // 手元にしか無い(未送信) / 進行中(秒数が進んでいる) は手元を正とする
-        if (!byId.has(i.id) || i.status === 'active') byId.set(i.id, i);
-      });
-      prev.forEach((i) => { if (i && !i.id) noId.push(i); });
-      const next = [...byId.values(), ...noId];
-      // 中身が同じなら同じ配列を返す(毎秒の描き直しを増やさない)
-      if (next.length === prev.length && next.every((x, k) => x === prev[k])) return prev;
-      return next;
-    });
-  }, [serverInts]);
+  // 🧾中断(不具合・軽微不良・気づき)は **この端末の配列を正としない**(製品 2026-08-14 と同じ形)。
+  //   開いた瞬間のコピーを握り続けると ①他端末が足した記録を消す ②分析タブで消した記録を復活させる。
+  //   → 共有(lot)を正とし、保存してから購読が返るまでの一瞬だけ pending で繋ぐ。
+  const [pendingInts, setPendingInts] = useState({});
+  const interruptions = useMemo(() => mergePendingInts(lot.interruptions, pendingInts), [lot.interruptions, pendingInts, timerTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setPendingInts(prev => dropSettledPending(prev, lot.interruptions)); }, [lot.interruptions]);
+  // 中断1件を共有へ書く。書けるまでの間だけ手元に持ち、失敗したら外して知らせる(黙って落とさない)。
+  // ⚠戻り値で成否を返す。呼び出し側は **保存できてから** 画面を閉じる。
+  const writeInterruption = async (next, prev = null) => {
+    const k = intKeyOf(next);
+    setPendingInts(p => ({ ...p, [k]: next }));
+    try { await onSave(intWritePatch(prev, next)); return true; }
+    catch (e) {
+      setPendingInts(p => { const n = { ...p }; delete n[k]; return n; });
+      alert(`記録の保存に失敗しました: ${e?.message || e}
+入力はそのまま残っています。通信を確かめて、もう一度お試しください。`);
+      return false;
+    }
+  };
   // 測定画面メイン拡大表示トグル（測定タイプの工程のみで使用）
   const [measurementFullscreen, setMeasurementFullscreen] = useState(false);
   // 確認チェック拡大表示 + 注意事項/画像 拡大表示
@@ -7718,18 +7711,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
          }
 
          // Interruption durations: 進行中のものがある場合のみ map (新オブジェクト生成を最小化)
-         if (hasActiveNonBreakInterruption) {
-           setInterruptions(prev => {
-             let changed = false;
-             const next = prev.map(i => {
-               if (i.status === 'active' && i.type !== 'break') {
-                 const d = Math.floor((currentNow - i.startTime) / 1000);
-                 if (i.duration !== d) { changed = true; return { ...i, duration: d }; }
-               }
-               return i;
-             });
-             return changed ? next : prev;
-           });
+         // 進行中の中断の秒は withLiveDuration(mergePendingInts)が出す。ここは描き直しの合図だけ。
+         if (hasActiveNonBreakInterruption && executionType !== 'custom') {
+           setTimerTick(prev => prev + 1);
          }
 
          // Custom Tasks: timerTick の inc だけで個別タスクの timer 表示を更新 (setTasks 全コピーは廃止)
@@ -7816,21 +7800,25 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           photos: photos || [],
           ...(meta || {}) // 気づき・改善用: { improvementKind, targetStepTitle } 等
       };
-      const updated = [...interruptions, newInt];
-      setInterruptions(updated);
-      onSave({ interruptions: updated });
-      if (type === 'defect') {
-        setShowDefectModal(false);
-        setDefectLabel('');
-        setDefectCauseProcess('');
-        setDefectPhotos([]);
-      }
+      // 🧾配列ごと書き戻さない。1件を鍵つきで書く(他端末の追加・削除・修正を消さないため)
+      // ⚠⚠ **保存できてから画面を閉じる**(失敗した時に入力も写真も消えていないように)。
+      writeInterruption(newInt).then((ok) => {
+        if (!ok) return;
+        if (type === 'defect') {
+          setShowDefectModal(false);
+          setDefectLabel('');
+          setDefectCauseProcess('');
+          setDefectPhotos([]);
+        }
+      });
+      return newInt;
   };
 
   const stopInterruption = (id) => {
-      const updated = interruptions.map(i => i.id === id ? { ...i, status: 'completed' } : i);
-      setInterruptions(updated);
-      onSave({ interruptions: updated });
+      const cur = (interruptions || []).find(i => i && i.id === id);
+      if (!cur) return;
+      // ⚠1件だけ書く。秒は「止めた瞬間の実時刻」から出す(stopIntEntry)。
+      writeInterruption(stopIntEntry(cur), cur);
   };
 
   // --- Pause Logic (中断 = 作業時間計測の一時停止) ---
@@ -12598,7 +12586,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             <div className="text-xs opacity-95">画面は「済み」に見えていますが、まだ保存されていません。閉じると失われます。</div>
           </div>
           <button
-            onClick={() => { try { onSave({ tasks: tasksRef.current, interruptions }); } catch (e) { console.error(e); } }}
+            onClick={() => { try { onSave({ tasks: tasksRef.current }); } catch (e) { console.error(e); } }}
             className="bg-white text-rose-700 px-3 py-2 rounded-lg font-black text-xs hover:bg-rose-50 flex items-center gap-1 shrink-0"
           ><RefreshCw className="w-3.5 h-3.5"/> いま送り直す</button>
         </div>
@@ -19130,14 +19118,14 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     if (!confirm(`この${typeName}を削除しますか？`)) return;
     const lot = lots.find(l => l.id === lotId);
     if (lot) {
-      const newInterruptions = (lot.interruptions || []).filter(i => i.id !== interruptionId);
-      try {
-        await saveData('lots', lotId, { interruptions: newInterruptions });
-      } catch (e) {
-        console.error('🚨 削除がサーバに届きませんでした', e);
-        alert('🚨 削除がサーバに届きませんでした。\n\n'
-          + `${(e && e.message) || e}\n\n`
-          + 'まだ消えていません。つながってから、もう一度お試しください。');
+      // ⚠配列から抜いて丸ごと書き戻さない。作業画面が握っている古い配列ですぐ復活する。消したことを共有に1件書く。
+      // ⚠3秒だけ待つ(settleSaveBriefly)。電波が無い時は送信待ちとして進め、拒否された時だけ知らせる。
+      const target = (lot.interruptions || []).find(i => i && i.id === interruptionId);
+      if (target) {
+        let r;
+        try { r = await settleSaveBriefly(saveData('lots', lotId, intDeletePatch(target, currentUserName))); }
+        catch (e) { console.error('🚨 削除がサーバに届きませんでした', e); alert(SAVE_REFUSED_MESSAGE); return; }
+        if (!mayCloseAfterSave(r)) { alert(SAVE_REFUSED_MESSAGE); return; }
       }
     }
   };
@@ -19154,8 +19142,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
     const { data, lotId, type } = editModal;
     const lot = lots.find(l => l.id === lotId);
     if (!lot) return;
-    const updatedInterruptions = (lot.interruptions || []).map(i => {
-      if (i.id !== data.id) return i;
+    const cur = (lot.interruptions || []).find(i => i && i.id === data.id);
+    if (!cur) return;
+    const updatedOne = [cur].map(i => {
       if (type === 'defect') {
         const updated = { ...i, label: editLabel };
         if (editCauseProcess) updated.causeProcess = editCauseProcess; else delete updated.causeProcess;
@@ -19163,11 +19152,13 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
         return updated;
       }
       return { ...i, label: editLabel };
-    });
+    })[0];
     // 🚨 **届いてから閉じる**。先に閉じると、打ち直した内容が手元ごと消える。
     setSavingEdit(true);
     try {
-      await saveData('lots', lotId, { interruptions: updatedInterruptions });
+      // ⚠1件だけ書く(intWritePatch)。3秒だけ待ち、送信待ちなら閉じ、拒否なら閉じない。
+      const r = await settleSaveBriefly(saveData('lots', lotId, intWritePatch(cur, updatedOne)));
+      if (!mayCloseAfterSave(r)) { alert(SAVE_REFUSED_MESSAGE); return; }
       setEditModal({ isOpen: false, type: null, data: null, lotId: null });
     } catch (e) {
       // 🚨 **閉じない**。打った内容は窓に残っているので、送り直せる。
@@ -28594,9 +28585,10 @@ const QuotaStoppedPanel = ({ until }) => (
    //   届いた後は普段の窓(liveLots)を混ぜない。混ぜると、窓の購読を止めた後に
    //   **古い姿で新しい姿を上書き**してしまう。過去 ⊇ 窓 なので混ぜる必要も無い。
    const lots = useMemo(() => {
-     if (lotsWindowWhole) return liveLots;                       // 全部読めている = 今までと同一
-     if (historyLots !== null) return mergeLotsById(historyLots, openLots);
-     return mergeLotsById(liveLots, openLots);
+     // 🧾中断は interruptionsMap(1件ずつの記録)を配列へ合流して渡す(マップの無いロットは同じ物が返る)
+     if (lotsWindowWhole) return liveLots.map(withInterruptionLog);                       // 全部読めている = 今までと同一
+     if (historyLots !== null) return mergeLotsById(historyLots, openLots).map(withInterruptionLog);
+     return mergeLotsById(liveLots, openLots).map(withInterruptionLog);
    }, [lotsWindowWhole, historyLots, openLots, liveLots]);
    // 過去まで揃っているか。🚨**揃っていない状態で過去の数字を出さない**(黙って減るのが一番まずい)。
    const historyLoaded = historyLots !== null;
