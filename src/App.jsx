@@ -127,6 +127,7 @@ import { budgetOf, laddersFor, dataUrlBytes, pickStep, shouldConfirm, shrinkNote
 import { collectQualityRows, filterQuality, sourceNote } from './domain/qualitySources.js';
 import { UNKNOWN_KIND, UNKNOWN_CAUSE } from './domain/reworkAnalysis.js';
 import { DEFAULT_REWORK_KIND_OPTIONS } from './reworkKinds.js';
+import { MascotFx, MascotSettingsPanel } from './MascotFx.jsx'; // P156 ケンサくん
 // ⏱ まとめて開始(バッチ)の時間が消えないように(製品検査 src/domain/batchLiveTime.js と md5 一致の写し)。
 //   liveSecOf: バッチ台は batchStartedAt 起点で表示 / rebuildBatchStartTimes: 開き直した時に起点を tasks から作り直す
 import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from './domain/batchLiveTime.js';
@@ -137,7 +138,6 @@ import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGu
 import { setEstimatedSession } from './domain/workSessions.js';
 import ZoneTravelSettings from './ZoneTravelSettings.jsx';
 import { taskTimeQualityOf, hasUsableInterval } from './domain/taskTimeQuality.js';
-import { intKeyOf, withInterruptionLog, intWritePatch, intDeletePatch, stopIntEntry, mergePendingInts, dropSettledPending } from './domain/interruptionLog.js';
 // 🚶 掛け持ち案内の枠(製品検査 src/workscreen/JuggleGuide.jsx と md5 一致の写し。描くだけ)
 import { JuggleGuide } from './workscreen/JuggleGuide.jsx';
 // ⏱ 終わっていない工程を「該当なし」で閉じる時、時間・NG・写真を落とさない(製品検査 src/domain/skipKeepingRecord.js と md5 一致の写し)
@@ -701,6 +701,8 @@ const toMsAny = (raw) => {
 // CSVセルのエスケープ。カンマ/引用符/改行を含む値(品名・指図名のユーザー入力や toLocaleString のカンマ)を
 // 正しく引用し、列ずれ・破損を防ぐ。RFC4180準拠(" は "" にエスケープ)。
 const csvCell = (v) => { const s = String(v ?? ''); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+// P083: 印刷窓へ document.write する時の文字の逃がし(製品 App.jsx:1454 と同じ)
+const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGroups = [], startMs = 0, endMs = Infinity } = {}) => {
   const samples = []; // {d, tgt}
   let defectCount = 0, unitsSeen = 0, lotsSeen = 0;
@@ -21508,22 +21510,22 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
         }
         const target = step.targetTime || 0;
         const rate = target > 0 ? Math.round((target / Math.max(duration, 1)) * 100) : '-';
-        return `<tr><td style="padding:4px 8px;border:1px solid #ddd;text-align:center;font-size:11px">${idx+1}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${step.title}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${target > 0 ? formatSec(target) : '-'}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${formatSec(duration)}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:center;font-size:11px;${typeof rate === 'number' && rate < 80 ? 'color:red;font-weight:bold' : ''}">${typeof rate === 'number' ? rate + '%' : rate}</td></tr>`;
+        return `<tr><td style="padding:4px 8px;border:1px solid #ddd;text-align:center;font-size:11px">${idx+1}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${escapeHtml(step.title)}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${target > 0 ? formatSec(target) : '-'}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${formatSec(duration)}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:center;font-size:11px;${typeof rate === 'number' && rate < 80 ? 'color:red;font-weight:bold' : ''}">${typeof rate === 'number' ? rate + '%' : rate}</td></tr>`;
       }).join('');
 
       const defects = (lot.interruptions || []).filter(i => i.type === 'defect');
-      const defectRows = defects.length > 0 ? defects.map(d => `<tr><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${d.label || '-'}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${d.causeProcess || '-'}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${d.stepInfo?.title || '-'}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${d.duration || 0}s</td></tr>`).join('') : '<tr><td colspan="4" style="padding:8px;text-align:center;color:#999;font-size:11px">なし</td></tr>';
+      const defectRows = defects.length > 0 ? defects.map(d => `<tr><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${escapeHtml(d.label || '-')}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${escapeHtml(d.causeProcess || '-')}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">${escapeHtml(d.stepInfo?.title || '-')}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-size:11px">${d.duration || 0}s</td></tr>`).join('') : '<tr><td colspan="4" style="padding:8px;text-align:center;color:#999;font-size:11px">なし</td></tr>';
 
       return `
         <div style="page-break-inside:avoid;margin-bottom:24px;border:1px solid #ccc;border-radius:8px;padding:16px">
           <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-            <div><strong style="font-size:16px">${lot.workNumber || lot.id}</strong> <span style="color:#666">${lot.model || ''}</span></div>
+            <div><strong style="font-size:16px">${escapeHtml(lot.workNumber || lot.id)}</strong> <span style="color:#666">${escapeHtml(lot.model || '')}</span></div>
             <div style="color:#666;font-size:12px">${lot.completedAt ? new Date(lot.completedAt).toLocaleString('ja-JP') : ''}</div>
           </div>
           <div style="display:flex;gap:24px;margin-bottom:12px;font-size:12px;color:#555">
-            <div>品目コード: <strong>${lot.model || '-'}</strong></div>
+            <div>品目コード: <strong>${escapeHtml(lot.model || '-')}</strong></div>
             <div>台数: <strong>${lot.quantity || 1}</strong></div>
-            <div>作業者: <strong>${worker?.name || '未割当'}</strong></div>
+            <div>作業者: <strong>${escapeHtml(worker?.name || '未割当')}</strong></div>
             <div>合計: <strong>${formatSec(totalTime)}</strong></div>
           </div>
           <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
@@ -23105,6 +23107,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          {/* 品目別 公差・基準値オーバーライド設定 (レガシー) */}
          {/* 勤務時間マスタ (始業・定時・残業・休憩) — 負荷計算で使用 */}
          <WorkScheduleSettingsPanel workSchedule={settings.workSchedule} saveSettings={saveSettings} workloadEffectiveWorkers={settings.workloadEffectiveWorkers} registeredWorkerCount={workers.length} />
+         {/* P156 マスコット(ケンサくん)の設定。既定は製品と同じ ON・ここで OFF にできる */}
+         <MascotSettingsPanel settings={settings} onSave={saveSettings} />
 
          {/* 作業順ガイド・厳密モード (管理者向け) — 一元管理は専用画面へ */}
          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
@@ -25480,7 +25484,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
     if (!pw) { alert("ポップアップがブロックされました。"); return; }
     const content = document.getElementById('report-preview-content');
     if (!content) { pw.close(); return; }
-    const title = `${lot.orderNo || '不明'}_${lot.model || '不明'}`;
+    const title = escapeHtml(`${lot.orderNo || '不明'}_${lot.model || '不明'}`);
     const appStyles = collectAppStyles();
     pw.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><title>${title}</title>${appStyles}<style>${PRINT_STYLES} body { font-family: sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .border, .border-b, .border-t, .border-l, .border-r { border-color: black !important; }</style></head><body>${content.outerHTML}</body></html>`);
     pw.document.close();
@@ -28624,13 +28628,14 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
       if (csvRows.length < 2) { alert("CSVのデータがありません。"); return; }
       const hdrs = csvRows[0].map(h => h.replace(/^"|"$/g, '').trim());
       if (hdrs[0] && hdrs[0].charCodeAt(0) === 0xFEFF) hdrs[0] = hdrs[0].substring(1);
-      const idxOrderNo = hdrs.indexOf('指図番号'), idxUnitNo = hdrs.indexOf('ユニットNo'), idxTitle = hdrs.indexOf('検査項目'), idxCategory = hdrs.indexOf('カテゴリ'), idxDuration = hdrs.indexOf('実績時間(秒)'), idxWorker = hdrs.indexOf('作業者');
+      const idxOrderNo = hdrs.indexOf('指図番号'), idxUnitNo = hdrs.indexOf('ユニットNo'), idxTitle = hdrs.indexOf('検査項目'), idxCategory = hdrs.indexOf('カテゴリ'), idxDuration = hdrs.indexOf('実績時間(秒)'), idxWorker = hdrs.indexOf('作業者'), idxResult = hdrs.indexOf('結果');
       if (idxOrderNo === -1 || idxUnitNo === -1 || idxTitle === -1) { alert("CSV形式が正しくありません。必須列（指図番号、ユニットNo、検査項目）が見つかりません。"); return; }
       const updates = {};
       for (let i = 1; i < csvRows.length; i++) {
         const row = csvRows[i]; if (row.length < hdrs.length) continue;
         const getVal = (idx) => idx !== -1 && row[idx] ? row[idx].replace(/^"|"$/g, '').trim() : '';
         const orderNo = getVal(idxOrderNo), unitNo = getVal(idxUnitNo), title = getVal(idxTitle), category = getVal(idxCategory), duration = parseInt(getVal(idxDuration), 10) || 0, workerName = getVal(idxWorker);
+        const isSkip = getVal(idxResult) === 'N/A'; // P080: 結果=N/A は『該当なし(対象外)』由来 → completed に戻さない
         if (!orderNo || !unitNo || !title) continue;
         const matchLot = completedLots.find(l => l.orderNo === orderNo); if (!matchLot) continue;
         if (!updates[matchLot.id]) updates[matchLot.id] = { tasks: JSON.parse(JSON.stringify(matchLot.tasks || {})) };
@@ -28644,8 +28649,10 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
           if (isNaN(occ) || occ < 0) continue;
           const loKey = `${step.id}-lot-${occ}`;
           const ex = updates[matchLot.id].tasks[loKey];
+          const loSkip = isSkip || ex?.status === 'skipped';
           updates[matchLot.id].tasks[loKey] = {
-            ...(ex || { startTime: null }), status: 'completed', duration,
+            ...(ex || { startTime: null }), status: loSkip ? 'skipped' : 'completed', duration,
+            ...(loSkip ? { skipReason: ex?.skipReason || '該当なし(対象外)', skipAt: ex?.skipAt || importEndTs } : {}),
             workerName: workerName !== '-' ? workerName : (ex?.workerName || ''),
             firstStartTime: ex?.firstStartTime || ex?.startTime || (duration > 0 ? importEndTs - duration * 1000 : importEndTs),
             endTime: ex?.endTime || importEndTs,
@@ -28659,10 +28666,12 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
         const actualKey = updates[matchLot.id].tasks[taskKey1] ? taskKey1 : taskKey2;
         // CSV取込で時刻情報がない場合は、ロットの completedAt or updatedAt を流用
         const importEnd = (typeof matchLot.completedAt === 'number' ? matchLot.completedAt : null) || Date.now();
+        const nSkip = isSkip || existingTask?.status === 'skipped';
         updates[matchLot.id].tasks[actualKey] = {
           ...(existingTask || { startTime: null }),
-          status: 'completed',
+          status: nSkip ? 'skipped' : 'completed',
           duration,
+          ...(nSkip ? { skipReason: existingTask?.skipReason || '該当なし(対象外)', skipAt: existingTask?.skipAt || importEnd } : {}),
           workerName: workerName !== '-' ? workerName : (existingTask?.workerName || ''),
           // CSV から復元したタスクには時刻が無い → 既存値があれば優先、無ければ ロット完了時刻ベースで埋める
           firstStartTime: existingTask?.firstStartTime || existingTask?.startTime || (duration > 0 ? importEnd - duration * 1000 : importEnd),
@@ -28672,10 +28681,17 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
       const updateLotIds = Object.keys(updates);
       if (updateLotIds.length === 0) { alert("更新対象のデータが見つかりませんでした。"); return; }
       if (confirm(`${updateLotIds.length}件のロットの実績を更新します。よろしいですか？`)) {
-        for (const lotId of updateLotIds) await saveData('lots', lotId, { tasks: updates[lotId].tasks });
-        alert("更新が完了しました。");
+        // P081: 1件失敗しても残りを続け、何件入って何件落ちたかを出す
+        let okN = 0; const failed = [];
+        for (const lotId of updateLotIds) {
+          try { await saveData('lots', lotId, { tasks: updates[lotId].tasks }); okN++; }
+          catch (err) { failed.push(lotId); console.error('CSV実績取込の保存に失敗', lotId, err); }
+        }
+        alert(failed.length
+          ? `更新: 成功 ${okN}件 / 失敗 ${failed.length}件\n\n失敗したロット: ${failed.slice(0, 5).join(', ')}${failed.length > 5 ? ' ほか' : ''}\n通信を確認して、同じCSVでもう一度取り込んでください（成功済みは上書きされるだけです）。`
+          : `更新が完了しました。（${okN}件）`);
       }
-      e.target.value = '';
+      e.target.value = ''; // ⚠同じファイルを選び直せるよう必ず空にする(失敗時も)
     };
     reader.readAsText(file);
   };
@@ -28777,18 +28793,23 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
                   </div>
                 </div>
                 <div className="text-sm text-slate-600">指図: <span className="font-bold">{lot.orderNo}</span> | <span className="bg-slate-100 px-1.5 rounded">{lot.quantity}台</span></div>
+                {/* P082: どのテンプレで検査したか(製品 App.jsx:43955 と同じ札) */}
+                <div className="flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-1 w-fit max-w-full" title={templates?.find(t => t.id === lot.templateId)?.name || ''} data-history-card-template>
+                  <ClipboardList className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">{templates?.find(t => t.id === lot.templateId)?.name || '(テンプレ不明)'}</span>
+                </div>
                 <div className="text-xs text-slate-500 flex items-center gap-1"><User className="w-3 h-3" /> {workers.find(w => w.id === lot.workerId)?.name || '未割当'}</div>
                 <div className="text-xs font-mono text-slate-600 flex items-center gap-1">
                   <Clock className="w-3 h-3" /> {formatTime(lot.tasks ? Object.values(lot.tasks).reduce((s, t) => s + (t.status === 'completed' ? (t.duration || 0) : 0), 0) : Math.floor((lot.totalWorkTime || 0) / 1000))}
                 </div>
                 <div className="text-xs text-slate-400 mt-auto pt-3 border-t flex items-center justify-between gap-2">
                   <span>{compMs(lot) ? new Date(compMs(lot)).toLocaleString() : '-'}</span>
-                  <button onClick={(e) => {
+                  <button onClick={async (e) => {
                     e.stopPropagation();
                     if (!confirm(`このロット（${lot.model} / ${lot.orderNo}）を検査リストへ復帰しますか？\n完了を取り消し、再度作業ができるようになります（実績は残ります）。`)) return;
-                    // 🚨投げっぱなしにしない(2026-08-31)。失敗は saveData が画面の保存失敗バナーと
-                    //   「全部送り直す」の控えで人に知らせる。ここは受け取って console に残す(誰も受け取らない拒否にしない)。
-                    saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }).catch((err) => console.error('🚨 検査リストへの復帰を保存できませんでした', lot.id, err));
+                    // 🚨 P014(製品 SS-201 と同じ形): 失敗したら押した人に知らせる。黙って完了のまま残さない。
+                    const r = await settleSaveBriefly(saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }));
+                    if (!mayCloseAfterSave(r)) { alert(SAVE_REFUSED_MESSAGE); return; }
                   }} className="text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 min-h-11 px-2 rounded font-bold flex items-center gap-1 shrink-0" title="完了を取り消して検査リストへ戻す"><RotateCcw className="w-3 h-3"/> 検査リストへ復帰</button>
                 </div>
               </div>
@@ -28806,7 +28827,7 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
           <div className="bg-white rounded-lg shadow border overflow-hidden">
             <table className="w-full text-left border-collapse">
               <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm text-xs text-slate-500 uppercase">
-                <tr><th className="p-3 font-bold border-b">完了日時</th><th className="p-3 font-bold border-b">指図番号</th><th className="p-3 font-bold border-b">品目コード</th><th className="p-3 font-bold border-b text-center">台数</th><th className="p-3 font-bold border-b">作業者</th><th className="p-3 font-bold border-b">実績時間</th><th className="p-3 font-bold border-b text-right">操作</th></tr>
+                <tr><th className="p-3 font-bold border-b">完了日時</th><th className="p-3 font-bold border-b">指図番号</th><th className="p-3 font-bold border-b">品目コード</th><th className="p-3 font-bold border-b">テンプレート</th><th className="p-3 font-bold border-b text-center">台数</th><th className="p-3 font-bold border-b">作業者</th><th className="p-3 font-bold border-b">実績時間</th><th className="p-3 font-bold border-b text-right">操作</th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
                 {sortedCompletedLots.map(lot => {
@@ -28822,13 +28843,19 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
                         <div className="text-xs font-normal text-slate-500 truncate max-w-[14rem]" data-history-table-model-text title={resolveItemName(lot.model, lot.modelText, settings?.itemMaster)}>{resolveItemName(lot.model, lot.modelText, settings?.itemMaster)}</div>
                       ) : null}
                     </td>
+                    <td className="p-3"><span className="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5" title={templates?.find(t => t.id === lot.templateId)?.name || ''} data-history-table-template><ClipboardList className="w-3 h-3 shrink-0" />{templates?.find(t => t.id === lot.templateId)?.name || '(不明)'}</span></td>
                     <td className="p-3 text-center"><span className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">{lot.quantity}台</span></td>
                     <td className="p-3 text-xs text-slate-600">{workers.find(w => w.id === lot.workerId)?.name || '未割当'}</td>
                     <td className="p-3 font-mono text-sm">{formatTime(totalActual)}</td>
                     <td className="p-3 text-right">
                       <div className="flex justify-end gap-1.5">
                         <button onClick={() => setViewGridLot(lot)} className="p-1.5 border rounded hover:bg-indigo-50 text-indigo-600 bg-white transition-colors" title="作業表で見る（工程×台）"><LayoutGrid className="w-4 h-4" /></button>
-                        <button onClick={() => { if (!confirm(`このロット（${lot.model} / ${lot.orderNo}）を検査リストへ復帰しますか？\n完了を取り消し、再度作業ができるようになります（実績は残ります）。`)) return; saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }).catch((err) => console.error('🚨 検査リストへの復帰を保存できませんでした', lot.id, err)); }} className="p-1.5 border rounded hover:bg-amber-50 text-amber-600 bg-white transition-colors" title="検査リストへ復帰（完了を取り消す）"><RotateCcw className="w-4 h-4" /></button>
+                        <button onClick={async () => {
+                          if (!confirm(`このロット（${lot.model} / ${lot.orderNo}）を検査リストへ復帰しますか？\n完了を取り消し、再度作業ができるようになります（実績は残ります）。`)) return;
+                          // 🚨 P014: 上のカードと必ず同じ形(片方だけ直すと「表からは戻せない」が残る)
+                          const r = await settleSaveBriefly(saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }));
+                          if (!mayCloseAfterSave(r)) { alert(SAVE_REFUSED_MESSAGE); return; }
+                        }} className="p-1.5 border rounded hover:bg-amber-50 text-amber-600 bg-white transition-colors" title="検査リストへ復帰（完了を取り消す）"><RotateCcw className="w-4 h-4" /></button>
                         <button onClick={() => setReportLot(lot)} className="p-1.5 border rounded hover:bg-green-50 text-green-600 bg-white transition-colors" title="成績表プレビュー"><Printer className="w-4 h-4" /></button>
                         <button onClick={() => setEditingTimeLot(lot)} className="p-1.5 border rounded hover:bg-amber-50 text-amber-600 bg-white transition-colors" title="作業時間編集"><Clock className="w-4 h-4" /></button>
                         <button onClick={() => setEditingMeasLot(lot)} className="p-1.5 border rounded hover:bg-emerald-50 text-emerald-600 bg-white transition-colors" title="測定結果編集"><Ruler className="w-4 h-4" /></button>
@@ -28839,7 +28866,7 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
                   </tr>
                   );
                 })}
-                {sortedCompletedLots.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-slate-400">表示するデータがありません</td></tr>}
+                {sortedCompletedLots.length === 0 && <tr><td colSpan="8" className="p-8 text-center text-slate-400">表示するデータがありません</td></tr>}
               </tbody>
             </table>
           </div>
@@ -32021,6 +32048,8 @@ const QuotaStoppedPanel = ({ until }) => (
      <WorkScheduleContext.Provider value={workScheduleWithCalendar}>
      <LotCardDisplayContext.Provider value={settings.lotCardDisplay || DEFAULT_LOT_CARD_DISPLAY}>
      <ItemMasterContext.Provider value={settings.itemMaster || null}>
+     {/* P156 ケンサくん。⚠完了履歴を開くと lots が窓→過去500件へ一気に増えるので、その時は祝わずに基準を取り直す(嘘の『ロット完了！』を止める) */}
+     <MascotFx lots={lots} settings={settings} onSaveSettings={saveSettings} baselineKey={historyLots === null ? 'live' : 'history'} />
      {/* グローバル CSS: 作業中ロット用の強い点滅アニメーション (Tailwind animate-pulse より強力) */}
      <style>{`
        @keyframes lotBlink {
