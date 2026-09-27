@@ -32,6 +32,7 @@ import TemplateSkipPanel from './TemplateSkipPanel.jsx';
 import DuplicateLotsPanel from './DuplicateLotsPanel.jsx';
 import ProgressImportExtras from './ProgressImportExtras.jsx';
 import PendingImportPanel from './PendingImportPanel.jsx';
+import ProgressSheetMapPanel from './ProgressSheetMapPanel.jsx';
 import { auditProgressRows } from './domain/progressSheetAudit.js';
 import { orderNosOfRows, orderNoChunks, orderNoLotsSpec, mergeLotsForImport, dropAlreadyExisting } from './domain/importExistingCheck.js';
 import { judgeTemplateSkip, buildTemplateSkippedTasks, isTemplateSkippedLot } from './domain/templateSkip.js';
@@ -129,7 +130,7 @@ import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStar
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
 //   この部品検査アプリは **読むだけ**(登録する画面は製品検査/最終検査にある)。
 import { isWorkdayYmd, makeIsWorkday } from './domain/factoryCalendar.js';
-import { planProgressImport, normalizeSheetMap, DEFAULT_SHEET_MAP, isShippedGrayFills, colToIndex, PS_REASON, PENDING_MAX_ROWS, pendingRowsFromPlan, mergePendingRows } from './domain/progressSheet.js';
+import { planProgressImport, normalizeSheetMap, DEFAULT_SHEET_MAP, isShippedGrayFills, colToIndex, PS_REASON, PENDING_MAX_ROWS, pendingRowsFromPlan, mergePendingRows, normalizeSheetProfiles, guessProfile, profilesToSettings, sheetMapProblems } from './domain/progressSheet.js';
 import { DEFAULT_IMPORT_OPTIONS } from './domain/importPlan.js';
 import { dueConflict } from './domain/dueConflict.js';
 import { LOT_PRIORITY_CHOICES, LOT_PRIORITY_LABEL, normalizeLotPriority, priorityLabelOf, priorityFromImportText, priorityBadgeOf, priorityFilterStyleOf } from './domain/lotPriority.js';
@@ -2749,9 +2750,9 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
 
       <div className="px-1.5 py-1 pr-6">{/* pr-6 で右端の細い帯(幅24px)と重ならないように。48px は中身を潰していた(2026-09-10) */}
         {/* ⚠ P094 納期の矛盾(入荷=entryAt が納期より後)。部品には到着予定が無いので arrival は null(製品 11050 と同じ札) */}
-        {(() => { try { const c = dueConflict({ lot, arrival: null, todayStartMs: todayStartMsNow() }); return c.conflict ? (
+        {(() => { let c = null; try { c = dueConflict({ lot, arrival: null, todayStartMs: todayStartMsNow() }); } catch { c = null; } return c && c.conflict ? (
           <div className="mb-0.5"><span data-due-conflict="1" className="text-xs font-black bg-rose-50 border border-rose-300 text-rose-700 rounded px-1.5 py-0.5" title={`入荷が納期より後になっています。入荷が決まったら納期も更新してください。納期:${c.dueMs ? new Date(c.dueMs).toLocaleDateString('ja-JP') : '—'} / 入荷:${c.arrivalMs ? new Date(c.arrivalMs).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}`}>⚠ 納期の更新が必要</span></div>
-        ) : null; } catch { return null; } })()}
+        ) : null; })()}
         {/* 停止理由バッジ (一時停止中で明示的に理由が設定されている時のみ。経過時間は勤務時間内のみカウント) */}
         {lot.pauseReason && lot.pauseReason.category && (() => {
           const colorMap = getPauseReasonColor(lot.pauseReason.category);
@@ -22947,6 +22948,9 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          {/* 🧯 P098 同じ指図×品目コード×テンプレの未完了ロットの重複(無ければ何も出さない) */}
          <DuplicateLotsPanel lots={lots} templates={templates} deleteData={deleteData} />
 
+         {/* 📊 P053 進捗管理表の読み方(表ごと・シート名・開始行・列の字・Z列の意味・出荷日の日数) */}
+         <ProgressSheetMapPanel settings={settings} saveSettings={saveSettings} openBook={openProgressBook_pi} />
+
          {/* 🗂 P057 未登録リスト(進捗管理表の取込で品質規格マスタに紐付けが無く落ちた行。無ければ何も出さない) */}
          <PendingImportPanel settings={settings} onRegisterPending={onRegisterPending} onRemovePending={onRemovePending} />
 
@@ -30898,9 +30902,31 @@ const QuotaStoppedPanel = ({ until }) => (
      try {
        // 📊 P023 ExcelJS で開き、落ちたら JSZip で読み直す(製品 openProgressBook_pi と同じ)。getWorksheet は await で呼ぶ
        const wb = await openProgressBook_pi(await file.arrayBuffer());
-       const smap = normalizeSheetMap(null, DEFAULT_SHEET_MAP);
+       // 📚 P053 どの表の読み方で読むかを、開いたブックのシート名・ファイル名から決める(製品 guessProfile と同じ)。
+       //   既定: 決められない時は いま選んでいる表で読む(製品のように選ぶ窓は出さない。プレビューに どの表で読んだかを出す)
+       const bookSheets = (wb.worksheets || []).map(w => w.name);
+       const { profiles, activeId } = normalizeSheetProfiles(settings, DEFAULT_SHEET_MAP);
+       let chosen = profiles.find(p => p.id === activeId) || profiles[0];
+       let chosenWhy = `いま選んでいる「${chosen.name}」で読みました`;
+       const guessed = guessProfile(bookSheets, file.name, profiles);
+       if (guessed && guessed.profile.id !== chosen.id) {
+         chosen = guessed.profile; chosenWhy = `「${chosen.name}」で読みました（${guessed.why}）`;
+         saveSettings(profilesToSettings(profiles, chosen.id, DEFAULT_SHEET_MAP));
+       } else if (guessed) {
+         chosenWhy = `「${chosen.name}」で読みました（${guessed.why}）`;
+       }
+       const smap = chosen.map;
+       // 🚨 割付に穴があると取込は黙って0件になる。読む前に止めて、直す場所を教える
+       const mapHoles = sheetMapProblems(smap, DEFAULT_SHEET_MAP);
+       if (mapHoles.length) {
+         alert(`「${chosen.name}」の読み方に穴があります。このままだと1行も取り込めません。\n\n・${mapHoles.join('\n・')}\n\nマスタ設定の「📊 進捗管理表の読み方（表ごと）」で直してください。`);
+         return;
+       }
        const sheet = await wb.getWorksheet(smap.sheetName);
-       if (!sheet) { alert('「進捗管理表」シートが見つかりません'); return; }
+       if (!sheet) {
+         alert(`「${chosen.name}」は「${smap.sheetName}」シートを読みますが、このファイルにはありません。\n\nこのファイルに入っているシート:\n・${bookSheets.join('\n・')}\n\nマスタ設定の「📊 進捗管理表の読み方（表ごと）」で、この中の どれかにシート名を直してください。`);
+         return;
+       }
 
        // 品質規格マスタを参照 (modelStandardMap[model] → qualityStandards[qsId].templates[])
        const modelStandardMap = settings.modelStandardMap || {};
@@ -30981,7 +31007,7 @@ const QuotaStoppedPanel = ({ until }) => (
        if (staleGuard) opts.deleteStale = false;
        // 🔎 P152 元表の食い違い。数えるだけ(取込は止めない)
        const audit = auditProgressRows(rows, { today: new Date(), labels: smap.cols, k33Means: smap.k33Means, startHeader: strAt(sheet.getRow(1), 'start'), sourceEndHeader: '' });
-       setProgressImportPreview({ ...plan, knownLots: known.lots, serverCheck: known.check, rows, opts, staleGuard, audit, fileName: file.name, reader: wb.reader, sheetMap: smap });
+       setProgressImportPreview({ ...plan, knownLots: known.lots, serverCheck: known.check, rows, opts, staleGuard, audit, fileName: file.name, reader: wb.reader, sheetMap: smap, profileName: chosen.name, profileWhy: chosenWhy });
      } catch (err) {
        console.error('Progress Mgmt parse error:', err);
        alert('取込み中にエラーが発生しました: ' + (err.message || err));
@@ -32709,6 +32735,7 @@ const QuotaStoppedPanel = ({ until }) => (
                    <h2 className="text-lg font-bold">工機進捗管理表 — 取込プレビュー</h2>
                    <div className="text-xs opacity-90">
                      データ {progressImportPreview.totalRows}行 / 新規 {progressImportPreview.createLots.length}件 / 更新 {progressImportPreview.updateLots.length}件 / スキップ {progressImportPreview.skipped.length}件
+                     {progressImportPreview.profileWhy ? <span data-progress-profile={progressImportPreview.profileName}> ・{progressImportPreview.profileWhy}</span> : null}
                      {progressImportPreview.reader ? <span data-progress-reader={progressImportPreview.reader}> ・読み手 {progressImportPreview.reader === 'jszip' ? 'JSZip（ExcelJS で読めなかったので読み直し）' : 'ExcelJS'}</span> : null}
                    </div>
                  </div>
