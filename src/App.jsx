@@ -94,6 +94,9 @@ import {
   reconcileValueMap, noteEditedKeys, recentlyEditedKeys, pruneEditedKeys, unsentPatch,
   reconcileTasks, runningTaskKeys,
 } from './domain/saveOrder.js';
+// 📐 P040 測定図は本体の外(step_diagrams)へ出し、同じ図は1枚をみんなで指す(製品と同じ純関数・md5 一致)
+import { hydrateLot, diagramMapOf, dehydrateSteps, lotsNeedingDiagramOffload, isDiagramRef, DIAGRAM_PREFIX, DIAGRAM_COLLECTION } from './domain/diagramOffload.js';
+import { restoreFailedRefs, describeWriteOrder } from './domain/saveOrder.js';
 // 🚨🚨 読み取り(read)の予算。2026-08-17 に最終検査が **枠切れ(429)で 14:36〜15:59 止まった**。
 //   無料枠 50,000件/日 は **4アプリで1つ**。部品検査が食った分だけ他アプリの枠が減る。
 //   ⚠数の決め方・合体の仕方・いつ枠が戻るかは、全部 domain/readBudget.js に置いて試験で固定してある
@@ -149,6 +152,8 @@ import ZoneTravelSettings from './ZoneTravelSettings.jsx';
 import { taskTimeQualityOf, hasUsableInterval } from './domain/taskTimeQuality.js';
 // 🚶 掛け持ち案内の枠(製品検査 src/workscreen/JuggleGuide.jsx と md5 一致の写し。描くだけ)
 import { JuggleGuide } from './workscreen/JuggleGuide.jsx';
+// ✍ P112 不具合写真に印を描く(描く道具は製品と md5 一致の写し)
+import { DefectPhotoMarkEditor, MarkedPhoto } from './workscreen/DefectPhotoMarks.jsx';
 // ⏱ 終わっていない工程を「該当なし」で閉じる時、時間・NG・写真を落とさない(製品検査 src/domain/skipKeepingRecord.js と md5 一致の写し)
 import { skipTaskKeepingRecord } from './domain/skipKeepingRecord.js';
 // 🖐 順序実行の「済・動いている・次の一手」(製品検査 src/domain/seqScreen.js と md5 一致の写し)
@@ -8105,6 +8110,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const [defectLabel, setDefectLabel] = useState('');
   const [defectCauseProcess, setDefectCauseProcess] = useState('');
   const [defectPhotos, setDefectPhotos] = useState([]);
+  // ✍ P112 不具合写真の印(写真と同じ並びの配列)と、いま描いている写真の番号
+  const [defectPhotoMarks, setDefectPhotoMarks] = useState([]);
+  const [markEditIdx, setMarkEditIdx] = useState(-1);
   const defectPhotoRef = useRef(null);
 
   // Complaint (軽微不良 = 品質の不良) state
@@ -8301,9 +8309,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   };
 
   // Voice Assistant
-  const [voiceEnabled, setVoiceEnabled] = useState(() => {
-    try { return localStorage.getItem('voiceEnabled') === '1'; } catch { return false; }
-  });
+  // 🎙 開いた時はいつも音声OFF(前は覚えていて、ボタンは「ON」なのに誰も聞いていなかった・製品と同じ)
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
   // localStorage 永続化
   useEffect(() => {
     try { localStorage.setItem('voiceEnabled', voiceEnabled ? '1' : '0'); } catch {}
@@ -8321,6 +8328,10 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const [voiceBarOpen, setVoiceBarOpen] = useState(false);
   const [showVoiceHelp, setShowVoiceHelp] = useState(false); // 音声コマンド早見表(すぐ出せるヘルプ)
   const voiceActiveRef = useRef(false);
+  // 🎙 聞く輪の世代。新しい輪が始まったら古い輪は次に耳を離した所で終わる(聞く輪はいつも1本・製品 fb4a1bc/688de95/c45a481)
+  const seqVoiceGenRef = useRef(0);
+  // 閉じたら輪を終える
+  useEffect(() => () => { voiceActiveRef.current = false; seqVoiceGenRef.current++; try { window.speechSynthesis?.cancel?.(); } catch { /* 読み上げが無い端末 */ } }, []);
   const voiceRunningRef = useRef(false);
 
   // Voice log for transcript display
@@ -8529,6 +8540,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           stepInfo: curStep ? { stepId: curStep.id, title: curStep.title } : null,
           causeProcess: causeProcess || '',
           photos: photos || [],
+          // ✍ P112 印は写真と同じ並び。印が1つも無ければ持たない(今までの形のまま)
+          ...(type === 'defect' && Array.isArray(photos) && photos.length && defectPhotoMarks.some(m => Array.isArray(m) && m.length)
+            ? { photoMarks: photos.map((_, i) => (Array.isArray(defectPhotoMarks[i]) ? defectPhotoMarks[i] : [])) } : {}),
           ...(meta || {}) // 気づき・改善用: { improvementKind, targetStepTitle } 等
       };
       // 🧾配列ごと書き戻さない。1件を鍵つきで書く。⚠保存できてから窓を閉じる(失敗しても入力と写真が残る)
@@ -8539,6 +8553,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           setDefectLabel('');
           setDefectCauseProcess('');
           setDefectPhotos([]);
+          setDefectPhotoMarks([]);
         }
       });
       return newInt;
@@ -8657,6 +8672,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const stopVoiceFlow = () => {
     voiceRunningRef.current = false;
     voiceActiveRef.current = false;
+    seqVoiceGenRef.current++;
     // ⚠ 2026-08-05: ここには recognitionRef が無い(別コンポーネントの物を書いていた)。
     //   try/catch に食われて例外は出ないが、**止めたつもりで止まっていなかった**。
     try { window.speechSynthesis?.cancel?.(); } catch {}
@@ -8837,6 +8853,12 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     // 音声の輪の中から呼ばれても 最新(ref)を読む(製品と同じ)
     const curTasks = tasksRef.current || tasks;
     const curMR = measurementResultsRef.current || measurementResults;
+    // 🎙 休憩中は進めない(断った理由を返す・音声は読み上げて聞き続ける・製品 5d77bb2)
+    if (executionType === 'sequential' && isOnBreakRef.current) {
+      const msg = '作業が止まっています。「作業開始」を押すか「再開」と言ってから 次へ進みます';
+      setOrderHint(msg);
+      return { ok: false, msg };
+    }
     // 確認チェック未完了ブロック (sequential モードの現在工程のみ)
     if (currentStep && Array.isArray(currentStep.checklistItems) && currentStep.checklistItems.length > 0) {
       const requiredItems = currentStep.checklistItems.filter(it => it.required !== false);
@@ -8941,9 +8963,11 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     }
     return true;
   };
-  // 音声の輪は始めた時の写しを持つので 最新の handleNext を読む(製品と同じ)
+  // 🎙 音声の輪からは いつも最新の処理を呼ぶ(製品と同じ)
+  const toggleBreakRef = useRef(null);
   const handleNextRef = useRef(null);
-  handleNextRef.current = handleNext;
+  const handlePauseRef = useRef(null);
+  useEffect(() => { toggleBreakRef.current = toggleBreak; handleNextRef.current = handleNext; handlePauseRef.current = handlePause; });
   
   // --- Voice Assistant Logic ---
   const runMicTest = async () => {
@@ -8992,6 +9016,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     unlockTTSForIOS();
     setVoiceEnabled(newVal);
     voiceActiveRef.current = newVal;
+    seqVoiceGenRef.current++; // 前の輪を終える
     if (newVal) {
       setVoiceBarOpen(true); // テスト結果を見えるように展開
       const micOk = await runMicTest();
@@ -9022,11 +9047,13 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const runVoiceInitialFlow = async () => {
     if (voiceRunningRef.current) return;
     voiceRunningRef.current = true;
+    const gen = ++seqVoiceGenRef.current;
+    const stale = () => !voiceActiveRef.current || gen !== seqVoiceGenRef.current;
     try {
       setVoiceStatus('🎤 「通常」or「カスタム」と言ってください');
-      while (voiceActiveRef.current) {
+      while (!stale()) {
         const cmd = await listenOnceWithLog({ timeout: 15000 });
-        if (!voiceActiveRef.current) return;
+        if (stale()) return;
         if (!cmd) continue;
         if (matchSequential(cmd)) {
           await speakAsyncWithLog('通常モードで開始します');
@@ -9042,23 +9069,25 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         }
         await speakAsyncWithLog('通常かカスタム、どちらにしますか？');
       }
-    } finally { voiceRunningRef.current = false; }
+    } finally { if (gen === seqVoiceGenRef.current) voiceRunningRef.current = false; }
   };
 
   // Voice: Custom mode - listen for commands and auto-operate UI
   const runVoiceCustomListenLoop = async () => {
     if (voiceRunningRef.current) return;
     voiceRunningRef.current = true;
+    const gen = ++seqVoiceGenRef.current;
+    const stale = () => !voiceActiveRef.current || gen !== seqVoiceGenRef.current;
     try {
       const stepNames = localSteps.map((s, i) => ({ idx: i, title: s.title, num: i + 1 }));
       setVoiceStatus('🎤 工程名・番号と台数を言ってください');
 
-      while (voiceActiveRef.current) {
+      while (!stale()) {
         const rawCmd = await listenOnceWithLog({ timeout: 15000 });
-        if (!voiceActiveRef.current) return;
+        if (stale()) return;
         if (!rawCmd) continue;
         // 全モード共通コマンド(NG/該当なし/修正/修正完了/再開/状況/ヘルプ/音声オフ)を先に処理
-        if (await handleUniversalVoiceCmd(rawCmd)) { if (!voiceActiveRef.current) return; continue; }
+        if (await handleUniversalVoiceCmd(rawCmd)) { if (stale()) return; continue; }
         const cmd = normalizeVoiceText(rawCmd);
 
         // Check for completion command
@@ -9075,8 +9104,10 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
         // --- キャンセル（取り消し）コマンド ---
         if (matchCancel(cmd) || matchCancel(rawCmd)) {
-          handleUndo();
-          await speakAsyncWithLog('取り消しました');
+          // 🖐 最新の控えを読む(無ければそう言う・製品 c45a481)
+          const lu = voiceLatestRef.current || {};
+          if ('pendingUndo' in lu ? lu.pendingUndo : pendingUndo) { (lu.handleUndo || handleUndo)(); await speakAsyncWithLog('取り消しました'); }
+          else await speakAsyncWithLog('取り消せる操作がありません');
           continue;
         }
 
@@ -9093,7 +9124,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             if (!rNext.ok) { await speakAsyncWithLog(rNext.hint || 'この工程は画面から開始してください'); continue; }
             focusCustomTask(`${nextS}-${uI}`);
             await speakAsyncWithLog(`${nextS+1}工程、${uI+1}台目を開始しました`);
-            await runVoiceCustomTaskFlow(nextS, uI);
+            await runVoiceCustomTaskFlow(nextS, uI, stale);
           } else {
             await speakAsyncWithLog('最後の工程です。全作業完了しますか？');
             const confirm = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
@@ -9148,7 +9179,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
               } else {
                 await speakAsyncWithLog(`${stepNum}工程、${unitNum}台目を開始しました`);
                 focusCustomTask(taskKey);
-                await runVoiceCustomTaskFlow(sIdx, uIdx);
+                await runVoiceCustomTaskFlow(sIdx, uIdx, stale);
               }
             } else if (curTask.status === 'processing') {
               await speakAsyncWithLog(`${stepNum}工程${unitNum}台目を完了しますか？`);
@@ -9171,10 +9202,12 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           }
         } else if (matchMeasurement(cmd)) {
           if (activeCustomTaskKeyRef.current) {
-            const { stepIdx: sI } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
+            const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
             const step = localSteps[sI];
             if (step?.type === 'measurement' && step.measurementConfig) {
-              await runVoiceMeasurementFlow(step, sI);
+              // 🎙 その台の欄へ書き、「完了」はその台を完了にする(製品と同じ)
+              const mres = await runVoiceMeasurementFlow(step, sI, uI, null, stale);
+              if (mres === 'complete') { voiceToggleTask(sI, uI); await speakAsyncWithLog(`${sI+1}工程${uI+1}台目を完了しました。次はどうしますか？`); }
             } else {
               await speakAsyncWithLog('この工程に測定項目はありません');
             }
@@ -9182,7 +9215,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             await speakAsyncWithLog('先に工程を開始してください');
           }
         } else if (matchInterrupt(cmd)) {
-          toggleBreak();
+          (toggleBreakRef.current || toggleBreak)();
           await speakAsyncWithLog('中断しました');
         } else if (matchNext(cmd) && activeCustomTaskKeyRef.current) {
           const { stepIdx: sI, unitIdx: uI } = parseActiveTaskKey(activeCustomTaskKeyRef.current);
@@ -9196,7 +9229,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             if (!rNx.ok) { await speakAsyncWithLog(rNx.hint || 'この工程は画面から開始してください'); continue; }
             focusCustomTask(`${nextS}-${nextU}`);
             await speakAsyncWithLog(`${nextS+1}工程、${nextU+1}台目を開始しました`);
-            await runVoiceCustomTaskFlow(nextS, nextU);
+            await runVoiceCustomTaskFlow(nextS, nextU, stale);
           } else {
             await speakAsyncWithLog('全工程が終了しました。全作業完了しますか？');
             const confirm = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
@@ -9209,7 +9242,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           setVoiceStatus('🎤 工程と台数を言ってください（例:「1の1」「1工程1台目」）');
         }
       }
-    } finally { voiceRunningRef.current = false; }
+    } finally { if (gen === seqVoiceGenRef.current) voiceRunningRef.current = false; }
   };
 
   // Voice: Handle a single custom task (measurement input etc.)
@@ -9404,7 +9437,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     }
     if (matchVoiceOff(rawCmd)) {
       await speakAsyncWithLog('音声アシスタントを終了します');
-      voiceActiveRef.current = false; setVoiceEnabled(false);
+      voiceActiveRef.current = false; seqVoiceGenRef.current++; setVoiceEnabled(false);
       window.speechSynthesis?.cancel(); stopIOSResumeFix();
       return true;
     }
@@ -9479,30 +9512,36 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     return false;
   };
 
-  const runVoiceCustomTaskFlow = async (sIdx, uIdx) => {
+  const runVoiceCustomTaskFlow = async (sIdx, uIdx, isStale = null) => {
+    const stale = () => !voiceActiveRef.current || (typeof isStale === 'function' && isStale());
     const step = localSteps[sIdx];
-    if (!step || !voiceActiveRef.current) return;
+    if (!step || stale()) return;
 
     if (step.type === 'measurement' && step.measurementConfig) {
       await speakAsyncWithLog('測定入力しますか？');
       const answer = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
+      if (stale()) return;
       if (matchYes(answer) || answer === null) {
-        await runVoiceMeasurementFlow(step, sIdx);
+        const mres = await runVoiceMeasurementFlow(step, sIdx, uIdx, null, stale);
+        if (mres === 'complete') { voiceToggleTask(sIdx, uIdx); await speakAsyncWithLog(`${sIdx+1}工程${uIdx+1}台目を完了しました。次はどうしますか？`); return; }
+        if (mres === 'paused' || stale()) return;
       }
     }
     // 完了/次/次工程/中断/キャンセルを待つループ
     setVoiceStatus('🎤 「完了」「次」「次工程」「キャンセル」「中断」');
-    while (voiceActiveRef.current) {
+    while (!stale()) {
       const cmd = await listenOnceWithLog({ timeout: 15000 });
-      if (!voiceActiveRef.current) return;
+      if (stale()) return;
       if (!cmd) continue;
-      if (await handleUniversalVoiceCmd(cmd)) { if (!voiceActiveRef.current) return; continue; }
+      if (await handleUniversalVoiceCmd(cmd)) { if (stale()) return; continue; }
       const norm = normalizeVoiceText(cmd);
 
       // キャンセル（取り消し）
       if (matchCancel(norm) || matchCancel(cmd)) {
-        handleUndo();
-        await speakAsyncWithLog('取り消しました');
+        // 🖐 最新の控えを読む(無ければそう言う・製品 c45a481)
+        const lu = voiceLatestRef.current || {};
+        if ('pendingUndo' in lu ? lu.pendingUndo : pendingUndo) { (lu.handleUndo || handleUndo)(); await speakAsyncWithLog('取り消しました'); }
+        else await speakAsyncWithLog('取り消せる操作がありません');
         continue;
 
       } else if (matchComplete(norm) || matchComplete(cmd)) {
@@ -9521,7 +9560,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           // activeCustomTaskKey は数値index 形式で統一 (他の voice ハンドラと一致させる、parse 時 NaN を避ける)
           focusCustomTask(`${nextS}-${uIdx}`);
           await speakAsyncWithLog(`${nextS+1}工程、${uIdx+1}台目を開始しました`);
-          await runVoiceCustomTaskFlow(nextS, uIdx);
+          await runVoiceCustomTaskFlow(nextS, uIdx, stale);
         } else {
           await speakAsyncWithLog('最後の工程です。全作業完了しますか？');
           const confirm = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
@@ -9541,7 +9580,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           if (!rNu.ok) { await speakAsyncWithLog(rNu.hint || 'この工程は画面から開始してください'); return; }
           focusCustomTask(`${nextS}-${nextU}`);
           await speakAsyncWithLog(`${nextS+1}工程、${nextU+1}台目を開始しました`);
-          await runVoiceCustomTaskFlow(nextS, nextU);
+          await runVoiceCustomTaskFlow(nextS, nextU, stale);
         } else {
           await speakAsyncWithLog('全工程が終了しました');
           // 弾かれても下の return で待受ループへ戻るだけ(音声は生きている)
@@ -9550,7 +9589,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         return;
 
       } else if (matchInterrupt(norm) || matchInterrupt(cmd)) {
-        toggleBreak(); // 一時停止のみ（不具合報告は開かない）
+        (toggleBreakRef.current || toggleBreak)(); // 一時停止のみ（不具合報告は開かない）
         await speakAsyncWithLog('作業を一時停止しました。再開するときは「再開」ボタンか、もう一度「中断」と発声してください');
         return;
 
@@ -9570,86 +9609,102 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const runVoiceSequentialFlow = async (stepIdx) => {
     if (voiceRunningRef.current || !voiceActiveRef.current) return;
     voiceRunningRef.current = true;
+    const gen = ++seqVoiceGenRef.current;
+    const stale = () => !voiceActiveRef.current || gen !== seqVoiceGenRef.current;
     try {
       const step = localSteps[stepIdx];
       if (!step) return;
       const unitLabel = totalUnits > 1 ? `${currentUnitIdx + 1}台目、` : '';
       await speakAsyncWithLog(`工程${stepIdx + 1}、${unitLabel}${step.title}です。`);
-      if (!voiceActiveRef.current) return;
+      if (stale()) return;
 
-      if (step.type === 'measurement' && step.measurementConfig) {
-        await runVoiceMeasurementFlow(step, stepIdx);
-      } else {
+      // 🎙 断られたら理由を言って聞き続ける(製品 a565657)
+      const measured = (step.type === 'measurement' && step.measurementConfig) ? await runVoiceMeasurementFlow(step, stepIdx, null, undefined, stale) : null;
+      if (measured === 'advanced' || stale()) return;
+      {
         const nextLabel = currentUnitIdx < totalUnits - 1
           ? `「完了」で次の台、「次工程」で次工程に進みます`
           : `「完了」で次に進みます`;
         setVoiceStatus(`🎤 ${nextLabel}`);
-        while (voiceActiveRef.current) {
+        while (!stale()) {
           const cmd = await listenOnceWithLog({ timeout: 15000 });
-          if (!voiceActiveRef.current) return;
+          if (stale()) return;
           if (!cmd) continue;
-          if (await handleUniversalVoiceCmd(cmd)) { if (!voiceActiveRef.current) return; continue; }
+          if (await handleUniversalVoiceCmd(cmd)) { if (stale()) return; continue; }
           if (matchAllComplete(cmd)) {
             await speakAsyncWithLog('全作業を完了しますか？');
             const c = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
             // 弾かれたら return せず待受を続ける(通常モードもここで抜けると音声が死ぬ)
             if (matchYes(c) || c === null) { if (await (voiceLatestRef.current.voiceTryCompleteAll || voiceTryCompleteAll)()) return; }
           } else if (matchNextStep(cmd) || matchComplete(cmd) || matchNext(cmd)) {
-            // 通常モードは「完了/次/次工程」いずれも次へ進める。弾かれたら理由を言って待ち受けを続ける(製品と同じ)
+            // 通常モードは「完了/次/次工程」いずれも次へ進める
             const r = (handleNextRef.current || handleNext)();
-            if (r === true) return;
-            await speakAsyncWithLog(r?.msg || '今は次へ進めません');
+            if (r === true || r === undefined) return;
+            await speakAsyncWithLog((r && r.msg) || '今は次へ進めません');
           } else if (matchInterrupt(cmd)) {
             // 止まっている時に「中断」と言っても 二重に止めない(製品 fb4a1bc)
-            if (isOnBreakRef.current || !isTimerRunning) { await speakAsyncWithLog('もう止まっています。「再開」で続けます'); continue; }
+            if (isOnBreakRef.current) { await speakAsyncWithLog('もう止まっています。「再開」で続けます'); continue; }
             await speakAsyncWithLog('中断します');
-            handlePause(); return;
+            (handlePauseRef.current || handlePause)();
+            setVoiceStatus('🎤 止まっています。「再開」で続けます');
+            continue;
           } else if (isCancelCmd && isCancelCmd(cmd)) {
             // 取り消し (直近操作のundo窓内のみ実効)
             // 🖐 音声の輪は始めた時の写しを持ち続けるので、とうに消えた取り消しの控えで tasks を巻き戻していた → 最新を読む(製品 fb4a1bc)
             const lu = voiceLatestRef.current;
-            if (lu.pendingUndo ?? pendingUndo) { (lu.handleUndo || handleUndo)(); await speakAsyncWithLog('取り消しました'); }
+            if ('pendingUndo' in lu ? lu.pendingUndo : pendingUndo) { (lu.handleUndo || handleUndo)(); await speakAsyncWithLog('取り消しました'); }
             else await speakAsyncWithLog('取り消せる操作がありません');
           }
         }
       }
-    } finally { voiceRunningRef.current = false; }
+    } finally { if (gen === seqVoiceGenRef.current) voiceRunningRef.current = false; }
   };
 
-  const runVoiceMeasurementFlow = async (step, stepIdx) => {
+  // 🖐 2026-09-24 確かめ役: カスタムでは 画面の台ではなく 順序実行の位置の台に書き、終わると handleNext(順序実行の位置)を完了にしていた。
+  //   unitIdx = 書く台(無ければ順序実行の今の台)・onDone = 測定の後に進める動き(カスタムは null =「完了」の声を待つ)
+  const runVoiceMeasurementFlow = async (step, stepIdx, unitIdx = null, onDone = () => (handleNextRef.current || handleNext)(), isStale = null) => {
+    // 🖐 2026-09-24 確かめ役(7回目): 測定の輪は世代を見ず、画面で再開・次へ・音声OFF→ON の後も古い輪が聞き続け、
+    //   2つの輪が「次工程に進みますか？」(答えが無ければ はい)で 1回ずつ進めていた → 呼ぶ側の stale() を受けて 耳を離すたびに見る
+    const gone = () => !voiceActiveRef.current || (typeof isStale === 'function' && isStale());
     const config = step.measurementConfig;
     const inputs = config?.inputs || [];
     if (inputs.length === 0) return;
 
     await speakAsyncWithLog('測定入力を開始します');
-    // 🖐 順序実行も台ごとに書く(前はいつも1台目の欄)。ロット1回は0(製品と同じ)
-    const vUnit = step.lotOnce ? 0 : currentUnitIdx;
+    // 🖐 2026-09-24 今の台の欄へ(前は いつも1台目の欄に書き、2台目以降は 1台目の値を上書きしていた)。ロット1回は 0
+    const vUnit = step.lotOnce ? 0 : (unitIdx ?? currentUnitIdx);
     const currentValues = { ...(measurementResults[`${step.id}-${vUnit}-values`] || (vUnit === 0 ? measurementResults[`${step.id}-values`] : null) || {}) };
 
     for (let i = 0; i < inputs.length; i++) {
-      if (!voiceActiveRef.current) return;
+      if (gone()) return;
       const inp = inputs[i];
       setVoiceStatus(`🎤 ${inp.label}の入力待ち... (${i + 1}/${inputs.length})`);
       await speakAsyncWithLog(`${inp.label}の結果をお願いします`);
 
       let retry = 0;
-      while (retry < 3 && voiceActiveRef.current) {
+      while (retry < 3 && !gone()) {
         const response = await listenOnceWithLog({ timeout: 12000 });
-        if (!voiceActiveRef.current) return;
+        if (gone()) return;
 
         if (matchComplete(response)) {
           await speakAsyncWithLog('測定を完了しますか？');
           const c = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
+          // 🖐 確かめ役(8回目) 見直し: ここは そのまま抜けてよい(言った値は 確かめた時に もう書いてある)。古い輪は 進めない・完了にしない
+          if (gone()) return;
           if (matchYes(c) || c === null) {
-            const r = (handleNextRef.current || handleNext)();
-            if (r !== true) await speakAsyncWithLog(r?.msg || '今は次へ進めません');
-            return;
+            if (!onDone) return 'complete'; // カスタム: 呼ぶ側がその台を完了にする
+            const r = onDone();
+            if (r === true || r === undefined) return 'advanced';
+            await speakAsyncWithLog((r && r.msg) || '今は次へ進めません');
+            return 'refused';
           }
           retry = 0; continue;
         }
         if (matchInterrupt(response)) {
           await speakAsyncWithLog('中断します');
-          handlePause(); return;
+          // カスタムは カスタムの中断(作業中の台を止める)。順序実行は 今まで通り
+          if (!onDone || executionType === 'custom') (toggleBreakRef.current || toggleBreak)(); else if (!isOnBreakRef.current) (handlePauseRef.current || handlePause)();
+          return 'paused';
         }
 
         let num = parseJapaneseNumber(response);
@@ -9657,8 +9712,12 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           setVoiceStatus(`🎤 ${inp.label}: ${num} — 確認中 (5秒で自動確定)`);
           await speakAsyncWithLog(`${num}ですね`);
           let confirm = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
+          // 🖐 2026-09-24 確かめ役(8回目): 688de95 で ここに gone() を置き、確かめの5秒の間に画面で次へ進むと 言った値を書かずに捨てていた。
+          //   確かめた値は 古い輪でも書く(書き先は この輪が閉じ込めた台 vUnit なので 正しい台に入る)。抜けるのは 書いた後。
+          //   「いいえ」と 言い直した数(まだ確かめていない)は 書かない。古い輪は 聞き直さずに抜ける
 
           if (matchNo(confirm)) {
+            if (gone()) return;
             await speakAsyncWithLog('もう一度お願いします');
             retry = 0; continue;
           }
@@ -9667,15 +9726,18 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           while (confirm && !matchYes(confirm) && cguard < 3) {
             const corrected = parseJapaneseNumber(confirm);
             if (corrected === null || corrected === num) break;
+            if (gone()) return; // 言い直した数は まだ確かめていない(古い輪は 聞き直せない)
             num = corrected;
             setVoiceStatus(`🎤 ${inp.label}: ${num} — 確認中 (5秒で自動確定)`);
             await speakAsyncWithLog(`${num}に直しました。よろしいですか？`);
             confirm = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
-            if (matchNo(confirm)) { await speakAsyncWithLog('もう一度お願いします'); num = null; break; }
+            if (matchNo(confirm)) { if (gone()) return; await speakAsyncWithLog('もう一度お願いします'); num = null; break; }
             cguard++;
           }
           if (num === null) { retry = 0; continue; }
           // Confirmed (explicit yes or 5s timeout auto-confirm)
+          // 🖐 2026-09-24 確かめ役(3回目): 始めた時の写しに重ねて書くと 画面で付けたチェックや値を消していた → 最新に重ねる
+          Object.assign(currentValues, (measurementResultsRef.current || {})[`${step.id}-${vUnit}-values`] || {});
           currentValues[inp.id] = num;
           // 統一キー方針: ${stepId}-${unitIdx}-values + ${stepId}-${unitIdx}
           // 旧キー (${stepId}-values, ${stepId}-result, ${stepId}) は読み出し時 fallback でのみ使用
@@ -9683,15 +9745,20 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           const crossVals = collectCrossStepValues(lot, step.id);
           const calcResults = calculateMeasurementResults(currentValues, config, crossVals);
           const measData = { values: currentValues, calcResults, timestamp: Date.now() };
-          const newMR = {
-            ...measurementResults,
-            [`${stepKey}-${vUnit}-values`]: currentValues,
-            [`${stepKey}-${vUnit}`]: measData,
-          };
-          // 旧キーが既存データに残っている場合のみ更新（互換用・1台目だけ）
-          if (vUnit === 0 && measurementResults[`${stepKey}-values`] !== undefined) newMR[`${stepKey}-values`] = currentValues;
-          if (vUnit === 0 && measurementResults[stepKey] !== undefined) newMR[stepKey] = measData;
-          setMeasurementResults(newMR);
+          const vals = { ...currentValues };
+          setMeasurementResults((prevMR) => {
+            const newMR = {
+              ...prevMR,
+              [`${stepKey}-${vUnit}-values`]: vals,
+              [`${stepKey}-${vUnit}`]: measData,
+            };
+            // 旧キーが既存データに残っている場合のみ更新（互換用・1台目の分だけ）
+            if (vUnit === 0 && prevMR[`${stepKey}-values`] !== undefined) newMR[`${stepKey}-values`] = vals;
+            if (vUnit === 0 && prevMR[stepKey] !== undefined) newMR[stepKey] = measData;
+            return newMR;
+          });
+          // 書いてから抜ける(古い輪は 次の項目を聞かない・次へ進めない)
+          if (gone()) return;
 
           if (i < inputs.length - 1) {
             await speakAsyncWithLog('次へ');
@@ -9706,7 +9773,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     }
 
     // All inputs done - announce results
-    if (!voiceActiveRef.current) return;
+    if (gone()) return;
     const finalResults = calculateMeasurementResults(currentValues, config, collectCrossStepValues(lot, step.id));
     if (finalResults.length > 0) {
       const announcements = finalResults.map(r => {
@@ -9715,12 +9782,17 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         return `${r.label}、${r.result.toFixed(r.precision ?? 3)}${r.unit}、判定${okng}`;
       }).join('。');
       setVoiceStatus(`🎤 結果発表中...`);
+      if (!onDone) { await speakAsyncWithLog(`計算結果。${announcements}。「完了」で この台を終えます`); return 'measured'; }
       await speakAsyncWithLog(`計算結果。${announcements}。次工程に進みますか？`);
       const confirm = await listenOnceWithLog({ timeout: 8000, defaultValue: 'はい' });
+      if (gone()) return;
       if (matchYes(confirm) || confirm === null) {
-        const r = (handleNextRef.current || handleNext)();
-        if (r !== true) await speakAsyncWithLog(r?.msg || '今は次へ進めません');
+        const r = onDone();
+        if (r === true || r === undefined) return 'advanced';
+        await speakAsyncWithLog((r && r.msg) || '今は次へ進めません');
+        return 'refused';
       }
+      return 'measured';
     }
   };
 
@@ -11897,53 +11969,58 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         )}
         {/* 📷 縮めた写真を見せて確かめる(段が下がった時だけ) */}
         <ShrinkConfirm open={!!shrinkAsk} src={shrinkAsk?.src} info={shrinkAsk?.info} label={shrinkAsk?.label} onOk={() => shrinkAsk?.onOk?.()} onRetake={() => shrinkAsk?.onRetake?.()} />
-        {showDefectModal && (
-            <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-                <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
-                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-rose-600"><AlertCircle className="w-5 h-5"/> 不具合報告</h3>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">不具合内容</label>
-                        <textarea className="w-full border rounded-lg p-2" rows={3} placeholder="不具合の内容を入力..." value={defectLabel} onChange={e=>setDefectLabel(e.target.value)}/>
+      {showDefectModal && (
+        <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+            <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-rose-600"><AlertCircle className="w-5 h-5"/> 不具合報告</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">不具合内容</label>
+                <textarea className="w-full border rounded-lg p-2" rows={3} placeholder="不具合の内容を入力..." value={defectLabel} onChange={e=>setDefectLabel(e.target.value)}/>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">原因工程</label>
+                <select className="w-full border rounded-lg p-2" value={defectCauseProcess} onChange={e=>setDefectCauseProcess(e.target.value)}>
+                  <option value="">選択してください</option>
+                  {(defectProcessOptions || DEFAULT_DEFECT_PROCESS_OPTIONS).map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">写真添付</label>
+                <div className="flex gap-2 flex-wrap">
+                  {defectPhotos.map((p, i) => (
+                    <div key={i} className="flex flex-col items-center gap-0.5">
+                      <div className="w-16 h-16 border rounded overflow-hidden relative group/ph">
+                        <img src={p} className="w-full h-full object-cover"/>
+                        {(defectPhotoMarks[i] || []).length > 0 && <span className="absolute bottom-0 left-0 bg-violet-600 text-white text-[10px] px-1 rounded-tr">✍{defectPhotoMarks[i].length}</span>}
+                        <button onClick={()=>{setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i)); setDefectPhotoMarks(prev=>prev.filter((_,idx)=>idx!==i));}} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">原因工程</label>
-                        <select className="w-full border rounded-lg p-2" value={defectCauseProcess} onChange={e=>setDefectCauseProcess(e.target.value)}>
-                          <option value="">選択してください</option>
-                          {(defectProcessOptions || DEFAULT_DEFECT_PROCESS_OPTIONS).map(opt => (
-                            <option key={opt} value={opt}>{opt}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">写真添付</label>
-                        <div className="flex gap-2 flex-wrap">
-                          {defectPhotos.map((p, i) => (
-                            <div key={i} className="w-16 h-16 border rounded overflow-hidden relative group/ph">
-                              <img src={p} className="w-full h-full object-cover"/>
-                              <button onClick={()=>setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i))} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
-                            </div>
-                          ))}
-                          <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
-                            <Camera className="w-5 h-5"/>
-                          </button>
-                          <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); const info=lastShrinkInfo(); if(info&&info.confirm){setShrinkAsk({src:img,info,label:'不具合の写真',onOk:()=>{setDefectPhotos(prev=>[...prev, img]); setShrinkAsk(null);},onRetake:()=>setShrinkAsk(null)});} else {setDefectPhotos(prev=>[...prev, img]);}} e.target.value='';}}/>
-                        </div>
-                      </div>
+                      <button onClick={()=>setMarkEditIdx(i)} className="text-[11px] font-bold text-violet-700 bg-violet-50 border border-violet-200 rounded px-1.5 min-h-[28px]">✍ 印</button>
                     </div>
-                    <div className="bg-rose-50 border border-rose-200 rounded-lg p-2 text-xs text-rose-700 mt-3">
-                      <div className="font-bold mb-1">📋 報告方法を選択</div>
-                      <div><span className="font-bold">報告のみ</span>: 不具合を記録するだけ。作業を続行 (タイマー停止なし)</div>
-                      <div><span className="font-bold">対応開始</span>: 今すぐ対処開始。作業時間を分離して計測</div>
-                    </div>
-                    <div className="flex justify-end gap-2 mt-4 flex-wrap">
-                        <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
-                        <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, true)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold min-h-[44px] disabled:opacity-40">📋 報告のみ</button>
-                        <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, false)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">🚨 対応開始</button>
-                    </div>
+                  ))}
+                  <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
+                    <Camera className="w-5 h-5"/>
+                  </button>
+                  <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); const info=lastShrinkInfo(); if(info&&info.confirm){setShrinkAsk({src:img,info,label:'不具合の写真',onOk:()=>{setDefectPhotos(prev=>[...prev, img]); setShrinkAsk(null);},onRetake:()=>setShrinkAsk(null)});} else {setDefectPhotos(prev=>[...prev, img]);}} e.target.value='';}}/>
+                          {markEditIdx >= 0 && defectPhotos[markEditIdx] && <DefectPhotoMarkEditor src={defectPhotos[markEditIdx]} marks={defectPhotoMarks[markEditIdx] || []} onCancel={() => setMarkEditIdx(-1)} onDone={(m) => { const at = markEditIdx; setDefectPhotoMarks(prev => { const n = [...prev]; while (n.length <= at) n.push([]); n[at] = m; return n; }); setMarkEditIdx(-1); }} />}
                 </div>
+              </div>
             </div>
-        )}
+            <div className="bg-rose-50 border border-rose-200 rounded-lg p-2 text-xs text-rose-700 mt-3">
+              <div className="font-bold mb-1">📋 報告方法を選択</div>
+              <div><span className="font-bold">報告のみ</span>: 不具合を記録するだけ。作業を続行 (タイマー停止なし)</div>
+              <div><span className="font-bold">対応開始</span>: 今すぐ対処開始。作業時間を分離して計測</div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 flex-wrap">
+              <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);setDefectPhotoMarks([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
+              <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, true)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold min-h-[44px] disabled:opacity-40">📋 報告のみ</button>
+              <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, false)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">🚨 対応開始</button>
+            </div>
+          </div>
+        </div>
+      )}
 
         {sharedReportModals}
 
@@ -13426,15 +13503,20 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                 <label className="block text-xs font-bold text-slate-500 mb-1">写真添付</label>
                 <div className="flex gap-2 flex-wrap">
                   {defectPhotos.map((p, i) => (
-                    <div key={i} className="w-16 h-16 border rounded overflow-hidden relative group/ph">
-                      <img src={p} className="w-full h-full object-cover"/>
-                      <button onClick={()=>setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i))} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
+                    <div key={i} className="flex flex-col items-center gap-0.5">
+                      <div className="w-16 h-16 border rounded overflow-hidden relative group/ph">
+                        <img src={p} className="w-full h-full object-cover"/>
+                        {(defectPhotoMarks[i] || []).length > 0 && <span className="absolute bottom-0 left-0 bg-violet-600 text-white text-[10px] px-1 rounded-tr">✍{defectPhotoMarks[i].length}</span>}
+                        <button onClick={()=>{setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i)); setDefectPhotoMarks(prev=>prev.filter((_,idx)=>idx!==i));}} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
+                      </div>
+                      <button onClick={()=>setMarkEditIdx(i)} className="text-[11px] font-bold text-violet-700 bg-violet-50 border border-violet-200 rounded px-1.5 min-h-[28px]">✍ 印</button>
                     </div>
                   ))}
                   <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
                     <Camera className="w-5 h-5"/>
                   </button>
                   <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); const info=lastShrinkInfo(); if(info&&info.confirm){setShrinkAsk({src:img,info,label:'不具合の写真',onOk:()=>{setDefectPhotos(prev=>[...prev, img]); setShrinkAsk(null);},onRetake:()=>setShrinkAsk(null)});} else {setDefectPhotos(prev=>[...prev, img]);}} e.target.value='';}}/>
+                          {markEditIdx >= 0 && defectPhotos[markEditIdx] && <DefectPhotoMarkEditor src={defectPhotos[markEditIdx]} marks={defectPhotoMarks[markEditIdx] || []} onCancel={() => setMarkEditIdx(-1)} onDone={(m) => { const at = markEditIdx; setDefectPhotoMarks(prev => { const n = [...prev]; while (n.length <= at) n.push([]); n[at] = m; return n; }); setMarkEditIdx(-1); }} />}
                 </div>
               </div>
             </div>
@@ -13444,7 +13526,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
               <div><span className="font-bold">対応開始</span>: 今すぐ対処開始。作業時間を分離して計測</div>
             </div>
             <div className="flex justify-end gap-2 mt-4 flex-wrap">
-              <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
+              <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);setDefectPhotoMarks([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
               <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, true)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold min-h-[44px] disabled:opacity-40">📋 報告のみ</button>
               <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, false)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">🚨 対応開始</button>
             </div>
@@ -20648,8 +20730,9 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
          <div className="fixed inset-0 z-[80] bg-black/90 flex flex-col p-4 items-center justify-center cursor-pointer" onClick={() => setExpandedDefectImage(null)}>
            <div className="absolute top-4 right-4 text-white hover:text-slate-300"><X className="w-10 h-10" /></div>
            <div className="flex gap-4 flex-wrap justify-center items-center max-w-full max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-             {(Array.isArray(expandedDefectImage) ? expandedDefectImage : [expandedDefectImage]).map((src, idx) => (
-               <img key={idx} src={src} className="max-h-[80vh] max-w-[45vw] object-contain rounded-lg shadow-lg" />
+             {/* ✍ P112 印つきの写真は { photos, marks }。印を写真の上に重ねる */}
+             {(Array.isArray(expandedDefectImage) ? expandedDefectImage : (expandedDefectImage && Array.isArray(expandedDefectImage.photos) ? expandedDefectImage.photos : [expandedDefectImage])).map((src, idx) => (
+               <MarkedPhoto key={idx} src={src} marks={(expandedDefectImage && Array.isArray(expandedDefectImage.marks) && expandedDefectImage.marks[idx]) || []} imgClassName="max-h-[80vh] max-w-[45vw] object-contain rounded-lg shadow-lg" />
              ))}
            </div>
          </div>
@@ -21125,7 +21208,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                            <td className="p-3 text-xs">{d.stepInfo?.title || '全体'}</td>
                            <td className="p-3 text-rose-600 font-bold whitespace-pre-wrap">{d.label || ''}</td>
                            <td className="p-3 text-xs font-bold whitespace-nowrap">{d.causeProcess ? <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded">{d.causeProcess}</span> : '-'}</td>
-                           <td className="p-3 text-center">{d.photos && d.photos.length > 0 ? <button onClick={() => setExpandedDefectImage(d.photos)} className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold hover:bg-blue-200">{d.photos.length}枚</button> : '-'}</td>
+                           <td className="p-3 text-center">{d.photos && d.photos.length > 0 ? <button onClick={() => setExpandedDefectImage(Array.isArray(d.photoMarks) ? { photos: d.photos, marks: d.photoMarks } : d.photos)} className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold hover:bg-blue-200">{d.photos.length}枚</button> : '-'}</td>
                            <td className="p-3 text-xs text-slate-600 whitespace-nowrap">{d.workerName || ''}</td>
                            <td className="p-3 text-center">
                              <div className="flex items-center justify-center gap-1">
@@ -30049,6 +30132,9 @@ const QuotaStoppedPanel = ({ until }) => (
    const lotsLoadedRef = useRef(false);
    // 保存の見張りが突き合わせる「いまサーバに在るロット」。描き直しに巻き込まれない ref で持つ。
    const rawLotsRef = useRef([]);
+   // 📐 P040 保管庫の測定図 { id: dataUrl }。ref は保存・巡回が再描画を待たずに読む用
+   const stepDiagramsRef = useRef({});
+   const [stepDiagrams, setStepDiagrams] = useState({});
    // 購読が死んだ事を人に見せる。名指しで出す(どのコレクションが読めていないか)。
    const [readErrors, setReadErrors] = useState({});
 
@@ -30177,12 +30263,15 @@ const QuotaStoppedPanel = ({ until }) => (
    // ⚠過去(historyLots)は **今までの購読そのもの**(新しい方から500件)なので、
    //   届いた後は普段の窓(liveLots)を混ぜない。混ぜると、窓の購読を止めた後に
    //   **古い姿で新しい姿を上書き**してしまう。過去 ⊇ 窓 なので混ぜる必要も無い。
-   const lots = useMemo(() => {
-     // 🧾 中断の記録(interruptionsMap)を配列へ合流させるのは ここ1回だけ(製品の購読の出口と同じ)
-     if (lotsWindowWhole) return liveLots.map(withInterruptionLog);                       // 全部読めている = 今までと同一
-     if (historyLots !== null) return mergeLotsById(historyLots, openLots).map(withInterruptionLog);
-     return mergeLotsById(liveLots, openLots).map(withInterruptionLog);
+   // 📐 P040 lotsRaw = 保管庫にあるままの姿(測定図は札のまま)。見張り・容量の関所・巡回はこちらを見る。
+   const lotsRaw = useMemo(() => {
+     if (lotsWindowWhole) return liveLots;                       // 全部読めている = 今までと同一
+     if (historyLots !== null) return mergeLotsById(historyLots, openLots);
+     return mergeLotsById(liveLots, openLots);
    }, [lotsWindowWhole, historyLots, openLots, liveLots]);
+   // 画面用だけ札を絵に戻す(届いていない札は札のまま=保存で消えない)
+   // 🧾 中断の記録(interruptionsMap)を配列へ合流させるのは ここ1回だけ(製品の購読の出口と同じ)
+   const lots = useMemo(() => (Object.keys(stepDiagrams).length ? lotsRaw.map(l => hydrateLot(l, stepDiagrams)) : lotsRaw).map(withInterruptionLog), [lotsRaw, stepDiagrams]);
    // 過去まで揃っているか。🚨**揃っていない状態で過去の数字を出さない**(黙って減るのが一番まずい)。
    const historyLoaded = historyLots !== null;
    const lotsHistoryReady = lotsWindowWhole || historyLoaded;
@@ -30761,6 +30850,8 @@ const QuotaStoppedPanel = ({ until }) => (
        watch('announcements', (rows) => setAnnouncements(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
        // ⚠observationPlans は作業画面(じっと見るモード)が使う。外すと現場が使えない。
        watch('observationPlans', (rows) => setObservationPlans(rows)),
+       // 📐 P040 測定図の保管庫(ロットより前に届く保証は無い。届いたら画面用の合流をやり直す)
+       watch(DIAGRAM_COLLECTION, (rows) => { const m = diagramMapOf(rows); stepDiagramsRef.current = m; setStepDiagrams(m); }),
        // 🚨 ここから外した物 → 下の「開いた時だけ読む」へ移した:
        //   logs(バックアップ画面だけ) / indirectWork(達成率・分析・日次集計だけ) / improvements(分析だけ)
        P.watchDoc(APP_DATA_ID, 'settings', 'config', (data0, snap) => {
@@ -30808,7 +30899,7 @@ const QuotaStoppedPanel = ({ until }) => (
        P.watchCollection(CONTACT_SHARED_NS, NOTICE_COL, (rows) => setAppNotices(rows || []), { onError: readFailed(NOTICE_COL) })
      ];
      // 張った事は0件でも残す(「読んでいない」と「そもそも購読していない」を人が見分けられるように)。
-     ['templates', 'workers', 'notes', 'announcements', 'observationPlans', 'settings/config', 'contact_shared/settings'].forEach(c => countReads(c, 0, { attach: true }));
+     ['templates', 'workers', 'notes', 'announcements', 'observationPlans', DIAGRAM_COLLECTION, 'settings/config', 'contact_shared/settings'].forEach(c => countReads(c, 0, { attach: true }));
      if (stopped) stopAll(); // 張っている最中に枠切れが来た時の取りこぼし防止
      return () => { stopped = true; unsubs.forEach(u => { try { u(); } catch { /* 既に止まっていても構わない */ } }); };
    }, [user, db, countReads, noteReadError]);
@@ -30872,7 +30963,7 @@ const QuotaStoppedPanel = ({ until }) => (
    }, [historyLots, lots, lotsWindowWhole]);
 
    // 念のための後追い(購読の中の同期更新が本体。ここは取りこぼしの保険)。
-   useEffect(() => { rawLotsRef.current = lots; }, [lots]);
+   useEffect(() => { rawLotsRef.current = lotsRaw; }, [lotsRaw]);
 
    // --- 過去のロットを「開いた時だけ」読む -------------------------------------
    // 🚨🚨 完了履歴 / 分析 / 作業最適化 / 達成率 / 完了一覧 / 日次集計 / 引き継ぎ は
@@ -31102,7 +31193,30 @@ const QuotaStoppedPanel = ({ until }) => (
      }
    };
 
-   const saveData = async (col, id, data) => {
+   // 📐 P040 保存前に「どの測定図を外へ出すか」を集めるだけ(通信しない)。札に替えた steps と、書く絵の一覧を返す。
+   //   ⚠書けなかった時・上限(6枚)を超えた絵は札に替えず絵のまま(90秒ごとの巡回が後で片付ける)。
+   const collectDiagramWrites = async (steps) => {
+     const writes = [];
+     const out = await dehydrateSteps(steps, async (fid, body) => { writes.push({ id: fid, body }); },
+       { known: new Set(Object.keys(stepDiagramsRef.current)), max: 6 });
+     return { steps: out, writes };
+   };
+   // 📐 P040 保管庫が受け取らなかった絵は、札を元の絵へ戻して steps だけ書き直す(札は在るのに図が無い状態を残さない)。
+   //   ⚠tasks は1バイトも触らない(関所 saveData は通さない。書くのは steps だけ)。
+   const restoreFailedDiagrams = (col, id, stepsAfter, stepsBefore, failedIds) => {
+     const next = { ...stepDiagramsRef.current };
+     failedIds.forEach(fid => { delete next[fid]; });
+     stepDiagramsRef.current = next;
+     if (!stepsAfter || !stepsBefore) return;
+     const restored = restoreFailedRefs(stepsAfter, stepsBefore, failedIds,
+       (st) => (st && st.measurementConfig && isDiagramRef(st.measurementConfig.diagramImage)
+         ? st.measurementConfig.diagramImage.slice(DIAGRAM_PREFIX.length) : null));
+     if (restored === stepsAfter) return;
+     DATA(db).save(APP_DATA_ID, col, id, { steps: restored, updatedAt: DATA_SERVER_NOW })
+       .catch(e2 => { console.error('[測定図] 札の戻しにも失敗', e2); setErrorMsg('測定図の保存に失敗しました。図が出ない工程があるかもしれません（作業の記録は保存されています）。'); });
+   };
+
+   const saveData = async (col, id, data, saveOpts = {}) => {
      // 🚨🚨🚨 2026-08-23: サインインが終わっていない間の保存を **黙って捨てない**。
      //   前はここで無言 return していたので `await` した側には正常に返り、
      //   画面だけ先へ進んで Firestore には何も行かなかった(2026-08-17 の事故と同じ形)。
@@ -31118,32 +31232,65 @@ const QuotaStoppedPanel = ({ until }) => (
      }
      // ⚠関所は try の **外**。中で投げると下の catch が飲み込み、
      //   「止めたつもりの保存」が失敗扱いで再試行キューに入ってしまう。
+     // 📐 P040 測定図は本体に入れない。絵は step_diagrams へ逃がし、工程には札だけ置く(製品と同じ)。
+     //   ⚠ここでは書かない。何を書くか集めるだけ(通信しない)。書くのは下の saveInOrder(記録が先・絵が後)。
+     //   ⚠書けなかった絵・上限(6枚)を超えた絵は札に替えず絵のまま残す。90秒ごとの巡回が後で片付ける。
+     //   ⚠関所(guardLotSave)は札に替えた後の姿で測る(保管庫の姿=rawLotsRef と同じ物差し)。
+     const rawData = data;
+     let diagramWrites = [];
+     let stepsBeforeOffload = null;
+     if (col === 'lots' && data && Array.isArray(data.steps)) {
+       try {
+         stepsBeforeOffload = data.steps;
+         const off = await collectDiagramWrites(data.steps);
+         diagramWrites = off.writes;
+         if (off.steps !== data.steps) data = { ...data, steps: off.steps };
+       } catch (e) {
+         console.warn('測定図の別置きの下ごしらえに失敗したので、絵を本体に入れたまま保存します(次の巡回でやり直します)', e);
+         diagramWrites = [];
+         stepsBeforeOffload = null;
+         data = rawData;
+       }
+     }
      guardLotSave(col, id, data);
-     const rec = { kind: 'doc', col, id, data };
+     const rec = { kind: 'doc', col, id, data: rawData };
+     // ⚠裏の処理(測定図の巡回)は画面の同期表示を動かさない
+     const quiet = saveOpts.background === true;
      bumpInflight(+1);
      try {
-       setSyncStatus('syncing');
-       setErrorMsg(null);
+       if (!quiet) {
+         setSyncStatus('syncing');
+         setErrorMsg(null);
+       }
 
        // 🚨🚨 2026-08-17 の事故対策の関所(domain/saveOrder.js)。
-       //   **記録を先に待ち行列へ入れ、別置き(写真)は後ろへ回し、その間に await を挟まない。**
-       //   ⚠待つ回数は前と同じ1回(記録の1回)だけ。現場の検査動線に await は1つも足していない。
-       //   ⚠部品検査は写真をロット本体に持つ(別置き先が無い)ので blobs は今は必ず空。
-       //     別置きを足す時は **blobs へ入れる**。そうすれば record の後ろに並ぶ事が
-       //     この1本(orderWrites)で保証され、8/17 の形へは戻せなくなる。
+       //   **記録を先に待ち行列へ入れ、別置き(写真)は後ろへ回し、その間に待たない。**
+       //   ⚠待つのは前と同じ1回(記録の1回)だけ。
+       //   📐 P040 別置き(測定図)は blobs へ入れる。record の後ろに並ぶ事がこの1本(orderWrites)で保証される。
+       //     上の collectDiagramWrites の max:6 と同じ数(両方直す事)。
+       const diagramBlobs = diagramWrites.slice(0, 6).map(d => ({ id: d.id, col: DIAGRAM_COLLECTION, body: d.body, opts: { merge: false } }));
+       // 手元の索引は待ち行列へ入れる時に更新する(電波が無い間に自分の画面から図が消えない)
+       if (diagramBlobs.length) stepDiagramsRef.current = { ...stepDiagramsRef.current, ...Object.fromEntries(diagramBlobs.map(b => [b.id, b.body.data])) };
        const h = saveInOrder({
-         record: { id, body: { ...cleanUndefined(data), updatedAt: DATA_SERVER_NOW } },
-         blobs: [],
-         write: (w) => DATA(db).save(APP_DATA_ID, col, w.id, w.body),
+         record: { id, col, body: cleanUndefined(data) },
+         blobs: diagramBlobs,
+         write: (w) => DATA(db).save(APP_DATA_ID, w.col, w.id, { ...w.body, updatedAt: DATA_SERVER_NOW }, w.opts),
        });
+       if (diagramWrites.length) console.info('[保存の順番]', describeWriteOrder(h.order));
        // ⚠別置きの結果(h.blobs)は **必ず resolve する**(saveOrder.js の約束)。
-       //   いまは空なので何も起きないが、握り潰しにならないよう名指しで受けておく。
-       h.blobs.then((r) => { if (r && r.failedIds && r.failedIds.length) console.error('🚨 別置きの保存に失敗', col, id, r.failedIds, r.errors); });
+       //   拒否された絵は札だけ残さない: 札を元の絵へ戻して steps だけ書き直す(tasks は触らない)。
+       const stepsAfterOffload = Array.isArray(data.steps) ? data.steps : null;
+       h.blobs.then((r) => {
+         if (!(r && r.failedIds && r.failedIds.length)) return;
+         console.error('🚨 別置き(測定図)の保存に失敗', col, id, r.failedIds, r.errors);
+         restoreFailedDiagrams(col, id, stepsAfterOffload, stepsBeforeOffload, r.failedIds);
+       });
        await h.record;
-       setSyncStatus('idle');
+       if (!quiet) setSyncStatus('idle');
        forgetFailed(rec);
      } catch (e) {
          console.error(e);
+         if (quiet) throw e; // 表示は動かさない。ただし握り潰さない
          setSyncStatus('error');
          setErrorMsg(e.message || "Unknown error during save");
          rememberFailed(rec);
@@ -31210,6 +31357,38 @@ const QuotaStoppedPanel = ({ until }) => (
      }
      setExecutionLotId(id);
    }, [lots, workers, currentUserName]);
+   // 📐 P040 関所は ref 越しに呼ぶ(saveDataRef は上の現場マップの口と共用)
+   // 📐 P040 既にあるロットの測定図を少しずつ外へ出す巡回(製品と同じ: 90秒ごと・一度に3件)。
+   //   ⚠見るのは保管庫の姿(rawLotsRef)。選ぶ側と動かす側は同じ isOffloadableDiagram。変わらない物は書かない。
+   //   ⚠関所(saveData)を通す。渡すのは絵のままの steps だけ(tasks は渡さない)。
+   const diagramSweepBusy = useRef(false);
+   useEffect(() => {
+     if (!user || !db) return;
+     const tick = async () => {
+       if (diagramSweepBusy.current) return;
+       if (!lotsLoadedRef.current) return; // 読めていない間は自動で書かない
+       const raw = rawLotsRef.current || [];
+       const targets = lotsNeedingDiagramOffload(raw).slice(0, 3);
+       if (!targets.length) return;
+       diagramSweepBusy.current = true;
+       try {
+         for (const t of targets) {
+           const cur = (rawLotsRef.current || []).find(l => l && l.id === t.id);
+           if (!cur) continue;
+           const probe = await dehydrateSteps(cur.steps, async () => {}, { known: new Set(Object.keys(stepDiagramsRef.current)) });
+           if (probe === cur.steps) continue;
+           const save = saveDataRef.current;
+           if (!save) break;
+           await save('lots', t.id, { steps: cur.steps }, { background: true });
+         }
+       } catch (e) {
+         console.warn('測定図の片付けに失敗(次の巡回でやり直します)', e);
+       } finally { diagramSweepBusy.current = false; }
+     };
+     const timer = setInterval(tick, 90000);
+     const first = setTimeout(tick, 15000);
+     return () => { clearInterval(timer); clearTimeout(first); };
+   }, [user, db]);
 
    const retryLastSave = async () => {
      const p = lastFailedPayloadRef.current;

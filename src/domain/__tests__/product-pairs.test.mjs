@@ -163,6 +163,11 @@ const PAIRS = [
   { file: 'opsim/workloadMeter.js', product: 'product-inspection-app/src/opsim/workloadMeter.js', md5: '6140214a2e71cb9af59498e5ac0d520e' },
   { file: 'opsim/lateTone.js', product: 'product-inspection-app/src/opsim/lateTone.js', md5: 'df1660970b56c8f5cfd84e4942d5b70f' },
   { file: 'opsim/idleTone.js', product: 'product-inspection-app/src/opsim/idleTone.js', md5: 'dbf0cac2986233260059fe4b1384abde' },
+  // P074: 画面部品。製品・最終と md5 一致(d7ca21de…)
+  { file: 'ShrinkConfirm.jsx', product: 'product-inspection-app/src/ShrinkConfirm.jsx', md5: 'd7ca21dec7173fad2662b68a54a4bf0a' },
+  // P112: 印を描く道具(画面部品)。描き方は製品と同じ
+  { file: 'MarkCanvas.jsx', product: 'product-inspection-app/src/MarkCanvas.jsx', md5: '8845eaaf8481df33679e06b52259ef8b' },
+  { file: 'RecipeMarks.jsx', product: 'product-inspection-app/src/RecipeMarks.jsx', md5: '30c5884e352229a0f896ca4fb6474f2c' },
 ];
 
 for (const p of PAIRS) {

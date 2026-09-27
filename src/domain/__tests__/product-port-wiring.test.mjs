@@ -77,7 +77,7 @@ test('PP7 音声: 「全作業完了」が弾かれても聞き取りを止め�
   assert.ok(voiceArea.length > 1000, '音声の範囲が見つからない');
   assert.doesNotMatch(voiceArea, /handleCompleteTrigger\(\)/, '音声から handleCompleteTrigger を直に呼んでいる(弾かれると音声が死ぬ)');
   assert.ok((voiceArea.match(/\(voiceLatestRef\.current\.voiceTryCompleteAll \|\| voiceTryCompleteAll\)\(\)/g) || []).length >= 7, '音声の「全作業完了」が voiceTryCompleteAll の最新を通っていない');
-  assert.match(voiceArea, /if \(lu\.pendingUndo \?\? pendingUndo\) \{ \(lu\.handleUndo \|\| handleUndo\)\(\);/, '音声の取り消しが古い控えを読んでいる');
+  assert.match(voiceArea, /if \('pendingUndo' in lu \? lu\.pendingUndo : pendingUndo\) \{ \(lu\.handleUndo \|\| handleUndo\)\(\);/, '音声の取り消しが古い控えを読んでいる');
   const hc = bodyOf('const handleCompleteTrigger = (skipTimeCheck = false) => {', 3500);
   assert.match(hc, /completeBlockReasonRef\.current = 'checklist';\s*return false;/, '確認チェックで弾いた時に false を返していない');
   assert.match(hc, /completeBlockReasonRef\.current = 'timecheck'; return false;/, '時間の確認で弾いた時に false を返していない');
