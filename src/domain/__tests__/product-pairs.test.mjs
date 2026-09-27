@@ -144,6 +144,10 @@ const PAIRS = [
   { file: 'domain/workSessions.js', product: 'product-inspection-app/src/domain/workSessions.js', md5: 'e03d0ca73c84520b58f4760bbc2dd192' },
   { file: 'domain/workerDailyActual.js', product: 'product-inspection-app/src/domain/workerDailyActual.js', md5: 'c2f19376c2a6608a1e4e1eb87ca091ea' },
   { file: 'domain/workerPlan.js', product: 'product-inspection-app/src/domain/workerPlan.js', md5: '813226cf8606115a270a27cf07181b5f' },
+  // 2026-09-27 a6: 自動運転中に取れたはずの時間(画面は機械区間の記録が入ってから)
+  { file: 'domain/timeIntervals.js', product: 'product-inspection-app/src/domain/timeIntervals.js', md5: 'addcd2103b26b2ca667e2261e6d96b5f' },
+  { file: 'domain/autoOpportunity.js', product: 'product-inspection-app/src/domain/autoOpportunity.js', md5: 'a4e9cad00dcd48bf5b49e17c03bf85f9' },
+  { file: 'domain/autoOpportunityReport.js', product: 'product-inspection-app/src/domain/autoOpportunityReport.js', md5: '2f36d0be599423c13d967907c506f702' },
 ];
 
 for (const p of PAIRS) {
