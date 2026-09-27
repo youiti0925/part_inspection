@@ -207,6 +207,10 @@ import { WorkerAvatar } from './WorkerAvatar.jsx';
 import { workerToneOf } from './workerTone.js';
 import SignoffModal from './SignoffModal.jsx';
 import { stampTrainee } from './domain/lotSavePipeline.js';
+// ⭐ P116 星取表 / 👀 P161 独り立ち直後の見守り(製品の画面を写し・純関数は写し済み)
+import StarChartView from './StarChartView.jsx';
+import MimamoriCard from './MimamoriCard.jsx';
+import { deriveSignoffs, buildMimamoriReport } from './domain/educationEvents.js';
 import { normalizeRequiredSkills, requiredSkillIdsForStep, toggleSkillOnStep, attachSkill, detachSkill, upsertSkill, newSkillId, SKILL_SCOPE } from './domain/skillRegistry.js';
 // P028/P099: アプリへの要望・不具合の箱と更新のお知らせ(製品から1バイト同じで写した・置き場所は contact-shared-v1 の共通の箱)
 import { FeedbackButton, FeedbackModal, FeedbackList, feedbackDeviceId } from './AppFeedback.jsx';
@@ -7558,8 +7562,10 @@ const CustomCompactGrid = ({ localSteps, lot, tasks, batchStartTimes, globalNext
                         onClick={() => onCellClick(sIdx, u)}
                         className={`w-full rounded ${D.cellBtn} relative overflow-hidden flex flex-col items-center justify-center leading-none transition-all ${c.cls} ${isNext ? 'ring-2 ring-emerald-400' : ''} ${isActive ? 'ring-2 ring-blue-400' : ''}`}
                         style={{ minHeight: D.cellMinH, ...(c.style || {}) }}
-                        title={`#${u + 1}台目 ${step.title} (${task.status})${c.pct != null ? ` / 目標の${Math.round(c.pct)}%経過` : ''}${reworkTotal > 0 ? ` / 修正${reworks.length}回 合計${formatTime(reworkTotal)}` : ''}`}
+                        title={`#${u + 1}台目 ${step.title} (${task.status})${c.pct != null ? ` / 目標の${Math.round(c.pct)}%経過` : ''}${reworkTotal > 0 ? ` / 修正${reworks.length}回 合計${formatTime(reworkTotal)}` : ''}${task.trainee === true ? ' / 🎓教育中に記録（標準時間などの「ものさし」からは外しています）' : ''}`}
                       >
+                        {/* 🎓 P132 教育中に記録された台の目印(task.trainee を読む=卒業しても消えない) */}
+                        {task.trainee === true && <span className="absolute top-0 left-0 fi-tap-text leading-none pointer-events-none opacity-90">🎓</span>}
                         {c.mark && <span className={D.cellMark}>{c.mark}</span>}
                         <span className={`${D.cellTime} ${dense ? '' : 'mt-1'}`}>{c.time}</span>
                         {/* 進捗ゲージ: 経過/目標 (緑→警告色→超過で白) */}
@@ -7789,6 +7795,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     || null;
   const inspectorWorker = resolveWorkerForWork(inspectorWorkerId);
   const inspectorName = inspectorWorker?.name || currentUserName || '';
+  const inspectorIsTrainee = inspectorWorker?.trainee === true; // 🎓 P132 担当が教育中か(担当セレクタに出す)
   // ================================================================================
   // 作業中の担当者引き継ぎ(製品と同じ): 見出しのこのセレクタで担当を切替えると lot.workerId を更新 →
   //   inspectorName が追従し、これ以降に完了する台は新しい担当で記録される(完了済みの台はそのまま=遡及しない)。
@@ -7807,12 +7814,12 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const inspectorSelector = (
     <label onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 bg-white/10 rounded px-1.5 py-1 shrink-0" title={`この作業の担当者。切り替えると、これ以降に完了する台は新しい担当で記録されます（完了済みの台はそのまま）${!inspectorWorkerId ? `
 ⚠担当が未選択です。記録は「${inspectorName || '(名前なし)'}」で残ります。担当を選んでください。` : ''}`}>
-      <User className="w-3.5 h-3.5 opacity-80 shrink-0" />
+      {inspectorIsTrainee ? <span className="text-sm shrink-0 leading-none" title="教育中の担当者です。これ以降に記録する時間は「ものさし」(標準時間・スキル比較)から外れます">🎓</span> : <User className="w-3.5 h-3.5 opacity-80 shrink-0" />}
       {/* ⚠表示は lot.workerId ではなく「これから記録に使う担当」を出す(購読が返るまで lot.workerId は旧担当のまま) */}
       <select value={inspectorWorkerId || ''} onChange={(e) => changeInspector(e.target.value)} className="rounded px-1 py-0.5 text-xs font-bold border max-w-[6.5rem] bg-slate-700 text-white border-white/20">
         <option value="">担当を選択</option>
         {/* 🛌休止中の人は外す。ただし今この作業に付いている人は外さない(🛌を付けて出す) */}
-        {laneWorkersOf(workers || [], [], { keepIds: [inspectorWorkerId] }).map(w => <option key={w.id} value={w.id} className="text-black">{isWorkerPaused(w) ? `🛌${w.name}` : w.name}</option>)}
+        {laneWorkersOf(workers || [], [], { keepIds: [inspectorWorkerId] }).map(w => <option key={w.id} value={w.id} className="text-black">{isWorkerPaused(w) ? `🛌${w.name}` : (w.trainee === true ? `🎓${w.name}` : w.name)}</option>)}
       </select>
     </label>
   );
@@ -30615,7 +30622,21 @@ const QuotaStoppedPanel = ({ until }) => (
      lazyCtx, 'minor_reports',
      activeTab === 'analysis' || showQuickLedger,
      (rows) => rows.slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
-   const [logs, logsReady] = useLazyCollection(
+   // ⭐ P116 星取表の「教えられる」の指名(追記型 skill_marks)。作業最適化のタブを開いた時だけ読む
+  const [skillMarks] = useLazyCollection(
+    lazyCtx, 'skill_marks',
+    activeTab === 'optimize',
+    (rows) => rows.slice().sort((a, b) => (toMsAny(b.at) || 0) - (toMsAny(a.at) || 0)).slice(0, 500));
+  // 👀 P161 教育の出来事(独り立ちのサインオフ)。全体進捗を開いた時だけ読む
+  const [educationEvents] = useLazyCollection(
+    lazyCtx, 'education_events',
+    activeTab === 'progress',
+    (rows) => rows.slice().sort((a, b) => (toMsAny(b.at) || 0) - (toMsAny(a.at) || 0)).slice(0, 500));
+  const mimamoriReport = useMemo(() => {
+    try { return buildMimamoriReport({ lots, workers, signoffs: deriveSignoffs(educationEvents || []), nowMs: Date.now(), toMs: toMsAny }); }
+    catch (e) { console.warn('mimamori', e); return null; }
+  }, [lots, workers, educationEvents]);
+  const [logs, logsReady] = useLazyCollection(
      lazyCtx, 'logs',
      activeTab === 'analysis',
      (rows) => rows.slice().sort((a, b) => b.timestamp - a.timestamp));
@@ -33986,7 +34007,7 @@ const QuotaStoppedPanel = ({ until }) => (
          {activeTab === 'progress' && (
            quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
            : !progressDataReady ? <DataLoadingPanel what="過去のロットと間接作業" />
-           : <ProgressOverviewView lots={lots} /* 🧹 2026-09-23 休止中の人を在籍・ロスター・タイムラインに数えない(製品と同じ。作業者の現状の5人と合わせる) */ workers={activeWorkersOf(workers || [])} pausedCount={Math.max(0, (workers || []).length - activeWorkersOf(workers || []).length)} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} />
+           : <div className="h-full flex flex-col gap-3 min-h-0">{/* 👀 P161 独り立ち直後の見守り。カードが無ければ null */}<MimamoriCard report={mimamoriReport} currentUserName={currentUserName} canEdit={currentUserName === '管理者'} /><div className="flex-1 min-h-0"><ProgressOverviewView lots={lots} /* 🧹 2026-09-23 休止中の人を在籍・ロスター・タイムラインに数えない(製品と同じ。作業者の現状の5人と合わせる) */ workers={activeWorkersOf(workers || [])} pausedCount={Math.max(0, (workers || []).length - activeWorkersOf(workers || []).length)} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} /></div></div>
          )}
          {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)} />}
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
@@ -34013,6 +34034,7 @@ const QuotaStoppedPanel = ({ until }) => (
                  <button onClick={() => setOptimizeView('strict')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'strict' ? 'bg-white shadow text-rose-600' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 厳密モード{strictReviewCount > 0 && <span className="bg-amber-400 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-black">{strictReviewCount}</span>}</button>
                  <button onClick={() => setOptimizeView('skill')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'skill' ? 'bg-white shadow text-orange-600' : 'text-slate-500 hover:text-slate-700'}`}><Award className="w-4 h-4" /> スキルマップ</button>
                  <button onClick={() => setOptimizeView('modelgroup')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'modelgroup' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}><Layers className="w-4 h-4" /> 品目グループ</button>
+                 <button onClick={() => setOptimizeView('star')} className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'star' ? 'bg-white shadow text-amber-600' : 'text-slate-500 hover:text-slate-700'}`}><Award className="w-4 h-4" /> ⭐星取表</button>
                  <button onClick={() => setOptimizeView('tskip')} data-optimize-tab="tskip" className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 ${optimizeView === 'tskip' ? 'bg-white shadow text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}><ShieldCheck className="w-4 h-4" /> 抜取/スキップ</button>
                </div>
                {/* 🚨 説明文は消していない。？ を押すと全文が出る(畳んだだけ)。
@@ -34043,7 +34065,8 @@ const QuotaStoppedPanel = ({ until }) => (
                {!quotaBlock && lotsHistoryReady && optimizeView === 'strict' && (currentUserName === '管理者' ? <StrictModeManagerModal embedded lots={lots} templates={templates} rules={settings.strictModeRules || {}} history={strictModeHistory} currentUserName={currentUserName} maturityUnits={strictMaturityUnits} onSetMaturity={(n) => saveSettings({ strictMaturityUnits: n })} onDecide={handleStrictDecide} optimalByCombo={optimalByCombo} onDecideOptimal={handleOptimalDecide} onOpenAnalysis={(row) => setAnalysisCombo({ model: row.model, templateId: row.templateId, templateName: row.templateName })} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">厳密モードの管理は管理者のみです。ヘッダー左上で「管理者」を選択してください。</div>)}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'skill' && <SkillMapView lots={lots} templates={templates} workers={workers} skills={settings.skills && settings.skills.length ? settings.skills : DEFAULT_SKILLS} workerSkills={settings.workerSkills || {}} canEdit={currentUserName === '管理者'} onSaveSkills={(list) => saveSettings({ skills: list })} onSaveWorkerSkill={(wn, sid, level) => { const ws = settings.workerSkills || {}; saveSettings({ workerSkills: { ...ws, [wn]: { ...(ws[wn] || {}), [sid]: level } } }); }} onSaveTemplateSkills={(tplId, reqSkills) => saveData('templates', tplId, { requiredSkills: reqSkills })} />}
                {/* 🧾 品目×テンプレ単位の抜取／スキップ。決めるのは管理者。数字は domain/templateSkip.js が実測から出す。 */}
-               {!quotaBlock && lotsHistoryReady && optimizeView === 'tskip' && <TemplateSkipPanel unitLabel="品目" lots={lots} templates={templates} settings={settings} saveSettings={saveSettings} canEdit={currentUserName === '管理者'} currentUserName={currentUserName} />}
+               {!quotaBlock && lotsHistoryReady && optimizeView === 'star' && <StarChartView lots={lots} workers={workers} templates={templates} settings={settings} skillMarks={skillMarks || []} canEdit={currentUserName === '管理者'} currentUserName={currentUserName} onSaveMark={(doc) => saveData('skill_marks', doc.id, doc)} />}
+              {!quotaBlock && lotsHistoryReady && optimizeView === 'tskip' && <TemplateSkipPanel unitLabel="品目" lots={lots} templates={templates} settings={settings} saveSettings={saveSettings} canEdit={currentUserName === '管理者'} currentUserName={currentUserName} />}
                {!quotaBlock && lotsHistoryReady && optimizeView === 'modelgroup' && (currentUserName === '管理者' ? <ModelGroupManager lots={lots} settings={settings} saveSettings={saveSettings} /> : <div className="bg-white rounded-xl border p-8 text-center text-slate-400">品目グループの管理は管理者のみです。</div>)}
              </div>
            </div>
