@@ -314,6 +314,140 @@ const readXlsxGridWithJSZip_pl = async (buf, preferredSheetName) => {
   }
   return grid;
 };
+
+
+// 📊 進捗管理表の「2人目の読み手」(2026-09-10 清水さん報告: 本番で
+//   「取込み中にエラーが発生しました: Cannot read properties of undefined (reading 'sheets')」)。
+//   ExcelJS はブラウザで特定の xlsx(外部リンク [1]会議用 を持つ表・10MB)を読めずに落ちる。
+//   入荷登録Excel には 2026-06-30 に JSZip の読み手を付けてあったが、進捗管理表の道には無かった。
+//   ⚠ 私の写しの試験は openpyxl で作り直した小さい見本だったので素通りした(実物で試していなかった)。
+//
+//   ExcelJS の代わりに JSZip で xlsx を直に開き、取込が使う **同じ顔**(worksheets / getWorksheet /
+//   rowCount / getRow(r).getCell(i).value / .fill)を返す。取込の本体は1行も変えない。
+//   ・値: 共有文字列 / inlineStr / 数式の結果(v) / 数値(シリアル値のまま。読み方は純関数が持つ) / #VALUE! などの文字
+//   ・塗り(灰色=出荷済): styles.xml の cellXfs → fills → patternFill の fgColor(theme / tint / rgb)
+//   ⚠ 日付型の数値は Date に直さない(ExcelJS も数式の結果は数のまま返す事があり、純関数 cellToYMD がシリアル値を読む)。
+const readProgressBookWithJSZip_pi = async (buf) => {
+  const JSZip = await loadJSZip();
+  const zip = await JSZip.loadAsync(buf);
+  const readXml = async (p) => { const f = zip.file(p); return f ? await f.async('string') : null; };
+  const parser = new DOMParser();
+  const RELNS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+  // 共有文字列
+  const shared = [];
+  const sstXml = await readXml('xl/sharedStrings.xml');
+  if (sstXml) {
+    const sdoc = parser.parseFromString(sstXml, 'application/xml');
+    sdoc.querySelectorAll('si').forEach(si => { let t = ''; si.querySelectorAll('t').forEach(x => { t += x.textContent || ''; }); shared.push(t); });
+  }
+  // 塗り: cellXfs[s].fillId → fills[fillId]
+  const fills = [];
+  const xfFill = [];
+  const stXml = await readXml('xl/styles.xml');
+  if (stXml) {
+    const sd = parser.parseFromString(stXml, 'application/xml');
+    const fillEls = sd.getElementsByTagName('fills')[0];
+    if (fillEls) {
+      [...fillEls.getElementsByTagName('fill')].forEach(f => {
+        const pf = f.getElementsByTagName('patternFill')[0];
+        const pt = pf ? (pf.getAttribute('patternType') || '') : '';
+        const fg = pf ? pf.getElementsByTagName('fgColor')[0] : null;
+        if (!pf || !pt || pt === 'none' || !fg) { fills.push(null); return; }
+        const theme = fg.getAttribute('theme'); const tint = fg.getAttribute('tint'); const rgb = fg.getAttribute('rgb');
+        fills.push({ type: 'pattern', pattern: pt, fgColor: {
+          ...(theme != null ? { theme: Number(theme) } : {}),
+          ...(tint != null ? { tint: Number(tint) } : {}),
+          ...(rgb ? { argb: rgb } : {}),
+        } });
+      });
+    }
+    const xfs = sd.getElementsByTagName('cellXfs')[0];
+    if (xfs) [...xfs.getElementsByTagName('xf')].forEach(x => { xfFill.push(Number(x.getAttribute('fillId') || 0)); });
+  }
+  // シート名 → 中身の場所
+  const wbXml = await readXml('xl/workbook.xml');
+  if (!wbXml) throw new Error('workbook.xml が見つかりません');
+  const wdoc = parser.parseFromString(wbXml, 'application/xml');
+  const relMap = {};
+  const relsXml = await readXml('xl/_rels/workbook.xml.rels');
+  if (relsXml) parser.parseFromString(relsXml, 'application/xml').querySelectorAll('Relationship').forEach(r => { relMap[r.getAttribute('Id')] = r.getAttribute('Target'); });
+  const sheetEls = [...wdoc.getElementsByTagName('sheet')];
+  const ridOf = (el) => el.getAttributeNS(RELNS, 'id') || el.getAttribute('r:id') || el.getAttribute('id');
+  const pathOf = (el) => {
+    let tgt = relMap[ridOf(el)] || '';
+    tgt = tgt.replace(/^\.\//, '');
+    return tgt.startsWith('/') ? tgt.slice(1) : (tgt.startsWith('xl/') ? tgt : 'xl/' + tgt);
+  };
+  const worksheets = sheetEls.map(el => ({ name: el.getAttribute('name'), _path: pathOf(el) }));
+
+  const EMPTY_CELL = { value: null, fill: null };
+  const loadSheet = async (ws) => {
+    const xml = await readXml(ws._path);
+    if (!xml) throw new Error(`シート「${ws.name}」の中身(${ws._path})が見つかりません`);
+    const doc = parser.parseFromString(xml, 'application/xml');
+    const rows = new Map();
+    let rowCount = 0;
+    const rowEls = doc.getElementsByTagName('row');
+    for (let ri = 0; ri < rowEls.length; ri++) {
+      const rowEl = rowEls[ri];
+      const rNum = parseInt(rowEl.getAttribute('r'), 10) || (ri + 1);
+      if (rNum > rowCount) rowCount = rNum;
+      const cells = new Map();
+      const cEls = rowEl.getElementsByTagName('c');
+      for (let ci = 0; ci < cEls.length; ci++) {
+        const cEl = cEls[ci];
+        const pos = xlsxRefToRC_pl(cEl.getAttribute('r'));
+        const colNum = pos ? pos.col : (ci + 1);
+        const type = cEl.getAttribute('t') || '';
+        const vEl = cEl.getElementsByTagName('v')[0];
+        const isEl = cEl.getElementsByTagName('is')[0];
+        let value = null;
+        if (type === 's') { const idx = parseInt(vEl ? vEl.textContent : '', 10); value = shared[idx] != null ? shared[idx] : ''; }
+        else if (type === 'inlineStr' && isEl) { let t = ''; const ts = isEl.getElementsByTagName('t'); for (let k = 0; k < ts.length; k++) t += ts[k].textContent || ''; value = t; }
+        else if (type === 'str' || type === 'e') { value = vEl ? (vEl.textContent || '') : ''; }
+        else if (type === 'b') { value = vEl ? vEl.textContent === '1' : null; }
+        else { const txt = vEl ? vEl.textContent : ''; value = txt === '' || txt == null ? null : (Number.isFinite(Number(txt)) ? Number(txt) : txt); }
+        const sIdx = cEl.getAttribute('s');
+        const fill = sIdx != null && xfFill[Number(sIdx)] != null ? (fills[xfFill[Number(sIdx)]] || null) : null;
+        cells.set(colNum, { value, fill });
+      }
+      rows.set(rNum, cells);
+    }
+    return {
+      name: ws.name,
+      rowCount,
+      getRow: (r) => { const cells = rows.get(r); return { getCell: (i) => (cells && cells.get(i)) || EMPTY_CELL }; },
+    };
+  };
+  return {
+    worksheets,
+    getWorksheet: async (name) => { const ws = worksheets.find(w => w.name === name); return ws ? loadSheet(ws) : null; },
+  };
+};
+
+// 📊 進捗管理表を開く: ExcelJS → 落ちたら JSZip の読み手(上の readProgressBookWithJSZip_pi)。
+//   呼ぶ側は同じ顔(worksheets / getWorksheet / reader)で使う。
+//   ⚠ getWorksheet は **await** で呼ぶ(JSZip の方はシートを開く時に初めて中身を読む)。
+//   ⚠ 2通りとも落ちた時だけ投げる(どちらのせいで落ちたかを文に残す)。
+const openProgressBook_pi = async (buf) => {
+  let firstError = null;
+  try {
+    const ExcelJS = await loadExcelJS();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf);
+    return { reader: 'exceljs', worksheets: wb.worksheets || [], getWorksheet: async (name) => wb.getWorksheet(name) || null };
+  } catch (e1) {
+    firstError = String((e1 && e1.message) || e1);
+    console.warn('ExcelJS で読めなかったので JSZip で読み直します:', firstError);
+  }
+  try {
+    const book = await readProgressBookWithJSZip_pi(buf);
+    return { ...book, reader: 'jszip', firstError };
+  } catch (e2) {
+    throw new Error(`Excel を2通りの読み手で試しましたが読めませんでした。ExcelJS: ${firstError} ／ JSZip: ${(e2 && e2.message) || e2}`);
+  }
+};
 // フォールバックのグリッドを、既存コードが使う ExcelJS 風の最小API(getRow(n).getCell(i).value / eachRow)に包む。
 const gridToWsShim_pl = (grid) => ({
   getRow: (r) => ({ getCell: (c) => ({ value: (grid[r] && grid[r][c] != null && grid[r][c] !== '') ? grid[r][c] : null }) }),
@@ -28956,6 +29090,8 @@ const QuotaStoppedPanel = ({ until }) => (
    const backupInputRef = useRef(null);
    const progressMgmtInputRef = useRef(null);
    const [progressImportPreview, setProgressImportPreview] = useState(null);  // 工機進捗管理表 取込プレビュー結果
+   const [progressImportBusy, setProgressImportBusy] = useState(false);       // ⏳ P097 進捗管理表を読んでいる最中(大きい表は20秒ほどかかる。黙って待たせない)
+   const [progressImportSaving, setProgressImportSaving] = useState('');      // ⏳ P097 確定の書き込み中「N/M」
  
    // State: Execution Modal
    const [executionLotId, setExecutionLotId] = useState(null);
@@ -30593,12 +30729,11 @@ const QuotaStoppedPanel = ({ until }) => (
      const file = e.target.files[0];
      if (!file) return;
      e.target.value = '';
+     setProgressImportBusy(true);
      try {
-       const ExcelJS = await loadExcelJS();
-       const wb = new ExcelJS.Workbook();
-       const buf = await file.arrayBuffer();
-       await wb.xlsx.load(buf);
-       const sheet = wb.getWorksheet('進捗管理表');
+       // 📊 P023 ExcelJS で開き、落ちたら JSZip で読み直す(製品 openProgressBook_pi と同じ)。getWorksheet は await で呼ぶ
+       const wb = await openProgressBook_pi(await file.arrayBuffer());
+       const sheet = await wb.getWorksheet('進捗管理表');
        if (!sheet) { alert('「進捗管理表」シートが見つかりません'); return; }
 
        // 品質規格マスタを参照 (modelStandardMap[model] → qualityStandards[qsId].templates[])
@@ -30705,6 +30840,7 @@ const QuotaStoppedPanel = ({ until }) => (
          skipped: [],      // スキップ (理由付き)
          warnings: [],     // 警告 (複数日付など)
          totalRows: 0,
+         reader: wb.reader, // どちらの読み手で読んだか(exceljs / jszip)
        };
 
        const today = new Date();
@@ -30820,6 +30956,8 @@ const QuotaStoppedPanel = ({ until }) => (
      } catch (err) {
        console.error('Progress Mgmt parse error:', err);
        alert('取込み中にエラーが発生しました: ' + (err.message || err));
+     } finally {
+       setProgressImportBusy(false);
      }
    };
 
@@ -30828,6 +30966,10 @@ const QuotaStoppedPanel = ({ until }) => (
      if (!progressImportPreview) return;
      const { createLots, updateLots } = progressImportPreview;
      setProgressImportPreview(null);
+     const totalWrites = createLots.length + updateLots.length;
+     let doneWrites = 0;
+     const tick = (what) => { doneWrites++; setProgressImportSaving(`${what}… ${doneWrites}/${totalWrites}`); };
+     setProgressImportSaving(`書き込んでいます… 0/${totalWrites}`);
      try {
        const timestamp = Date.now();
        // 新規作成
@@ -30864,6 +31006,7 @@ const QuotaStoppedPanel = ({ until }) => (
            interruptions: [],
            appliedStandard,
          });
+         tick('作っています');
        }
        // 既存更新 (dueDate / quantity のみ)
        for (const u of updateLots) {
@@ -30879,9 +31022,12 @@ const QuotaStoppedPanel = ({ until }) => (
            updates.unitSerialNumbers = Array.from({ length: u.quantity }, (_, i) => existingLot?.unitSerialNumbers?.[i] || `#${i + 1}`);
          }
          await saveData('lots', u.existingId, updates);
+         tick('直しています');
        }
+       setProgressImportSaving('');
        alert(`✓ 取込み完了\n新規作成: ${createLots.length}件\n更新: ${updateLots.length}件`);
      } catch (err) {
+       setProgressImportSaving('');
        console.error(err);
        alert('保存中にエラーが発生しました: ' + (err.message || err));
      }
@@ -32453,6 +32599,10 @@ const QuotaStoppedPanel = ({ until }) => (
          </div>
        )}
 
+       {/* ⏳ P097 進捗管理表を読んでいる最中・書き込み中の合図(製品 51417 と同じ) */}
+       {(progressImportBusy || progressImportSaving) && (
+         <div data-progress-import-busy="1" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] bg-indigo-700 text-white px-4 py-3 rounded-xl shadow-xl text-sm font-bold flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin"/> {progressImportSaving || '進捗管理表を読んでいます…（大きい表だと20秒ほどかかります）'}</div>
+       )}
        {/* 工機進捗管理表 取込プレビュー モーダル */}
        {progressImportPreview && (
          <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
@@ -32464,6 +32614,7 @@ const QuotaStoppedPanel = ({ until }) => (
                    <h2 className="text-lg font-bold">工機進捗管理表 — 取込プレビュー</h2>
                    <div className="text-xs opacity-90">
                      データ {progressImportPreview.totalRows}行 / 新規 {progressImportPreview.createLots.length}件 / 更新 {progressImportPreview.updateLots.length}件 / スキップ {progressImportPreview.skipped.length}件
+                     {progressImportPreview.reader ? <span data-progress-reader={progressImportPreview.reader}> ・読み手 {progressImportPreview.reader === 'jszip' ? 'JSZip（ExcelJS で読めなかったので読み直し）' : 'ExcelJS'}</span> : null}
                    </div>
                  </div>
                </div>
