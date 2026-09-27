@@ -297,6 +297,13 @@ import { Bar as VizBar, Dots as VizDots } from './opsim/vizKit.jsx'; // 📊 P10
 import { layoutInfo, nextLayoutMode, readLayoutMode, saveLayoutMode, layoutModeLabel } from './domain/layoutMode.js';
 // 📨 P058/P070/P140/P142 ほか: 工程連絡(製品の連絡タブ・送るモーダル・到着予定・プッシュ・ポータル)を写した部品
 import { bindContactHelpers, RENRAKU_PORTAL, ContactPortal, ForegroundPushToast, ContactAlarm, InstallAppButton } from './contact/ContactKit.jsx';
+import { FactoryCalendarPanel } from './calendar/FactoryCalendarPanel.jsx';
+import { makeSaveFactoryCalendar } from './calendar/saveFactoryCalendar.js';
+import { shouldSkipReworkContact, buildRepairDraft } from './domain/repairContact.js';
+import { GoalLayerView } from './goal/GoalLayerView.jsx';
+import { ArrivalTag } from './contact/ContactKit.jsx';
+import { arrivalFilterMatches } from './domain/contactBoard.js';
+import { arrivalForWhen } from './domain/arrivalSplits.js';
 import { useContactHub, WorkContactBlock, contactPropsOf, ContactTabBadge, ContactTab } from './contact/ContactHub.jsx';
 import { IncomingArrivalsPanel } from './IncomingArrivals.jsx';
 import { DriveFileViewer } from './DriveFileViewer.jsx';
@@ -7908,7 +7915,7 @@ const ModelQualityInfoPanel = ({ model, stepTitle, info, open, onToggle }) => {
   );
 };
 
-const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [], contactEnabled = false, contactRequests = [], contactGroups = [], contactMembers = {}, notifyPush = null }) => {
+const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [], contactEnabled = false, contactRequests = [], contactGroups = [], contactMembers = {}, notifyPush = null, repairContactOnNg = false, reworkContactSkip = null }) => {
   // 📨 P058/P027 連絡・呼出の下書き(不具合報告の「📨 報告して連絡」からも開く)
   const [contactDraft, setContactDraft] = useState(null);
   // 親側で `lots.find(l => l.id === executionLotId)` が undefined を返すケースに備える。
@@ -11073,6 +11080,17 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     const previousTasks = { ...tasks };
     const newTasks = { ...tasks };
     const currentTask = tasks[key] || {};
+    // 🔧 P131 NG を付けた瞬間(理由を押した直後)に「修正のお願い」の下書きを開く(製品 openRepairContact)。
+    //   既定: OFF(工程連絡を入れて、さらに「NG で修正のお願い」を入れた時だけ)。修正開始では出さない。
+    const openRepairContact = (tKey, rsn, noteLbl = '') => {
+      if (!(saveData && contactEnabled && repairContactOnNg)) return;
+      const skipTplName = (templates.find(t => t.id === lot.templateId)?.name) || '';
+      if (shouldSkipReworkContact(reworkContactSkip, skipTplName, rsn)) {
+        setOrderHint('🔁 中間分割の精度・バックラッシュNGのため、連絡せずに返却します（NG理由と修正時間の記録は残ります）');
+        return;
+      }
+      setContactDraft(buildRepairDraft({ taskKey: tKey, reason: rsn, noteLabel: noteLbl, steps: localSteps, itemLabel }));
+    };
 
     // processing 状態から遷移する場合は、ここまでの経過時間を duration に加算してから状態変更する。
     // (これをやらないと「測定中に NG クリック」で測定時間が消失する)
@@ -11144,6 +11162,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         reworks: captured.reworks || [],
         ...(ngReason ? { ngReason } : (captured.ngReason ? {} : {})),
       };
+      openRepairContact(key, ngReason || captured.ngReason || '');
     } else if (action === 'rework') {
       // 🚦 修正作業も手作業(製品と同じ)
       const gate = startGuard({ targetStep: REWORK_STEP, excludeKey: key });
@@ -11187,6 +11206,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       const fromHere = action === 'redo-from-here';
       const nowTs = Date.now();
       if (u != null) {
+        let redoCount = 0; // P131 1件もやり直しにならなければ連絡を開かない(製品と同じ)
         localSteps.forEach((step, si) => {
           if (step?.lotOnce) return; // ロット1回(段取り)工程は台やり直しの対象外 (u=台番号を回数kと取り違え、無関係な段取りを巻き添えNGにしてしまうため)
           if (fromHere && si < refStep) return;
@@ -11196,7 +11216,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           const cap = captureSessionIfProcessing(t);
           // やり直し理由: 選択された理由を優先 (軽微不良の理由ピッカーから)。無ければ既存/既定。
           newTasks[k] = { ...cap, status: 'ng', ngAt: nowTs, endTime: nowTs, startTime: null, ngReason: ngReason || cap.ngReason || 'やり直し（再測定）', workerName: inspectorName, reworks: cap.reworks || [] };
+          redoCount += 1;
         });
+        if (redoCount > 0) openRepairContact(key, ngReason || (tasks[key]?.ngReason) || 'やり直し（再測定）', fromHere ? 'この工程から下をやり直し' : '全工程やり直し');
       }
     }
 
@@ -20915,6 +20937,7 @@ const ANALYSIS_GROUPS = [
   { key: 'kaizen', label: '③④ 改善（計画→実行→効果）', tabs: [
     { k: 'pdca', l: '改善PDCA（重点工程→対策→効果）', color: 'text-indigo-600' },
     { k: 'improvement', l: 'AI洞察・乖離アラート', color: 'text-indigo-600' },
+    { k: 'goal', l: '🎯 年間目標（見るだけ）', color: 'text-rose-600' }, // P166
   ] },
   { key: 'standardize', label: '⑤ 基準を固める（定着）', tabs: [
     { k: 'standardize', l: '目標時間・厳密モードへ', color: 'text-indigo-600' },
@@ -20932,6 +20955,8 @@ const ANALYSIS_GROUPS = [
     { k: 'rotary', l: '分割測定結果', color: 'text-cyan-600' },
   ] },
 ];
+// 🎯 P166 年間目標タブへ渡す計算(App の中の同じ関数を渡す・2つ持たない)。
+const GOAL_KIT = { toMsAny, isStatTask, profitRanking, crossStepRanking, measureWindow, modelGroupsOf, enumerateModelTplSteps, pdcaFmtSec, loadExcelJS };
 const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settings, saveSettings, currentUserName = '', minorReports = [], indirectWork = [], improvements = [], observationPlans = [], templates = [], notes = [], announcements = [], strictModeHistory = [], onRestore = null, db = null, anomalies = [], onGoOptimize = null, wide = false, onToggleWide = null, parentTabs = null }) => {
   // デフォルトは process (工程改善分析)。旧 'daily' は全体進捗タブと重複していたため削除済み
   const [showLedger, setShowLedger] = useState(false); // 📒 軽微不良・改善 台帳の窓
@@ -21680,6 +21705,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
               {activeMode === 'improvement' && (<><Zap className="w-5 h-5 text-indigo-600"/> AI洞察・乖離アラート</>)}
               {activeMode === 'anomaly' && (<><AlertTriangle className="w-5 h-5 text-amber-600"/> ① データを正す（要確認）</>)}
               {activeMode === 'standardize' && (<><ShieldCheck className="w-5 h-5 text-indigo-600"/> ⑤ 基準を固める（定着）</>)}
+              {activeMode === 'goal' && (<>🎯 年間目標（3アプリ合算・部品は見るだけ）</>)}
               {activeMode === 'pdca' && (<><ClipboardList className="w-5 h-5 text-indigo-600"/> 改善PDCA (改善カルテ)</>)}
               {activeMode === 'monthly' && (<><FileText className="w-5 h-5 text-slate-700"/> 月次レポート</>)}
             </h2>
@@ -23252,6 +23278,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
            {activeMode === 'kpi' && <KpiDetailView lots={lots} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} />}
            {activeMode === 'achievement' && <AchievementRateView lots={lots} customTargetTimes={settings.customTargetTimes || {}} settings={settings} templates={templates} />}
            {activeMode === 'process-analysis' && <ProcessAnalysisView lots={lots} settings={settings} workers={workers} templates={templates} customTargetTimes={settings.customTargetTimes || {}} modelGroups={modelGroupsOf(settings)} observationPlans={observationPlans} improvements={improvements} saveData={saveData} deleteData={deleteData} currentUserName={currentUserName} onGoToPdca={() => setActiveMode('pdca')} />}
+           {activeMode === 'goal' && <GoalLayerView lots={lots} settings={settings} db={db} DATA={DATA} templates={templates} kit={GOAL_KIT} />}
            {activeMode === 'pdca' && <ImprovementCardsPanel improvements={improvements} lots={lots} settings={settings} saveData={saveData} deleteData={deleteData} customTargetTimes={settings.customTargetTimes || {}} modelGroups={modelGroupsOf(settings)} currentUserName={currentUserName} templates={templates} />}
            {activeMode === 'audit' && <AuditBackupPanel lots={lots} templates={templates} workers={workers} settings={settings} indirectWork={indirectWork} improvements={improvements} observationPlans={observationPlans} notes={notes} announcements={announcements} logs={logs} strictModeHistory={strictModeHistory} currentUserName={currentUserName} onRestore={onRestore} db={db} />}
            {/* ① データを正す: 要確認(異常値・該当なし)。ヘッダーの浮いたバッジと同じ中身を流れの先頭に置く。 */}
@@ -26120,7 +26147,10 @@ const NarrowFold = ({ fold, summary, className = '', children }) => {
   );
 };
 
-const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onDeleteLot, setExecutionLotId, currentUserName = '', saveData, parentTabs = null }) => {
+const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onDeleteLot, setExecutionLotId, currentUserName = '', saveData, parentTabs = null, arrivalByLot = {} }) => {
+  // 🚚 P164 到着予定の絞り込み(製品 38513)。arrivalByLot は工程連絡が ON の時だけ中身が入る(既定 OFF=空)。
+  const [arrivalFilter, setArrivalFilter] = useState([]);
+  const arrivalOn = Object.keys(arrivalByLot || {}).length > 0;
   const [assignmentLot, setAssignmentLot] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
   // 📦 指図ごとにまとめる(2026-09-06)。押した時だけ。グリッド／リストはそのまま残る。
@@ -26233,13 +26263,18 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
         return delayFilter.includes(level);
       });
     }
+    // 🚚 P164 到着予定フィルタ(分納は次に来る便で見る・製品と同じ)
+    if (arrivalFilter.length > 0) {
+      result = result.filter(l => arrivalFilterMatches(arrivalForWhen((arrivalByLot || {})[l.id]), arrivalFilter));
+    }
     return result;
-  }, [activeLots, selectedZoneFilter, searchQuery, searchOrderNo, searchModel, searchTemplate, onlyMine, myWorkerId, workerFilter, templateFilter, statusFilter, priorityFilter, delayFilter, templates]);
+  }, [activeLots, selectedZoneFilter, searchQuery, searchOrderNo, searchModel, searchTemplate, onlyMine, myWorkerId, workerFilter, templateFilter, statusFilter, priorityFilter, delayFilter, arrivalFilter, arrivalByLot, templates]);
 
   // アクティブな詳細フィルタ数 (バッジ表示用)
-  const activeAdvancedCount = templateFilter.length + statusFilter.length + priorityFilter.length + delayFilter.length;
+  const activeAdvancedCount = templateFilter.length + statusFilter.length + priorityFilter.length + delayFilter.length + arrivalFilter.length;
 
   const clearAllAdvancedFilters = () => {
+    setArrivalFilter([]);
     setTemplateFilter([]);
     setStatusFilter([]);
     setPriorityFilter([]);
@@ -26510,6 +26545,31 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
             </div>
           </div>
 
+          {/* 🚚 P164 到着予定 (工程連絡が ON で、相手が「いつ来るか」を教えてくれた分) */}
+          {arrivalOn && (
+          <div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-bold text-slate-500 bg-slate-100 rounded px-2 py-1 shrink-0 flex items-center gap-1"><TruckIcon className="w-3 h-3"/> 到着予定</span>
+              {[
+                { key: 'has', label: '🚚 到着時間あり', bg: 'bg-teal-600', border: 'border-teal-700' },
+                { key: 'today', label: '本日 到着', bg: 'bg-teal-600', border: 'border-teal-700' },
+                { key: 'tomorrow', label: '明日 到着', bg: 'bg-sky-600', border: 'border-sky-700' },
+                { key: 'later', label: 'あさって以降', bg: 'bg-slate-500', border: 'border-slate-600' },
+                { key: 'past', label: '⚠ 予定を過ぎた', bg: 'bg-amber-500', border: 'border-amber-600' },
+                { key: 'none', label: '未登録', bg: 'bg-slate-700', border: 'border-slate-700' },
+              ].map(a => {
+                const active = arrivalFilter.includes(a.key);
+                return (
+                  <button key={a.key}
+                    onClick={() => setArrivalFilter(toggleInArray(arrivalFilter, a.key))}
+                    className={`min-h-10 px-2.5 py-1 rounded-full text-xs font-bold border transition-colors ${active ? `${a.bg} text-white ${a.border}` : 'bg-white text-slate-600 border-slate-200 hover:bg-teal-50 hover:border-teal-300'}`}
+                  >{a.label}</button>
+                );
+              })}
+            </div>
+          </div>
+          )}
+
           {/* 遅延状況 */}
           <div>
             <div className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1">
@@ -26562,6 +26622,12 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
             <span key={`pr-${p}`} className="bg-white border border-indigo-300 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
               {priorityLabelOf(p)}
               <button onClick={() => setPriorityFilter(priorityFilter.filter(x => x !== p))} className="hover:bg-indigo-100 rounded-full"><X className="w-3 h-3"/></button>
+            </span>
+          ))}
+          {arrivalFilter.map(a => (
+            <span key={`ar-${a}`} className="bg-white border border-indigo-300 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+              {({ has: '🚚 到着時間あり', today: '本日 到着', tomorrow: '明日 到着', later: 'あさって以降', past: '⚠ 予定を過ぎた', none: '到着 未登録' })[a] || a}
+              <button onClick={() => setArrivalFilter(arrivalFilter.filter(x => x !== a))} className="hover:bg-indigo-100 rounded-full"><X className="w-3 h-3"/></button>
             </span>
           ))}
           {delayFilter.map(d => {
@@ -26645,6 +26711,10 @@ const InspectionListView = ({ lots, workers, templates, settings, onEditLot, onD
                       <div data-lot-template-skip="1" className="text-xs font-black text-emerald-800 bg-emerald-100 border border-emerald-300 rounded px-2 py-0.5 inline-flex items-center gap-1 w-fit" title={`品目×テンプレの実績(連続無欠点 ${lot.templateSkip?.streak ?? '?'}ロット)で検査せず流す判定。全工程はシステムがスキップ済み。押して完了にするだけ`}>
                         ⏭ スキップ（流すだけ）
                       </div>
+                    )}
+                    {/* 🚚 P164 到着予定の札(製品 39085・分納は回数も出る ArrivalTag)。工程連絡が OFF なら出ない */}
+                    {settings?.lotCardDisplay?.arrivalBadge !== false && (arrivalByLot || {})[lot.id]?.time && (
+                      <ArrivalTag arrival={arrivalByLot[lot.id]} compact />
                     )}                    {/* 停止理由バッジ */}
                     {lot.pauseReason && lot.pauseReason.category && (() => {
                       const cm = getPauseReasonColor(lot.pauseReason.category);
@@ -28940,7 +29010,7 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
   );
 };
 
-const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templates = [], saveSettings, indirectWork = [], factoryCalendar = null }) => {
+const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templates = [], saveSettings, indirectWork = [], factoryCalendar = null, saveFactoryCalendar = null, factoryCalendarLoaded = true, canEditCalendarSwitch = false }) => {
   // 📅 工場の暦(土日+登録した祝日・全社休業)で休みの日かを決める(製品 worksOnCal と同じ)
   const worksOnCal = useMemo(() => makeIsWorkday(factoryCalendar), [factoryCalendar]);
   const [tickN, setTickN] = useState(0);
@@ -29396,6 +29466,10 @@ ${measuredFactor.factorNote}` : ''}`}>
         workSchedule={settings?.workSchedule}
         factoryCalendar={factoryCalendar}
       />
+
+      {/* 📅 P149/P160 工場の暦(製品 42386 と同じ位置)。既定は見るだけ(settings.factoryCalendarEditInParts で登録できる) */}
+      <FactoryCalendarPanel calendar={factoryCalendar} onSave={settings?.factoryCalendarEditInParts === true ? saveFactoryCalendar : null} loaded={factoryCalendarLoaded}
+        canToggle={canEditCalendarSwitch} editOn={settings?.factoryCalendarEditInParts === true} onToggleEdit={saveSettings ? (on) => saveSettings({ factoryCalendarEditInParts: !!on }) : null} />
 
       {/* 作業者ロスター（日次の在席）— 下のキャパ計算の作業者数に反映 */}
       <WorkerRosterPanel workers={workers} settings={settings} saveSettings={saveSettings} days={7} factoryCalendar={factoryCalendar} />
@@ -35537,9 +35611,9 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          {activeTab === 'progress' && (
            quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
            : !progressDataReady ? <DataLoadingPanel what="過去のロットと間接作業" />
-           : <div className="h-full flex flex-col gap-3 min-h-0">{/* 👀 P161 独り立ち直後の見守り。カードが無ければ null */}<MimamoriCard report={mimamoriReport} currentUserName={currentUserName} canEdit={currentUserName === '管理者'} /><div className="flex-1 min-h-0"><ProgressOverviewView lots={lots} /* 🧹 2026-09-23 休止中の人を在籍・ロスター・タイムラインに数えない(製品と同じ。作業者の現状の5人と合わせる) */ workers={activeWorkersOf(workers || [])} pausedCount={Math.max(0, (workers || []).length - activeWorkersOf(workers || []).length)} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} /></div></div>
+           : <div className="h-full flex flex-col gap-3 min-h-0">{/* 👀 P161 独り立ち直後の見守り。カードが無ければ null */}<MimamoriCard report={mimamoriReport} currentUserName={currentUserName} canEdit={currentUserName === '管理者'} /><div className="flex-1 min-h-0"><ProgressOverviewView lots={lots} /* 🧹 2026-09-23 休止中の人を在籍・ロスター・タイムラインに数えない(製品と同じ。作業者の現状の5人と合わせる) */ workers={activeWorkersOf(workers || [])} pausedCount={Math.max(0, (workers || []).length - activeWorkersOf(workers || []).length)} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} saveFactoryCalendar={makeSaveFactoryCalendar(contactHub.saveContactShared, currentUserName)} factoryCalendarLoaded={contactShared !== null} canEditCalendarSwitch={currentUserName === '管理者'} /></div></div>
          )}
-         {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)} />}
+         {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)} arrivalByLot={contactHub.contactFeatureOn ? contactHub.arrivalByLot : {}} />}
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
          {/* 📒 ヘッダーの☰から開く台帳(読み終わるまで出さない=0件と見分けが付かないため) */}
          {showQuickLedger && minorReportsReady && <MinorReportLedgerModal reports={minorReports} lots={lots} workers={workers} currentUserName={currentUserName} saveData={saveData} deleteData={deleteData} itemMaster={settings?.itemMaster || {}} onClose={() => setShowQuickLedger(false)} />}
@@ -35652,6 +35726,10 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
                <label className="flex items-center gap-2 font-bold text-slate-700">
                  <input type="checkbox" className="w-5 h-5" checked={settings?.contactFeature?.enabled === true} onChange={e => saveSettings({ contactFeature: { ...(settings?.contactFeature || {}), enabled: e.target.checked } })} />
                  連絡タブ・作業画面の「連絡・呼出」・到着予定・プッシュ通知を使う
+               </label>
+               <label className="flex items-center gap-2 font-bold text-slate-700">
+                 <input type="checkbox" className="w-5 h-5" disabled={settings?.contactFeature?.enabled !== true} checked={settings?.contactFeature?.repairOnNg === true} onChange={e => saveSettings({ contactFeature: { ...(settings?.contactFeature || {}), repairOnNg: e.target.checked } })} />
+                 NG の理由を押した瞬間に「修正のお願い」の下書きを開く（既定: OFF）
                </label>
                <div className="text-xs text-slate-500">既定は OFF です。相手（組立・機械加工）が部品検査の連絡を受け取る画面は、連絡ポータル（この住所の後ろに <b>?renraku=1</b>）です。宛先の班は製品検査・最終検査と共通です。</div>
                <InstallAppButton />

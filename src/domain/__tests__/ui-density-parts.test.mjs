@@ -101,7 +101,7 @@ test('UD4 🚨 札の名前・順番・押した時の行き先が1つも変わ�
   assert.deepEqual(subs, [
     '要確認（異常値・該当なし）',
     '工程分析（データを見る）', '達成率', '不具合分析', '軽微不良・改善提案', 'ダッシュボード', '経営分析',
-    '改善PDCA（重点工程→対策→効果）', 'AI洞察・乖離アラート',
+    '改善PDCA（重点工程→対策→効果）', 'AI洞察・乖離アラート', '🎯 年間目標（見るだけ）', // P166 足しただけ(既存の札は不変)
     '目標時間・厳密モードへ',
     '作業者評価', '🎓 教育・伸び（新人の級・検定）', '直間分析', // 🎓 E32 で教育・伸びを足した(製品と同じ位置)
     '月次レポート', '点検・バックアップ', 'データ書き出し', '分割測定結果',
@@ -109,7 +109,7 @@ test('UD4 🚨 札の名前・順番・押した時の行き先が1つも変わ�
   assert.deepEqual(keys, [
     'anomaly',
     'process-analysis', 'achievement', 'defects', 'complaints', 'dashboard', 'kpi',
-    'pdca', 'improvement',
+    'pdca', 'improvement', 'goal',
     'standardize',
     'worker-eval', 'growth', 'direct-indirect',
     'monthly', 'audit', 'export', 'rotary',
@@ -146,7 +146,7 @@ test('UD7 🚨 畳んだ文言はソースに残っている(消していない)
   // 見出し15本(activeMode ごと)がそのまま残っている
   const h = headerSlice();
   const titles = [...h.matchAll(/activeMode === '([a-z-]+)' && \(<>/g)].map((m) => m[1]);
-  assert.equal(titles.length, 15, `見出しが ${titles.length} 本(15本のはず。1つでも減らしてはいけない)`);
+  assert.equal(titles.length, 16, `見出しが ${titles.length} 本(16本のはず・P166 で 🎯年間目標 を1本足した。1つでも減らしてはいけない)`);
 });
 
 test('UD8 作業最適化の帯にも親タブを合流させ、専用の行を作らない', () => {

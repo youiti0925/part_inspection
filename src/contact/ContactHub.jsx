@@ -677,7 +677,11 @@ export const useContactHub = ({
          );
        })()}
   </>);
+  // 🔧 P131 NG の瞬間に「修正のお願い」の下書きを開くか。既定: OFF(誰へ出すかが決まるまで)。
+  const repairContactOnNg = contactFeatureOn && settings?.contactFeature?.repairOnNg === true;
+  const reworkContactSkip = settings?.reworkContactSkip || null;
   return {
+    repairContactOnNg, reworkContactSkip,
     contactFeatureOn, contactSettings, contactRequests, arrivalTimes, pushTokens, arrivalByLot, saveContactShared,
     notifyContactPush, contactUnseen, markContactSeen, setArrivalApply, setCompletePrompt, contactEstimateSecOf,
     checkArrival, undoArrivalCheck, remindArrival, undoDeclineComplete, overlays,
@@ -727,6 +731,8 @@ export const contactPropsOf = (hub) => (hub && hub.contactFeatureOn ? {
   contactGroups: contactGroupsOf(hub.contactSettings),
   contactMembers: contactMembersOf(hub.contactSettings),
   notifyPush: hub.notifyContactPush,
+  repairContactOnNg: !!hub.repairContactOnNg,
+  reworkContactSkip: hub.reworkContactSkip || null,
 } : { contactEnabled: false });
 
 // 連絡タブの赤い数字(未読)/橙の丸(返事待ち)。製品 topTabBadge と同じ決め方。
