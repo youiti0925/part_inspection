@@ -8163,7 +8163,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         const missing = requiredItems.filter(it => !checked[it.id]);
         if (missing.length > 0) {
           alert(`⚠ 確認チェックを完了してください:\n\n${missing.map(m => `・${m.label || '(無題)'}`).join('\n')}`);
-          return;
+          return { ok: false, msg: '確認チェックが残っています。画面で確認してください' };
         }
       }
     }
@@ -8175,13 +8175,15 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     // 🚨 動いている物(自動運転・修正作業中)は ここでは終えない(製品 2026-09-24)。
     //   音声の「完了」や 画面の「次へ」で、機械に載っている台を 測った時間ごと完了にしていた。
     if (seqIsRunning(prevTask)) {
-      setOrderHint(prevTask.status === 'reworking' ? '修正作業中です。修正の完了はカスタム画面で押します' : 'カスタム画面で作業中の記録があります。カスタム画面で終えてください');
-      return;
+      const msg = prevTask.status === 'reworking' ? '修正作業中です。修正の完了はカスタム画面で押します' : 'カスタム画面で作業中の記録があります。カスタム画面で終えてください';
+      setOrderHint(msg);
+      return { ok: false, msg };
     }
     // まとめて開始の台は カスタムの「まとめて完了」で(1台ずつ終えると まとめた時間を台数ぶん付ける)
     if (prevTask && prevTask.batchOwner != null && !seqIsSettled(prevTask)) {
-      setOrderHint('まとめて開始の作業です。カスタム画面で「まとめて完了」してください');
-      return;
+      const msg = 'まとめて開始の作業です。カスタム画面で「まとめて完了」してください';
+      setOrderHint(msg);
+      return { ok: false, msg };
     }
     // 🚨 済・該当なし・NG・修正済みの記録は 上書きしない(前は completed と作った時間で上書きし、該当なしの印や NG の理由を消していた)
     const settled = seqIsSettled(prevTask);
@@ -8243,7 +8245,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes,
           measurementResults: curMR, tasks: tasksRef.current, ...delKeys });
         setOrderHint(gate.message);
-        return;
+        return { ok: false, msg: gate.message };
       }
       setCurrentStepIdx(next.step);
       setCurrentUnitIdx(next.unit);
@@ -8251,9 +8253,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     } else {
       // 全工程×全台完了
       onSave({ totalWorkTime: elapsed, stepTimes: newStepTimes, stepUnitTimes: newStepUnitTimes, measurementResults: curMR, tasks: tasksRef.current, ...delKeys });
-      handleCompleteTrigger();
+      // 🎤 弾かれたら理由を返す(音声はそれを読んで待ち受けを続ける・製品と同じ)
+      if (!handleCompleteTrigger()) return { ok: false, msg: VOICE_COMPLETE_BLOCKED_SPEECH[completeBlockReasonRef.current] || '完了できませんでした。画面を確認してください' };
     }
+    return true;
   };
+  // 音声の輪は始めた時の写しを持つので 最新の handleNext を読む(製品と同じ)
+  const handleNextRef = useRef(null);
+  handleNextRef.current = handleNext;
   
   // --- Voice Assistant Logic ---
   const runMicTest = async () => {
@@ -8904,8 +8911,10 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             // 弾かれたら return せず待受を続ける(通常モードもここで抜けると音声が死ぬ)
             if (matchYes(c) || c === null) { if (await (voiceLatestRef.current.voiceTryCompleteAll || voiceTryCompleteAll)()) return; }
           } else if (matchNextStep(cmd) || matchComplete(cmd) || matchNext(cmd)) {
-            // 通常モードは「完了/次/次工程」いずれも次へ進める
-            handleNext(); return;
+            // 通常モードは「完了/次/次工程」いずれも次へ進める。弾かれたら理由を言って待ち受けを続ける(製品と同じ)
+            const r = (handleNextRef.current || handleNext)();
+            if (r === true) return;
+            await speakAsyncWithLog(r?.msg || '今は次へ進めません');
           } else if (matchInterrupt(cmd)) {
             // 止まっている時に「中断」と言っても 二重に止めない(製品 fb4a1bc)
             if (isOnBreakRef.current || !isTimerRunning) { await speakAsyncWithLog('もう止まっています。「再開」で続けます'); continue; }
@@ -8946,7 +8955,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           await speakAsyncWithLog('測定を完了しますか？');
           const c = await listenOnceWithLog({ timeout: 5000, defaultValue: 'はい' });
           if (matchYes(c) || c === null) {
-            handleNext(); return;
+            const r = (handleNextRef.current || handleNext)();
+            if (r !== true) await speakAsyncWithLog(r?.msg || '今は次へ進めません');
+            return;
           }
           retry = 0; continue;
         }
@@ -9021,7 +9032,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       await speakAsyncWithLog(`計算結果。${announcements}。次工程に進みますか？`);
       const confirm = await listenOnceWithLog({ timeout: 8000, defaultValue: 'はい' });
       if (matchYes(confirm) || confirm === null) {
-        handleNext();
+        const r = (handleNextRef.current || handleNext)();
+        if (r !== true) await speakAsyncWithLog(r?.msg || '今は次へ進めません');
       }
     }
   };
