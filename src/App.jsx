@@ -28317,12 +28317,12 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
                 </div>
                 <div className="text-xs text-slate-400 mt-auto pt-3 border-t flex items-center justify-between gap-2">
                   <span>{compMs(lot) ? new Date(compMs(lot)).toLocaleString() : '-'}</span>
-                  <button onClick={(e) => {
+                  <button onClick={async (e) => {
                     e.stopPropagation();
                     if (!confirm(`このロット（${lot.model} / ${lot.orderNo}）を検査リストへ復帰しますか？\n完了を取り消し、再度作業ができるようになります（実績は残ります）。`)) return;
-                    // 🚨投げっぱなしにしない(2026-08-31)。失敗は saveData が画面の保存失敗バナーと
-                    //   「全部送り直す」の控えで人に知らせる。ここは受け取って console に残す(誰も受け取らない拒否にしない)。
-                    saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }).catch((err) => console.error('🚨 検査リストへの復帰を保存できませんでした', lot.id, err));
+                    // 🚨 P014(製品 SS-201 と同じ形): 失敗したら押した人に知らせる。黙って完了のまま残さない。
+                    const r = await settleSaveBriefly(saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }));
+                    if (!mayCloseAfterSave(r)) { alert(SAVE_REFUSED_MESSAGE); return; }
                   }} className="text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 min-h-11 px-2 rounded font-bold flex items-center gap-1 shrink-0" title="完了を取り消して検査リストへ戻す"><RotateCcw className="w-3 h-3"/> 検査リストへ復帰</button>
                 </div>
               </div>
@@ -28362,7 +28362,12 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
                     <td className="p-3 text-right">
                       <div className="flex justify-end gap-1.5">
                         <button onClick={() => setViewGridLot(lot)} className="p-1.5 border rounded hover:bg-indigo-50 text-indigo-600 bg-white transition-colors" title="作業表で見る（工程×台）"><LayoutGrid className="w-4 h-4" /></button>
-                        <button onClick={() => { if (!confirm(`このロット（${lot.model} / ${lot.orderNo}）を検査リストへ復帰しますか？\n完了を取り消し、再度作業ができるようになります（実績は残ります）。`)) return; saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }).catch((err) => console.error('🚨 検査リストへの復帰を保存できませんでした', lot.id, err)); }} className="p-1.5 border rounded hover:bg-amber-50 text-amber-600 bg-white transition-colors" title="検査リストへ復帰（完了を取り消す）"><RotateCcw className="w-4 h-4" /></button>
+                        <button onClick={async () => {
+                          if (!confirm(`このロット（${lot.model} / ${lot.orderNo}）を検査リストへ復帰しますか？\n完了を取り消し、再度作業ができるようになります（実績は残ります）。`)) return;
+                          // 🚨 P014: 上のカードと必ず同じ形(片方だけ直すと「表からは戻せない」が残る)
+                          const r = await settleSaveBriefly(saveData('lots', lot.id, { status: 'paused', location: lot.mapZoneId ? 'planned' : 'arrival', completedAt: null }));
+                          if (!mayCloseAfterSave(r)) { alert(SAVE_REFUSED_MESSAGE); return; }
+                        }} className="p-1.5 border rounded hover:bg-amber-50 text-amber-600 bg-white transition-colors" title="検査リストへ復帰（完了を取り消す）"><RotateCcw className="w-4 h-4" /></button>
                         <button onClick={() => setReportLot(lot)} className="p-1.5 border rounded hover:bg-green-50 text-green-600 bg-white transition-colors" title="成績表プレビュー"><Printer className="w-4 h-4" /></button>
                         <button onClick={() => setEditingTimeLot(lot)} className="p-1.5 border rounded hover:bg-amber-50 text-amber-600 bg-white transition-colors" title="作業時間編集"><Clock className="w-4 h-4" /></button>
                         <button onClick={() => setEditingMeasLot(lot)} className="p-1.5 border rounded hover:bg-emerald-50 text-emerald-600 bg-white transition-colors" title="測定結果編集"><Ruler className="w-4 h-4" /></button>
