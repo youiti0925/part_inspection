@@ -131,6 +131,10 @@ const PAIRS = [
   { file: 'domain/quotaMeter.js', product: 'product-inspection-app/src/domain/quotaMeter.js', md5: 'c9675844bb1b72d3bf2780487e88e26b' },
   { file: 'domain/reworkAnalysis.js', product: 'product-inspection-app/src/domain/reworkAnalysis.js', md5: '3949e25f4036608511ef3a8683b50709' },
   { file: 'domain/skillRegistry.js', product: 'product-inspection-app/src/domain/skillRegistry.js', md5: '0ce4618ca50823c5b35282ecc9f5842a' },
+  // P084: 人の色(名簿全体から1か所で配る)。操業シミュの他の物は写さない
+  { file: 'opsim/workerColors.js', product: 'product-inspection-app/src/opsim/workerColors.js', md5: '696de0aa786fa1bbf3c27d5ba1304348' },
+  // P117: 卒業の直後の独り立ちの記録(画面)。react・lucide・educationEvents・settleSave だけ
+  { file: 'SignoffModal.jsx', product: 'product-inspection-app/src/SignoffModal.jsx', md5: '36d14e813434d2d523192a7912c0a0dd' },
   { file: 'domain/soloDependency.js', product: 'product-inspection-app/src/domain/soloDependency.js', md5: 'b7ac8c5e40dd5ffaf74820fb471dda82' },
   { file: 'domain/starChart.js', product: 'product-inspection-app/src/domain/starChart.js', md5: '07e6081e2e44c7bdbf9d019ca60ef33b' },
   { file: 'domain/taskTimeQuality.js', product: 'product-inspection-app/src/domain/taskTimeQuality.js', md5: '5e9ae0e3d6a186f43084e05dbe379078' },

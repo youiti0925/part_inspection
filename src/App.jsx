@@ -183,6 +183,12 @@ import { HelpManualModal, PRODUCT_HELP_SECTIONS } from './HelpManual.jsx';
 import { StrictModeManagerModal, computeStrictEvidence, strictComboKey, MultiUnitGantt } from './StrictModeManager.jsx';
 // スキルマップ（作業者×スキル：レベル＋回数）
 import { SkillMapView, DEFAULT_SKILLS } from './SkillMap.jsx';
+import { skillColorOf } from './skillColors.js';
+import { WorkerAvatar } from './WorkerAvatar.jsx';
+import { workerToneOf } from './workerTone.js';
+import SignoffModal from './SignoffModal.jsx';
+import { stampTrainee } from './domain/lotSavePipeline.js';
+import { normalizeRequiredSkills, requiredSkillIdsForStep, toggleSkillOnStep, attachSkill, detachSkill, upsertSkill, newSkillId, SKILL_SCOPE } from './domain/skillRegistry.js';
 
 // --- 一度だけ実行: 管理者未承認の厳密モード(localStorageの古い残骸)を全消去して既定OFFに戻す ---
 // 厳密モードは「厳密モード一元管理(settings.strictModeRules)」での承認のみを正とする方針。
@@ -733,7 +739,7 @@ const measureWindow = (lots, { model, stepKey, customTargetTimes = {}, modelGrou
         const t = (l.tasks || {})[k];
         if (!t) return;
         if (t.status !== 'completed' && t.status !== 'ng') return;
-        if (t.samplingSkipped) return;
+        if (t.samplingSkipped || t.trainee === true) return; // 🎓教育中の記録はものさしから外す(製品 isStatTask)
         const d = t.duration || 0; if (d <= 0) return;
         const ms = toMsAny(t.endTime) || lotMs;
         if (ms == null || ms < startMs || ms > endMs) return;
@@ -912,7 +918,7 @@ const profitDetail = (lots, settings, { model, stepKey, startMs = 0, endMs = Inf
       if (sk !== stepKey && !sameTitle) return;
       const keys = step.lotOnce ? lotOnceKeysOf(l.tasks || {}, step) : Array.from({ length: l.quantity || 1 }, (_, i) => (l.tasks || {})[`${step.id}-${i}`] !== undefined ? `${step.id}-${i}` : `${idx}-${i}`);
       const durs = [];
-      keys.forEach(k => { const t = (l.tasks || {})[k]; if (!t) return; if (t.status !== 'completed' && t.status !== 'ng') return; if (t.samplingSkipped) return; const d = t.duration || 0; if (d <= 0) return; const ms = toMsAny(t.endTime) || lotMs; if (ms == null || ms < startMs || ms > endMs) return; durs.push(d); });
+      keys.forEach(k => { const t = (l.tasks || {})[k]; if (!t) return; if (t.status !== 'completed' && t.status !== 'ng') return; if (t.samplingSkipped || t.trainee === true) return; const d = t.duration || 0; if (d <= 0) return; const ms = toMsAny(t.endTime) || lotMs; if (ms == null || ms < startMs || ms > endMs) return; durs.push(d); });
       if (!durs.length) return;
       if (sameTitle) (byModel[l.model] = byModel[l.model] || []).push(...durs);
       if (sk === stepKey && l.model === model) {
@@ -943,7 +949,7 @@ const stepBreakdown = (lots, { model, templateId, startMs = 0, endMs = Infinity,
       keys.forEach(k => {
         const t = (l.tasks || {})[k]; if (!t) return;
         if (t.status !== 'completed' && t.status !== 'ng') return;
-        if (t.samplingSkipped) return;
+        if (t.samplingSkipped || t.trainee === true) return; // 🎓教育中の記録はものさしから外す(製品 isStatTask)
         const d = t.duration || 0; if (d <= 0) return;
         const ms = toMsAny(t.endTime) || lotMs; if (ms == null || ms < startMs || ms > endMs) return;
         let e = byStep.get(sk);
@@ -984,7 +990,7 @@ const obsElementStats = (lots, { model, templateId, stepKey, plan }) => {
         const t = (l.tasks || {})[`${step.id}-${u}`] || (l.tasks || {})[`${idx}-${u}`];
         // 該当なし(skipped)/抜取スキップ/未完了の台は時間統計(stepBreakdown/measureWindow)と対称に除外。
         // 完了→該当なし変換しても elementDurations が残るため、status を見ないと内訳に古い値が居座る。
-        if (!t || t.status !== 'completed' || t.samplingSkipped || !t.elementDurations) continue;
+        if (!t || t.status !== 'completed' || t.samplingSkipped || t.trainee === true || !t.elementDurations) continue;
         const entries = Object.entries(t.elementDurations).filter(([, sec]) => sec > 0);
         if (!entries.length) continue;
         observedUnits++; // この台は内訳ありの1観測
@@ -3647,7 +3653,7 @@ const VideoToPhotosModal = ({ contextLabel = '', existingDescription = '', onApp
   );
 };
 
-const WorkerSummaryCard = ({ worker, lots }) => {
+const WorkerSummaryCard = ({ worker, lots, colorTone = null }) => {
   // 進行中ロットがあれば 5秒毎に再描画 (live workStartTime 加算用)
   const [, setTick] = useState(0);
   const hasProcessing = lots.some(l => l.workerId === worker.id && l.status === 'processing' && l.workStartTime);
@@ -3663,9 +3669,12 @@ const WorkerSummaryCard = ({ worker, lots }) => {
     <div className="bg-white border border-slate-200 rounded-lg p-3 shadow-sm flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2 border-b pb-2">
          <div className="flex items-center gap-2">
+           {/* 👤 人の色の丸(P084)。色は名簿全体から1か所で配る(作業者マスタと同じ色)。渡されない時は今までの人型 */}
+           {colorTone ? <WorkerAvatar name={worker.name} tone={colorTone} size="w-8 h-8" showName={false} /> : (
            <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
               <User className="w-5 h-5"/>
            </div>
+           )}
            <span className="font-bold text-lg text-slate-800">{worker.name}</span>
          </div>
          {inProgressCount > 0 && (
@@ -5324,15 +5333,36 @@ const MeasurementPreviewBox = ({ config, variant = 'tiny', maxHeight = 200 }) =>
   );
 };
 
-const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSaveLayouts, comboPresets = [], builtInOverrides = {}, hiddenBuiltIns = [] }) => {
+// 🔧治具番号・📐プログラム番号のチップ (工程に登録がある時だけ出る。両方無ければ何も描かない)
+//   ⚠描画関数の中で定義しない(再マウントで入力が飛ぶ)。module-level に置く。
+const StepSetupChips = ({ step, className = '' }) => {
+  if (!step || (!step.jigNo && !step.programNo)) return null;
+  return (
+    <div className={`flex flex-wrap items-center gap-1.5 ${className}`}>
+      {step.jigNo && <span className="inline-flex items-center gap-1 bg-amber-50 border border-amber-300 text-amber-800 text-xs font-bold px-2 py-0.5 rounded">🔧 治具 {step.jigNo}</span>}
+      {step.programNo && <span className="inline-flex items-center gap-1 bg-sky-50 border border-sky-300 text-sky-800 text-xs font-bold px-2 py-0.5 rounded">📐 プログラム {step.programNo}</span>}
+    </div>
+  );
+};
+
+const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSaveLayouts, comboPresets = [], builtInOverrides = {}, hiddenBuiltIns = [], skills = [], onSaveSkills = null, currentUserName = '' }) => {
   const [name, setName] = useState(template?.name || '');
   const [steps, setSteps] = useState(template?.steps || []);
+  // 🎯 決まり17: このテンプレに要るスキル [{ skillId, stepIds:[] }](stepIds 空＝全工程)。保存は onSave の requiredSkills で一緒に。
+  //   🚨 新しい hooks はガード(return null)より上に置く(2026-08-27 の事故)。ここは関数の先頭。
+  const [reqSkills, setReqSkills] = useState(() => normalizeRequiredSkills(template?.requiredSkills));
+  const [skillPickOpen, setSkillPickOpen] = useState(false);
+  const [newSkillName, setNewSkillName] = useState('');
+  const [newSkillSpecial, setNewSkillSpecial] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [type, setType] = useState('normal');
   // 確認チェック項目 (type 不問で工程に添付できる)
   const [checklistItems, setChecklistItems] = useState([]);
   const [targetTime, setTargetTime] = useState(0);
+  // 段取り情報: 治具番号・プログラム番号 (工程に直付けで保存。空なら保存しない)
+  const [jigNo, setJigNo] = useState('');
+  const [programNo, setProgramNo] = useState('');
   // 自動測定 (機械占有) 工程か / この工程は他の台の自動測定中に並行できるか
   const [executionMode, setExecutionMode] = useState('manual'); // 'manual' | 'batch' (= 自動)
   // workResource: この工程が占有するリソース。デフォルト null = 機械独立 (= 並行可)
@@ -5467,6 +5497,9 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
       // 自動測定の既知時間 (経過で自動終了)。自動工程かつ有効かつ正の秒数のときのみ保存。
       ...(executionMode === 'batch' && autoEndEnabled && autoEndSec > 0 ? { autoEndEnabled: true, autoEndSec: Math.round(autoEndSec) } : {}),
       ...(lotOnce ? { lotOnce: true } : {}),  // ロット1回(段取り)工程
+      // 段取り情報 (治具番号・プログラム番号)。空文字は保存しない (条件付きスプレッド)
+      ...(jigNo.trim() ? { jigNo: jigNo.trim() } : {}),
+      ...(programNo.trim() ? { programNo: programNo.trim() } : {}),
       ...(rotaryLink && !lotOnce && executionMode !== 'batch' ? { rotaryLink: true, rotaryRole, rotaryMode } : {}),  // 分割測定アプリ連携(準備/測定開始の指令送信+測定モード)。lotOnce/batchとは併用不可(workId採番が噛み合わない)
       ...(type === 'measurement' && measurementConfig ? { measurementConfig } : {}),
       // checklistItems は type 問わず保存可能 (測定 + チェックの併用OK)
@@ -5475,7 +5508,7 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
     if (editingStepId) { setSteps(steps.map(s => s.id === editingStepId ? newStep : s)); } else { setSteps([...steps, newStep]); }
     resetInput();
   };
-  const resetInput = () => { setTitle(''); setDescription(''); setType('normal'); setTargetTime(0); setImages([]); setPdfData(null); setEditingStepId(null); setMeasurementConfig(null); setChecklistItems([]); setExecutionMode('manual'); setWorkResource(''); setAutoEndEnabled(false); setAutoEndSec(0); setLotOnce(false); setRotaryLink(false); setRotaryRole('capture'); setRotaryMode('回転分割'); };
+  const resetInput = () => { setTitle(''); setDescription(''); setType('normal'); setTargetTime(0); setJigNo(''); setProgramNo(''); setImages([]); setPdfData(null); setEditingStepId(null); setMeasurementConfig(null); setChecklistItems([]); setExecutionMode('manual'); setWorkResource(''); setAutoEndEnabled(false); setAutoEndSec(0); setLotOnce(false); setRotaryLink(false); setRotaryRole('capture'); setRotaryMode('回転分割'); };
   const editStep = (s) => {
     setEditingStepId(s.id);
     setTitle(s.title);
@@ -5483,6 +5516,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
     // 旧 'checklist' タイプは normal に正規化 (checklistItems は別フィールドで保持)
     setType(s.type === 'checklist' ? 'normal' : s.type);
     setTargetTime(s.targetTime);
+    setJigNo(s.jigNo || '');
+    setProgramNo(s.programNo || '');
     setImages(s.images || []);
     setPdfData(s.pdfData || null);
     setMeasurementConfig(s.measurementConfig || null);
@@ -5515,7 +5550,9 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
       }
     } catch {}
     // hasOverview が false のときは null を渡して既存の overview を消す (merge保存なので明示的にnull)
-    onSave({ id: template?.id, name, steps, overview: hasOverview ? overviewClean : null });
+    // 🎯 要るスキル: 触っていなければ送らない(旧スキルマップの {skillId, level} をそのまま残す)
+    const reqChanged = JSON.stringify(reqSkills) !== JSON.stringify(normalizeRequiredSkills(template?.requiredSkills));
+    onSave({ id: template?.id, name, steps, overview: hasOverview ? overviewClean : null, ...(reqChanged ? { requiredSkills: reqSkills } : {}) });
   };
 
   return (
@@ -5546,13 +5583,58 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
           const initName = template?.name || '';
           const initSteps = JSON.stringify(template?.steps || []);
           const curSteps = JSON.stringify(steps);
-          const isDirty = (name !== initName) || (curSteps !== initSteps);
+          const initReq = JSON.stringify(normalizeRequiredSkills(template?.requiredSkills));
+          const isDirty = (name !== initName) || (curSteps !== initSteps) || (JSON.stringify(reqSkills) !== initReq);
           if (isDirty && !confirm('保存していない変更があります。破棄して戻りますか？')) return;
           onCancel();
         }} className="p-2 hover:bg-slate-100 rounded-full" title="戻る"><ArrowRight className="w-5 h-5 rotate-180"/></button><input value={name} onChange={e => setName(e.target.value)} placeholder="テンプレート名" className="text-lg font-bold border-none focus:ring-0 w-full"/></div>
         {/* Fixed: button type explicitly set to button */}
         <button type="button" onClick={handleSave} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 z-50 relative"><Save className="w-4 h-4"/> 保存</button>
       </div>
+      {/* 🎯 決まり17: このテンプレに要るスキル(名前の下の1行)。チップ＝付いているスキル(全工程／◯工程)。「＋スキルを足す」で既存から選ぶか、名前だけで新しく作る。
+          🚨 型式専用の編集(scopeLabel)では出さない(保存側が拾わない＝共通テンプレの物)。 */}
+      {(
+        <div className="bg-orange-50 border-b-2 border-orange-200 px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 relative" data-tpl="skills-row">
+          <span className="text-xs font-black text-orange-800">このテンプレに要るスキル</span>
+          {reqSkills.length === 0 && <span className="fi-tap-text text-slate-500">まだ付いていません（付けると、スキルマップの「このテンプレに要るスキル」と同じ物です）</span>}
+          {reqSkills.map((rs) => { const sk = (skills || []).find((x) => x.id === rs.skillId); const col = skillColorOf(skills, rs.skillId); return (
+            <span key={rs.skillId} data-tpl-skill={rs.skillId} className="inline-flex items-center gap-1.5 bg-white border rounded-full pl-2 pr-1 py-0.5 text-xs font-bold text-slate-700" style={{ borderColor: col }}>
+              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: col }} />
+              {sk?.scope === SKILL_SCOPE.TEMPLATE ? '★' : ''}{sk ? sk.name : rs.skillId}
+              <span className="fi-tap-text font-normal text-slate-400">▸ {rs.stepIds.length === 0 ? '全工程' : `${rs.stepIds.length}工程`}</span>
+              <button type="button" onClick={() => setReqSkills(detachSkill(reqSkills, rs.skillId))} className="text-slate-400 hover:text-rose-600 px-1" title="外す">×</button>
+            </span>
+          ); })}
+          <button type="button" onClick={() => setSkillPickOpen((v) => !v)} data-tpl="skill-add" className="px-3 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-1"><Plus className="w-3.5 h-3.5"/> スキルを足す</button>
+          <span className="ml-auto fi-tap-text text-slate-400">全工程で付けた物は工程ごとには外せません。一部の工程だけに効く物(★)は右の工程編集で✓。</span>
+          {skillPickOpen && (
+            <div className="absolute left-4 top-full mt-1 z-40 bg-white border border-slate-300 rounded-xl shadow-xl p-3 w-80 space-y-2" data-tpl="skill-pick">
+              <div className="fi-tap-text font-bold text-slate-500">＋ スキルを足す（全工程に要る物として付きます）</div>
+              {(skills || []).filter((sk) => !reqSkills.some((rs) => rs.skillId === sk.id)).map((sk) => (
+                <button key={sk.id} type="button" data-tpl-pick={sk.id} onClick={() => { setReqSkills(attachSkill(reqSkills, sk.id, [])); setSkillPickOpen(false); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-orange-50 text-sm font-bold text-slate-700 flex items-center gap-2">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: skillColorOf(skills, sk.id) }} />{sk.scope === SKILL_SCOPE.TEMPLATE ? '★' : ''}{sk.name}
+                </button>
+              ))}
+              {(skills || []).filter((sk) => !reqSkills.some((rs) => rs.skillId === sk.id)).length === 0 && <div className="text-xs text-slate-400 px-2">足せるスキルは全部付いています</div>}
+              {onSaveSkills && (
+                <div className="border-t border-slate-200 pt-2 space-y-1.5">
+                  <div className="fi-tap-text font-bold text-orange-700">＋ 新しいスキルを作る（名前だけ。説明はスキルマップで）</div>
+                  <input value={newSkillName} onChange={(e) => setNewSkillName(e.target.value)} placeholder="例: RTT-215 傾斜回転" data-tpl="new-skill-name" className="w-full border rounded-lg px-2 py-1.5 text-sm" />
+                  <label className="flex items-center gap-1 text-xs text-slate-600 cursor-pointer"><input type="checkbox" checked={newSkillSpecial} onChange={(e) => setNewSkillSpecial(e.target.checked)} data-tpl="new-skill-special" /> ★特注機（このテンプレ専用）</label>
+                  <button type="button" data-tpl="new-skill-save" onClick={() => {
+                    const nm = newSkillName.trim(); if (!nm) return;
+                    const id = newSkillId(Date.now(), Math.random().toString(36).slice(2, 5));
+                    const sk = { id, name: nm, note: '', scope: newSkillSpecial ? SKILL_SCOPE.TEMPLATE : SKILL_SCOPE.SHARED, templateId: newSkillSpecial ? (template?.id || '') : '', by: currentUserName || '', at: Date.now() };
+                    onSaveSkills(upsertSkill(skills, sk));
+                    setReqSkills(attachSkill(reqSkills, id, []));
+                    setNewSkillName(''); setNewSkillSpecial(false); setSkillPickOpen(false);
+                  }} className="w-full py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold">作って、このテンプレに付ける</button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex-1 flex overflow-hidden">
         <div className="w-1/3 p-4 overflow-y-auto border-r bg-white">
           {/* テンプレ全体の総合資料 (手順書PDF・概要写真・全体説明)。工程の上に配置 */}
@@ -5579,11 +5661,31 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
             const resColor = isAuto ? 'bg-purple-100 text-purple-700' :
                              resTag === 'measurement-machine' || resTag === 'jig-shared' || (resTag && resTag !== '') ? 'bg-rose-100 text-rose-700' :
                              (resTag === null || resTag === '') ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700';
-            return (<div key={s.id} className={`p-3 border rounded-lg flex gap-3 cursor-pointer ${editingStepId===s.id ? 'border-blue-500 bg-blue-50' : 'hover:border-slate-300'}`} onClick={() => editStep(s)}><div className="flex flex-col gap-1 justify-center"><button onClick={(e)=>{e.stopPropagation();moveStep(i,'up')}} disabled={i===0} className="text-slate-300 hover:text-slate-600"><ArrowUp className="w-4 h-4"/></button><span className="text-xs font-bold text-slate-400 text-center">{i+1}</span><button onClick={(e)=>{e.stopPropagation();moveStep(i,'down')}} disabled={i===steps.length-1} className="text-slate-300 hover:text-slate-600"><ArrowDown className="w-4 h-4"/></button></div><div className="flex-1 min-w-0"><div className="font-bold text-sm truncate flex items-center gap-1.5">{isAuto && <span className="bg-purple-500 text-white text-xs font-bold px-1 rounded shrink-0">自動</span>}{s.title}</div><p className="text-xs text-slate-500 truncate">{s.description}</p><div className="flex items-center gap-1 mt-1"><span className={`text-xs font-bold px-1.5 py-0.5 rounded ${resColor}`}>{isAuto ? '🤖 自動測定' : resLabel}</span></div></div><div className="flex flex-col gap-1"><button onClick={(e)=>{e.stopPropagation();const dup={...s,id:generateId(),title:s.title+' (コピー)'};setSteps(prev=>[...prev.slice(0,i+1),dup,...prev.slice(i+1)]);}} className="text-slate-300 hover:text-blue-500" title="複製"><Copy className="w-4 h-4"/></button><button onClick={(e)=>{e.stopPropagation();deleteStep(s.id)}} className="text-slate-300 hover:text-red-500" title="削除"><Trash2 className="w-4 h-4"/></button></div></div>);
+            return (<div key={s.id} className={`p-3 border rounded-lg flex gap-3 cursor-pointer ${editingStepId===s.id ? 'border-blue-500 bg-blue-50' : 'hover:border-slate-300'}`} onClick={() => editStep(s)}><div className="flex flex-col gap-1 justify-center"><button onClick={(e)=>{e.stopPropagation();moveStep(i,'up')}} disabled={i===0} className="text-slate-300 hover:text-slate-600"><ArrowUp className="w-4 h-4"/></button><span className="text-xs font-bold text-slate-400 text-center">{i+1}</span><button onClick={(e)=>{e.stopPropagation();moveStep(i,'down')}} disabled={i===steps.length-1} className="text-slate-300 hover:text-slate-600"><ArrowDown className="w-4 h-4"/></button></div><div className="flex-1 min-w-0"><div className="font-bold text-sm truncate flex items-center gap-1.5">{isAuto && <span className="bg-purple-500 text-white text-xs font-bold px-1 rounded shrink-0">自動</span>}{s.title}</div><p className="text-xs text-slate-500 truncate">{s.description}</p><div className="flex items-center gap-1 mt-1 flex-wrap"><span className={`text-xs font-bold px-1.5 py-0.5 rounded ${resColor}`}>{isAuto ? '🤖 自動測定' : resLabel}</span>{s.jigNo && <span className="fi-tap-text font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">🔧治具:{s.jigNo}</span>}{s.programNo && <span className="fi-tap-text font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">📐Prg:{s.programNo}</span>}{requiredSkillIdsForStep(reqSkills, s.id).map((sid) => <span key={sid} data-step-skill={sid} className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: skillColorOf(skills, sid) }} title={`要るスキル: ${((skills || []).find((x) => x.id === sid) || {}).name || sid}`} />)}</div></div><div className="flex flex-col gap-1"><button onClick={(e)=>{e.stopPropagation();const dup={...s,id:generateId(),title:s.title+' (コピー)'};setSteps(prev=>[...prev.slice(0,i+1),dup,...prev.slice(i+1)]);}} className="text-slate-300 hover:text-blue-500" title="複製"><Copy className="w-4 h-4"/></button><button onClick={(e)=>{e.stopPropagation();deleteStep(s.id)}} className="text-slate-300 hover:text-red-500" title="削除"><Trash2 className="w-4 h-4"/></button></div></div>);
           })}</div>
         </div>
         <div className="w-2/3 p-6 bg-slate-50 overflow-y-auto flex gap-6">
           <div className="flex-1 space-y-4">
+            {/* 🎯 決まり17: この工程に要るスキル(✓)。全工程の物はここでは外せない(上の行で外す)。 */}
+            {editingStepId && (skills || []).length > 0 && (
+              <div className="bg-pink-50/60 border-2 border-pink-200 rounded-lg p-3" data-tpl="step-skills">
+                <div className="text-xs font-bold text-pink-800 mb-1.5">この工程に要るスキル <span className="fi-tap-text font-normal text-slate-500">（★のような一部の工程だけに効くスキルはここで✓）</span></div>
+                <div className="flex flex-wrap gap-2">
+                  {(skills || []).map((sk) => {
+                    const rs = reqSkills.find((x) => x.skillId === sk.id);
+                    const all = !!rs && rs.stepIds.length === 0;
+                    const on = !!rs && (all || rs.stepIds.includes(editingStepId));
+                    return (
+                      <label key={sk.id} className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border text-xs font-bold ${on ? 'bg-white' : 'bg-white/60 text-slate-500'} ${all ? 'opacity-70' : 'cursor-pointer'}`} style={{ borderColor: on ? skillColorOf(skills, sk.id) : '#e2e8f0' }} title={all ? '全工程で要る物(上の行で外します)' : ''}>
+                        <input type="checkbox" checked={on} disabled={all} data-step-skill-check={sk.id} onChange={(e) => setReqSkills(toggleSkillOnStep(reqSkills, sk.id, editingStepId, e.target.checked))} />
+                        <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: skillColorOf(skills, sk.id) }} />
+                        {sk.scope === SKILL_SCOPE.TEMPLATE ? '★' : ''}{sk.name}{all ? <span className="fi-tap-text font-normal text-slate-400">全工程</span> : null}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div><label className="block text-xs font-bold text-slate-500 mb-1">工程タイトル</label><input value={title} onChange={e => setTitle(e.target.value)} className="w-full p-2 border rounded"/></div>
             <div className="flex gap-4"><div className="flex-1"><label className="block text-xs font-bold text-slate-500 mb-1">タイプ</label><div className="flex gap-1 flex-wrap">{['normal', 'important', 'danger'].map(t => (<button key={t} onClick={() => { setType(t); if (t !== 'measurement') setMeasurementConfig(null); }} className={`flex-1 py-1.5 text-xs rounded border ${type===t ? 'bg-slate-800 text-white' : 'bg-white text-slate-500'}`}>{t}</button>))}<button onClick={() => { setType('measurement'); if (!measurementConfig) setMeasurementConfig({ layout: 'circle-4point', inputs: [...MEASUREMENT_LAYOUTS['circle-4point'].inputs.map(inp => ({ ...inp, inputType: 'number', presetValues: [], group: '' }))], calculations: [{ id: 'calc1', label: '計算結果', method: 'max-min', formula: '', inputIds: [], toleranceUpper: 0.05, toleranceLower: -0.05, unit: 'mm' }] }); }} className={`flex-1 py-1.5 text-xs rounded border ${type==='measurement' ? 'bg-teal-600 text-white' : 'bg-white text-teal-600 border-teal-300'}`}><Calculator className="w-3 h-3 inline mr-0.5"/>測定</button></div></div><div className="w-24"><label className="block text-xs font-bold text-slate-500 mb-1">目標(秒)</label><input type="number" value={targetTime} onChange={e => setTargetTime(Number(e.target.value))} className="w-full p-2 border rounded text-right"/></div></div>
 
@@ -5713,6 +5815,23 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
                 <div className="text-xs text-slate-500 mt-1.5 leading-relaxed">
                   💡 <b>機械独立</b> = 書類確認・準備など機械を使わない作業。他の台が自動測定中でも並行できる。<br/>
                   💡 <b>測定機を占有</b> = 測定準備・測定プログラム・自動測定本体など。同じ機械を共有する作業なので並行不可。
+                </div>
+              </div>
+            </div>
+            {/* 段取り情報: 治具番号・プログラム番号 (工程に直付けで保存。作業画面の工程にチップで出る) */}
+            <div className="bg-amber-50/40 border-2 border-amber-100 rounded-lg p-3">
+              <div className="text-xs font-bold text-amber-800 flex items-center gap-1.5 mb-2">
+                <Wrench className="w-3.5 h-3.5"/> 段取り情報
+                <span className="fi-tap-text font-normal text-amber-600 ml-1">(任意 — 登録すると作業画面の工程にチップで表示)</span>
+              </div>
+              <div className="flex gap-3 flex-wrap">
+                <div className="flex-1 min-w-[140px]">
+                  <label className="block fi-tap-text font-bold text-slate-500 mb-1">🔧 治具番号</label>
+                  <input value={jigNo} onChange={e => setJigNo(e.target.value)} placeholder="例: JG-102" className="w-full p-2 border rounded text-sm"/>
+                </div>
+                <div className="flex-1 min-w-[140px]">
+                  <label className="block fi-tap-text font-bold text-slate-500 mb-1">📐 プログラム番号</label>
+                  <input value={programNo} onChange={e => setProgramNo(e.target.value)} placeholder="例: PRG-3301" className="w-full p-2 border rounded text-sm"/>
                 </div>
               </div>
             </div>
@@ -12527,6 +12646,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                    </div>
                    <div className="space-y-4">
                       <div><label className="text-xs font-bold text-slate-500">作業名</label><div className="text-base font-bold text-slate-800">{displayStep.title}</div></div>
+                      <StepSetupChips step={displayStep}/>
                       <div>
                         <label className="text-xs font-bold text-slate-500 flex items-center justify-between">内容・注意点 <button onClick={() => { const el = document.getElementById('custom-desc-edit'); if(el) el.style.display = el.style.display === 'none' ? '' : 'none'; }} className="text-xs text-blue-500 hover:text-blue-700"><Pencil className="w-3 h-3 inline"/> 編集</button></label>
                         <div className="text-sm text-slate-600 bg-slate-50 p-3 rounded-lg whitespace-pre-wrap">{displayStep.description}</div>
@@ -12859,6 +12979,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                   {activeStep.description && (
                     <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
                       <div className="text-sm font-bold text-slate-500 mb-2">作業内容 / 注意事項</div>
+                      <StepSetupChips step={activeStep} className="mb-2"/>
                       <div className="text-xl text-slate-800 whitespace-pre-wrap leading-relaxed">{activeStep.description}</div>
                     </div>
                   )}
@@ -13010,6 +13131,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                };
                return (
                  <div className="flex flex-col gap-3">
+                   <StepSetupChips step={currentStep}/>
                    {currentStep.description && (
                      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-sm text-slate-700 whitespace-pre-wrap">
                        <div className="text-xs font-bold text-slate-500 mb-1">作業内容 / 注意事項</div>
@@ -13534,7 +13656,7 @@ const DashboardView = ({ onSetMode, lots, workers, handleMoveLot, saveData, setD
           ? workers.filter(w => w.name === currentUserName)
           : laneWorkersOf(workers, lots)
         ).map(worker => (
-          <WorkerSummaryCard key={worker.id} worker={worker} lots={lots} />
+          <WorkerSummaryCard key={worker.id} worker={worker} lots={lots} colorTone={workerToneOf(workers, worker.name)} />
         ))}
         {workers.length === 0 && <div className="text-center text-slate-400 p-4">作業者が登録されていません</div>}
       </ZoneList>
@@ -16613,7 +16735,7 @@ const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {},
         for (let u = 0; u < qty; u++) {
           const t = tasks[st.id ? `${st.id}-${u}` : `${si}-${u}`] || tasks[`${si}-${u}`];
           if (!t || (t.status !== 'completed' && t.status !== 'ng')) continue;
-          if (t.samplingSkipped) continue;
+          if (t.samplingSkipped || t.trainee === true) continue;
           const d = t.duration || 0; if (d <= 0) continue;
           const ms = toMs(t.endTime) || lotMs; if (!ms) continue;
           out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt });
@@ -22280,7 +22402,7 @@ const MeasurementSettingsView = ({ settings, saveSettings, comboPresets = [], te
 
 // テンプレート管理: 検索 / フィルタ / 並び替えサポート
 // ⚠⚠ 2026-08-05 クラッシュ修正: 中で setShowStrictManager を呼んでいたが受け取っていなかった(製品検査と同じ)。
-const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplate, deleteData, handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, onOpenStrictManager = null }) => {
+const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplate, deleteData, handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, onOpenStrictManager = null, handleAllTemplatesDownload = null, handleAllTemplatesImport = null, allTplInputRef = null }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('name_asc'); // name_asc | name_desc | steps_desc | steps_asc | recent | usage_desc
   // フィルタ (multi-select)
@@ -22362,6 +22484,10 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
         <div className="flex justify-between items-center mb-4">
           <h3 className="font-bold text-base flex items-center gap-2"><ClipboardList className="w-5 h-5" /> 工程テンプレート管理</h3>
           <div className="flex gap-2">
+            {handleAllTemplatesDownload && (<>
+              <button onClick={handleAllTemplatesDownload} className="text-xs flex items-center gap-1 bg-indigo-600 text-white px-3 py-2 rounded border border-indigo-700 hover:bg-indigo-700 font-bold"><FileSpreadsheet className="w-4 h-4"/> 全テンプレExcel</button>
+              <label className="text-xs flex items-center gap-1 cursor-pointer bg-indigo-50 text-indigo-700 px-3 py-2 rounded border border-indigo-200 hover:bg-indigo-100 font-bold"><FileUp className="w-4 h-4"/> まとめて取込<input type="file" ref={allTplInputRef} accept=".xlsx" onChange={handleAllTemplatesImport} className="hidden"/></label>
+            </>)}
             <label className="text-xs flex items-center gap-1 cursor-pointer bg-green-50 text-green-700 px-3 py-2 rounded border border-green-200 hover:bg-green-100"><FileUp className="w-4 h-4"/> Excel取込<input type="file" ref={excelInputRef} accept=".xlsx" onChange={handleExcelImport} className="hidden"/></label>
             <button onClick={handleBackupExport} className="text-xs flex items-center gap-1 bg-slate-100 text-slate-600 px-3 py-2 rounded border hover:bg-slate-200"><DownloadCloud className="w-4 h-4"/> バックアップ</button>
             <label className="text-xs flex items-center gap-1 cursor-pointer bg-slate-100 text-slate-600 px-3 py-2 rounded border hover:bg-slate-200"><RefreshCw className="w-4 h-4"/> 復元<input type="file" ref={backupInputRef} accept=".json" onChange={handleBackupImport} className="hidden"/></label>
@@ -22484,6 +22610,25 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
   );
 };
 
+ // 🎓 教育中フラグの入切 (2026-08-08)。
+ //   ⚠これは「人の判断」なので端末ローカルに置かない。workers doc(共有)に書くことで
+ //     どの端末から見ても同じ札が出て、その人の記録が「ものさし」から外れる。
+ //   ⚠卒業は trainee キーを消すのではなく **false を書く**。
+ //     merge:true では「送らなかったキー」が残るため、消すやり方だと次の同期で教育中に戻る。
+ const toggleWorkerTrainee = (w, { saveData, byName = '', onGraduated = null } = {}) => {
+   if (!w || !saveData) return;
+   const now = Date.now();
+   if (w.trainee === true) {
+     if (!window.confirm(`「${w.name}」さんを🎓教育中から卒業させます。\n\n・これから記録する作業時間は、みんなと同じ「ものさし」(標準時間・スキル比較・改善効果)に入ります。\n・今までの🎓が付いた記録はそのまま残ります(過去の集計は変わりません)。\n\nよろしいですか？`)) return;
+     saveData('workers', w.id, { trainee: false, graduatedAt: now, graduatedBy: byName || '' });
+     // 🏅卒業の瞬間だけサインオフ(横で見た先輩+ロットを1タップで残す)を開く。教育中にする側では呼ばない
+     if (onGraduated) onGraduated(w);
+   } else {
+     if (!window.confirm(`「${w.name}」さんを🎓教育中にします。\n\nこれから記録する作業時間は「ものさし」から外れます。\n(実際にかかった人件費・必要人数・月次レポートには今までどおり入ります)\n\nよろしいですか？`)) return;
+     saveData('workers', w.id, { trainee: true, traineeSince: now });
+   }
+ };
+
 // ⚠⚠ 2026-08-05 クラッシュ修正: 「厳密モード 一元管理を開く」ボタンは
 //   TemplateListSection ではなく **この TemplatesView の中**にある(下の方の設定パネル群)。
 //   前回 onOpenStrictManager を TemplateListSection 側だけに足したので、
@@ -22507,7 +22652,9 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
    saveData('workers', w.id, resumePatch(Date.now()));
  };
 
- const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null, parentTabs = null }) => {
+ const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null, currentUserName = '', parentTabs = null }) => {
+  // 🏅 P117 卒業の直後に開く「独り立ちの記録」(SignoffModal)の相手。hooks は関数の先頭
+  const [signoffFor, setSignoffFor] = useState(null);
   const [newProcessOpt, setNewProcessOpt] = useState('');
   const defectProcessOptions = settings?.defectProcessOptions || DEFAULT_DEFECT_PROCESS_OPTIONS;
   const [localZones, setLocalZones] = useState(mapZones || INITIAL_MAP_ZONES);
@@ -22649,10 +22796,21 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
              <input id="workerInput" className="border rounded px-3 py-2 text-sm flex-1" placeholder="新しい作業者名" />
              <button onClick={() => { const input = document.getElementById('workerInput'); if(input && input.value) { saveData('workers', generateId(), { name: input.value }); input.value = ''; } }} className="bg-slate-800 text-white px-4 py-2 rounded text-sm font-bold">追加</button>
            </div>
+           <p className="text-xs text-slate-500 mb-2">🎓 = 教育中。教育中の人の作業時間は「ものさし」(標準時間・達成率・要素作業)から外れます。</p>
+           {signoffFor && <SignoffModal worker={signoffFor.name} workers={workers} lots={lots} by={currentUserName} onSave={(doc) => saveData('education_events', doc.id, doc)} onClose={() => setSignoffFor(null)} />}
            <div className="flex flex-wrap gap-2">
              {activeWorkersOf(workers).map(w => (
-               <div key={w.id} className="bg-slate-50 border px-3 py-1.5 rounded-full flex items-center gap-2 text-sm">
+               <div key={w.id} className={`border px-3 py-1.5 rounded-full flex items-center gap-2 text-sm ${w.trainee === true ? 'bg-amber-50 border-amber-300 text-amber-800 font-bold' : 'bg-slate-50'}`}>
+                 {/* 👤 人の色の丸(P084)。現場マップと同じ色。名前は横の {w.name} が出すので showName={false} */}
+                 <WorkerAvatar name={w.name} tone={workerToneOf(workers, w.name)} size="w-6 h-6" showName={false} />
+                 {w.trainee === true && <span title={w.traineeSince ? `教育開始: ${new Date(w.traineeSince).toLocaleDateString('ja-JP')}` : '教育中'}>🎓</span>}
                  {w.name}
+                 {/* 🎓 P117 教育中の入切。卒業の時だけ独り立ちの記録(SignoffModal)を開く */}
+                 <button
+                   onClick={() => toggleWorkerTrainee(w, { saveData, byName: currentUserName, onGraduated: (ww) => setSignoffFor(ww) })}
+                   title={w.trainee === true ? '教育中から卒業させる' : '教育中にする'}
+                   className={`text-xs px-3 min-h-[36px] rounded border flex items-center ${w.trainee === true ? 'border-amber-400 text-amber-700 hover:bg-amber-100' : 'border-slate-300 text-slate-500 hover:bg-slate-100'}`}
+                 >{w.trainee === true ? '卒業' : '🎓教育中'}</button>
                  <button
                    onClick={() => pauseWorker(w, { saveData, lots })}
                    title={`「${w.name}」を休止にして、担当を選ぶ所・マップのレーンから外す（消えません。いつでも復帰できます）`}
@@ -29365,6 +29523,7 @@ const QuotaStoppedPanel = ({ until }) => (
    useEffect(() => { window.__setMoveLot = setMoveLot; return () => { delete window.__setMoveLot; }; }, []);
    const lotExcelInputRef = useRef(null);
    const excelInputRef = useRef(null);
+   const allTplInputRef = useRef(null);
    const backupInputRef = useRef(null);
    const progressMgmtInputRef = useRef(null);
    const [progressImportPreview, setProgressImportPreview] = useState(null);  // 工機進捗管理表 取込プレビュー結果
@@ -30555,6 +30714,131 @@ const QuotaStoppedPanel = ({ until }) => (
        console.error(err);
        alert('Excelファイルの生成に失敗しました');
      }
+   };
+
+   // 1c. 全テンプレまとめて Excel ダウンロード (1シート・1行=1工程・テンプレIDでグループ)
+   const TPL_CHK_COLS = 10; // チェック項目の列数(最大10)
+   const tplResLabel = (wr) => wr === 'measurement-machine' ? '測定機占有' : (wr === 'jig-shared' ? '治具占有' : (wr || ''));
+   const tplResValue = (l) => { const s = (l || '').trim(); if (/測定機/.test(s)) return 'measurement-machine'; if (/治具/.test(s)) return 'jig-shared'; return s; };
+   const handleAllTemplatesDownload = async () => {
+     try {
+       const ExcelJS = await loadExcelJS();
+       const wb = new ExcelJS.Workbook();
+       const ws = wb.addWorksheet('全テンプレート');
+       const thin = { style: 'thin', color: { argb: 'FF000000' } };
+       const bd = { top: thin, bottom: thin, left: thin, right: thin };
+       const headers = ['テンプレID', 'テンプレ名', '工程ID', 'No', '工程名', '作業内容/注意事項', '目標時間(秒)', '種別', '段取り(ロット1回)', '実行モード', '占有リソース', '自動終了(秒)', ...Array.from({ length: TPL_CHK_COLS }, (_, i) => `チェック項目${i + 1}`), '画像枚数(参考)'];
+       const NC = headers.length;
+       ws.mergeCells(1, 1, 1, NC);
+       const t1 = ws.getCell('A1'); t1.value = '全テンプレート一覧（まとめて編集用）'; t1.font = { bold: true, size: 14 };
+       ws.mergeCells(2, 1, 2, NC);
+       const t2 = ws.getCell('A2');
+       t2.value = '※この行より下を編集→「まとめて取込」で反映。●テンプレID/工程IDは変更しない(空欄=新規追加)。●同じテンプレIDの行が1つのテンプレの工程群。新規テンプレはテンプレID空欄+同じテンプレ名を複数行。●種別=normal/important/danger/measurement。段取り=○。実行モード=手動/自動。●チェック項目は先頭★で必須(最大10)。●測定図の詳細/画像/PDFはアプリ側で保持(ここでは編集しません)。●Excelから消したテンプレは削除されません(削除は一覧のゴミ箱で)。';
+       t2.font = { italic: true, size: 9, color: { argb: 'FF666666' } }; ws.getRow(2).height = 54; t2.alignment = { vertical: 'middle', wrapText: true };
+       const hr = ws.getRow(3);
+       headers.forEach((h, i) => { const c = hr.getCell(i + 1); c.value = h; c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } }; c.border = bd; c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }; });
+       const widths = [16, 24, 14, 5, 26, 40, 12, 13, 14, 13, 14, 12, ...Array(TPL_CHK_COLS).fill(18), 11];
+       widths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+       let r = 4;
+       const sorted = [...templates].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ja'));
+       sorted.forEach(tpl => {
+         const steps = tpl.steps || [];
+         const emit = (s, idx) => {
+           const row = ws.getRow(r);
+           row.getCell(1).value = tpl.id || '';
+           row.getCell(2).value = tpl.name || '';
+           row.getCell(3).value = s ? (s.id || '') : '';
+           row.getCell(4).value = s ? (idx + 1) : '';
+           row.getCell(5).value = s ? (s.title || '') : '';
+           row.getCell(6).value = s ? (s.description || '') : '';
+           row.getCell(7).value = s ? (s.targetTime || 0) : '';
+           row.getCell(8).value = s ? (s.type || 'normal') : '';
+           row.getCell(9).value = s && s.lotOnce ? '○' : '';
+           row.getCell(10).value = s ? (s.executionMode === 'batch' ? '自動(バッチ)' : '手動') : '';
+           row.getCell(11).value = s ? tplResLabel(s.workResource) : '';
+           row.getCell(12).value = s && s.autoEndEnabled && s.autoEndSec ? s.autoEndSec : '';
+           const chk = (s && s.checklistItems) || [];
+           for (let i = 0; i < TPL_CHK_COLS; i++) { const it = chk[i]; row.getCell(13 + i).value = it ? ((it.required ? '★' : '') + (it.label || '')) : ''; }
+           row.getCell(13 + TPL_CHK_COLS).value = s ? (s.images ? s.images.length : 0) : '';
+           for (let c = 1; c <= NC; c++) { row.getCell(c).border = bd; row.getCell(c).alignment = { vertical: 'middle', wrapText: c === 6 }; }
+           r++;
+         };
+         if (steps.length) steps.forEach((s, i) => emit(s, i)); else emit(null, 0);
+       });
+       const buf = await wb.xlsx.writeBuffer();
+       const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '全テンプレート一覧.xlsx'; a.click();
+     } catch (err) { console.error(err); alert('全テンプレExcelの生成に失敗しました: ' + (err && err.message || err)); }
+   };
+
+   // 1d. 全テンプレまとめて Excel 取込 (グループ→upsert・非編集項目は工程IDで保持・削除はしない)
+   const handleAllTemplatesImport = async (e) => {
+     const file = e.target.files?.[0];
+     if (!file) { return; }
+     try {
+       const ExcelJS = await loadExcelJS();
+       const wb = new ExcelJS.Workbook();
+       await wb.xlsx.load(file);
+       const ws = wb.getWorksheet(1);
+       if (!ws) throw new Error('シートが見つかりません');
+       const cellTxt = (cell) => { const v = cell == null ? null : cell.value; if (v == null) return ''; if (typeof v === 'object') { if (v.text != null) return String(v.text); if (v.result != null) return String(v.result); if (Array.isArray(v.richText)) return v.richText.map(t => t.text).join(''); if (v.hyperlink) return String(v.text || v.hyperlink); return ''; } return String(v); };
+       const recs = [];
+       ws.eachRow((row, idx) => {
+         if (idx < 4) return;
+         const g = (c) => cellTxt(row.getCell(c)).trim();
+         const rec = { tplId: g(1), tplName: g(2), stepId: g(3), title: g(5), description: cellTxt(row.getCell(6)), targetTime: parseInt(g(7)) || 0, type: (g(8) || 'normal'), lotOnce: /^(○|◯|✓|はい|yes|true|1|y)$/i.test(g(9)), execMode: /自動|batch/i.test(g(10)) ? 'batch' : 'manual', res: g(11), autoEndSec: parseInt(g(12)) || 0, chk: [] };
+         for (let i = 0; i < TPL_CHK_COLS; i++) { const raw = g(13 + i); if (raw) { const required = /^[★*]/.test(raw); rec.chk.push({ label: raw.replace(/^[★*]\s*/, ''), required }); } }
+         if (!rec.tplId && !rec.tplName && !rec.title) return; // 空行
+         recs.push(rec);
+       });
+       if (!recs.length) { alert('有効なデータが見つかりませんでした（4行目以降を確認）'); e.target.value = ''; return; }
+       // テンプレ単位にグループ (IDあり=既存/ID空=テンプレ名で新規)
+       const groups = new Map();
+       recs.forEach(rec => {
+         const key = rec.tplId ? ('ID::' + rec.tplId) : ('NEW::' + (rec.tplName || '無題'));
+         if (!groups.has(key)) groups.set(key, { tplId: rec.tplId, tplName: rec.tplName, recs: [] });
+         const grp = groups.get(key); if (!grp.tplName && rec.tplName) grp.tplName = rec.tplName; grp.recs.push(rec);
+       });
+       let created = 0, updated = 0; const ops = [];
+       groups.forEach(grp => {
+         const existing = grp.tplId ? templates.find(t => t.id === grp.tplId) : null;
+         const templateId = grp.tplId || generateId();
+         const name = grp.tplName || (existing && existing.name) || '無題テンプレート';
+         const _seenIds = new Set();
+         const steps = grp.recs.filter(rec => rec.title && rec.title.trim()).map(rec => {
+           // 工程IDで既存stepを引く。別テンプレへ移動した行でも全テンプレ横断で探し、高度設定(observationElements/measurementConfig等)を保持。
+           let orig = rec.stepId ? ((existing && (existing.steps || []).find(s => s.id === rec.stepId)) || (templates || []).map(t => (t.steps || []).find(s => s.id === rec.stepId)).find(Boolean)) : null;
+           // 工程IDが空でも、同テンプレ内に同名工程が1つだけあれば母体として継承(measurementConfig/observation等の消失を防ぐ)
+           if (!orig && existing && rec.title && rec.title.trim()) { const _cand = (existing.steps || []).filter(s => (s.title || '').trim() === rec.title.trim()); if (_cand.length === 1) orig = _cand[0]; }
+           const base = orig ? { ...orig } : {};
+           const chkItems = rec.chk.map((c, ci) => ({ id: (orig && orig.checklistItems && orig.checklistItems[ci] && orig.checklistItems[ci].id) || generateId(), label: c.label, required: !!c.required }));
+           let _sid = (orig && orig.id) || rec.stepId || generateId();
+           if (_seenIds.has(_sid)) _sid = generateId();
+           _seenIds.add(_sid);
+           const st = {
+             ...base,
+             id: _sid,
+             title: rec.title.trim(),
+             description: rec.description || '',
+             targetTime: rec.targetTime,
+             type: ['normal', 'important', 'danger', 'measurement'].includes(rec.type) ? rec.type : 'normal',
+             lotOnce: rec.lotOnce,
+             executionMode: rec.execMode,
+             workResource: tplResValue(rec.res),
+             checklistItems: chkItems,
+           };
+           if (rec.autoEndSec > 0) { st.autoEndEnabled = true; st.autoEndSec = rec.autoEndSec; } else { st.autoEndEnabled = false; }
+           return st;
+         });
+         const doc = { id: templateId, name, steps, overview: (existing && existing.overview) || null, createdAt: (existing && existing.createdAt) || Date.now(), updatedAt: Date.now() };
+         ops.push([templateId, doc]);
+         if (existing) updated++; else created++;
+       });
+       if (!window.confirm(`まとめて反映します。\n新規テンプレ: ${created}件 / 更新: ${updated}件\n（工程ID空=新規工程、テンプレID空=新規テンプレとして登録。Excelに無いテンプレは削除しません）\nよろしいですか？`)) { e.target.value = ''; return; }
+       for (const [id, doc] of ops) { await saveData('templates', id, doc); }
+       alert(`反映しました（新規${created}件・更新${updated}件）`);
+     } catch (err) { console.error(err); alert('まとめて取込に失敗しました: ' + (err && err.message || err)); }
+     e.target.value = '';
    };
 
    // 2. Backup Export
@@ -32536,7 +32820,7 @@ const QuotaStoppedPanel = ({ until }) => (
          {activeTab === 'template-mgr' && (
            editingTemplate ? (
              <div className="p-4 h-full flex flex-col overflow-hidden">
-               <TemplateEditor template={editingTemplate} onSave={handleSaveTemplate} onCancel={() => setEditingTemplate(null)} customLayouts={settings?.customLayouts || {}} onSaveLayouts={(layouts, deadKey) => saveSettings({ customLayouts: layouts, ...(deadKey ? { __deleteMapKeys: [['customLayouts', deadKey]] } : {}) })} comboPresets={settings?.comboPresets || []} builtInOverrides={settings?.builtInOverrides || {}} hiddenBuiltIns={settings?.hiddenBuiltIns || []} />
+               <TemplateEditor template={editingTemplate} onSave={handleSaveTemplate} onCancel={() => setEditingTemplate(null)} skills={settings.skills && settings.skills.length ? settings.skills : DEFAULT_SKILLS} onSaveSkills={(list) => saveSettings({ skills: list })} currentUserName={currentUserName} customLayouts={settings?.customLayouts || {}} onSaveLayouts={(layouts, deadKey) => saveSettings({ customLayouts: layouts, ...(deadKey ? { __deleteMapKeys: [['customLayouts', deadKey]] } : {}) })} comboPresets={settings?.comboPresets || []} builtInOverrides={settings?.builtInOverrides || {}} hiddenBuiltIns={settings?.hiddenBuiltIns || []} />
              </div>
            ) : (
              <TemplateListSection
@@ -32552,11 +32836,14 @@ const QuotaStoppedPanel = ({ until }) => (
                excelInputRef={excelInputRef}
                backupInputRef={backupInputRef}
                onOpenStrictManager={() => setShowStrictManager(true)}
+               handleAllTemplatesDownload={handleAllTemplatesDownload}
+               handleAllTemplatesImport={handleAllTemplatesImport}
+               allTplInputRef={allTplInputRef}
              />
            )
          )}
          {activeTab === 'measurement-settings' && <MeasurementSettingsView settings={settings} saveSettings={saveSettings} comboPresets={settings?.comboPresets || []} templates={templates} />}
-         {activeTab === 'templates' && <TemplatesView editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
+         {activeTab === 'templates' && <TemplatesView editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
          </div>
        </main>
        
@@ -32721,6 +33008,16 @@ const QuotaStoppedPanel = ({ until }) => (
            //     console が二重に鳴る。画面への表示は saveData が既にやっている
            //     (alert / 保存失敗バナー / failedSaves の「全部送り直す」)。
            onSave={(updates) => {
+             // 🎓 P117: 担当が教育中なら、この保存で実測が生まれた台に trainee:true を焼き付ける(ものさしから外すため)。
+             //   式は製品と同じ stampTrainee(開始しただけ・他人の確定済みの実測には付けない)。前の姿は購読中のロット。
+             try {
+               const cur = (lots || []).find((l) => l && l.id === executionLotId);
+               const wid = (updates && updates.workerId) || (cur && cur.workerId) || null;
+               const w = (workers || []).find((x) => x && x.id === wid) || (workers || []).find((x) => x && x.name === String(currentUserName || '').trim());
+               if (updates && updates.tasks && w && w.trainee === true) {
+                 updates = { ...updates, tasks: stampTrainee({ prev: (cur && cur.tasks) || {}, next: updates.tasks, trainee: true }) };
+               }
+             } catch (e) { console.error('🎓 教育中の印を付けられませんでした', e); }
              const p = saveData('lots', executionLotId, updates);
              p.catch((e) => { console.error('🚨 ロットの保存が通りませんでした', executionLotId, e); });
              return p;
