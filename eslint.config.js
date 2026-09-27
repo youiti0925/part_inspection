@@ -38,4 +38,14 @@ export default defineConfig([
       'no-use-before-define': ['error', { functions: false, classes: false, variables: true, allowNamedExports: true }],
     },
   },
+  // 📨 製品から1バイト同じで写したファイル(product-pairs.test.mjs で md5 を見張る)。中身を直すと対が壊れるので、
+  //   製品のままの書き方(未使用の catch 変数など)はここで黙らせる。⚠ no-undef は止めない(白画面の網)。
+  {
+    files: ['src/push.js', 'src/ArrivalCheck.jsx', 'src/IncomingArrivals.jsx'],
+    rules: {
+      'no-unused-vars': 'off',
+      'react-refresh/only-export-components': 'off',
+      'react-hooks/purity': 'off',
+    },
+  },
 ])

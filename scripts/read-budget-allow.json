@@ -122,6 +122,33 @@
    "who": "清水",
    "why": "更新のお知らせ(検査アプリ共通の棚)。未読の判定を全件で行うので絞ると既読扱いになる物が出る。製品と同じ。",
    "maxDocs": 100
+  },
+  {
+   "app": "parts",
+   "file": "src/contact/ContactHub.jsx",
+   "col": "push_tokens",
+   "kind": "watchCollection",
+   "who": "清水",
+   "why": "通知の宛先は端末数に律速。全端末へ届ける為に全件必要(製品の実測9件・部品は製品の同じ例外を写した P140)。",
+   "maxDocs": 40
+  },
+  {
+   "app": "parts",
+   "file": "src/contact/ContactHub.jsx",
+   "col": "contact_requests",
+   "kind": "watchCollection",
+   "who": "清水",
+   "why": "工程連絡の依頼。分納の便ごとに枝が付き、到着予定の突き合わせでロット単位に引く(新しい順には切れない)。製品の同じ例外を写した P070。",
+   "maxDocs": 300
+  },
+  {
+   "app": "parts",
+   "file": "src/contact/ContactHub.jsx",
+   "col": "arrival_times",
+   "kind": "watchCollection",
+   "who": "清水",
+   "why": "到着予定。書類の id がロットの id なので『新しい順に何件』では引けず、古い未着ロットの予定が消える。製品の同じ例外を写した P142。",
+   "maxDocs": 300
   }
  ]
 }

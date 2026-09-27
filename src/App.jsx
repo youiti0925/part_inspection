@@ -212,6 +212,11 @@ import { normalizeRequiredSkills, requiredSkillIdsForStep, toggleSkillOnStep, at
 import { FeedbackButton, FeedbackModal, FeedbackList, feedbackDeviceId } from './AppFeedback.jsx';
 import { FEEDBACK_COL, openFeedbackCount, feedbackConfigOf, toggleAgreePatch } from './domain/appFeedback.js';
 import { NoticePopup } from './AppNotice.jsx';
+// 📨 P058/P070/P140/P142 ほか: 工程連絡(製品の連絡タブ・送るモーダル・到着予定・プッシュ・ポータル)を写した部品
+import { bindContactHelpers, RENRAKU_PORTAL, ContactPortal, ForegroundPushToast, ContactAlarm, InstallAppButton } from './contact/ContactKit.jsx';
+import { useContactHub, WorkContactBlock, contactPropsOf, ContactTabBadge, ContactTab } from './contact/ContactHub.jsx';
+import { IncomingArrivalsPanel } from './IncomingArrivals.jsx';
+import { MessageCircle, Truck as TruckIcon } from 'lucide-react';
 import { NOTICE_COL, noticeConfigOf } from './domain/appNotices.js';
 
 // --- 一度だけ実行: 管理者未承認の厳密モード(localStorageの古い残骸)を全消去して既定OFFに戻す ---
@@ -7746,7 +7751,9 @@ const ModelQualityInfoPanel = ({ model, stepTitle, info, open, onToggle }) => {
   );
 };
 
-const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [] }) => {
+const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [], contactEnabled = false, contactRequests = [], contactGroups = [], contactMembers = {}, notifyPush = null }) => {
+  // 📨 P058/P027 連絡・呼出の下書き(不具合報告の「📨 報告して連絡」からも開く)
+  const [contactDraft, setContactDraft] = useState(null);
   // 親側で `lots.find(l => l.id === executionLotId)` が undefined を返すケースに備える。
   // ※ React Hooks ルール準拠: hooks を条件分岐の上に置くと「hooks 呼び出し回数の不一致」エラーになるため、
   //   lot 自体は空 object でフォールバックして hooks を常に同じ回数呼ぶ。実際の render は最後に guard する。
@@ -12016,6 +12023,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             <div className="flex justify-end gap-2 mt-4 flex-wrap">
               <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);setDefectPhotoMarks([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
               <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, true)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold min-h-[44px] disabled:opacity-40">📋 報告のみ</button>
+              {/* 📨 P027 報告して連絡(報告を記録してから、その記録と写真を添えて連絡の下書きを開く)。本文の頭に品目コード+品名 */}
+              {contactEnabled && saveData && <button onClick={()=>{ const ph = defectPhotos; const ni = startInterruption('defect', defectLabel, defectCauseProcess, ph, true); const nm = resolveItemName(lot.model, lot.modelText, itemMaster); setContactDraft({ kind: 'repair', stepTitle: ni?.stepInfo?.title || '', message: ('【' + (lot.model || '') + (nm ? ' ' + nm : '') + '】【不具合】' + defectLabel + (defectCauseProcess ? '（発生工程: ' + defectCauseProcess + '）' : '') + ' の対応をお願いします'), chips: [defectLabel], refIntId: ni?.id || '', attachPhotos: ph }); }} disabled={!defectLabel.trim()} className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">📨 報告して連絡</button>}
               <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, false)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">🚨 対応開始</button>
             </div>
           </div>
@@ -12023,6 +12032,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       )}
 
         {sharedReportModals}
+        {/* 📨 P058 連絡・呼出(右下に浮かせる)と送るモーダル */}
+        <WorkContactBlock lot={lot} draft={contactDraft} setDraft={setContactDraft} contactEnabled={contactEnabled} contactRequests={contactRequests} contactGroups={contactGroups} contactMembers={contactMembers} chipOptions={complaintOptions || []} from={inspectorName} saveData={saveData} notifyPush={notifyPush} itemMaster={itemMaster} />
 
         {batchRangeModal && (() => {
           const step = localSteps[batchRangeModal.stepIdx];
@@ -13455,6 +13466,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       {/* 🧾 軽微不良・気づき・自動終了のお知らせ は両方の画面で同じ窓(製品と同じ) */}
       {sharedAutoEndToast}
       {sharedReportModals}
+      {/* 📨 P058 連絡・呼出(右下に浮かせる)と送るモーダル */}
+      <WorkContactBlock lot={lot} draft={contactDraft} setDraft={setContactDraft} contactEnabled={contactEnabled} contactRequests={contactRequests} contactGroups={contactGroups} contactMembers={contactMembers} chipOptions={complaintOptions || []} from={inspectorName} saveData={saveData} notifyPush={notifyPush} itemMaster={itemMaster} />
       {/* 🚨🚨🚨 画面の「済み」とサーバの中身が食い違っている。**この画面を信じてはいけない**状態。
              2026-08-17 の事故はここが見えなかったので、作業者は最後まで気づけなかった。
              ⚠× で消せないようにする(消せると意味が無い)。押せるのは「送り直す」だけ。 */}
@@ -13528,6 +13541,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
             <div className="flex justify-end gap-2 mt-4 flex-wrap">
               <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);setDefectPhotoMarks([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
               <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, true)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold min-h-[44px] disabled:opacity-40">📋 報告のみ</button>
+              {/* 📨 P027 報告して連絡(報告を記録してから、その記録と写真を添えて連絡の下書きを開く)。本文の頭に品目コード+品名 */}
+              {contactEnabled && saveData && <button onClick={()=>{ const ph = defectPhotos; const ni = startInterruption('defect', defectLabel, defectCauseProcess, ph, true); const nm = resolveItemName(lot.model, lot.modelText, itemMaster); setContactDraft({ kind: 'repair', stepTitle: ni?.stepInfo?.title || '', message: ('【' + (lot.model || '') + (nm ? ' ' + nm : '') + '】【不具合】' + defectLabel + (defectCauseProcess ? '（発生工程: ' + defectCauseProcess + '）' : '') + ' の対応をお願いします'), chips: [defectLabel], refIntId: ni?.id || '', attachPhotos: ph }); }} disabled={!defectLabel.trim()} className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">📨 報告して連絡</button>}
               <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, false)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">🚨 対応開始</button>
             </div>
           </div>
@@ -30092,6 +30107,8 @@ const QuotaStoppedPanel = ({ until }) => (
   </div>
 );
 
+// 📨 工程連絡の画面(src/contact)へ、App にしか無い道具を渡す(納期の読み方・目標時間など)。
+bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotElapsedMs });
 // --- Main Component ---
 
  export default function App() {
@@ -30488,9 +30505,12 @@ const QuotaStoppedPanel = ({ until }) => (
        { id: 'template-mgr', label: '工程テンプレート', icon: ClipboardList },
        { id: 'measurement-settings', label: '測定設定', icon: Ruler },
        { id: 'app-feedback', label: 'アプリへの要望', icon: Lightbulb },
+       { id: 'contact-settings', label: '工程連絡', icon: MessageCircle }, // 📨 P070 ⑥ 連絡の入切
      ],
    };
    const TAB_PARENT = { inspection: 'inspection', history: 'inspection', analysis: 'analysis', optimize: 'analysis', templates: 'templates', 'template-mgr': 'templates', 'measurement-settings': 'templates', 'app-feedback': 'templates' };
+   TAB_PARENT['contact-settings'] = 'templates'; // 📨 P070
+   TAB_PARENT.contact = 'contact';
    // 親タブ(検査リスト|完了履歴 / 分析|作業最適化 / マスタ設定|…)のボタン。
    // 🚨 2026-09-07: 分析・作業最適化の画面では、この帯を下の大分類の帯へ**合流**させて1本減らす。
    //    同じ物を出す為に作り方をここ1か所にまとめた。札の名前・順番・押した時の行き先は変えていない。
@@ -31618,6 +31638,10 @@ const QuotaStoppedPanel = ({ until }) => (
        bumpInflight(-1);
      }
    };
+   // 📨 工程連絡(P060/P070/P126/P140/P142/P162/P163)。状態・購読・見回りは src/contact/ContactHub.jsx の1か所。
+   //   ⚠ 既定: 部品では連絡は OFF(マスタ設定→工程連絡で入れる)。相手(組立・機械加工)が部品の棚を読む画面がまだ無いため。
+   const contactHub = useContactHub({ db, user, DATA, APP_DATA_ID, settings, saveSettings, saveData, deleteData, lots, lotsLoaded, currentUserName, activeTab, setActiveTab, contactShared, templates, setErrorMsg, calculateLotEstimatedTime, cleanUndefined });
+   const [showIncoming, setShowIncoming] = useState(false); // 🚚 これから来るもの(到着予定の一覧)
 
    // 📝🖼 メモ・お知らせの写真(note_images)を1枚だけ読む(2026-08-31 SS-701)。
    //   購読はしない(開いた画面で必要な札のぶんだけ getOne = 読み取りの枠を食わない)。
@@ -33568,6 +33592,25 @@ const QuotaStoppedPanel = ({ until }) => (
      }
    };
  
+   // 📨 P141 連絡ポータル(?renraku=1): 前後工程(組立・機械加工)用の限定ビュー。検査の画面は一切出さない(製品と同じ)。
+   //   ⚠ 既定: 部品の制御装置は無いので出さない。連絡の入切(マスタ設定)に関係なく、ポータルでは連絡を読む。
+   if (RENRAKU_PORTAL) {
+     return (
+       <>
+         {!isOnline && (
+           <div className="sticky top-0 z-[99] bg-rose-600 text-white text-center text-sm font-bold py-2 px-3">
+             📡 オフライン中 — 返信・登録は電波が戻ったときに相手へ届きます（急ぎは電話でお願いします）
+           </div>
+         )}
+         <ContactPortal lots={lots} contactRequests={contactHub.contactRequests} arrivalTimes={contactHub.arrivalTimes} saveData={saveData} settings={contactHub.contactSettings} pushTokens={contactHub.pushTokens} notifyPush={contactHub.notifyContactPush} deleteData={deleteData} templates={templates} workers={workers} estimateSecOf={contactHub.contactEstimateSecOf} onSendFeedback={saveFeedback}
+           controllers={[]} orderMotors={[]}
+           appFeedback={appFeedback} appNotices={appNotices} contactShared={contactShared}
+           onFeedbackComment={addFeedbackComment} onFeedbackAgree={toggleFeedbackAgree} />
+         <ForegroundPushToast ready={!!db} settings={contactHub.contactSettings} />
+         <ContactAlarm ready={!!db} settings={contactHub.contactSettings} />
+       </>
+     );
+   }
    return (
      <WorkScheduleContext.Provider value={workScheduleWithCalendar}>
      <LotCardDisplayContext.Provider value={settings.lotCardDisplay || DEFAULT_LOT_CARD_DISPLAY}>
@@ -33858,6 +33901,8 @@ const QuotaStoppedPanel = ({ until }) => (
                 { id: 'progress', label: '全体進捗', icon: Activity },
                 { id: 'inspection', label: '検査リスト', icon: ListChecks },
                 { id: 'analysis', label: '分析', icon: BarChart3 },
+                // 📨 P070 工程連絡は最上位タブ(分析の横)。マスタ設定→工程連絡で入切
+                ...(contactHub.contactFeatureOn ? [{ id: 'contact', label: '連絡', icon: MessageCircle }] : []),
                 { id: 'templates', label: 'マスタ設定', icon: Settings },
               ].map(tab => (
                 <button
@@ -33866,12 +33911,15 @@ const QuotaStoppedPanel = ({ until }) => (
                   className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-bold transition-all ${(TAB_PARENT[activeTab] || activeTab) === tab.id ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
                 >
                   <tab.icon className="w-4 h-4" /> {tab.label}
+                  {tab.id === 'contact' && <span className="relative inline-block w-0 h-4"><ContactTabBadge hub={contactHub} /></span>}
                 </button>
               ))}
            </div>
            <div className="flex items-center gap-1">
              {/* 💡 P028 アプリへの要望・不具合。設定でOFFにしたら入口ごと消える */}
              {feedbackConfigOf(contactShared).enabled && <FeedbackButton compact onClick={() => setFeedbackOpen(true)} />}
+             {/* 🚚 P142 これから来るもの(到着予定の一覧)。連絡を入れている時だけ */}
+             {contactHub.contactFeatureOn && <button onClick={() => setShowIncoming(true)} className="bg-slate-600 hover:bg-slate-500 text-white px-2 py-1.5 rounded-md shadow-sm flex items-center" title="これから来るもの（到着予定）"><TruckIcon className="w-4 h-4" /></button>}
              <button onClick={(e) => openHdrMenu('docs', e)} className="relative bg-slate-600 hover:bg-slate-500 text-white px-2 py-1.5 rounded-md shadow-sm flex items-center gap-0.5" title="資料 (作業標準 / ノート)">
                <BookOpen className="w-4 h-4" /><ChevronDown className="w-3 h-3" />
                {notes.filter(n => n.isPersonal && n.author === currentUserName).length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-xs text-white rounded-full w-4 h-4 flex items-center justify-center font-black">{notes.filter(n => n.isPersonal && n.author === currentUserName).length}</span>}
@@ -34084,6 +34132,22 @@ const QuotaStoppedPanel = ({ until }) => (
              />
            )
          )}
+         {/* 📨 P070 連絡タブ */}
+         {activeTab === 'contact' && <ContactTab hub={contactHub} lots={lots} saveSettings={saveSettings} saveData={saveData} deleteData={deleteData} currentUserName={currentUserName} templates={templates} />}
+         {/* 📨 P070 ⑥ / P140: 工程連絡の入切と、この端末をアプリとして入れる */}
+         {activeTab === 'contact-settings' && (
+           <div className="h-full overflow-y-auto">
+             <div className="bg-white rounded-xl border border-slate-200 p-4 max-w-2xl flex flex-col gap-3">
+               <h2 className="text-lg font-black text-slate-800">📨 工程連絡</h2>
+               <label className="flex items-center gap-2 font-bold text-slate-700">
+                 <input type="checkbox" className="w-5 h-5" checked={settings?.contactFeature?.enabled === true} onChange={e => saveSettings({ contactFeature: { ...(settings?.contactFeature || {}), enabled: e.target.checked } })} />
+                 連絡タブ・作業画面の「連絡・呼出」・到着予定・プッシュ通知を使う
+               </label>
+               <div className="text-xs text-slate-500">既定は OFF です。相手（組立・機械加工）が部品検査の連絡を受け取る画面は、連絡ポータル（この住所の後ろに <b>?renraku=1</b>）です。宛先の班は製品検査・最終検査と共通です。</div>
+               <InstallAppButton />
+             </div>
+           </div>
+         )}
          {activeTab === 'app-feedback' && (
            <div className="h-full overflow-y-auto">
              <div className="flex items-center gap-2 mb-3 flex-wrap">
@@ -34253,6 +34317,7 @@ const QuotaStoppedPanel = ({ until }) => (
            key={executionLotId}
            lot={lots.find(l => l.id === executionLotId)}
            itemMaster={settings?.itemMaster || null}
+           {...contactPropsOf(contactHub)}
            // 🚶 掛け持ち案内の「移る」「↩ 戻る」: 作業画面が保存を見届けてから、開くロットを替える(key で画面を作り直す)
            onSwitchLot={(id) => setExecutionLotId(id)}
            // 🚶 区画どうしの片道・2分の決まり(マスタ設定の作業エリアの下で誰でも変えられる)。空なら区画の名前の目安だけ
@@ -34664,6 +34729,14 @@ const QuotaStoppedPanel = ({ until }) => (
        />
        {/* 📣 P099 更新のお知らせ。開いた時に1回だけ出る(端末ごとに覚える)。書く所は製品・最終に置く */}
        <NoticePopup notices={appNotices} app="parts" side="app" enabled={noticeConfigOf(contactShared).enabled} />
+       {/* 📨 工程連絡の通知(ティッカー・アラーム・到着の反映・検査完了の連絡)。OFF の時は何も出さない */}
+       {contactHub.contactFeatureOn && contactHub.overlays}
+       {showIncoming && contactHub.contactFeatureOn && (
+         <IncomingArrivalsPanel arrivalByLot={contactHub.arrivalByLot} lots={lots}
+           zoneNameOf={(l) => ((settings.mapZones || []).find(z => z.id === l.mapZoneId) || {}).name || ''}
+           estimateSecOf={contactHub.contactEstimateSecOf}
+           onClose={() => setShowIncoming(false)} />
+       )}
      </div>
      </ItemMasterContext.Provider>
      </LotCardDisplayContext.Provider>
