@@ -7222,8 +7222,24 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   const toggleGridDense = () => setGridDense(v => { const nv = !v; try { localStorage.setItem('gridDense', nv ? '1' : '0'); } catch {} return nv; });
   // 前回モードを復元 (lot.executionType があれば優先)
   const [executionType, setExecutionType] = useState(lot.executionType || 'initial');
-  const [currentStepIdx, setCurrentStepIdx] = useState(lot.currentStepIndex || 0);
-  const [currentUnitIdx, setCurrentUnitIdx] = useState(lot.currentUnitIndex || 0);
+  // 🖐 2026-09-24 順序実行と保存したロットは 記録から「次にやる作業」を探し直す(保存した位置が古い事がある・カスタムで進めた分を飛ばす)
+  // 🖐 2026-09-24 確かめ役: カスタムで手作業を「開始」したまま(processing)・修正作業中(reworking)の記録があるロットは
+  //   順序実行では終えられない(時間も二重に数える) → 開く時はカスタム(前と同じ)。
+  const seqOpenHasManualRunning = () => Object.entries(lot.tasks || {}).some(([k, t]) => {
+    if (!t || (t.status !== 'processing' && t.status !== 'reworking' && t.status !== 'paused')) return false;
+    if (t.status === 'reworking') return true;
+    // まとめて開始の台(作業中/一時停止)は 完了で「壁時計÷台数」に按分する約束。順序実行は1台ずつ終えるので扱えない
+    if (t.batchOwner != null) return true;
+    if (t.status === 'paused') return false;
+    const steps0 = lot.steps || [];
+    const lotM = k.match(/^(.+)-lot-\d+$/);
+    const ident = lotM ? lotM[1] : k.slice(0, k.lastIndexOf('-'));
+    const st = steps0.find((x) => x && x.id === ident) || (/^\d+$/.test(ident) ? steps0[Number(ident)] : null);
+    return !st || !isAutoStep(st);
+  });
+  const seqInitPos = () => (lot.executionType === 'sequential' && lot.tasks && Object.keys(lot.tasks).length && !seqOpenHasManualRunning() ? seqNextOf(lot.steps || [], lot.tasks, lot.quantity || 1, isAutoStep) : null);
+  const [currentStepIdx, setCurrentStepIdx] = useState(() => { const p = seqInitPos(); return p ? p.s : (lot.currentStepIndex || 0); });
+  const [currentUnitIdx, setCurrentUnitIdx] = useState(() => { const p = seqInitPos(); return p ? p.u : (lot.currentUnitIndex || 0); });
   const totalUnits = lot.quantity || 1;
   // ※ optimizedStepOrder による自動並べ替えは撤去 (2026-05-30 ユーザー指示)
   //   理由: テンプレ/ロットの正規工程順を勝手に書き換えるのは破壊的すぎる。
@@ -7704,7 +7720,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
   // Initialize
   useEffect(() => {
-    if (lot.tasks && Object.keys(lot.tasks).length > 0) {
+    // 🖐 順序実行と決めたロットは そのまま(位置は useState の初期値で 記録から探し直す・製品 2026-09-24 と同じ)
+    if (lot.tasks && Object.keys(lot.tasks).length > 0 && (lot.executionType !== 'sequential' || seqOpenHasManualRunning())) {
        setExecutionType('custom');
     }
     setElapsed(lot.totalWorkTime || 0);
