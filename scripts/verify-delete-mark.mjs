@@ -201,24 +201,35 @@ export const scanBlocks = (m) => {
       const o = bstack.pop();
       if (o == null) continue;
       let isFn = false;
+      // 🚨 名前は **引数の括弧より前** から拾う(2026-09-28 部品で実測)。
+      //   前は `{` の直前220文字から拾っていたので、引数の既定値に入った呼び出しを名前と取り違えた:
+      //     export default function LotPairLab({ …, templatesById = new Map(), … }) {
+      //   が「Map という関数」と数えられ、normalizeRequiredSkills の中の `new Map()` を
+      //   「LotPairLab 全体(3万文字)を呼んでいる」と辿って、画面の中だけの delete を
+      //   テンプレ保存の消しと誤って赤にした(DM-1 src/App.jsx handleSave)。
+      let nameAt = o;
       const p = backSkipWs(m, o - 1);
-      if (p >= 1 && m[p] === '>' && m[p - 1] === '=') isFn = true;            // (a) => {
-      else if (p >= 0 && m[p] === ')') {
+      if (p >= 1 && m[p] === '>' && m[p - 1] === '=') {                       // (a) => {  /  a => {
+        isFn = true;
+        const a = backSkipWs(m, p - 2);
+        if (a >= 0 && m[a] === ')') { const ao = parenOpenOf.get(a); if (ao != null) nameAt = ao + 1; }
+        else if (a >= 0 && /[\w$]/.test(m[a])) nameAt = backIdent(m, a).at + 1;
+      } else if (p >= 0 && m[p] === ')') {
         const po = parenOpenOf.get(p);
         if (po != null) {
           const q = backSkipWs(m, po - 1);
           const { word } = backIdent(m, q);
-          if (!NOT_FN_HEAD.has(word)) isFn = true;                            // function f(){ / f(){ / method(){
+          if (!NOT_FN_HEAD.has(word)) { isFn = true; nameAt = po + 1; }           // function f(){ / f(){ / method(){
         }
       }
-      blocks.push({ open: o, close: i, isFn, name: isFn ? nameOfFnBlock(m, o) : '' });
+      blocks.push({ open: o, close: i, isFn, name: isFn ? nameOfFnBlock(m, nameAt) : '' });
     }
   }
   blocks.sort((a, b) => a.open - b.open);
   return { blocks, parenOpenOf, parenCloseOf, balanced: bstack.length === 0 && pstack.length === 0 };
 };
 
-/** 関数の入れ物の名前を、直前200文字から拾う(見つからなければ空)。 */
+/** 関数の入れ物の名前を、引数の開き括弧まで(無ければ `{` の手前まで)の220文字から拾う(見つからなければ空)。 */
 const nameOfFnBlock = (m, open) => {
   const head = m.slice(Math.max(0, open - 220), open);
   const re = /function\s+([A-Za-z_$][\w$]*)|(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=|([A-Za-z_$][\w$]*)\s*(?::|\()/g;
@@ -706,6 +717,20 @@ const g = (saveData, lot, prev, next) => { delete prev[x]; saveData('lots', lot.
   { name: '変数に入れて広げる', src: `const f = (onSave, newTasks, removed) => { delete newTasks[k]; const delKeys = removed.length ? { __deleteMapKeys: { tasks: removed } } : {}; onSave({ tasks: newTasks, ...delKeys }); };` },
   { name: '消していない保存は無関係', src: `const f = (saveSettings) => { saveSettings({ baseFontSize: 14 }); };` },
   { name: '空文字は本物の値(印は要らない)', src: `const f = (saveSettings, next, k) => { next[k] = ''; saveSettings({ memo: next }); };` },
+  // 🚨 2026-09-28 部品で実測した誤検出。引数の既定値の `new Map()` で、画面部品が「Map という関数」と数えられ、
+  //   別の所の `new Map()` から画面の中だけの delete まで辿っていた(src/App.jsx handleSave ← LotPairLab.jsx:426)。
+  { name: '引数の既定値の new Map() で画面部品を Map と取り違えない', src: `export function normalizeList(list) { const by = new Map(); (list || []).forEach((x) => by.set(x, 1)); return [...by.keys()]; }
+export default function PairLab({ lots = [], byId = new Map(), settings = {} }) {
+  const onPick = (k) => setRes(v => { const next = { ...v }; delete next[k]; return next; });
+  return null;
+}
+const Editor = ({ template, onSave, reqSkills }) => {
+  const handleSave = () => {
+    const changed = JSON.stringify(reqSkills) !== JSON.stringify(normalizeList(template?.requiredSkills));
+    onSave({ id: template?.id, ...(changed ? { requiredSkills: reqSkills } : {}) });
+  };
+  return null;
+};` },
 ];
 
 export const selftest = () => {

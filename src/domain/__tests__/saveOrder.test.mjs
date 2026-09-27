@@ -662,17 +662,93 @@ test('S21 ⚠実コード: 記録の書き込みが 別置き(写真/図)より�
   assert.ok(blob > rec, '🚨 blobs(別置き)が record(記録)より先に書かれています(順番が逆)');
 });
 
-test('S21b 🚨実コード: 関所を素通りする書き込みが saveData の中に無い', () => {
-  // ⚠部品検査は写真をロット本体に持つので、いまは別置きが1件も無い。
-  //   だからこそ「関所の外にもう1本の save が生える」= 気づかれずに順番が壊れる。
-  //   保管庫へ渡すのは **saveInOrder の write だけ** に固定する。
-  const r = saveDataRegion();
-  const saves = [...r.matchAll(/DATA\(db\)\.save\s*\(/g)];
-  assert.equal(saves.length, 1,
-    `🚨 saveData の中で保管庫へ書いている所が ${saves.length}箇所あります。関所(saveInOrder)の write ただ1本にすること`);
+/** r の openIdx の `(` に対応する `)` の位置(文字列・行コメントは飛ばす)。見つからなければ -1。 */
+const parenEndIn = (r, openIdx) => {
+  let depth = 0, q = null;
+  for (let j = openIdx; j < r.length; j++) {
+    const c = r[j], n = r[j + 1];
+    if (q) { if (c.charCodeAt(0) === 92) { j++; continue; } if (c === q) q = null; continue; }
+    if (c === '/' && n === '/') { j = r.indexOf(NL, j); if (j < 0) return -1; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') { depth--; if (depth === 0) return j; }
+  }
+  return -1;
+};
+/**
+ * saveData の中の保管庫への書き込みを3つに分ける。
+ *   write   … saveInOrder の write(記録と別置きの全部が通る1本)
+ *   restore … 別置き(測定図)の結果が **全部出た後**(`.blobs.then(` の中)に、拒否された絵の札を絵へ戻して steps だけ書き直す1本
+ *   others  … それ以外(= 関所を素通りする書き込み)
+ */
+const splitSaveDataWrites = (r) => {
+  const saves = [...r.matchAll(/DATA\(db\)\.save\s*\(/g)].map((m) => m.index);
   const w = r.indexOf('write:');
-  assert.ok(w > 0 && saves[0].index > w,
+  // write の中 = saveInOrder( … ) の呼び出しの括弧の中で、かつ `write:` より後ろ
+  //   ⚠説明の文(「書くのは下の saveInOrder(記録が先…)」)に当たらないよう、呼び出しの形 `saveInOrder({` で探す
+  const callAt = r.search(/\bsaveInOrder\(\{/);
+  const callEnd = callAt >= 0 ? parenEndIn(r, callAt + 'saveInOrder'.length) : -1;
+  const thenAt = r.indexOf('.blobs.then(');
+  const thenEnd = thenAt >= 0 ? parenEndIn(r, thenAt + '.blobs.then'.length) : -1;
+  const inThen = (i) => thenAt >= 0 && thenEnd > thenAt && i > thenAt && i < thenEnd;
+  const write = saves.filter((i) => w > 0 && i > w && callAt >= 0 && i > callAt && i < callEnd && !inThen(i));
+  const restore = saves.filter((i) => inThen(i));
+  const others = saves.filter((i) => !write.includes(i) && !restore.includes(i));
+  return { saves, write, restore, others, w };
+};
+// 🚨 札の戻しとして通すのは **steps だけを書く形** だけ(tasks などの記録を書いたら関所の素通り)。
+const RESTORE_ONLY_STEPS = /^DATA\(db\)\.save\(APP_DATA_ID, col, id, \{ steps: restored, updatedAt: DATA_SERVER_NOW \}\)/;
+
+test('S21b 🚨実コード: 関所を素通りする書き込みが saveData の中に無い', () => {
+  // ⚠保管庫へ渡すのは **saveInOrder の write だけ** に固定する(関所の外にもう1本の save が生えると、気づかれずに順番が壊れる)。
+  // ⚠ただ1つの例外は、P040(2026-09-27 f907ee6 で製品から移した測定図の別置き)の「札の戻し」。
+  //   前はここに「部品検査は写真をロット本体に持つので、別置きが1件も無い」と書いて save を1本に決めていたが、
+  //   P040 で step_diagrams へ絵を出すようになり、拒否された絵の札を絵へ戻して steps だけ書き直す1本が要るようになった。
+  //   その1本を saveData の外(別の関数)へ出すと、時間取りの見張り(verify-worktime-guard WTG-010)が
+  //   「関所を通さずにロットを直接書いている」と止める。製品と同じく saveData の中に置き、ここで形を固定する:
+  //     ・`.blobs.then(` の中 = 記録も絵も待ち行列に入った後(記録より先には絶対に出ない)
+  //     ・steps だけを書く(tasks を1バイトも触らない)・1本だけ
+  const r = saveDataRegion();
+  const x = splitSaveDataWrites(r);
+  assert.equal(x.others.length, 0,
+    `🚨 saveData の中で saveInOrder の write の外から保管庫へ書いている所が ${x.others.length}箇所あります(関所を素通りしています)`);
+  assert.equal(x.write.length, 1,
+    `🚨 saveInOrder の write の中の保管庫への書き込みが ${x.write.length}箇所です。write ただ1本にすること`);
+  assert.ok(x.w > 0 && x.saves[0] > x.w,
     '🚨 保管庫への書き込みが saveInOrder の write の外にあります(関所を素通りしています)');
+  assert.ok(x.restore.length <= 1,
+    `🚨 別置きの結果を待った後の書き込みが ${x.restore.length}箇所あります(札の戻しの1本だけにすること)`);
+  for (const i of x.restore) {
+    assert.match(r.slice(i, i + 200), RESTORE_ONLY_STEPS,
+      `🚨 別置きの結果を待った後に steps 以外を書いています: ${r.slice(i, i + 120).replace(/\s+/g, ' ')}`);
+  }
+});
+
+test('S21c 見張り自身の試験: S21b の分け方が 素通りの書き込みを必ず拾う(わざと壊す)', () => {
+  const base = [
+    'const saveData = async (col, id, data) => {',
+    '  const h = saveInOrder({ record: { id, col, body: data }, blobs: [],',
+    '    write: (w) => DATA(db).save(APP_DATA_ID, w.col, w.id, { ...w.body, updatedAt: DATA_SERVER_NOW }, w.opts) });',
+    '  h.blobs.then((r) => { if (!r.failedIds.length) return;',
+    '    DATA(db).save(APP_DATA_ID, col, id, { steps: restored, updatedAt: DATA_SERVER_NOW }).catch(() => {}); });',
+    '  await h.record;',
+    '};',
+  ].join(NL);
+  const ok = splitSaveDataWrites(base);
+  assert.deepEqual([ok.write.length, ok.restore.length, ok.others.length], [1, 1, 0], '正しい形は write 1本 + 札の戻し1本');
+  // 壊し方1: 記録の前にもう1本 save を生やす → others に出る
+  const src1 = base.replace('  const h = saveInOrder(', '  await DATA(db).save(APP_DATA_ID, col, id, data);' + NL + '  const h = saveInOrder(');
+  assert.notEqual(src1, base, '当て込みが空振り');
+  assert.equal(splitSaveDataWrites(src1).others.length, 1, '🚨 write の前に生やした save を拾えていない');
+  // 壊し方2: 札の戻しで tasks も書く → steps だけの形に当たらない
+  const src2 = base.replace('{ steps: restored, updatedAt', '{ tasks, steps: restored, updatedAt');
+  assert.notEqual(src2, base, '当て込みが空振り');
+  assert.ok(splitSaveDataWrites(src2).restore.some((i) => !RESTORE_ONLY_STEPS.test(src2.slice(i, i + 200))),
+    '🚨 札の戻しで tasks を書く形を拾えていない');
+  // 壊し方3: then の外(await h.record の後)に save を置く → others に出る
+  const src3 = base.replace('  await h.record;', '  await h.record;' + NL + '  DATA(db).save(APP_DATA_ID, col, id, { steps: restored, updatedAt: DATA_SERVER_NOW });');
+  assert.notEqual(src3, base, '当て込みが空振り');
+  assert.equal(splitSaveDataWrites(src3).others.length, 1, '🚨 then の外の save を拾えていない');
 });
 
 test('S22 ⚠実コード: 作業画面の tasks をサーバと合わせ直している',

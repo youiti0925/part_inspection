@@ -724,17 +724,32 @@ export const findFnBody = (src, name, nearIdx = 0) => {
     `\\b(?:async\\s+)?function\\s+${n}\\s*\\([^)]*\\)\\s*\\{`,
     `\\b(?:const|let|var)\\s+${n}\\s*=\\s*(?:async\\s+)?function\\s*\\([^)]*\\)\\s*\\{`,
   ];
-  const opens = [];
+  const defs = [];
   for (const p of pats) {
     const re = new RegExp(p, 'g');
     let m;
-    while ((m = re.exec(src))) opens.push(m.index + m[0].length - 1);
+    while ((m = re.exec(src))) {
+      const open = m.index + m[0].length - 1;
+      defs.push({ at: open, from: open, to: braceClose(src, open) + 1 });
+    }
   }
-  if (!opens.length) return null;
-  opens.sort((a, b) => a - b);
-  const before = opens.filter((i) => i <= nearIdx);
-  const open = before.length ? before[before.length - 1] : opens[0];
-  return { from: open, to: braceClose(src, open) + 1, name };
+  // 🚨 2026-09-28(部品で実測): 中括弧の無い1行の関数 `const tick = () => setSeqClock(…)` を定義と数えていなかった。
+  //   その為 setInterval(tick, 1000) の tick を、**別の画面の同じ名前の関数**(測定図の巡回 async tick・保存する)と
+  //   取り違え、画面の時計を「1秒ごとに保存する」と ❌ にしていた(src/App.jsx:9667 ← 33792)。
+  //   製品が緑だったのは、たまたま先頭の同名 tick(紙吹雪の描画)が書かない物だったから。
+  //   逆に、1行の関数が **本当に書いている** 時(`const pass = () => saveData(…)`)は、同じ名前の {…} 定義が
+  //   どこにも無いと「見つからない」で黙って数えていなかった。1行の形も定義として数え、中身は文の終わりまでとする。
+  const one = new RegExp(`\\b(?:const|let|var)\\s+${n}\\s*=\\s*(?:async\\s*)?(?:\\([^)]*\\)|[A-Za-z_$][\\w$]*)\\s*=>\\s*(?!\\{|\\s)`, 'g');
+  let m1;
+  while ((m1 = one.exec(src))) {
+    const from = m1.index + m1[0].length;
+    defs.push({ at: from, from, to: statementEnd(src, from) });
+  }
+  if (!defs.length) return null;
+  defs.sort((a, b) => a.at - b.at);
+  const before = defs.filter((d) => d.at <= nearIdx);
+  const d = before.length ? before[before.length - 1] : defs[0];
+  return { from: d.from, to: d.to, name };
 };
 
 /** 引数に書かれた中身の範囲を返す。⚠ nearIdx = 仕掛けている場所(同名の定義を取り違えない為)。 */
@@ -1112,6 +1127,24 @@ const SAMPLE_SAMENAME = `
   }
 `;
 
+// ⚠⚠ 2026-09-28(部品で実測): 中括弧の無い1行の tick を、別の所の同じ名前の(保存する)tick と取り違えない
+//   (部品 src/App.jsx:9665 順序実行の時計 と 33792 測定図の巡回)
+const SAMPLE_SAMENAME_ONELINE = `
+  function A() {
+    const tick = () => setSeqClock({ nowMs: Date.now() });
+    const iv = setInterval(tick, 1000);
+  }
+  function B() {
+    const tick = async () => { await saveData('lots', id, {}); };
+    const t = setInterval(tick, 90000);
+  }
+`;
+// ⚠⚠ 1行の関数が **本当に書いている** 時は数える(前は「見つからない」で黙って落としていた)
+const SAMPLE_ONELINE_WRITE = `
+  const pass = () => saveData('lots', id, {});
+  const iv = setInterval(pass, 1000);
+`;
+
 // ============================================================================
 // 🚨 NC3(2026-09-01)用の見本。**窓口ごしの書き込みを数え落としていた**形。
 // ============================================================================
@@ -1421,6 +1454,14 @@ const selftest = () => {
   say(same[0] && same[0].delayMs === 2000, `保存する方の間隔 2000ms を採る (実際 ${same[0] && same[0].delayMs}ms)`);
   say(findFnBody(SAMPLE_SAMENAME, 'tick', SAMPLE_SAMENAME.length).from
     > findFnBody(SAMPLE_SAMENAME, 'tick', 0).from, '手前でいちばん近い定義を選んでいる');
+  // ⑦c 🚨 中括弧の無い1行の tick を、別の所の同じ名前の(保存する)tick と取り違えない(2026-09-28 部品で実測)
+  const sameOne = run(SAMPLE_SAMENAME_ONELINE).sites;
+  say(sameOne.length === 1 && sameOne[0].delayMs === 90000,
+    `1行の tick(画面の時計)を別の保存する tick と取り違えない (実際 ${sameOne.length}件/${sameOne.map((x) => x.delayMs).join(',')}ms。1000ms が出たら取り違え)`);
+  // ⑦d 🚨 1行の関数が本当に書いていれば、黙って落とさず数える
+  const oneW = run(SAMPLE_ONELINE_WRITE).sites;
+  say(oneW.length === 1 && oneW[0].perHour === 3600 && oneW[0].verdict === 'ng',
+    `1行の関数の中の保存も数える (実際 ${oneW.length}件/${oneW[0] && oneW[0].perHour}回per時/${oneW[0] && oneW[0].verdict})`);
 
   // ⑪ 🚨🚨 NC3(2026-09-01): **窓口ごしの書き込みを数える**
   //   ここが空いていた為、0.2秒ごとの DATA(db).save(1日432,000回＝枠の21.6倍)が緑で通っていた。

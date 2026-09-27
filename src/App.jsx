@@ -33626,20 +33626,6 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        { known: new Set(Object.keys(stepDiagramsRef.current)), max: 6 });
      return { steps: out, writes };
    };
-   // 📐 P040 保管庫が受け取らなかった絵は、札を元の絵へ戻して steps だけ書き直す(札は在るのに図が無い状態を残さない)。
-   //   ⚠tasks は1バイトも触らない(関所 saveData は通さない。書くのは steps だけ)。
-   const restoreFailedDiagrams = (col, id, stepsAfter, stepsBefore, failedIds) => {
-     const next = { ...stepDiagramsRef.current };
-     failedIds.forEach(fid => { delete next[fid]; });
-     stepDiagramsRef.current = next;
-     if (!stepsAfter || !stepsBefore) return;
-     const restored = restoreFailedRefs(stepsAfter, stepsBefore, failedIds,
-       (st) => (st && st.measurementConfig && isDiagramRef(st.measurementConfig.diagramImage)
-         ? st.measurementConfig.diagramImage.slice(DIAGRAM_PREFIX.length) : null));
-     if (restored === stepsAfter) return;
-     DATA(db).save(APP_DATA_ID, col, id, { steps: restored, updatedAt: DATA_SERVER_NOW })
-       .catch(e2 => { console.error('[測定図] 札の戻しにも失敗', e2); setErrorMsg('測定図の保存に失敗しました。図が出ない工程があるかもしれません（作業の記録は保存されています）。'); });
-   };
 
    const saveData = async (col, id, data, saveOpts = {}) => {
      // 🚨🚨🚨 2026-08-23: サインインが終わっていない間の保存を **黙って捨てない**。
@@ -33708,7 +33694,21 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        h.blobs.then((r) => {
          if (!(r && r.failedIds && r.failedIds.length)) return;
          console.error('🚨 別置き(測定図)の保存に失敗', col, id, r.failedIds, r.errors);
-         restoreFailedDiagrams(col, id, stepsAfterOffload, stepsBeforeOffload, r.failedIds);
+         // 📐 P040 保管庫が受け取らなかった絵は、札を元の絵へ戻して steps だけ書き直す(札は在るのに図が無い状態を残さない)。
+         //   手元の索引から外す(次の保存・巡回でやり直せるようにする)
+         const next = { ...stepDiagramsRef.current };
+         r.failedIds.forEach(fid => { delete next[fid]; });
+         stepDiagramsRef.current = next;
+         if (!stepsAfterOffload || !stepsBeforeOffload) return;
+         // ⚠関所(saveData)の **中** に置く(製品と同じ形)。関所の外へ別の関数として出すと、
+         //   容量チェック・読み込みの門と同じ流れに無い「ロットへの直接書き込み」になる(時間取りの見張り WTG-010)。
+         //   ⚠ここで書くのは steps だけで tasks を1バイトも触らないので、関所(saveData)をもう一度は通さない。
+         const restored = restoreFailedRefs(stepsAfterOffload, stepsBeforeOffload, r.failedIds,
+           (st) => (st && st.measurementConfig && isDiagramRef(st.measurementConfig.diagramImage)
+             ? st.measurementConfig.diagramImage.slice(DIAGRAM_PREFIX.length) : null));
+         if (restored === stepsAfterOffload) return;
+         DATA(db).save(APP_DATA_ID, col, id, { steps: restored, updatedAt: DATA_SERVER_NOW })
+           .catch(e2 => { console.error('[測定図] 札の戻しにも失敗', e2); setErrorMsg('測定図の保存に失敗しました。図が出ない工程があるかもしれません（作業の記録は保存されています）。'); });
        });
        await h.record;
        if (!quiet) setSyncStatus('idle');
