@@ -9510,6 +9510,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   //   ・最適の次の一手 以外の waiting タップ → ブロック(データ最適順を強制)
   const optimalGate = (sIdx, uIdx) => {
     if (!optimalNextMove || !strictOrderMode) return null;
+    // 順番を強制するのは「これから始める台(未着手 waiting / 一時停止 paused の再開)」だけ(製品 e7d6e49 と同じ)。
+    //   作業中・完了・NG・修正中などの台は toggleTask(完了/メニュー)へ通す。
+    {
+      const gStep = localSteps[sIdx];
+      const gTask = (gStep?.id && tasks[`${gStep.id}-${uIdx}`]) || tasks[`${sIdx}-${uIdx}`];
+      const gSt = gTask?.status || 'waiting';
+      if (gSt !== 'waiting' && gSt !== 'paused') return null;
+    }
     const gnt = globalNextTask;
     if (!gnt) return null; // 次が無い(手動進行中など)は通常処理へ委ねる
     if (gnt.isLot) return null; // 次がロット1回ゲート(準備/片付け)のときは台タップを強制ブロックしない (バッジで案内・台はタップ可)
