@@ -26467,7 +26467,9 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
   // 間接作業を加味した実効直工キャパ
   //   factor = 間接込み係数 (1.0 = 間接ゼロ, 1.3 = 直工1hあたり間接0.3h など)
   //   必要人数(間接込み) = 直工必要人数 × factor、実効直工キャパ = 名目キャパ ÷ factor
-  const factor = Number(settings?.indirectFactor) || 1;
+  // 🧮 P151 係数を仕事量に掛けるかの口(settings.operationPolicy.applyIndirectFactor)。
+  //   既定: 部品は今までどおり掛ける(false と選んだ時だけ掛けない)。製品の既定(掛けない)に揃えるかは清水さんの判断待ち。
+  const factor = settings?.operationPolicy?.applyIndirectFactor === false ? 1 : (Number(settings?.indirectFactor) || 1);
   // 余力判定しきい値 (稼働率% で判定)。未設定なら現行挙動 (50/85/100) を維持。
   const capLevels = settings?.capLevels || { yoyu: 50, tekisei: 85, manKado: 100 };
   // 1人1日の最大残業時間 (超過分を残業/土曜出勤に振り分ける計算で使用)。未設定なら 2.0h。
@@ -26766,6 +26768,16 @@ const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templa
                 title="実測した間接込み係数を上の入力に反映します"
               >実測値を係数に反映</button>
             </div>
+          </div>
+          {/* 🧮 P151 係数を仕事量に掛けるか(製品 42193 の口を写した・既定は部品の今までどおり掛ける) */}
+          <div className="flex flex-col gap-1 basis-full">
+            <label className="flex items-center gap-2 text-xs font-bold min-h-11 cursor-pointer">
+              <input type="checkbox" className="w-5 h-5" data-progress-apply-factor={settings?.operationPolicy?.applyIndirectFactor === false ? '0' : '1'}
+                checked={settings?.operationPolicy?.applyIndirectFactor !== false}
+                onChange={e => { if (!saveSettings) return; const cur = (settings && settings.operationPolicy && typeof settings.operationPolicy === 'object') ? settings.operationPolicy : {}; saveSettings({ operationPolicy: { ...cur, applyIndirectFactor: !!e.target.checked } }); }}
+              />
+              <span className="text-slate-700">間接込み係数を仕事量のキャパに掛ける：{settings?.operationPolicy?.applyIndirectFactor === false ? '掛けていません（係数 1.00 として数える）' : '掛けています'}</span>
+            </label>
           </div>
         </div>
       </details>
@@ -27297,7 +27309,9 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
   const effectiveWorkers = (overrideWorkers && Number(overrideWorkers) > 0) ? Number(overrideWorkers) : registeredWorkers;
   const capacityWorkers = effectiveWorkers || 1; // 0除算回避用
   // 間接作業を加味した実効直工キャパ (ProgressOverviewView と同一の前提)
-  const factor = Number(settings?.indirectFactor) || 1;
+  // 🧮 P151 係数を仕事量に掛けるかの口(settings.operationPolicy.applyIndirectFactor)。
+  //   既定: 部品は今までどおり掛ける(false と選んだ時だけ掛けない)。製品の既定(掛けない)に揃えるかは清水さんの判断待ち。
+  const factor = settings?.operationPolicy?.applyIndirectFactor === false ? 1 : (Number(settings?.indirectFactor) || 1);
   const capLevels = settings?.capLevels || { yoyu: 50, tekisei: 85, manKado: 100 };
   // 1人1日の最大残業時間 (超過分を残業/土曜出勤に振り分ける計算で使用)。ProgressOverviewView と同一の前提。
   const maxOtPerDay = (settings?.maxOvertimeHoursPerDay != null && Number(settings.maxOvertimeHoursPerDay) >= 0) ? Number(settings.maxOvertimeHoursPerDay) : 2.0;
