@@ -11082,100 +11082,14 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   // Safeguard against empty steps or invalid index
   const displayStep = localSteps[displayStepIdx] || localSteps[0] || { title: 'No Step', description: '', images: [] };
 
-  // --- Custom Mode with Monitoring & Defects ---
-  if (isCustom) {
-    return (
-      <div data-fs="execution" className="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-2 overflow-auto">
-        {autoEndToast && (
+  // 🧾 自動終了のお知らせ・軽微不良・気づきの窓は カスタムと順序実行の両方で使う(順序実行ではボタンだけあって窓が出なかった・製品と同じ)
+  const sharedAutoEndToast = autoEndToast && (
           <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[400] bg-purple-600 text-white px-4 py-2 rounded-lg shadow-2xl text-sm font-bold flex items-center gap-2 animate-bounce">
             🤖 自動測定{autoEndToast.title ? `「${autoEndToast.title}」` : ''}が時間経過で完了しました
           </div>
-        )}
-        {/* 画面外枠ゲージ (円形ゲージの画面全体版): 経過時間が枠として上辺中央から時計回りに「塗られていく」。
-            一周 = 超過しきい値(overPct)。超過したら枠全体が超過色になり、明るい帯が回り続ける(回転速度/帯の長さは設定)。
-            設定(oaCfg): gaugeEnabled / gaugeColor(進行中の色) / gaugeWidth(太さ) / gaugeTrack(下地) / gaugeRotate / gaugeCometLen */}
-        {gaugeWorst && oaCfg.gaugeEnabled !== false && (() => {
-          const filled = Math.min(100, gaugeWorst.pct / (oaCfg.overPct || 100) * 100);
-          const color = gaugeWorst.warn ? oaCfg.warnColor : (oaCfg.gaugeColor || '#10B981');
-          const gw = Math.max(8, Math.min(60, oaCfg.gaugeWidth || 24));
-          const rotDur = { slow: '2.6s', normal: '1.6s', fast: '0.8s' }[oaCfg.gaugeRotate || 'normal'] || null; // 'none'→null=回転なし
-          const cometLen = Math.max(6, Math.min(45, oaCfg.gaugeCometLen || 18));
-          return (
-            <svg className="fixed inset-0 z-[105] pointer-events-none w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-              {gaugeWorst.over ? (
-                rotDur ? (
-                  <>
-                    {/* 超過: 枠全体が超過色 + 明るい帯が時計回りに回転し続ける */}
-                    <path d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" opacity="0.45" />
-                    <path className="oa-rotate" style={{ animationDuration: rotDur }} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" strokeDasharray={`${cometLen} ${100 - cometLen}`} strokeLinecap="round" />
-                  </>
-                ) : (
-                  /* 回転なし設定: 全周を超過色で点灯 (点滅はoverBlink設定) */
-                  <path className={oaBlinkCls(oaCfg.overBlink)} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" />
-                )
-              ) : (
-                <>
-                  {/* 進行中: うっすら下地(設定で非表示可) + 経過分が時計回りに塗られていく */}
-                  {oaCfg.gaugeTrack !== false && <path d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={color} strokeWidth={gw} vectorEffect="non-scaling-stroke" opacity="0.12" />}
-                  <path className={gaugeWorst.warn ? oaBlinkCls(oaCfg.warnBlink) : ''} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={color} strokeWidth={gw} vectorEffect="non-scaling-stroke" strokeDasharray="100 100" strokeDashoffset={100 - filled} style={{ transition: 'stroke 0.5s, stroke-dashoffset 0.95s linear' }} />
-                </>
-              )}
-            </svg>
-          );
-        })()}
-        {worstOverrun && oaCfg.screenEffect && (
-          <div className={`fixed top-0 left-1/2 -translate-x-1/2 z-[106] pointer-events-none px-5 py-2 rounded-b-2xl shadow-2xl text-white font-black text-sm flex items-center gap-2 ${oaBlinkCls(worstOverrun.over ? oaCfg.overBlink : oaCfg.warnBlink)}`} style={{ backgroundColor: worstOverrun.over ? oaCfg.overColor : oaCfg.warnColor }}>
-            ⏰ {worstOverrun.over ? '目標時間オーバー！' : 'まもなく目標時間'}：{worstOverrun.title}{worstOverrun.isLot ? '' : ` #${worstOverrun.u + 1}`} — {formatTime(worstOverrun.sec)} / 目標{formatTime(worstOverrun.tgt)}{myOverruns.length > 1 ? ` （他${myOverruns.length - 1}件）` : ''}
-          </div>
-        )}
-        {showDefectModal && (
-            <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-                <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
-                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-rose-600"><AlertCircle className="w-5 h-5"/> 不具合報告</h3>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">不具合内容</label>
-                        <textarea className="w-full border rounded-lg p-2" rows={3} placeholder="不具合の内容を入力..." value={defectLabel} onChange={e=>setDefectLabel(e.target.value)}/>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">原因工程</label>
-                        <select className="w-full border rounded-lg p-2" value={defectCauseProcess} onChange={e=>setDefectCauseProcess(e.target.value)}>
-                          <option value="">選択してください</option>
-                          {(defectProcessOptions || DEFAULT_DEFECT_PROCESS_OPTIONS).map(opt => (
-                            <option key={opt} value={opt}>{opt}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">写真添付</label>
-                        <div className="flex gap-2 flex-wrap">
-                          {defectPhotos.map((p, i) => (
-                            <div key={i} className="w-16 h-16 border rounded overflow-hidden relative group/ph">
-                              <img src={p} className="w-full h-full object-cover"/>
-                              <button onClick={()=>setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i))} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
-                            </div>
-                          ))}
-                          <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
-                            <Camera className="w-5 h-5"/>
-                          </button>
-                          <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); setDefectPhotos(prev=>[...prev, img]);} e.target.value='';}}/>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="bg-rose-50 border border-rose-200 rounded-lg p-2 text-xs text-rose-700 mt-3">
-                      <div className="font-bold mb-1">📋 報告方法を選択</div>
-                      <div><span className="font-bold">報告のみ</span>: 不具合を記録するだけ。作業を続行 (タイマー停止なし)</div>
-                      <div><span className="font-bold">対応開始</span>: 今すぐ対処開始。作業時間を分離して計測</div>
-                    </div>
-                    <div className="flex justify-end gap-2 mt-4 flex-wrap">
-                        <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
-                        <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, true)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold min-h-[44px] disabled:opacity-40">📋 報告のみ</button>
-                        <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, false)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">🚨 対応開始</button>
-                    </div>
-                </div>
-            </div>
-        )}
-
+        );
+  const sharedReportModals = (
+    <>
         {showComplaintModal && (
             <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
@@ -11268,6 +11182,100 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
                 </div>
             </div>
         )}
+    </>
+  );
+
+  // --- Custom Mode with Monitoring & Defects ---
+  if (isCustom) {
+    return (
+      <div data-fs="execution" className="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-2 overflow-auto">
+        {sharedAutoEndToast}
+        {/* 画面外枠ゲージ (円形ゲージの画面全体版): 経過時間が枠として上辺中央から時計回りに「塗られていく」。
+            一周 = 超過しきい値(overPct)。超過したら枠全体が超過色になり、明るい帯が回り続ける(回転速度/帯の長さは設定)。
+            設定(oaCfg): gaugeEnabled / gaugeColor(進行中の色) / gaugeWidth(太さ) / gaugeTrack(下地) / gaugeRotate / gaugeCometLen */}
+        {gaugeWorst && oaCfg.gaugeEnabled !== false && (() => {
+          const filled = Math.min(100, gaugeWorst.pct / (oaCfg.overPct || 100) * 100);
+          const color = gaugeWorst.warn ? oaCfg.warnColor : (oaCfg.gaugeColor || '#10B981');
+          const gw = Math.max(8, Math.min(60, oaCfg.gaugeWidth || 24));
+          const rotDur = { slow: '2.6s', normal: '1.6s', fast: '0.8s' }[oaCfg.gaugeRotate || 'normal'] || null; // 'none'→null=回転なし
+          const cometLen = Math.max(6, Math.min(45, oaCfg.gaugeCometLen || 18));
+          return (
+            <svg className="fixed inset-0 z-[105] pointer-events-none w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+              {gaugeWorst.over ? (
+                rotDur ? (
+                  <>
+                    {/* 超過: 枠全体が超過色 + 明るい帯が時計回りに回転し続ける */}
+                    <path d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" opacity="0.45" />
+                    <path className="oa-rotate" style={{ animationDuration: rotDur }} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" strokeDasharray={`${cometLen} ${100 - cometLen}`} strokeLinecap="round" />
+                  </>
+                ) : (
+                  /* 回転なし設定: 全周を超過色で点灯 (点滅はoverBlink設定) */
+                  <path className={oaBlinkCls(oaCfg.overBlink)} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={oaCfg.overColor} strokeWidth={gw} vectorEffect="non-scaling-stroke" />
+                )
+              ) : (
+                <>
+                  {/* 進行中: うっすら下地(設定で非表示可) + 経過分が時計回りに塗られていく */}
+                  {oaCfg.gaugeTrack !== false && <path d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={color} strokeWidth={gw} vectorEffect="non-scaling-stroke" opacity="0.12" />}
+                  <path className={gaugeWorst.warn ? oaBlinkCls(oaCfg.warnBlink) : ''} d="M50 0 H100 V100 H0 V0 H50" pathLength="100" fill="none" stroke={color} strokeWidth={gw} vectorEffect="non-scaling-stroke" strokeDasharray="100 100" strokeDashoffset={100 - filled} style={{ transition: 'stroke 0.5s, stroke-dashoffset 0.95s linear' }} />
+                </>
+              )}
+            </svg>
+          );
+        })()}
+        {worstOverrun && oaCfg.screenEffect && (
+          <div className={`fixed top-0 left-1/2 -translate-x-1/2 z-[106] pointer-events-none px-5 py-2 rounded-b-2xl shadow-2xl text-white font-black text-sm flex items-center gap-2 ${oaBlinkCls(worstOverrun.over ? oaCfg.overBlink : oaCfg.warnBlink)}`} style={{ backgroundColor: worstOverrun.over ? oaCfg.overColor : oaCfg.warnColor }}>
+            ⏰ {worstOverrun.over ? '目標時間オーバー！' : 'まもなく目標時間'}：{worstOverrun.title}{worstOverrun.isLot ? '' : ` #${worstOverrun.u + 1}`} — {formatTime(worstOverrun.sec)} / 目標{formatTime(worstOverrun.tgt)}{myOverruns.length > 1 ? ` （他${myOverruns.length - 1}件）` : ''}
+          </div>
+        )}
+        {showDefectModal && (
+            <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-rose-600"><AlertCircle className="w-5 h-5"/> 不具合報告</h3>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">不具合内容</label>
+                        <textarea className="w-full border rounded-lg p-2" rows={3} placeholder="不具合の内容を入力..." value={defectLabel} onChange={e=>setDefectLabel(e.target.value)}/>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">原因工程</label>
+                        <select className="w-full border rounded-lg p-2" value={defectCauseProcess} onChange={e=>setDefectCauseProcess(e.target.value)}>
+                          <option value="">選択してください</option>
+                          {(defectProcessOptions || DEFAULT_DEFECT_PROCESS_OPTIONS).map(opt => (
+                            <option key={opt} value={opt}>{opt}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">写真添付</label>
+                        <div className="flex gap-2 flex-wrap">
+                          {defectPhotos.map((p, i) => (
+                            <div key={i} className="w-16 h-16 border rounded overflow-hidden relative group/ph">
+                              <img src={p} className="w-full h-full object-cover"/>
+                              <button onClick={()=>setDefectPhotos(prev=>prev.filter((_,idx)=>idx!==i))} className="absolute top-0 right-0 bg-red-500 text-white rounded-bl p-0.5 opacity-0 group-hover/ph:opacity-100"><X className="w-3 h-3"/></button>
+                            </div>
+                          ))}
+                          <button onClick={()=>defectPhotoRef.current?.click()} className="w-16 h-16 border-2 border-dashed rounded flex items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-300">
+                            <Camera className="w-5 h-5"/>
+                          </button>
+                          <input type="file" ref={defectPhotoRef} className="hidden" accept="image/*" capture="environment" onChange={async(e)=>{const file=e.target.files?.[0]; if(file){const img=await resizeImage(file, 'defectPhoto'); setDefectPhotos(prev=>[...prev, img]);} e.target.value='';}}/>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-rose-50 border border-rose-200 rounded-lg p-2 text-xs text-rose-700 mt-3">
+                      <div className="font-bold mb-1">📋 報告方法を選択</div>
+                      <div><span className="font-bold">報告のみ</span>: 不具合を記録するだけ。作業を続行 (タイマー停止なし)</div>
+                      <div><span className="font-bold">対応開始</span>: 今すぐ対処開始。作業時間を分離して計測</div>
+                    </div>
+                    <div className="flex justify-end gap-2 mt-4 flex-wrap">
+                        <button onClick={()=>{setShowDefectModal(false);setDefectLabel('');setDefectCauseProcess('');setDefectPhotos([]);}} className="px-4 py-2 text-slate-500 min-h-[44px]">キャンセル</button>
+                        <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, true)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold min-h-[44px] disabled:opacity-40">📋 報告のみ</button>
+                        <button onClick={()=>startInterruption('defect', defectLabel, defectCauseProcess, defectPhotos, false)} disabled={!defectLabel.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold min-h-[44px] disabled:opacity-40">🚨 対応開始</button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {sharedReportModals}
 
         {batchRangeModal && (() => {
           const step = localSteps[batchRangeModal.stepIdx];
@@ -12697,6 +12705,9 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   // --- Sequential Mode UI (Same as before) ---
   return (
     <div data-fs="execution" className="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-4">
+      {/* 🧾 軽微不良・気づき・自動終了のお知らせ は両方の画面で同じ窓(製品と同じ) */}
+      {sharedAutoEndToast}
+      {sharedReportModals}
       {/* 🚨🚨🚨 画面の「済み」とサーバの中身が食い違っている。**この画面を信じてはいけない**状態。
              2026-08-17 の事故はここが見えなかったので、作業者は最後まで気づけなかった。
              ⚠× で消せないようにする(消せると意味が無い)。押せるのは「送り直す」だけ。 */}
