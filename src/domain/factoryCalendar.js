@@ -194,6 +194,28 @@ export const normalizeCalendar = (raw) => {
   return Object.freeze({ days: Object.freeze(days), workdays: Object.freeze(normalizeWorkdays(raw.workdays)) });
 };
 
+/**
+ * 🚨 暦の指紋。**登録された日と種類だけ**を見る。
+ *
+ * なぜ要るか:
+ *   祝日を登録しても、計算を作り直す合図(鍵)に暦が入っていなければ
+ *   **登録しても何も変わらない画面** になる。その鍵を作る口を1つだけにする。
+ *   画面側(useOperationsSimulation)と計算側(normalizeInput)が別の作り方をすると、
+ *   片方だけ作り直してもう片方が前の答えを使い回す。
+ *
+ * 🚨 登録が0件なら **空文字**。鍵の文字列が今までと変わらないので、
+ *   祝日表を入れるまでは1度も余計な作り直しが起きない。
+ * ⚠ 一言(なぜ休みか)は入れない。言い方を直しただけで計算をやり直さないため。
+ * ⚠ 週の形(workdays)も入れない。あちらは勤務表側が自分で鍵に入れている。
+ * @returns {string}
+ */
+export const calendarFingerprint = (raw) => {
+  const cal = normalizeCalendar(raw);
+  const keys = Object.keys(cal.days).sort();
+  if (keys.length === 0) return '';
+  return keys.map((k) => `${k}:${cal.days[k].type}`).join(',');
+};
+
 /** その日の登録(無ければ null)。 */
 export const entryOfYmd = (calendar, ymd) => {
   const cal = normalizeCalendar(calendar);
