@@ -127,6 +127,7 @@ import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStar
 import { isWorkdayYmd, makeIsWorkday } from './domain/factoryCalendar.js';
 import { planProgressImport, normalizeSheetMap, DEFAULT_SHEET_MAP, isShippedGrayFills, colToIndex } from './domain/progressSheet.js';
 import { DEFAULT_IMPORT_OPTIONS } from './domain/importPlan.js';
+import { dueConflict } from './domain/dueConflict.js';
 import { LOT_PRIORITY_CHOICES, LOT_PRIORITY_LABEL, normalizeLotPriority, priorityLabelOf, priorityFromImportText, priorityBadgeOf, priorityFilterStyleOf } from './domain/lotPriority.js';
 import { workerWorkedSecondsInRange, dayRangeOf } from './domain/workerDailyActual.js';
 import { remainingByTasks, lotRemainingSec } from './domain/lotRemaining.js';
@@ -2368,6 +2369,9 @@ const LotActionSheet = ({ lot, templateName, onEdit, onDelete, onClose }) => {
 /**
  * 🚩 優先度の小さな札(緊急=赤 / 特注=橙)。通常は何も描かない(製品 PriorityBadge と同じ)。旧 'high'(急ぎ)は「緊急」として出る。
  */
+// 今日の 0:00(domain に Date.now を入れない決まり。時刻は呼ぶ側が渡す)
+const todayStartMsNow = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+
 const PriorityBadge = ({ priority, className = '' }) => {
   const b = priorityBadgeOf(priority);
   if (!b) return null;
@@ -2737,6 +2741,10 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
       {actionSheet}
 
       <div className="px-1.5 py-1 pr-6">{/* pr-6 で右端の細い帯(幅24px)と重ならないように。48px は中身を潰していた(2026-09-10) */}
+        {/* ⚠ P094 納期の矛盾(入荷=entryAt が納期より後)。部品には到着予定が無いので arrival は null(製品 11050 と同じ札) */}
+        {(() => { try { const c = dueConflict({ lot, arrival: null, todayStartMs: todayStartMsNow() }); return c.conflict ? (
+          <div className="mb-0.5"><span data-due-conflict="1" className="text-xs font-black bg-rose-50 border border-rose-300 text-rose-700 rounded px-1.5 py-0.5" title={`入荷が納期より後になっています。入荷が決まったら納期も更新してください。納期:${c.dueMs ? new Date(c.dueMs).toLocaleDateString('ja-JP') : '—'} / 入荷:${c.arrivalMs ? new Date(c.arrivalMs).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}`}>⚠ 納期の更新が必要</span></div>
+        ) : null; } catch { return null; } })()}
         {/* 停止理由バッジ (一時停止中で明示的に理由が設定されている時のみ。経過時間は勤務時間内のみカウント) */}
         {lot.pauseReason && lot.pauseReason.category && (() => {
           const colorMap = getPauseReasonColor(lot.pauseReason.category);
