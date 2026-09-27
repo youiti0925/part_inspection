@@ -9,6 +9,7 @@
 //  ・このデータは将来の「自動配置(空いてる得意な人へ)」の土台になる。
 // =============================================================================
 import React, { useState, useMemo } from 'react';
+import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { Users, Plus, Trash2, Settings as Cog, ChevronDown, ChevronUp, ChevronRight, Award, X } from 'lucide-react';
 
 export const DEFAULT_SKILLS = [
@@ -51,7 +52,7 @@ export function computeSkillCounts(lots, templates, workers = []) {
   return counts;
 }
 
-export function SkillMapView({ lots, templates, workers = [], skills, workerSkills = {}, canEdit = false, onSaveSkills, onSaveWorkerSkill, onSaveTemplateSkills }) {
+function SkillMapViewBody({ lots, templates, workers = [], skills, workerSkills = {}, canEdit = false, onSaveSkills, onSaveWorkerSkill, onSaveTemplateSkills }) {
   const [showConfig, setShowConfig] = useState(false);
   const [configTab, setConfigTab] = useState('template'); // 'template' | 'kinds'
   const [newSkill, setNewSkill] = useState('');
@@ -180,4 +181,9 @@ export function SkillMapView({ lots, templates, workers = [], skills, workerSkil
       </div>
     </div>
   );
+}
+
+// 🛟 P103: この画面が例外を投げても、この枠だけ「この部分だけ表示できませんでした」にして周りを生かす(製品と同じ包み方)。
+export function SkillMapView(props) {
+  return <ErrorBoundary compact where="スキルマップ"><SkillMapViewBody {...props} /></ErrorBoundary>;
 }

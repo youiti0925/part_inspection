@@ -8,6 +8,7 @@
 //    コンポーネントは sections プロップだけで動くので、最終検査アプリにも流用可能。
 // =============================================================================
 import React, { useState, useRef, useMemo } from 'react';
+import { ErrorBoundary } from './ErrorBoundary.jsx';
 import {
   X, BookOpen, Search, Camera, Upload, Trash2, ChevronRight, Loader2,
   Info, Lightbulb, AlertTriangle, CheckCircle2,
@@ -153,7 +154,7 @@ function Block({ block, slotProps }) {
 // -----------------------------------------------------------------------------
 //  本体: HelpManualModal
 // -----------------------------------------------------------------------------
-export function HelpManualModal({ appLabel = 'アプリ', sections, images = {}, canEdit = false, onUpload, onDelete, onClose }) {
+function HelpManualModalBody({ appLabel = 'アプリ', sections, images = {}, canEdit = false, onUpload, onDelete, onClose }) {
   const [activeId, setActiveId] = useState(sections[0]?.id);
   const [q, setQ] = useState('');
   const bodyRef = useRef(null);
@@ -591,3 +592,8 @@ export const PRODUCT_HELP_SECTIONS = [
     ],
   },
 ];
+
+// 🛟 P103: この画面が例外を投げても、この枠だけ「この部分だけ表示できませんでした」にして周りを生かす(製品と同じ包み方)。
+export function HelpManualModal(props) {
+  return <ErrorBoundary compact where="使い方マニュアル"><HelpManualModalBody {...props} /></ErrorBoundary>;
+}

@@ -5,6 +5,7 @@
 // 🚨 数字は domain/templateSkip.js(純関数)が実測から出す。ここで数えない。
 // 🚨 情報は消さない: スキップと決めたロットも検査リストに『スキップ』の札で残る(削除しない)。
 import React, { useMemo, useState } from 'react';
+import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { ShieldCheck, ListChecks, Activity, Lock } from 'lucide-react';
 import { normalizeTemplateSkipCfg, templateSkipRows, templateSkipSummary, latestCompletedMs, JUDGE_REASON_TEXT } from './domain/templateSkip.js';
 
@@ -17,7 +18,7 @@ const makeSaver = ({ canEdit, saveSettings, currentUserName }) => (next, action,
   saveSettings({ templateSkip: { ...next, history: [entry, ...(next.history || [])].slice(0, 200) } });
 };
 
-export default function TemplateSkipPanel({ lots = [], templates = [], settings = null, saveSettings = null, canEdit = false, currentUserName = '', onOpenOpsim = null, unitLabel = '型式' }) {
+function TemplateSkipPanelBody({ lots = [], templates = [], settings = null, saveSettings = null, canEdit = false, currentUserName = '', onOpenOpsim = null, unitLabel = '型式' }) {
   const cfg = useMemo(() => normalizeTemplateSkipCfg(settings && settings.templateSkip), [settings]);
   const [q, setQ] = useState('');
   const [onlyReady, setOnlyReady] = useState(false);
@@ -164,4 +165,9 @@ export default function TemplateSkipPanel({ lots = [], templates = [], settings 
       </div>
     </div>
   );
+}
+
+// 🛟 P103: この画面が例外を投げても、この枠だけ「この部分だけ表示できませんでした」にして周りを生かす(製品と同じ包み方)。
+export default function TemplateSkipPanel(props) {
+  return <ErrorBoundary compact where="テンプレの抜取"><TemplateSkipPanelBody {...props} /></ErrorBoundary>;
 }

@@ -3,6 +3,7 @@
 //   artifacts/product-inspection-v1/public/data/rotaryMeasurements/{機番_日時}
 // へ結果が書き込まれる。ここはそれをリアルタイム購読して表示するだけ（書き込み一切なし）。
 import React, { useEffect, useMemo, useState } from 'react';
+import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, orderBy, query, limit, where } from 'firebase/firestore';
 import { providerFor } from './data/provider.js';
 
@@ -25,7 +26,7 @@ const JudgeBadge = ({ j }) => {
   );
 };
 
-export default function RotaryMeasurementsPanel({ db }) {
+function RotaryMeasurementsPanelBody({ db }) {
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -226,4 +227,9 @@ export default function RotaryMeasurementsPanel({ db }) {
       )}
     </div>
   );
+}
+
+// 🛟 P103: この画面が例外を投げても、この枠だけ「この部分だけ表示できませんでした」にして周りを生かす(製品と同じ包み方)。
+export default function RotaryMeasurementsPanel(props) {
+  return <ErrorBoundary compact where="回転測定"><RotaryMeasurementsPanelBody {...props} /></ErrorBoundary>;
 }
