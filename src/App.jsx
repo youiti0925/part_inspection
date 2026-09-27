@@ -123,7 +123,7 @@ import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStar
 //   🚨 登録が空なら 月〜金 = 今までと1ミリも同じ挙動。
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
 //   この部品検査アプリは **読むだけ**(登録する画面は製品検査/最終検査にある)。
-import { isWorkdayYmd } from './domain/factoryCalendar.js';
+import { isWorkdayYmd, makeIsWorkday } from './domain/factoryCalendar.js';
 import { workerWorkedSecondsInRange, dayRangeOf } from './domain/workerDailyActual.js';
 import { remainingByTasks, lotRemainingSec } from './domain/lotRemaining.js';
 // 🛌 作業者の休止/復帰(2026-08-31 清水さんの要望)。消すのではなく一旦しまう。復帰したら元どおり。
@@ -26402,7 +26402,9 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
   );
 };
 
-const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSettings, indirectWork = [], factoryCalendar = null }) => {
+const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templates = [], saveSettings, indirectWork = [], factoryCalendar = null }) => {
+  // 📅 工場の暦(土日+登録した祝日・全社休業)で休みの日かを決める(製品 worksOnCal と同じ)
+  const worksOnCal = useMemo(() => makeIsWorkday(factoryCalendar), [factoryCalendar]);
   const [tickN, setTickN] = useState(0);
   // 週次仕事量で展開中の週 (null = なし)
   const [expandedWeekIdx, setExpandedWeekIdx] = useState(null);
@@ -26840,7 +26842,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
             </div>
           </div>
           <div className="text-xs text-slate-500">
-            想定: <span className="font-bold">{HOURS_PER_DAY.toFixed(2)}h/日 ({includeOT ? '残業込' : '定時'}) × {DAYS_PER_WEEK}日</span> = {HOURS_PER_WEEK.toFixed(1)}h/週 ・<span title={isWorkerOverride ? `マスタ設定で上書き (登録${registeredWorkers}人)` : isRosterDriven ? `作業者ロスターの今週平均在席 (登録${registeredWorkers}人・休/他工場を除く)` : '登録作業者数'}>{isWorkerOverride ? '想定' : isRosterDriven ? '在席' : '在籍'} <span className="font-bold">{totalWorkers}</span>人{isWorkerOverride && <span className="text-amber-600 text-xs ml-0.5">(設定値)</span>}{isRosterDriven && <span className="text-indigo-600 text-xs ml-0.5">(ロスター)</span>}</span> → 実効直工キャパ <span className="font-bold">{teamCapacityWeekH.toFixed(1)}h/週</span>{factor !== 1 && <span className="text-indigo-600 ml-0.5">(間接込み係数{factor.toFixed(2)})</span>}
+            {pausedCount > 0 ? <span className="mr-2 rounded bg-slate-100 px-1.5 py-0.5 font-bold text-slate-600" data-progress-paused={pausedCount}>休止中 {pausedCount}人 は人数に入れていません</span> : null}想定: <span className="font-bold">{HOURS_PER_DAY.toFixed(2)}h/日 ({includeOT ? '残業込' : '定時'}) × {DAYS_PER_WEEK}日</span> = {HOURS_PER_WEEK.toFixed(1)}h/週 ・<span title={isWorkerOverride ? `マスタ設定で上書き (登録${registeredWorkers}人)` : isRosterDriven ? `作業者ロスターの今週平均在席 (登録${registeredWorkers}人・休/他工場を除く)` : '登録作業者数'}>{isWorkerOverride ? '想定' : isRosterDriven ? '在席' : '在籍'} <span className="font-bold">{totalWorkers}</span>人{isWorkerOverride && <span className="text-amber-600 text-xs ml-0.5">(設定値)</span>}{isRosterDriven && <span className="text-indigo-600 text-xs ml-0.5">(ロスター)</span>}</span> → 実効直工キャパ <span className="font-bold">{teamCapacityWeekH.toFixed(1)}h/週</span>{factor !== 1 && <span className="text-indigo-600 ml-0.5">(間接込み係数{factor.toFixed(2)})</span>}
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -26879,6 +26881,8 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                   const dayLots = wk.lots.filter(l => {
                     if (!l.dueDate) return false;
                     const due = new Date(l.dueDate); due.setHours(0,0,0,0);
+                    // 📅 休みの日(土日+登録した祝日)に来た納期は下で月曜へ集める。ここで二重に数えない。
+                    if (!worksOnCal(due)) return false;
                     return due.getTime() === ds.getTime();
                   });
                   // 月曜セルに以下を集める:
@@ -26896,8 +26900,8 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                     wk.lots.forEach(l => {
                       if (!l.dueDate) return;
                       const due = new Date(l.dueDate); due.setHours(0,0,0,0);
-                      const dow = due.getDay();
-                      if ((dow === 0 || dow === 6) && due >= wk.start && due <= wk.end) {
+                      // 📅 土日だけでなく工場の暦の休み(祝日・全社休業)も月曜へ集める
+                      if (!worksOnCal(due) && due >= wk.start && due <= wk.end) {
                         dayLots.push(l);
                       }
                     });
@@ -31949,7 +31953,7 @@ const QuotaStoppedPanel = ({ until }) => (
          {activeTab === 'progress' && (
            quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
            : !progressDataReady ? <DataLoadingPanel what="過去のロットと間接作業" />
-           : <ProgressOverviewView lots={lots} /* 🧹 2026-09-23 休止中の人を在籍・ロスター・タイムラインに数えない(製品と同じ。作業者の現状の5人と合わせる) */ workers={activeWorkersOf(workers || [])} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} />
+           : <ProgressOverviewView lots={lots} /* 🧹 2026-09-23 休止中の人を在籍・ロスター・タイムラインに数えない(製品と同じ。作業者の現状の5人と合わせる) */ workers={activeWorkersOf(workers || [])} pausedCount={Math.max(0, (workers || []).length - activeWorkersOf(workers || []).length)} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} />
          )}
          {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)} />}
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
