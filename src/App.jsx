@@ -157,6 +157,7 @@ import { HelpManualModal, PRODUCT_HELP_SECTIONS } from './HelpManual.jsx';
 import { StrictModeManagerModal, computeStrictEvidence, strictComboKey, MultiUnitGantt } from './StrictModeManager.jsx';
 // スキルマップ（作業者×スキル：レベル＋回数）
 import { SkillMapView, DEFAULT_SKILLS, skillColorOf } from './SkillMap.jsx';
+import { WorkerAvatar, workerToneOf } from './WorkerAvatar.jsx';
 import { normalizeRequiredSkills, requiredSkillIdsForStep, toggleSkillOnStep, attachSkill, detachSkill, upsertSkill, newSkillId, SKILL_SCOPE } from './domain/skillRegistry.js';
 
 // --- 一度だけ実行: 管理者未承認の厳密モード(localStorageの古い残骸)を全消去して既定OFFに戻す ---
@@ -3543,7 +3544,7 @@ const VideoToPhotosModal = ({ contextLabel = '', existingDescription = '', onApp
   );
 };
 
-const WorkerSummaryCard = ({ worker, lots }) => {
+const WorkerSummaryCard = ({ worker, lots, colorTone = null }) => {
   // 進行中ロットがあれば 5秒毎に再描画 (live workStartTime 加算用)
   const [, setTick] = useState(0);
   const hasProcessing = lots.some(l => l.workerId === worker.id && l.status === 'processing' && l.workStartTime);
@@ -3559,9 +3560,12 @@ const WorkerSummaryCard = ({ worker, lots }) => {
     <div className="bg-white border border-slate-200 rounded-lg p-3 shadow-sm flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2 border-b pb-2">
          <div className="flex items-center gap-2">
+           {/* 👤 人の色の丸(P084)。色は名簿全体から1か所で配る(作業者マスタと同じ色)。渡されない時は今までの人型 */}
+           {colorTone ? <WorkerAvatar name={worker.name} tone={colorTone} size="w-8 h-8" showName={false} /> : (
            <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
               <User className="w-5 h-5"/>
            </div>
+           )}
            <span className="font-bold text-lg text-slate-800">{worker.name}</span>
          </div>
          {inProgressCount > 0 && (
@@ -13384,7 +13388,7 @@ const DashboardView = ({ onSetMode, lots, workers, handleMoveLot, saveData, setD
           ? workers.filter(w => w.name === currentUserName)
           : laneWorkersOf(workers, lots)
         ).map(worker => (
-          <WorkerSummaryCard key={worker.id} worker={worker} lots={lots} />
+          <WorkerSummaryCard key={worker.id} worker={worker} lots={lots} colorTone={workerToneOf(workers, worker.name)} />
         ))}
         {workers.length === 0 && <div className="text-center text-slate-400 p-4">作業者が登録されていません</div>}
       </ZoneList>
@@ -22336,6 +22340,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
            <div className="flex flex-wrap gap-2">
              {activeWorkersOf(workers).map(w => (
                <div key={w.id} className="bg-slate-50 border px-3 py-1.5 rounded-full flex items-center gap-2 text-sm">
+                 {/* 👤 人の色の丸(P084)。現場マップと同じ色。名前は横の {w.name} が出すので showName={false} */}
+                 <WorkerAvatar name={w.name} tone={workerToneOf(workers, w.name)} size="w-6 h-6" showName={false} />
                  {w.name}
                  <button
                    onClick={() => pauseWorker(w, { saveData, lots })}
