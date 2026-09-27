@@ -7182,9 +7182,67 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   //   品名はロットが名乗る名前 → 無ければ設定の品目名簿(settings.itemMaster)。どちらも無ければ品目コードだけ。
   const itemName = resolveItemName(lot.model, lot.modelText, itemMaster);
   const itemLabel = itemName ? `${lot.model || ''}｜${itemName}` : (lot.model || '');
-  // この検査を実施している作業者名 = ロットの担当者(lot.workerId)。担当を切替えると以降の完了が新担当で記録される。
+  // B.1.1: 担当も同じ理由で「直前に保存した値」を正にする。
+  //   担当変更 onSave({workerId}) の直後、Firestore の購読が lot へ返る前に次の作業を開始すると、
+  //   lot.workerId はまだ旧担当のため、新しいセッションが旧担当で開いてしまう。
+  const lastSavedWorkerIdRef = useRef(lot.workerId || null);
+  // この検査を実施している作業者 = ロットの担当者。担当を切替えると以降の完了が新担当で記録される。
   // これを各タスクの workerName に焼き付けることで、台ごとに別の人が作業しても集計が正しくなる。
-  const inspectorName = (lot.workerId && workers.find(w => w.id === lot.workerId)?.name) || currentUserName || '';
+  // ⚠生の lot.workerId ではなく lastSavedWorkerIdRef を正とする(B.1.1 と同じ理由)。
+  //   担当を切替えた直後は Firestore の購読が返るまで lot.workerId が旧担当のままで、
+  //   そのまま完了を押すと task.workerName に前の担当者の名前が焼き付いてしまう(既存バグ)。
+  //   教育中(🎓)判定も同じ ID から引く。
+  // ⚠ref は書き換えても再描画を起こさない。担当を切り替えた瞬間に画面を作り直すための刻み。
+  const [, setInspectorTick] = useState(0);
+  // 他端末が担当を変えた場合は prop 追従で取り込む(自端末の変更は下の onSave が即時に上書きする)。
+  // ⚠ref を書くだけでは再描画が起きない (あら探し#23)。別端末や現場マップで担当が変わっても、
+  //   その prop 更新の描画時点では ref がまだ旧値なので、担当セレクタと🎓バッジが古い担当のまま居座る。
+  //   逐次モードでタイマーが止まっていると毎秒の再描画も無いので、次に何か押すまで直らない。
+  //   → 実際に値が変わった時だけ刻みを進めて描き直す。
+  useEffect(() => {
+    const next = lot.workerId || null;
+    if (lastSavedWorkerIdRef.current === next) return;
+    lastSavedWorkerIdRef.current = next;
+    setInspectorTick(t => t + 1);
+  }, [lot.workerId]);
+  const inspectorWorkerId = lastSavedWorkerIdRef.current || lot.workerId || null;
+  // ⚠担当が未割当のロットでも作業画面は開ける(カードから直接・通知のディープリンクも)。
+  //   その時 workerName は currentUserName にフォールバックするのに、教育中(🎓)判定だけ
+  //   null 引きで必ず false になっていた (あら探し#10) = 新人の名前で記録されるのに印が付かず、
+  //   その記録が標準時間の較正・全社ベースタイム・Cpk・他の新人のものさしに混ざっていた。
+  //   → 名前でも引けるようにして「名前と印」を同じ規約にそろえる(31481 の myWorker と同じ引き方)。
+  const resolveWorkerForWork = (wid) => (wid ? (workers || []).find(w => w.id === wid) : null)
+    || (currentUserName ? (workers || []).find(w => w.name === currentUserName) : null)
+    || null;
+  const inspectorWorker = resolveWorkerForWork(inspectorWorkerId);
+  const inspectorName = inspectorWorker?.name || currentUserName || '';
+  // ================================================================================
+  // 作業中の担当者引き継ぎ(製品と同じ): 見出しのこのセレクタで担当を切替えると lot.workerId を更新 →
+  //   inspectorName が追従し、これ以降に完了する台は新しい担当で記録される(完了済みの台はそのまま=遡及しない)。
+  //   例: 4台のうち1・2台目を A が完了→ここで B に切替→3・4台目は B で記録。
+  //   ⚠教育中(🎓)の印は P132(作業者マスタの教育中)が入るまで出さない。
+  const changeInspector = (workerId) => {
+    if (!workerId || workerId === inspectorWorkerId) return;
+    const nm = (workers.find(w => w.id === workerId)?.name) || '';
+    if (!window.confirm(`担当を「${nm}」に切り替えます。
+これ以降に完了する台は「${nm}」で記録されます（完了済みの台はそのまま）。
+よろしいですか？`)) return;
+    onSave({ workerId }); // 中で lastSavedWorkerIdRef を即時更新する
+    // ⚠ref を書き換えただけでは再描画されない = inspectorName が旧担当のまま残る。ここで描き直す
+    setInspectorTick(t => t + 1);
+  };
+  const inspectorSelector = (
+    <label onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 bg-white/10 rounded px-1.5 py-1 shrink-0" title={`この作業の担当者。切り替えると、これ以降に完了する台は新しい担当で記録されます（完了済みの台はそのまま）${!inspectorWorkerId ? `
+⚠担当が未選択です。記録は「${inspectorName || '(名前なし)'}」で残ります。担当を選んでください。` : ''}`}>
+      <User className="w-3.5 h-3.5 opacity-80 shrink-0" />
+      {/* ⚠表示は lot.workerId ではなく「これから記録に使う担当」を出す(購読が返るまで lot.workerId は旧担当のまま) */}
+      <select value={inspectorWorkerId || ''} onChange={(e) => changeInspector(e.target.value)} className="rounded px-1 py-0.5 text-xs font-bold border max-w-[6.5rem] bg-slate-700 text-white border-white/20">
+        <option value="">担当を選択</option>
+        {/* 🛌休止中の人は外す。ただし今この作業に付いている人は外さない(🛌を付けて出す) */}
+        {laneWorkersOf(workers || [], [], { keepIds: [inspectorWorkerId] }).map(w => <option key={w.id} value={w.id} className="text-black">{isWorkerPaused(w) ? `🛌${w.name}` : w.name}</option>)}
+      </select>
+    </label>
+  );
   // ロットが消えた (削除/置換) 場合は自動でモーダルを閉じる
   useEffect(() => {
     if (!_lotProp && onClose) {
@@ -7284,6 +7342,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   // 🚦 保存の中継(製品と同じ): 連続操作で次のイベントが再描画より先でも、直前の開始・停止を開始の見張りが見られるようにする
   const onSave = useCallback((payload) => {
     if (payload && payload.tasks) tasksRef.current = payload.tasks;
+    // 👤 担当の切替も 購読が返る前の次の操作に効かせる(製品と同じ)
+    if (payload && payload.workerId) lastSavedWorkerIdRef.current = payload.workerId;
     return onSaveRaw(payload);
   }, [onSaveRaw]);
   useEffect(() => { tasksRef.current = tasks; }, [tasks]);
@@ -7887,7 +7947,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           startTime: reportOnly ? null : now,
           duration: 0,
           status: reportOnly ? 'reported' : 'active',
-          workerName: (workers.find(w => w.id === lot.workerId)?.name) || lot.workerId || '', // ID ではなく名前を保存
+          workerName: inspectorName || lot.workerId || '', // ID ではなく名前を保存(担当の切替も即効く・製品と同じ)
           stepInfo: curStep ? { stepId: curStep.id, title: curStep.title } : null,
           causeProcess: causeProcess || '',
           photos: photos || [],
@@ -8072,7 +8132,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
   });
   const startGuard = ({ targetStep, excludeKey = null, currentTasks = tasksRef.current }) => {
     const ctx = workGuardContextRef.current || { lots, lot, localSteps, workers, currentUserName, executionType, isTimerRunning, currentStepIdx };
-    const workerId = ctx.lot.workerId
+    const workerId = lastSavedWorkerIdRef.current || ctx.lot.workerId
       || (ctx.workers || []).find(w => w.name === ctx.currentUserName)?.id || null;
     return guardLotTaskStart({ lots: ctx.lots || [], workerId, targetStep, excludeKey,
       masterIndex: STEP_MASTER_INDEX, workers: ctx.workers || [],
@@ -11460,7 +11520,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
         <div className="bg-white w-full max-w-6xl h-full max-h-full rounded-2xl shadow-2xl flex flex-col overflow-hidden relative">
           <div className="bg-slate-800 text-white px-3 py-1.5 flex justify-between items-center shrink-0 gap-2">
-             <div className="shrink-0"><h2 className="text-sm font-bold flex items-center gap-1.5"><button onClick={switchToSequential} className="bg-emerald-600 hover:bg-blue-600 px-2 py-0.5 rounded text-xs transition-colors" title="通常モードに切替">カスタム ⇄</button><span className="truncate max-w-[16rem]" title={itemLabel} data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70 text-xs">#{lot.serialNo}</span> {lotTemplate?.name && <span className="text-xs bg-white/15 px-1.5 py-0.5 rounded font-bold truncate max-w-[10rem]" title={`テンプレート: ${lotTemplate.name}`}>📋 {lotTemplate.name}</span>} <span className="text-xs opacity-70 shrink-0">({lot.quantity}台)</span></h2></div>
+             <div className="shrink-0 flex flex-wrap items-center gap-1.5"><h2 className="text-sm font-bold flex items-center gap-1.5"><button onClick={switchToSequential} className="bg-emerald-600 hover:bg-blue-600 px-2 py-0.5 rounded text-xs transition-colors" title="通常モードに切替">カスタム ⇄</button><span className="truncate max-w-[16rem]" title={itemLabel} data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70 text-xs">#{lot.serialNo}</span> {lotTemplate?.name && <span className="text-xs bg-white/15 px-1.5 py-0.5 rounded font-bold truncate max-w-[10rem]" title={`テンプレート: ${lotTemplate.name}`}>📋 {lotTemplate.name}</span>} <span className="text-xs opacity-70 shrink-0">({lot.quantity}台)</span></h2>{inspectorSelector}</div>
              <div className="flex flex-wrap gap-1.5 items-center justify-end">
                  {voiceHelpModal}
                  <button onClick={toggleVoice} className={`p-2 rounded-full transition-all ${voiceEnabled ? 'bg-blue-500 text-white animate-pulse ring-2 ring-blue-300' : 'bg-white/10 text-white/60 hover:bg-white/20'}`} title={voiceEnabled ? '音声OFF' : '音声ON'}>
@@ -12784,7 +12844,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
 
       <div className="bg-white w-full max-w-4xl h-[85vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         <div className="bg-slate-800 text-white p-4 flex justify-between items-center shrink-0">
-          <div><h2 className="text-lg font-bold flex items-center gap-2"><button onClick={switchToCustom} className="bg-blue-600 hover:bg-emerald-600 px-2 py-0.5 rounded text-xs transition-colors" title="カスタムモードに切替">順序実行 ⇄</button><span data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70">#{lot.serialNo}</span></h2><p className="text-xs text-slate-400 mt-1">工程 {currentStepIdx + 1} / {localSteps.length}: {currentStep.title}{totalUnits > 1 ? ` — ${currentUnitIdx + 1}/${totalUnits}台目` : ''}</p></div>
+          <div><h2 className="text-lg font-bold flex items-center gap-2"><button onClick={switchToCustom} className="bg-blue-600 hover:bg-emerald-600 px-2 py-0.5 rounded text-xs transition-colors" title="カスタムモードに切替">順序実行 ⇄</button><span data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70">#{lot.serialNo}</span> {inspectorSelector}</h2><p className="text-xs text-slate-400 mt-1">工程 {currentStepIdx + 1} / {localSteps.length}: {currentStep.title}{totalUnits > 1 ? ` — ${currentUnitIdx + 1}/${totalUnits}台目` : ''}</p></div>
           <div className="flex items-center gap-2">
             {voiceEnabled && voiceStatus && <div className="bg-blue-500/30 text-blue-100 text-xs px-3 py-1 rounded-full max-w-xs truncate animate-pulse">{voiceStatus}</div>}
             <button onClick={toggleVoice} className={`p-2 rounded-full transition-all ${voiceEnabled ? 'bg-blue-500 text-white animate-pulse ring-2 ring-blue-300' : 'bg-white/10 text-white/60 hover:bg-white/20'}`} title={voiceEnabled ? '音声OFF' : '音声ON'}>
