@@ -29764,6 +29764,31 @@ const QuotaStoppedPanel = ({ until }) => (
      }
    };
 
+   // 👤 現場マップのカードから作業画面を開く口(製品 openExecutionFromMap を写した)。
+   //   担当が自分と違えば1回だけ聞く(替える/そのまま)。使用者を選んでいない・フリー・管理者は今までどおり何も聞かない。
+   //   ⚠ saveData は材料(deps)に入れず、置き場(ref)から最新を読む(製品 70765e1 の直し)。
+   const saveDataRef = useRef(null);
+   useEffect(() => { saveDataRef.current = saveData; }); // 毎描画で最新に差し替える(deps は付けない)
+   const openExecutionFromMap = useCallback((lotId) => {
+     const id = typeof lotId === 'string' ? lotId : (lotId && lotId.id);
+     if (!id) return;
+     const lot = lots.find((l) => l.id === id);
+     const me = String(currentUserName || '').trim();
+     const owner = lot ? (workers.find((w) => w.id === lot.workerId) || {}).name || '' : '';
+     if (lot && me && owner && owner !== me && !['フリー', '管理者'].includes(me)) {
+       const mine = workers.find((w) => w.name === me);
+       const swap = window.confirm(
+         `このロットの担当は「${owner}」さんです。\n`
+         + `このまま進むと、作業の記録は「${owner}」さんの名前で残ります。\n\n`
+         + `担当を「${me}」さんに替えますか？\n`
+         + `\u3000OK … 「${me}」さんに替えて開く\n`
+         + `\u3000キャンセル … 「${owner}」さんのまま開く`,
+       );
+       if (swap && mine && mine.id) saveDataRef.current('lots', id, { workerId: mine.id });
+     }
+     setExecutionLotId(id);
+   }, [lots, workers, currentUserName]);
+
    const retryLastSave = async () => {
      const p = lastFailedPayloadRef.current;
      if (!p) { setSyncStatus('idle'); return; }
@@ -32137,15 +32162,15 @@ const QuotaStoppedPanel = ({ until }) => (
          <div className="flex-1 min-h-0 overflow-hidden p-4 relative">
          {activeTab === 'main' && (
            <div className="h-full">
-             {viewMode === 'dashboard' && <DashboardView onSetMode={setViewMode} lots={lots} workers={workers} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setExecutionLotId={setExecutionLotId} settings={settings} templates={templates} onEditLot={onEditLot} onDeleteLot={onDeleteLot} handleImageUpload={handleImageUpload} saveSettings={saveSettings} mapZones={settings.mapZones} currentUserName={currentUserName} />}
+             {viewMode === 'dashboard' && <DashboardView onSetMode={setViewMode} lots={lots} workers={workers} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setExecutionLotId={openExecutionFromMap} settings={settings} templates={templates} onEditLot={onEditLot} onDeleteLot={onDeleteLot} handleImageUpload={handleImageUpload} saveSettings={saveSettings} mapZones={settings.mapZones} currentUserName={currentUserName} />}
              {viewMode === 'arrival-planning' && <ArrivalPlanningView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} handleAddWorker={handleAddWorker} onEditLot={onEditLot} onDeleteLot={onDeleteLot} mapZones={settings.mapZones} />}
-             {viewMode === 'planning-execution' && <PlanningExecutionView onBack={() => setViewMode('dashboard')} workers={workers} lots={lots} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} handleImageUpload={handleImageUpload} settings={settings} mapRef={mapRef} handleDropOnMap={handleDropOnMap} setExecutionLotId={setExecutionLotId} onEditLot={onEditLot} onDeleteLot={onDeleteLot} saveSettings={saveSettings} mapZones={settings.mapZones} currentUserName={currentUserName} />}
+             {viewMode === 'planning-execution' && <PlanningExecutionView onBack={() => setViewMode('dashboard')} workers={workers} lots={lots} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} handleImageUpload={handleImageUpload} settings={settings} mapRef={mapRef} handleDropOnMap={handleDropOnMap} setExecutionLotId={openExecutionFromMap} onEditLot={onEditLot} onDeleteLot={onDeleteLot} saveSettings={saveSettings} mapZones={settings.mapZones} currentUserName={currentUserName} />}
              {viewMode === 'completed-list' && (
                quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
                : !lotsHistoryReady ? <DataLoadingPanel what="完了したロット" />
                : <CompletedListView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} mapZones={settings.mapZones} saveData={saveData} onEditLot={onEditLot} onDeleteLot={onDeleteLot} />
              )}
-             {viewMode === 'map-only' && <MapOnlyView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setExecutionLotId={setExecutionLotId} settings={settings} handleImageUpload={handleImageUpload} saveSettings={saveSettings} mapZones={settings.mapZones} onEditLot={onEditLot} onDeleteLot={onDeleteLot} execOpen={!!executionLotId} />}
+             {viewMode === 'map-only' && <MapOnlyView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setExecutionLotId={openExecutionFromMap} settings={settings} handleImageUpload={handleImageUpload} saveSettings={saveSettings} mapZones={settings.mapZones} onEditLot={onEditLot} onDeleteLot={onDeleteLot} execOpen={!!executionLotId} />}
            </div>
          )}
          {activeTab === 'progress' && (
