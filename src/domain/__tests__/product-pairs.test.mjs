@@ -66,6 +66,7 @@ const PAIRS = [
   { file: 'domain/importPlan.js', product: 'product-inspection-app/src/domain/importPlan.js', md5: '949b505eb94d2e4f7c824b388544c16f' },
   { file: 'domain/incomingWork.js', product: 'product-inspection-app/src/domain/incomingWork.js', md5: '7d1b902a8f4e674df1a8940e302160c9' },
   { file: 'domain/interruptionLog.js', product: 'product-inspection-app/src/domain/interruptionLog.js', md5: '9e1e4021360b01689c1ecb4dda0ed535' },
+  { file: 'domain/traineeProgress.js', product: 'product-inspection-app/src/domain/traineeProgress.js', md5: '09c7cdeb104230e5759f289067900d5b' },
   { file: 'domain/knowledgeCourses.js', product: 'product-inspection-app/src/domain/knowledgeCourses.js', md5: '805601ff324c5f2866b29563f0fad6f6' },
   { file: 'domain/layoutMode.js', product: 'product-inspection-app/src/domain/layoutMode.js', md5: '929fd4ecc325b94d921ab446cd6faa40' },
   { file: 'domain/liveDataUsage.js', product: 'product-inspection-app/src/domain/liveDataUsage.js', md5: 'a0239a32e7da92388502dc95a5cb6437' },

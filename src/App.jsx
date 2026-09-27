@@ -259,6 +259,11 @@ import { skillColorOf } from './skillColors.js';
 import { WorkerAvatar } from './WorkerAvatar.jsx';
 import { workerToneOf } from './workerTone.js';
 import SignoffModal from './SignoffModal.jsx';
+// 🎓 E32 新人の級・検定(製品 traineeProgress.js をそのまま写した)。⚠判定は保存しない — 履歴から毎回導出する。
+import {
+  BASELINE_SOURCE_LABEL, TRAINEE_BASELINE_MIN_N, normalizeTrainingConfig,
+  collectTraineeCells, buildTraineeReport,
+} from './domain/traineeProgress.js';
 import { stampTrainee } from './domain/lotSavePipeline.js';
 // 🧍 P135(一部) 一人しかできない工程(実績から数える・スキルの言葉に依らない)。製品 SoloDependencyPanel をそのまま写した
 import { SoloDependencyPanel } from './SoloDependencyPanel.jsx';
@@ -938,6 +943,29 @@ const toMsAny = (raw) => {
 };
 // 統計(目標時間の提案・乖離アラート・達成率)に入れる台か。抜取スキップ(0秒扱い)と教育中を外す(製品 App.jsx と同じ1行)。
 const isStatTask = (t) => !!t && !t.samplingSkipped && t.trainee !== true;
+// 🎓 P155 このロットに「教育中として記録された作業」が入っているか (記録 = task.trainee)。製品 App.jsx と同じ1行。
+//   ⚠今その人が教育中か (workers[].trainee) ではない。卒業しても過去の記録の🎓は残るのが正しい。
+const lotHasTraineeWork = (lot) => Object.values(lot?.tasks || {}).some(t => t && t.trainee === true);
+// 🎓 E32 ものさし用: 較正済みの秒とテンプレ既定値の秒を分けて返す(製品 getCalibratedTargetTime と同じ中身=既定値へ落ちない版)。
+const getCalibratedTargetTime = (step, model, customTargetTimes, modelGroups = null) => {
+  if (!step || !model || !customTargetTimes) return 0;
+  const sk = targetTimeStepKey(step);
+  const own = customTargetTimes[`model_${model}`]?.[sk];
+  if (typeof own === 'number' && own > 0) return own;
+  if (Array.isArray(modelGroups)) {
+    const g = modelGroups.find(gr => Array.isArray(gr?.models) && gr.models.includes(model));
+    if (g) for (const sm of g.models) {
+      if (sm === model) continue;
+      const v = customTargetTimes[`model_${sm}`]?.[sk];
+      if (typeof v === 'number' && v > 0) return v;
+    }
+  }
+  return 0;
+};
+const traineeTargetSecOf = (step, model, customTargetTimes, modelGroups = null) => ({
+  sec: getCalibratedTargetTime(step, model, customTargetTimes, modelGroups),
+  templateSec: step?.targetTime || 0,
+});
 // CSVセルのエスケープ。カンマ/引用符/改行を含む値(品名・指図名のユーザー入力や toLocaleString のカンマ)を
 // 正しく引用し、列ずれ・破損を防ぐ。RFC4180準拠(" は "" にエスケープ)。
 const csvCell = (v) => { const s = String(v ?? ''); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -19832,6 +19860,368 @@ const ObservationPlanEditor = ({ plan, templateId, stepKey, stepTitle, model, mo
 
 // 個別値プロット(strip/individual value plot): 横一本に全台の点+中央値の太線+目標の点線。
 // 少数n(2〜15台)でも破綻せず、誰でも分かる(箱ひげが読めない人向け)。n≥6でQ1-Q3の薄帯を足す。div/SVG自前描画。
+// ==== 🎓 E32 教育・伸び (製品 App.jsx 32138-32497 の GrowthView をそのまま写した) ====
+
+// ============================================================================
+//  🎓 教育・伸び (GrowthView)
+// ----------------------------------------------------------------------------
+// 新人の記録は「ものさし」(標準時間・スキル比較・改善効果)から外してある。
+// 外した分、**新人の状況がどこにも出ない**ままだと教育が勘になる。ここがその置き場所。
+//
+// ⚠⚠ 級・検定は **保存していない**。ここに出ている級は毎回 traineeProgress.js が
+//   履歴から計算し直した結果。だから ⚙で倍率を変えると過去の判定も一斉に変わる。
+//
+// ⚠⚠ 数字を出す画面の鉄則: **出どころと式を画面に併記する**。
+//   「エースのものさし」は3通りの作られ方があり、どれで出た数字かで意味がまるで違う。
+//   較正済みの目標時間なら会社が決めた基準、P25なら先輩の実測、中央値なら参考値。
+//   出どころを書かない数字は、現場では「謎の数字」として無視されるか、鵜呑みにされるかの
+//   どちらかにしかならない。
+//
+// ⚠ 集計の単位は 型式 × テンプレ × 工程。工程名だけで束ねると、同名でも中身が別作業の
+//   ものが混ざって「あの人は測定が遅い」という嘘の結論になる(実測で中央値8.2倍差)。
+// ============================================================================
+const GROWTH_SORTS = [
+  { k: 'gap', l: '差が大きい順（教える優先度）' },
+  { k: 'gapPer', l: '1回あたりの差が大きい順' },
+  { k: 'ratio', l: '比率が高い順' },
+  { k: 'count', l: '回数が多い順' },
+  { k: 'recent', l: '最近やった順' },
+];
+// 級・検定のバッジ。⚠「ものさしが作れない」ことも必ず見せる(空欄で済ませると判定できたと誤解される)。
+const GrowthTierBadge = ({ progress }) => {
+  if (!progress || !progress.ready) return <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 fi-tap-text font-bold">ものさし無し</span>;
+  if (progress.examPassed) return <span className="px-1.5 py-0.5 rounded bg-emerald-500 text-white fi-tap-text font-bold">🏅 検定合格</span>;
+  const cls = progress.tier >= progress.config.tiers.length ? 'bg-amber-500 text-white'
+    : progress.tier > 0 ? 'bg-blue-500 text-white' : 'bg-slate-200 text-slate-600';
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className={`px-1.5 py-0.5 rounded fi-tap-text font-bold ${cls}`}>{progress.stage === 'exam' ? '検定挑戦中' : progress.tierName}</span>
+      <span className="fi-tap-text text-slate-400">あと{progress.remaining}回</span>
+    </span>
+  );
+};
+// ものさしの出どころ。較正済みの目標**以外**は【仮定】= 検証されていない値であることを明示する。
+// ⚠templateTarget(テンプレの仮置き)は会社が決めた基準ではない。ここを indigo の「較正済み目標」と
+//   同じ見た目にすると、誰も検証していない数字が基準として読まれる(あら探し#2/#9)。
+const GrowthBaselineBadge = ({ source, n }) => {
+  if (!source) return <span className="fi-tap-text text-slate-400">—</span>;
+  const isAssumed = source !== 'target';
+  const text = source === 'target' ? '較正済み目標'
+    : source === 'p25' ? `先輩P25${n ? `(n=${n})` : ''}`
+    : source === 'median' ? `先輩中央値${n ? `(n=${n})` : ''}`
+    : 'テンプレ既定値(未較正)';
+  return (
+    <span className={`px-1.5 py-0.5 rounded fi-tap-text font-bold ${isAssumed ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}
+      title={`ものさしの出どころ: ${BASELINE_SOURCE_LABEL[source] || source}${n ? `（n=${n}件）` : ''}`}>
+      {isAssumed ? '【仮定】' : ''}{text}
+    </span>
+  );
+};
+
+const GrowthView = ({ lots = [], workers = [], settings = {}, saveSettings = null, saveData = null, templates = [], currentUserName = '' }) => {
+  const isAdmin = currentUserName === '管理者';
+  const cfg = useMemo(() => normalizeTrainingConfig(settings?.trainingConfig), [settings?.trainingConfig]);
+  const trainees = useMemo(() => (workers || []).filter(w => w && w.trainee === true), [workers]);
+  const graduates = useMemo(() => (workers || []).filter(w => w && w.trainee !== true && w.graduatedAt), [workers]);
+  const [workerId, setWorkerId] = useState('');
+  // 🏅卒業直後のサインオフ(横で見た先輩を1タップで残す)。⚠hooksはガードより上に置く決まり
+  const [signoffFor, setSignoffFor] = useState(null);
+  const selected = (workers || []).find(w => w.id === workerId) || null;
+  // 最初に開いた時は先頭の教育中の人。誰も居なければ卒業済みの先頭。
+  useEffect(() => {
+    if (selected) return;
+    const first = trainees[0] || graduates[0] || null;
+    if (first) setWorkerId(first.id);
+  }, [trainees, graduates, selected]);
+  // 'only' = 🎓が付いた記録だけ / 'all' = その人の記録すべて(フラグを立てる前の記録も見たい時)
+  const [mode, setMode] = useState('only');
+  const [sort, setSort] = useState('gap');
+  const [openKey, setOpenKey] = useState('');
+  const [showCfg, setShowCfg] = useState(false);
+  const [cfgDraft, setCfgDraft] = useState(null);
+
+  const ctt = settings?.customTargetTimes || {};
+  const groups = modelGroupsOf(settings);
+  const tplNameOf = (id) => (id && (templates || []).find(t => t.id === id)?.name) || '';
+
+  const cells = useMemo(() => {
+    if (!selected?.name) return [];
+    try {
+      return collectTraineeCells({
+        lots: lots || [], workerName: selected.name, traineeMode: mode,
+        stepKeyOf: targetTimeStepKey,
+        taskKeysOf: (l, step, idx) => (step.lotOnce
+          ? lotOnceKeysOf(l.tasks || {}, step)
+          : Array.from({ length: l.quantity || 1 }, (_, i) => ((l.tasks || {})[`${step.id}-${i}`] !== undefined ? `${step.id}-${i}` : `${idx}-${i}`))),
+        // ⚠較正済みの目標とテンプレの既定値を分けて渡す(未較正の仮置きを「較正済み目標」と言わないため)
+        targetSecOf: (l, step) => traineeTargetSecOf(step, l.model, ctt, groups),
+        templateNameOf: tplNameOf,
+        toMs: toMsAny,
+      });
+    } catch (e) { console.error('[🎓] 記録の集計に失敗しました', e); return []; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lots, selected?.name, mode, settings, templates]);
+
+  const report = useMemo(() => buildTraineeReport({ cells, config: cfg, sort }), [cells, cfg, sort]);
+  const rows = report.rows;
+  const sum = report.summary;
+  const openRow = rows.find(r => r.key === openKey) || null;
+
+  const sinceMs = selected?.traineeSince || null;
+  const days = sinceMs ? Math.max(1, Math.round((Date.now() - sinceMs) / 86400000)) : null;
+
+  if (!trainees.length && !graduates.length) {
+    return (
+      <div className="max-w-2xl mx-auto bg-white border border-slate-200 rounded-xl p-6 text-center space-y-2">
+        <div className="text-5xl">🎓</div>
+        <div className="font-black text-slate-700 text-lg">教育中の人がまだ登録されていません</div>
+        <div className="text-sm text-slate-500 leading-relaxed">
+          <b>マスタ設定 → 作業者マスタ</b> で、新人の行の「🎓教育中」を入にしてください。<br />
+          入にした<b>あと</b>の作業から記録に🎓が付き、標準時間やスキル比較（＝ものさし）から外れます。<br />
+          <span className="text-amber-700">⚠ さかのぼっては付きません。新人が入ったらその日のうちに入にしてください。</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* ① 誰を見るか */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4">
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+          <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><Award className="w-5 h-5 text-amber-500" /> 🎓 教育・伸び</h3>
+          {isAdmin && (
+            <button onClick={() => { setCfgDraft({ tiers: cfg.tiers.join(', '), examRatio: String(cfg.examRatio), examStreak: String(cfg.examStreak) }); setShowCfg(v => !v); }}
+              className="text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">⚙ 級・検定の基準</button>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {trainees.map(w => (
+            <button key={w.id} onClick={() => { setWorkerId(w.id); setOpenKey(''); }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-bold border ${workerId === w.id ? 'bg-amber-500 text-white border-amber-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>🎓 {w.name}</button>
+          ))}
+          {graduates.map(w => (
+            <button key={w.id} onClick={() => { setWorkerId(w.id); setOpenKey(''); }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-bold border ${workerId === w.id ? 'bg-emerald-600 text-white border-emerald-700' : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'}`}
+              title={`卒業: ${pdcaFmtDate(w.graduatedAt)}${w.graduatedBy ? `（${w.graduatedBy}）` : ''}`}>🏅 {w.name}（卒業）</button>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-3 mt-3 text-xs">
+          <label className="flex items-center gap-1.5 text-slate-600">
+            <span className="font-bold">見る記録</span>
+            <select value={mode} onChange={e => { setMode(e.target.value); setOpenKey(''); }} className="border rounded px-2 py-1 text-xs font-bold">
+              <option value="only">🎓が付いた記録だけ</option>
+              <option value="all">この人の記録すべて</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 text-slate-600">
+            <span className="font-bold">並び</span>
+            <select value={sort} onChange={e => setSort(e.target.value)} className="border rounded px-2 py-1 text-xs font-bold">
+              {GROWTH_SORTS.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}
+            </select>
+          </label>
+          {mode === 'all' && <span className="text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">⚠ 🎓を付ける前の記録も混ざっています（ものさし側にも入っていた記録です）</span>}
+        </div>
+      </div>
+
+      {/* ⚙ 級・検定の基準 (管理者) */}
+      {isAdmin && showCfg && cfgDraft && (
+        <div className="bg-slate-50 border border-slate-300 rounded-xl p-4 space-y-2 text-xs">
+          <div className="font-bold text-slate-700">⚙ 級・検定の基準（全員・全工程 共通）</div>
+          <div className="text-slate-500 leading-relaxed">
+            級の目標 ＝ <b>エースのものさし × 倍率</b>。倍率を小さい順ではなく<b>厳しくなる順</b>に自動で並べ替えます。<br />
+            変えた瞬間に<b>過去の判定もこの基準で計算し直します</b>（級は保存していないため）。
+          </div>
+          <div className="flex flex-wrap gap-3 items-end">
+            <label className="flex flex-col gap-1"><span className="font-bold text-slate-600">級の倍率（カンマ区切り）</span>
+              <input value={cfgDraft.tiers} onChange={e => setCfgDraft({ ...cfgDraft, tiers: e.target.value })} className="border rounded px-2 py-1 w-40 font-mono" /></label>
+            <label className="flex flex-col gap-1"><span className="font-bold text-slate-600">検定の倍率</span>
+              <input value={cfgDraft.examRatio} onChange={e => setCfgDraft({ ...cfgDraft, examRatio: e.target.value })} className="border rounded px-2 py-1 w-24 font-mono" /></label>
+            <label className="flex flex-col gap-1"><span className="font-bold text-slate-600">連続で何回</span>
+              <input value={cfgDraft.examStreak} onChange={e => setCfgDraft({ ...cfgDraft, examStreak: e.target.value })} className="border rounded px-2 py-1 w-20 font-mono" /></label>
+            <button onClick={async () => {
+              const next = normalizeTrainingConfig({
+                tiers: String(cfgDraft.tiers).split(',').map(s => Number(s.trim())),
+                examRatio: Number(cfgDraft.examRatio), examStreak: Number(cfgDraft.examStreak),
+              });
+              if (!window.confirm(`級の倍率 ${next.tiers.join(' → ')}／検定 ×${next.examRatio} を ${next.examStreak}回連続 で保存します。\n過去の判定もこの基準で計算し直されます。よろしいですか？`)) return;
+              if (saveSettings) await saveSettings({ trainingConfig: next });
+              setShowCfg(false);
+            }} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-bold">保存</button>
+            <button onClick={() => setShowCfg(false)} className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 font-bold">閉じる</button>
+          </div>
+          <div className="text-slate-400">現在: 級 {cfg.tiers.map(t => `×${t}`).join(' → ')} ／ 検定 ×{cfg.examRatio} を {cfg.examStreak}回連続</div>
+        </div>
+      )}
+
+      {!selected ? (
+        <div className="text-center text-slate-400 py-10 text-sm">上から見たい人を選んでください</div>
+      ) : (
+        <>
+          {/* ② サマリ */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            <div className="bg-white border border-slate-200 rounded-xl p-3">
+              <div className="fi-tap-text text-slate-500 font-bold">教育開始</div>
+              <div className="text-lg font-black text-slate-800">{sinceMs ? pdcaFmtDate(sinceMs) : '—'}</div>
+              <div className="fi-tap-text text-slate-400">{days ? `${days}日目` : '開始日の記録なし'}</div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-xl p-3">
+              <div className="fi-tap-text text-slate-500 font-bold">検定に受かった工程</div>
+              <div className="text-lg font-black text-emerald-600">{sum.examPassedCells} <span className="text-xs text-slate-400 font-bold">/ {sum.measurableCells}</span></div>
+              <div className="fi-tap-text text-slate-400">判定できたセルのうち</div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-xl p-3">
+              <div className="fi-tap-text text-slate-500 font-bold">級が付いた工程</div>
+              <div className="text-lg font-black text-blue-600">{sum.tieredCells} <span className="text-xs text-slate-400 font-bold">/ {sum.measurableCells}</span></div>
+              <div className="fi-tap-text text-slate-400">{sum.noBaselineCells > 0 ? `ものさし無し ${sum.noBaselineCells}件は判定不可` : 'すべて判定済み'}</div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-xl p-3">
+              <div className="fi-tap-text text-slate-500 font-bold">やった記録</div>
+              <div className="text-lg font-black text-slate-800">{sum.recordCount}<span className="text-xs text-slate-400 font-bold">件</span></div>
+              <div className="fi-tap-text text-slate-400">{sum.cellCount}工程（型式×テンプレ別）</div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-xl p-3">
+              <div className="fi-tap-text text-slate-500 font-bold">ものさしとの差 合計</div>
+              <div className="text-lg font-black text-rose-600">{formatTime(sum.gapTotalSec)}</div>
+              <div className="fi-tap-text text-slate-400">（自分の中央値−ものさし）×回数</div>
+            </div>
+          </div>
+
+          {/* 数字の出どころ。⚠ここを消さないこと(式の無い数字は謎の数字になる) */}
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 fi-tap-text text-slate-600 leading-relaxed">
+            <b>エースのものさし</b>＝①その工程に<b>較正済みの目標時間</b>（目標時間最適化で決めた値）があればそれ。②無ければ<b>本人以外・教育中でない実績のP25</b>（{TRAINEE_BASELINE_MIN_N}件以上ある時。補間なしの下側順位）。③それも無ければ同じデータの<b>中央値</b>。④どれも無い時だけ<b>テンプレの既定値（未較正＝誰も検証していない仮置き）</b>。<br />
+            <b>比率</b>＝自分の中央値 ÷ ものさし。 <b>差(合計)</b>＝(自分の中央値 − ものさし) × 回数。
+            <b>級</b>＝ものさし×{cfg.tiers.join('／×')} を <b>{cfg.examStreak}回連続</b>で1つ昇級、最後に<b>ものさし×{cfg.examRatio}を{cfg.examStreak}回連続</b>で検定合格。<b>外すと連続はリセット、級は下げません。</b><br />
+            <span className="text-amber-700">【仮定】が付いた行は、会社が決めた目標ではありません（<b>先輩の実測から作った参考値</b>か、<b>テンプレの未較正な仮置き</b>）。卒業の判断に使う前に、その工程の目標時間を較正してください。</span>
+            <span className="text-slate-400">0秒の記録は数えていません。級は保存しておらず、この画面を開くたびに履歴から計算し直しています。
+            <b>いま作業中のロットの記録は、そのロットが完了してから数えます</b>（途中の時間を混ぜると速さが嘘になるため。作業画面の「あと◯回」も同じです）。</span>
+          </div>
+
+          {/* ③ セル表 */}
+          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+            <div className="px-4 py-2 border-b bg-slate-50 text-xs font-bold text-slate-600 flex items-center justify-between flex-wrap gap-1">
+              <span>工程ごとの状況（型式 × テンプレ × 工程）</span>
+              <span className="text-slate-400 font-normal">行を押すと、その工程の全記録が開きます</span>
+            </div>
+            {rows.length === 0 ? (
+              <div className="py-10 text-center text-slate-400 text-sm">
+                {mode === 'only' ? 'この人の🎓が付いた記録はまだありません（🎓を入にした後の作業から記録されます）' : 'この人の完了記録がまだありません'}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-100 text-slate-600">
+                    <tr>
+                      <th className="px-2 py-2 text-left font-bold">型式 / テンプレ / 工程</th>
+                      <th className="px-2 py-2 text-right font-bold">回数</th>
+                      <th className="px-2 py-2 text-right font-bold">自分の中央値</th>
+                      <th className="px-2 py-2 text-right font-bold">直近5回</th>
+                      <th className="px-2 py-2 text-right font-bold">ものさし</th>
+                      <th className="px-2 py-2 text-center font-bold">出どころ</th>
+                      <th className="px-2 py-2 text-right font-bold">比率</th>
+                      <th className="px-2 py-2 text-right font-bold">差(合計)</th>
+                      <th className="px-2 py-2 text-left font-bold">級・検定</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(r => {
+                      const on = r.key === openKey;
+                      const rc = r.ratio == null ? 'text-slate-400' : r.ratio <= 1.1 ? 'text-emerald-600' : r.ratio <= 1.5 ? 'text-amber-600' : 'text-rose-600';
+                      return (
+                        <tr key={r.key} onClick={() => setOpenKey(on ? '' : r.key)} className={`border-b cursor-pointer ${on ? 'bg-amber-50' : 'hover:bg-slate-50'}`}>
+                          <td className="px-2 py-1.5">
+                            <div className="font-bold text-slate-700">{r.stepTitle || '(工程名なし)'}</div>
+                            <div className="fi-tap-text text-slate-400">{r.model || '(型式なし)'}{r.templateName ? ` 〔${r.templateName}〕` : r.templateId ? ' 〔テンプレ不明〕' : ''}{r.category ? ` / ${r.category}` : ''}</div>
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono">{r.n}</td>
+                          <td className="px-2 py-1.5 text-right font-mono font-bold">{formatTime(r.median)}</td>
+                          <td className="px-2 py-1.5 text-right font-mono text-slate-500">{r.recentMedian > 0 ? formatTime(r.recentMedian) : '—'}</td>
+                          <td className="px-2 py-1.5 text-right font-mono">{r.baseline > 0 ? formatTime(r.baseline) : '—'}</td>
+                          <td className="px-2 py-1.5 text-center"><GrowthBaselineBadge source={r.baselineSource} n={r.baselineN} /></td>
+                          <td className={`px-2 py-1.5 text-right font-mono font-bold ${rc}`}>{r.ratio == null ? '—' : `×${r.ratio.toFixed(2)}`}</td>
+                          <td className="px-2 py-1.5 text-right font-mono text-rose-600">{r.gapTotalSec > 0 ? formatTime(r.gapTotalSec) : '—'}</td>
+                          <td className="px-2 py-1.5"><GrowthTierBadge progress={r.progress} /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* ④⑤ 選んだ工程の中身: 月別推移 + 個別値 + 1回ごとの合否 */}
+          {openRow && (
+            <div className="bg-white border-2 border-amber-300 rounded-xl p-4 space-y-4">
+              <div className="flex items-start justify-between gap-2 flex-wrap">
+                <div>
+                  <div className="font-black text-slate-800">{openRow.stepTitle}</div>
+                  <div className="fi-tap-text text-slate-500">{openRow.model}{openRow.templateName ? ` 〔${openRow.templateName}〕` : ''} / 記録 {openRow.n}件 / ものさし {openRow.baseline > 0 ? formatTime(openRow.baseline) : '作れません'}
+                    <span className="text-slate-400">{openRow.baselineSource ? `（${BASELINE_SOURCE_LABEL[openRow.baselineSource]}${openRow.baselineN ? ` n=${openRow.baselineN}件` : ''}）` : '（較正済み目標も、先輩の実績も無い工程です）'}</span>
+                  </div>
+                </div>
+                <button onClick={() => setOpenKey('')} className="text-xs font-bold text-slate-400 hover:text-slate-600">閉じる ✕</button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div>
+                  <div className="text-xs font-bold text-slate-600 mb-1">📈 月別の中央値（この人の{mode === 'only' ? '🎓' : ''}記録だけ）</div>
+                  <PdcaMiniTrend lots={lots} model={openRow.model} stepKey={openRow.stepKey} templateId={openRow.templateId}
+                    kpi="time" customTargetTimes={ctt} modelGroups={groups} actionDate={sinceMs} months={8}
+                    traineeMode={mode === 'only' ? 'only' : 'all'} workerName={selected.name}
+                    caption={`${selected.name}さんの記録のみ・棒＝その月の中央値／ものさし ${openRow.baseline > 0 ? formatTime(openRow.baseline) : '—'}${sinceMs ? `・緑＝🎓開始(${pdcaFmtDate(sinceMs)})以降` : ''}`} />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-600 mb-1">🎯 1台ごとの実測（点）とものさし（点線）</div>
+                  <StripPlot values={openRow.records.map(x => x.duration)} target={openRow.baseline} targetLabel="ものさし" />
+                </div>
+              </div>
+
+              {openRow.progress.ready && (
+                <div>
+                  <div className="text-xs font-bold text-slate-600 mb-1">🧾 1回ごとの合否（古い順）— 級の判定はこの並びから毎回計算しています</div>
+                  <div className="flex flex-wrap gap-1">
+                    {openRow.progress.history.map((h, i) => (
+                      <span key={i} title={`${h.endTime ? pdcaFmtDateTime(h.endTime) : '日時不明'}／${formatTime(h.duration)}（ものさし×${h.ratio}）／その時の目標 ${formatTime(h.goal)}（×${h.goalRatio}）`}
+                        className={`px-1.5 py-0.5 rounded fi-tap-text font-mono font-bold border ${h.pass ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-600 border-rose-200'}`}>
+                        {h.pass ? '○' : '×'}{formatTime(h.duration)}{h.promoted ? ' ⬆' : ''}{h.examPassed ? ' 🏅' : ''}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="fi-tap-text text-slate-400 mt-1">○＝その時の級の目標以内 ／ ×＝外した（連続はリセット・級は下げません） ／ ⬆＝昇級 ／ 🏅＝検定合格</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ⑥ 卒業 (管理者) */}
+          {isAdmin && selected.trainee === true && (
+            <div className="bg-white border border-emerald-200 rounded-xl p-4">
+              <div className="font-bold text-slate-800 mb-1">🎓 卒業させる</div>
+              <div className="fi-tap-text text-slate-600 leading-relaxed mb-2">
+                いまの状況: 判定できた工程 <b>{sum.measurableCells}</b> のうち <b className="text-emerald-600">{sum.examPassedCells}</b> が検定合格、
+                級が付いたのは <b className="text-blue-600">{sum.tieredCells}</b>。
+                {sum.noBaselineCells > 0 && <>（ものさしが作れず判定できない工程が <b>{sum.noBaselineCells}</b> あります）</>}<br />
+                卒業させると、<b>これから記録する時間はみんなと同じ「ものさし」に入ります</b>。今までの🎓が付いた記録はそのまま残るので、過去の集計は動きません。
+                {sum.examPassedCells < sum.measurableCells && <span className="text-amber-700"><br />⚠ まだ検定に受かっていない工程があります。卒業させるかは人の判断です（この画面は止めません）。</span>}
+              </div>
+              <button onClick={() => toggleWorkerTrainee(selected, { saveData, byName: currentUserName, onGraduated: (ww) => setSignoffFor(ww) })}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm">🏅 {selected.name} さんを卒業させる</button>
+              {signoffFor && <SignoffModal worker={signoffFor.name} workers={workers} lots={lots} by={currentUserName} onSave={(doc) => saveData('education_events', doc.id, doc)} onClose={() => setSignoffFor(null)} />}
+            </div>
+          )}
+          {selected.trainee !== true && selected.graduatedAt && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800">
+              🏅 <b>{pdcaFmtDate(selected.graduatedAt)}</b> に卒業しています{selected.graduatedBy ? `（${selected.graduatedBy}）` : ''}。
+              上の表は<b>教育中だった頃の記録</b>です（卒業後の記録には🎓が付かないため、「見る記録」を「この人の記録すべて」にすると今の実力も混ざります）。
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
 const StripPlot = ({ values = [], target = 0 }) => {
   const ds = (values || []).filter(v => v > 0);
   const st = statsOf(ds);
@@ -20524,6 +20914,8 @@ const ANALYSIS_GROUPS = [
   ] },
   { key: 'people', label: '人・配分', tabs: [
     { k: 'worker-eval', l: '作業者評価', color: 'text-amber-600', admin: true },
+    // 🎓 E32 教育中の人は作業者評価から外してある。その人たちの状況はここでだけ見える(製品と同じ・admin にしない)。
+    { k: 'growth', l: '🎓 教育・伸び（新人の級・検定）', color: 'text-amber-600' },
     { k: 'direct-indirect', l: '直間分析', color: 'text-teal-600' },
   ] },
   { key: 'record', label: '記録・出力', tabs: [
@@ -21300,7 +21692,7 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                 本番の写し・1366×768 の実測で 帯2 は 中身43%/50px(左に 552px・右に 732px の空き)だった。
                 ⚠ ml-auto は付けない(UG1: 右端へ飛ばすと真ん中が空く)。絞り込みのすぐ右へ **詰めて** 置く。
                 ⚠ ボタンの中身・押した時の行き先・出す条件(!['monthly',…].includes(activeMode))は1文字も変えていない。 */}
-              {!['monthly', 'dashboard', 'export', 'kpi', 'audit', 'achievement', 'rotary', 'pdca', 'process-analysis', 'anomaly', 'standardize'].includes(activeMode) && (
+              {!['monthly', 'dashboard', 'export', 'kpi', 'audit', 'achievement', 'rotary', 'pdca', 'process-analysis', 'anomaly', 'standardize', 'growth'].includes(activeMode) && (
               <div className="flex gap-1 border rounded-lg overflow-hidden">
                 {/* Excel エクスポート: 現在のタブのデータを出力する。タブ別に列・データを切替 */}
                 <button onClick={async ()=>{
@@ -22831,6 +23223,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
            {activeMode === 'monthly' && <MonthlyReportView lots={lots} workers={workers} settings={settings} customTargetTimes={settings.customTargetTimes || {}} targetTimeHistory={settings.targetTimeHistory || []} improvements={improvements} currentUserName={currentUserName} templates={templates} indirectWork={indirectWork} onSaveSettings={saveSettings} minorReports={minorReports} />}
            {activeMode === 'export' && <DataExportCenter lots={lots} workers={workers} indirectWork={indirectWork} settings={settings} currentUserName={currentUserName} saveSettings={saveSettings} minorReports={minorReports} />}
            {activeMode === 'dashboard' && <ManagerDashboard lots={lots} settings={settings} minorReports={minorReports} />}
+           {/* 🎓 E32 教育・伸び: 新人の級・検定。判定は保存せず履歴から毎回導出する (src/domain/traineeProgress.js) */}
+           {activeMode === 'growth' && <GrowthView lots={lots} workers={workers} settings={settings} saveSettings={saveSettings} saveData={saveData} templates={templates} currentUserName={currentUserName} />}
            {activeMode === 'kpi' && <KpiDetailView lots={lots} settings={settings} saveSettings={saveSettings} currentUserName={currentUserName} />}
            {activeMode === 'achievement' && <AchievementRateView lots={lots} customTargetTimes={settings.customTargetTimes || {}} settings={settings} templates={templates} />}
            {activeMode === 'process-analysis' && <ProcessAnalysisView lots={lots} settings={settings} workers={workers} templates={templates} customTargetTimes={settings.customTargetTimes || {}} modelGroups={modelGroupsOf(settings)} observationPlans={observationPlans} improvements={improvements} saveData={saveData} deleteData={deleteData} currentUserName={currentUserName} onGoToPdca={() => setActiveMode('pdca')} />}
@@ -22910,10 +23304,12 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                      let actualDuration = 0;
                      
                      // 実績時間の算出 (step.id ベースの新キー優先 + 数値index 旧キー fallback)
+                     let isTraineeRow = false;
                      if (lot.tasks) {
                          const task = (step.id && lot.tasks[`${step.id}-${unitIdx}`]) || lot.tasks[`${idx}-${unitIdx}`];
                          if (task && task.status === 'completed') {
                              actualDuration = task.duration;
+                             isTraineeRow = task.trainee === true;
                          }
                      } else if (lot.stepTimes && lot.stepTimes[step.id]) {
                          actualDuration = Math.floor((lot.stepTimes[step.id] / 1000) / (lot.quantity || 1));
@@ -22933,7 +23329,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                          step.targetTime,
                          actualDuration,
                          achievementRate + '%',
-                         actualDuration > step.targetTime ? '目標超過' : ''
+                         // 🎓 P155 実績一覧なので教育中の行も必ず出す。達成率を鵜呑みにされないよう備考で明示する(製品と同じ)。
+                         [isTraineeRow ? '🎓教育中' : '', actualDuration > step.targetTime ? '目標超過' : ''].filter(Boolean).join(' / ')
                      ]);
                  });
              } else {
@@ -22997,10 +23394,11 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
             if (lot.steps && lot.steps.length > 0) {
                 lot.steps.forEach((step, idx) => {
                     let actualDuration = 0;
+                    let isTraineeRow = false;
                     if (lot.tasks) {
                         // step.id ベースの新キー優先 + 数値index 旧キー fallback
                         const task = (step.id && lot.tasks[`${step.id}-${unitIdx}`]) || lot.tasks[`${idx}-${unitIdx}`];
-                        if (task && task.status === 'completed') actualDuration = task.duration;
+                        if (task && task.status === 'completed') { actualDuration = task.duration; isTraineeRow = task.trainee === true; }
                     } else if (lot.stepTimes && lot.stepTimes[step.id]) {
                         actualDuration = Math.floor((lot.stepTimes[step.id] / 1000) / (lot.quantity || 1));
                     }
@@ -23010,7 +23408,8 @@ const AnalysisView = ({ lots, logs, workers, saveData, deleteData = null, settin
                         workers.find(w => w.id === lot.workerId)?.name || '未割当',
                         lot.entryAt ? formatDateSafe(lot.entryAt) : '-', workStartTimeStr, formatDateSafe(lot.updatedAt),
                         step.title, step.targetTime, actualDuration, achievementRate + '%',
-                        actualDuration > step.targetTime ? '目標超過' : ''
+                        // 🎓 P155 備考に教育中を明示(製品と同じ)
+                        [isTraineeRow ? '🎓教育中' : '', actualDuration > step.targetTime ? '目標超過' : ''].filter(Boolean).join(' / ')
                     ]);
                     if (actualDuration > step.targetTime) {
                       row.getCell(16).font = { color: { argb: 'FFEF4444' }, bold: true };
@@ -30525,7 +30924,7 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
                   <ClipboardList className="w-3.5 h-3.5 shrink-0" />
                   <span className="truncate">{templates?.find(t => t.id === lot.templateId)?.name || '(テンプレ不明)'}</span>
                 </div>
-                <div className="text-xs text-slate-500 flex items-center gap-1"><User className="w-3 h-3" /> {workers.find(w => w.id === lot.workerId)?.name || '未割当'}</div>
+                <div className="text-xs text-slate-500 flex items-center gap-1"><User className="w-3 h-3" /> {workers.find(w => w.id === lot.workerId)?.name || '未割当'}{lotHasTraineeWork(lot) && <span className="text-amber-600 font-bold" title="教育中として記録された作業が含まれます（標準時間などの「ものさし」からは外しています）">🎓</span>}</div>
                 <div className="text-xs font-mono text-slate-600 flex items-center gap-1">
                   <Clock className="w-3 h-3" /> {formatTime(lot.tasks ? Object.values(lot.tasks).reduce((s, t) => s + (t.status === 'completed' ? (t.duration || 0) : 0), 0) : Math.floor((lot.totalWorkTime || 0) / 1000))}
                 </div>
@@ -30572,7 +30971,7 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
                     </td>
                     <td className="p-3"><span className="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5" title={templates?.find(t => t.id === lot.templateId)?.name || ''} data-history-table-template><ClipboardList className="w-3 h-3 shrink-0" />{templates?.find(t => t.id === lot.templateId)?.name || '(不明)'}</span></td>
                     <td className="p-3 text-center"><span className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">{lot.quantity}台</span></td>
-                    <td className="p-3 text-xs text-slate-600">{workers.find(w => w.id === lot.workerId)?.name || '未割当'}</td>
+                    <td className="p-3 text-xs text-slate-600">{workers.find(w => w.id === lot.workerId)?.name || '未割当'}{lotHasTraineeWork(lot) && <span className="text-amber-600 font-bold ml-1" title="教育中として記録された作業が含まれます（標準時間などの「ものさし」からは外しています）">🎓</span>}</td>
                     <td className="p-3 font-mono text-sm">{formatTime(totalActual)}</td>
                     <td className="p-3 text-right">
                       <div className="flex justify-end gap-1.5">
