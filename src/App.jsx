@@ -29,6 +29,14 @@ import {
 } from 'lucide-react';
 // 🧾 品目×テンプレ単位の抜取／スキップ(2026-09-06 清水さん「部品検査にもこの機能が要る」)。製品検査と同じ純関数・同じ画面。
 import TemplateSkipPanel from './TemplateSkipPanel.jsx';
+import ProgressImportExtras from './ProgressImportExtras.jsx';
+import PendingImportPanel from './PendingImportPanel.jsx';
+import ProgressSheetMapPanel from './ProgressSheetMapPanel.jsx';
+import MapViewLanes from './mapviews/MapViewLanes.jsx';
+import MapViewTimeline from './mapviews/MapViewTimeline.jsx';
+import { fmtWorkSec } from './domain/incomingWork.js';
+import { auditProgressRows } from './domain/progressSheetAudit.js';
+import { orderNosOfRows, orderNoChunks, orderNoLotsSpec, mergeLotsForImport, dropAlreadyExisting } from './domain/importExistingCheck.js';
 import { judgeTemplateSkip, buildTemplateSkippedTasks, isTemplateSkippedLot } from './domain/templateSkip.js';
 // 🏷 品目名簿 (品目コード → 品名)。2026-09-21 清水さん「品目テキストという枠が必要なぐらい」。
 //   直す前は読む所が3箇所あるのに書く所が0で、名簿は「在るのに永久に空」だった。
@@ -41,7 +49,7 @@ import {
 import { initializeApp } from "firebase/app";
 import {
   getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot,
-  serverTimestamp, query, orderBy, limit, where, getDocs, getDoc, updateDoc,
+  serverTimestamp, query, orderBy, limit, where, getDocs, getDocsFromServer, getDoc, updateDoc,
   deleteField, runTransaction,
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   connectFirestoreEmulator
@@ -151,10 +159,15 @@ import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStar
 //   🚨 登録が空なら 月〜金 = 今までと1ミリも同じ挙動。
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
 //   この部品検査アプリは **読むだけ**(登録する画面は製品検査/最終検査にある)。
-import { isWorkdayYmd } from './domain/factoryCalendar.js';
 import { dueMsOfLot, bucketOfDue } from './domain/dueDefense.js';
 import LotDuplicatesPanel from './LotDuplicatesPanel.jsx';
+import { isWorkdayYmd, makeIsWorkday } from './domain/factoryCalendar.js';
+import { planProgressImport, normalizeSheetMap, DEFAULT_SHEET_MAP, isShippedGrayFills, colToIndex, PS_REASON, PENDING_MAX_ROWS, pendingRowsFromPlan, mergePendingRows, normalizeSheetProfiles, guessProfile, profilesToSettings, sheetMapProblems } from './domain/progressSheet.js';
+import { DEFAULT_IMPORT_OPTIONS, planRowLots } from './domain/importPlan.js';
+import { dueConflict } from './domain/dueConflict.js';
 import { LOT_PRIORITY_CHOICES, normalizeLotPriority, priorityLabelOf, priorityFromImportText, priorityBadgeOf, priorityFilterStyleOf } from './domain/lotPriority.js';
+import { workerWorkedSecondsInRange, dayRangeOf } from './domain/workerDailyActual.js';
+import { remainingByTasks, lotRemainingSec } from './domain/lotRemaining.js';
 // 🛌 作業者の休止/復帰(2026-08-31 清水さんの要望)。消すのではなく一旦しまう。復帰したら元どおり。
 //   🚨 使ってよいのは「これから割り当てる先」を絞る所だけ。
 //     過去の記録の名前を引く所(WorkerBadge・分析・成績表)には絶対に使わない。
@@ -163,7 +176,7 @@ import {
   pausePatch, resumePatch, remainingWorkOf, pauseConfirmText, resumeConfirmText,
   pausedSummaryLabel, pausedSinceLabel,
 } from './domain/workerPause.js';
-const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
+const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDocsFromServer, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
 const DATA = (db) => providerFor(db, FS_API);
 import {
   getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject
@@ -412,6 +425,140 @@ const readXlsxGridWithJSZip_pl = async (buf, preferredSheetName) => {
     grid[rNum] = cells;
   }
   return grid;
+};
+
+
+// 📊 進捗管理表の「2人目の読み手」(2026-09-10 清水さん報告: 本番で
+//   「取込み中にエラーが発生しました: Cannot read properties of undefined (reading 'sheets')」)。
+//   ExcelJS はブラウザで特定の xlsx(外部リンク [1]会議用 を持つ表・10MB)を読めずに落ちる。
+//   入荷登録Excel には 2026-06-30 に JSZip の読み手を付けてあったが、進捗管理表の道には無かった。
+//   ⚠ 私の写しの試験は openpyxl で作り直した小さい見本だったので素通りした(実物で試していなかった)。
+//
+//   ExcelJS の代わりに JSZip で xlsx を直に開き、取込が使う **同じ顔**(worksheets / getWorksheet /
+//   rowCount / getRow(r).getCell(i).value / .fill)を返す。取込の本体は1行も変えない。
+//   ・値: 共有文字列 / inlineStr / 数式の結果(v) / 数値(シリアル値のまま。読み方は純関数が持つ) / #VALUE! などの文字
+//   ・塗り(灰色=出荷済): styles.xml の cellXfs → fills → patternFill の fgColor(theme / tint / rgb)
+//   ⚠ 日付型の数値は Date に直さない(ExcelJS も数式の結果は数のまま返す事があり、純関数 cellToYMD がシリアル値を読む)。
+const readProgressBookWithJSZip_pi = async (buf) => {
+  const JSZip = await loadJSZip();
+  const zip = await JSZip.loadAsync(buf);
+  const readXml = async (p) => { const f = zip.file(p); return f ? await f.async('string') : null; };
+  const parser = new DOMParser();
+  const RELNS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+  // 共有文字列
+  const shared = [];
+  const sstXml = await readXml('xl/sharedStrings.xml');
+  if (sstXml) {
+    const sdoc = parser.parseFromString(sstXml, 'application/xml');
+    sdoc.querySelectorAll('si').forEach(si => { let t = ''; si.querySelectorAll('t').forEach(x => { t += x.textContent || ''; }); shared.push(t); });
+  }
+  // 塗り: cellXfs[s].fillId → fills[fillId]
+  const fills = [];
+  const xfFill = [];
+  const stXml = await readXml('xl/styles.xml');
+  if (stXml) {
+    const sd = parser.parseFromString(stXml, 'application/xml');
+    const fillEls = sd.getElementsByTagName('fills')[0];
+    if (fillEls) {
+      [...fillEls.getElementsByTagName('fill')].forEach(f => {
+        const pf = f.getElementsByTagName('patternFill')[0];
+        const pt = pf ? (pf.getAttribute('patternType') || '') : '';
+        const fg = pf ? pf.getElementsByTagName('fgColor')[0] : null;
+        if (!pf || !pt || pt === 'none' || !fg) { fills.push(null); return; }
+        const theme = fg.getAttribute('theme'); const tint = fg.getAttribute('tint'); const rgb = fg.getAttribute('rgb');
+        fills.push({ type: 'pattern', pattern: pt, fgColor: {
+          ...(theme != null ? { theme: Number(theme) } : {}),
+          ...(tint != null ? { tint: Number(tint) } : {}),
+          ...(rgb ? { argb: rgb } : {}),
+        } });
+      });
+    }
+    const xfs = sd.getElementsByTagName('cellXfs')[0];
+    if (xfs) [...xfs.getElementsByTagName('xf')].forEach(x => { xfFill.push(Number(x.getAttribute('fillId') || 0)); });
+  }
+  // シート名 → 中身の場所
+  const wbXml = await readXml('xl/workbook.xml');
+  if (!wbXml) throw new Error('workbook.xml が見つかりません');
+  const wdoc = parser.parseFromString(wbXml, 'application/xml');
+  const relMap = {};
+  const relsXml = await readXml('xl/_rels/workbook.xml.rels');
+  if (relsXml) parser.parseFromString(relsXml, 'application/xml').querySelectorAll('Relationship').forEach(r => { relMap[r.getAttribute('Id')] = r.getAttribute('Target'); });
+  const sheetEls = [...wdoc.getElementsByTagName('sheet')];
+  const ridOf = (el) => el.getAttributeNS(RELNS, 'id') || el.getAttribute('r:id') || el.getAttribute('id');
+  const pathOf = (el) => {
+    let tgt = relMap[ridOf(el)] || '';
+    tgt = tgt.replace(/^\.\//, '');
+    return tgt.startsWith('/') ? tgt.slice(1) : (tgt.startsWith('xl/') ? tgt : 'xl/' + tgt);
+  };
+  const worksheets = sheetEls.map(el => ({ name: el.getAttribute('name'), _path: pathOf(el) }));
+
+  const EMPTY_CELL = { value: null, fill: null };
+  const loadSheet = async (ws) => {
+    const xml = await readXml(ws._path);
+    if (!xml) throw new Error(`シート「${ws.name}」の中身(${ws._path})が見つかりません`);
+    const doc = parser.parseFromString(xml, 'application/xml');
+    const rows = new Map();
+    let rowCount = 0;
+    const rowEls = doc.getElementsByTagName('row');
+    for (let ri = 0; ri < rowEls.length; ri++) {
+      const rowEl = rowEls[ri];
+      const rNum = parseInt(rowEl.getAttribute('r'), 10) || (ri + 1);
+      if (rNum > rowCount) rowCount = rNum;
+      const cells = new Map();
+      const cEls = rowEl.getElementsByTagName('c');
+      for (let ci = 0; ci < cEls.length; ci++) {
+        const cEl = cEls[ci];
+        const pos = xlsxRefToRC_pl(cEl.getAttribute('r'));
+        const colNum = pos ? pos.col : (ci + 1);
+        const type = cEl.getAttribute('t') || '';
+        const vEl = cEl.getElementsByTagName('v')[0];
+        const isEl = cEl.getElementsByTagName('is')[0];
+        let value = null;
+        if (type === 's') { const idx = parseInt(vEl ? vEl.textContent : '', 10); value = shared[idx] != null ? shared[idx] : ''; }
+        else if (type === 'inlineStr' && isEl) { let t = ''; const ts = isEl.getElementsByTagName('t'); for (let k = 0; k < ts.length; k++) t += ts[k].textContent || ''; value = t; }
+        else if (type === 'str' || type === 'e') { value = vEl ? (vEl.textContent || '') : ''; }
+        else if (type === 'b') { value = vEl ? vEl.textContent === '1' : null; }
+        else { const txt = vEl ? vEl.textContent : ''; value = txt === '' || txt == null ? null : (Number.isFinite(Number(txt)) ? Number(txt) : txt); }
+        const sIdx = cEl.getAttribute('s');
+        const fill = sIdx != null && xfFill[Number(sIdx)] != null ? (fills[xfFill[Number(sIdx)]] || null) : null;
+        cells.set(colNum, { value, fill });
+      }
+      rows.set(rNum, cells);
+    }
+    return {
+      name: ws.name,
+      rowCount,
+      getRow: (r) => { const cells = rows.get(r); return { getCell: (i) => (cells && cells.get(i)) || EMPTY_CELL }; },
+    };
+  };
+  return {
+    worksheets,
+    getWorksheet: async (name) => { const ws = worksheets.find(w => w.name === name); return ws ? loadSheet(ws) : null; },
+  };
+};
+
+// 📊 進捗管理表を開く: ExcelJS → 落ちたら JSZip の読み手(上の readProgressBookWithJSZip_pi)。
+//   呼ぶ側は同じ顔(worksheets / getWorksheet / reader)で使う。
+//   ⚠ getWorksheet は **await** で呼ぶ(JSZip の方はシートを開く時に初めて中身を読む)。
+//   ⚠ 2通りとも落ちた時だけ投げる(どちらのせいで落ちたかを文に残す)。
+const openProgressBook_pi = async (buf) => {
+  let firstError = null;
+  try {
+    const ExcelJS = await loadExcelJS();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf);
+    return { reader: 'exceljs', worksheets: wb.worksheets || [], getWorksheet: async (name) => wb.getWorksheet(name) || null };
+  } catch (e1) {
+    firstError = String((e1 && e1.message) || e1);
+    console.warn('ExcelJS で読めなかったので JSZip で読み直します:', firstError);
+  }
+  try {
+    const book = await readProgressBookWithJSZip_pi(buf);
+    return { ...book, reader: 'jszip', firstError };
+  } catch (e2) {
+    throw new Error(`Excel を2通りの読み手で試しましたが読めませんでした。ExcelJS: ${firstError} ／ JSZip: ${(e2 && e2.message) || e2}`);
+  }
 };
 // フォールバックのグリッドを、既存コードが使う ExcelJS 風の最小API(getRow(n).getCell(i).value / eachRow)に包む。
 const gridToWsShim_pl = (grid) => ({
@@ -2414,9 +2561,12 @@ const LotActionSheet = ({ lot, templateName, onEdit, onDelete, onClose }) => {
 };
 
 /**
- * 🚩 優先度の小さな札(緊急=赤 / 特注=橙)。通常は **何も描かない**(priorityBadgeOf が null)。
- *   旧 'high'(急ぎ)は「緊急」として出る(読み替えは lotPriority.js の1か所)。製品と同じ。
+ * 🚩 優先度の小さな札(緊急=赤 / 特注=橙)。通常は何も描かない(製品 PriorityBadge と同じ)。旧 'high'(急ぎ)は「緊急」として出る。
  */
+// 🗑 P095 表では終わっている物を消す既定の安全弁: 検査リストの未完了ロットの3割を超えたら既定を OFF(製品と同じ数)
+const STALE_DELETE_MAX_RATIO = 0.3;
+
+
 const PriorityBadge = ({ priority, className = '' }) => {
   const b = priorityBadgeOf(priority);
   if (!b) return null;
@@ -2785,6 +2935,10 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
       {actionSheet}
 
       <div className="px-1.5 py-1 pr-6">{/* pr-6 で右端の細い帯(幅24px)と重ならないように。48px は中身を潰していた(2026-09-10) */}
+        {/* ⚠ P094 納期の矛盾(入荷=entryAt が納期より後)。部品には到着予定が無いので arrival は null(製品 11050 と同じ札) */}
+        {(() => { let c = null; try { c = dueConflict({ lot, arrival: null, todayStartMs: todayStartMsNow() }); } catch { c = null; } return c && c.conflict ? (
+          <div className="mb-0.5"><span data-due-conflict="1" className="text-xs font-black bg-rose-50 border border-rose-300 text-rose-700 rounded px-1.5 py-0.5" title={`入荷が納期より後になっています。入荷が決まったら納期も更新してください。納期:${c.dueMs ? new Date(c.dueMs).toLocaleDateString('ja-JP') : '—'} / 入荷:${c.arrivalMs ? new Date(c.arrivalMs).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}`}>⚠ 納期の更新が必要</span></div>
+        ) : null; })()}
         {/* 停止理由バッジ (一時停止中で明示的に理由が設定されている時のみ。経過時間は勤務時間内のみカウント) */}
         {lot.pauseReason && lot.pauseReason.category && (() => {
           const colorMap = getPauseReasonColor(lot.pauseReason.category);
@@ -2800,6 +2954,7 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
         })()}
         {(display.orderNo || display.model || display.quantity) && (
           <div className="flex items-baseline gap-1.5 flex-wrap leading-none">
+            <PriorityBadge priority={lot.priority} />
             {display.orderNo && <span className="font-black text-base text-slate-800">{lot.orderNo}</span>}
             <PriorityBadge priority={lot.priority} />
             {display.model && <span className="font-bold text-base text-slate-700">{lot.model}</span>}
@@ -2904,9 +3059,11 @@ const isUnassignedLot = (l) => {
 //   完了ロットは completedAt(無ければ updatedAt)が今日のものだけを実績に数える。
 //   全期間の完了を積むと、予定が空の作業者でも昔の完了分が実績に出続けて
 //   「予定なしなのに実績だけ数字」になる(=ユーザー指摘)。当日分に限定して整合させる。
-const computeWorkerTimes = (lots, workerId) => {
-  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-  const todayStartMs = todayStart.getTime();
+const targetSecOfStep = (lot) => (step) => getEffectiveTargetTime(step, lot?.model, null, null);
+
+const computeWorkerTimes = (lots, workerId, workerName = '') => {
+  const nowMs = Date.now();
+  const { fromMs: todayStartMs, toMs: todayEndMs } = dayRangeOf(nowMs);
   const completedTodayMs = (l) => {
     const ms = toMsAny(l.completedAt) || toMsAny(l.updatedAt) || 0;
     return ms >= todayStartMs;
@@ -2922,29 +3079,49 @@ const computeWorkerTimes = (lots, workerId) => {
 
   plannedLots.forEach(lot => {
     const elapsedMs = getLotElapsedMs(lot);
-    const isInProgress = elapsedMs > 0 || lot.status === 'processing' || lot.status === 'paused';
+    // ⚠「進行中」は経過時間だけで決めない。1台でも終わっていれば進行中。
+    //   まとめて開始などで totalWorkTime に積まれない作りだと、経過0のまま作業が進む。
+    const prog = remainingByTasks(lot, targetSecOfStep(lot), { lotOnceKeys: lotOnceKeysOf });
+    const isInProgress = elapsedMs > 0 || prog.doneTasks > 0
+      || lot.status === 'processing' || lot.status === 'paused';
     if (isInProgress) {
       inProgressCount += 1;
       if (lot.status === 'processing') processingCount += 1;
-      const estimatedSec = calculateLotEstimatedTime(lot);
-      const elapsedSec = elapsedMs / 1000;
-      inProgressElapsedSec += elapsedSec;
-      inProgressRemainingSec += Math.max(0, estimatedSec - elapsedSec);
+      inProgressElapsedSec += elapsedMs / 1000;
+      // ⚠⚠ 残りは **終わっていないタスクの目標時間** から数える(経過時間から引かない)。
+      //   2026-08-11: 79%終わっているロットが「ほぼ手つかず」で計上されていた。→ src/domain/lotRemaining.js
+      inProgressRemainingSec += lotRemainingSec(
+        lot, targetSecOfStep(lot), calculateLotEstimatedTime(lot), elapsedMs / 1000,
+        { lotOnceKeys: lotOnceKeysOf },
+      ).sec;
     } else {
       notStartedSec += calculateLotEstimatedTime(lot);
     }
   });
 
-  const completedSec = completedLots.reduce((acc, lot) => acc + (lot.totalWorkTime || 0) / 1000, 0);
+  // 🟢 本日実績。完了ロットに限らず **全てのロットの tasks** を見る
+  //    (今日やった工程のロットが完了待ち・タッチアップ・別レーンに居ても、働いた時間は消えない)。
+  //    進行中の当日ぶんは runningSec / liveSec として中に入っているので、
+  //    上の inProgressElapsedSec(= totalWorkTime + 生の経過。日でも人でも切れていない)は足さない。
+  //    足すと同じ作業を二重に数える。
+  const worked = workerWorkedSecondsInRange(lots, {
+    workerId,
+    workerName,
+    fromMs: todayStartMs,
+    toMs: todayEndMs,
+    nowMs,
+    lotDoneMsOf: (l) => toMsAny(l.completedAt) || toMsAny(l.updatedAt) || 0,
+  });
 
   return {
     plannedRemainingSec: notStartedSec + inProgressRemainingSec,
-    actualDoneSec: completedSec + inProgressElapsedSec,
+    actualDoneSec: worked.totalSec,
     inProgressCount,
     processingCount,
     inProgressElapsedSec,
     notStartedCount: plannedLots.length - inProgressCount,
     completedCount: completedLots.length,
+    actualBreakdown: worked,
   };
 };
 
@@ -3752,7 +3929,7 @@ const WorkerSummaryCard = ({ worker, lots, colorTone = null }) => {
     return () => clearInterval(intv);
   }, [hasProcessing]);
 
-  const { plannedRemainingSec, actualDoneSec, inProgressCount, processingCount } = computeWorkerTimes(lots, worker.id);
+  const { plannedRemainingSec, actualDoneSec, inProgressCount, processingCount } = computeWorkerTimes(lots, worker.id, worker.name);
 
   return (
     <div className="bg-white border border-slate-200 rounded-lg p-3 shadow-sm flex flex-col gap-2">
@@ -3823,7 +4000,20 @@ const ZoneList = ({ id, title, icon: Icon, color, border, children, onDropLot, o
 // 2. Complex & Functional Components
 // ----------------------------------------------------------------------
 
+// 🗺 P056 現場マップの見せ方(製品 12243-12278 と同じ)。[保存する名前, ボタンの文字, 説明]。'classic' は従来の描画そのもの
+const MAP_VIEW_CHOICES = [
+  ['classic', '従来', '従来の現場マップ(エリアを並べた図)'],  // 既定
+  ['lanes', 'レーン', '人がレーン(作業者ごとの横一列)'],
+  ['timeline', '時間軸', '時間軸レーン盤(横軸が時刻)'],
+];
+const MAP_VIEW_COMPONENTS = { lanes: MapViewLanes, timeline: MapViewTimeline };
+// 端末に保存されている値を今の選択肢に合わせて直す(知らない値・空・壊れた値は 'classic')
+const normalizeMapView = (v) => (MAP_VIEW_CHOICES.some(([key]) => key === v) ? v : 'classic');
+
 const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, setDraggedLotId, draggedLotId, onEditLot, onDeleteLot, setExecutionLotId, settings, handleImageUpload, saveSettings, mapZones, isDashboard = false }) => {
+  // 🗺 P056 見せ方の切替。端末ごとの好み(localStorage)。'classic' なら従来の描画を1文字も変えない
+  const [mapView, setMapView] = useState(() => { try { return normalizeMapView(localStorage.getItem('map.viewStyle.v1')); } catch { return 'classic'; } });
+  const setMapViewStyle = (v) => { const next = normalizeMapView(v); setMapView(next); try { localStorage.setItem('map.viewStyle.v1', next); } catch { /* 保存できない端末は今回だけ */ } };
   const [isLayoutMode, setIsLayoutMode] = useState(false);
   // 既存設定に「未該当エリア」がなければレンダリング時に自動追加
   // (不良/残ロット待ちなどの一時置き場として現場マップにも常時表示)
@@ -3908,6 +4098,13 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
         <div className="p-3 bg-white/90 backdrop-blur border-b border-slate-200 flex justify-between items-center">
           <h2 className="font-bold text-slate-800 flex items-center gap-2"><MapIcon className="w-5 h-5 text-blue-600" /> 作業エリア</h2>
           <div className="flex items-center gap-2">
+             <div className="flex items-center rounded border border-indigo-300 bg-indigo-50 overflow-hidden shrink-0" title="現場マップの見せ方を切り替えます。表示が変わるだけで、ロットのデータは変わりません。この端末だけに効きます">
+               <span className="fi-tap-text font-black text-indigo-700 px-1.5 whitespace-nowrap">🧪見せ方</span>
+               {MAP_VIEW_CHOICES.map(([v, l, hint]) => (
+                 <button key={v} onClick={() => setMapViewStyle(v)} aria-pressed={mapView === v} title={hint || l}
+                   className={`text-xs px-2 py-1 font-bold whitespace-nowrap ${mapView === v ? 'bg-indigo-600 text-white' : 'text-indigo-700 hover:bg-indigo-100'}`}>{l}</button>
+               ))}
+             </div>
              <button onClick={() => setShowFilterBar(v => !v)} className={`text-xs flex items-center gap-1 px-2 py-1 rounded border font-bold transition-colors ${isFiltered ? 'bg-amber-100 text-amber-700 border-amber-300' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>
                <Filter className="w-3 h-3" /> 表示{isFiltered ? `(${visibleZones.length}/${localZones.length})` : ''}
              </button>
@@ -3982,6 +4179,27 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
            : { backgroundImage: settings.mapImage ? `url(${settings.mapImage})` : 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: settings.mapImage ? 'contain' : '20px 20px', backgroundRepeat: 'no-repeat', backgroundPosition: 'center' }
          }
        >
+       {!isDashboard && !EMBED_MAP && mapView !== 'classic' && MAP_VIEW_COMPONENTS[mapView] ? (() => {
+         // 🗺 P056 別の見せ方。部品には到着予定が無いので arrivalByLot は {}・ArrivalTag は渡さない
+         const V = MAP_VIEW_COMPONENTS[mapView];
+         const BoundLotCard = (p) => (
+           <LotCard workers={workers} templates={templates} mapZones={localZones} saveData={saveData}
+             setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId}
+             onOpenExecution={(l) => l && setExecutionLotId(l.id)} {...p} />
+         );
+         return (
+           <div className="flex-1 min-h-0 overflow-y-auto">
+             <V lots={lots} zones={visibleZones} workers={workers} arrivalByLot={{}} settings={settings}
+               templates={templates}
+               onOpenExecution={(l) => l && setExecutionLotId(l.id)} onMoveLot={handleMoveLot}
+               LotCard={BoundLotCard}
+               saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId}
+               estimateSecOf={(l) => calculateLotEstimatedTime(l)}
+               fmtWorkSec={fmtWorkSec}
+               pauseReasonColorOf={(r) => getPauseReasonColor(r)} />
+           </div>
+         );
+       })() : (<>
        {/* 通常ゾーン (未該当エリア以外) — グリッドで並べる or 自由配置 */}
        <div
          className={`${isFiltered && !isLayoutMode ? 'grid flex-1' : 'flex-1 relative'}`}
@@ -4118,6 +4336,7 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
            </div>
          );
        })()}
+       </>)}
        </div>{/* close mapRef container */}
     </div>
   );
@@ -13831,7 +14050,8 @@ const ArrivalPlanningView = ({ onBack, lots, workers, templates, handleMoveLot, 
       <div className="col-span-3 flex flex-col h-full border-r pr-4 min-h-0">
         <button onClick={onBack} className="mb-2 text-slate-500 hover:text-slate-800 flex items-center gap-1"><ArrowRight className="w-4 h-4 rotate-180"/> 戻る</button>
         <ZoneList id="arrival" title="入荷待ちリスト" icon={Package} color="bg-white" border="border-slate-300" onDropLot={(id) => handleMoveLot(id, 'arrival')} active={true}>
-          {lots.filter(l => l.location === 'arrival').map(lot => <LotCard key={lot.id} lot={lot} workers={workers} templates={templates} mapZones={mapZones} onOpenExecution={()=>{}} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} onEdit={onEditLot} onDelete={onDeleteLot} minimal={false}/>)}
+          {/* 🚚 P168 入荷待ちは入庫(entryAt=表の入荷の日)の早い順の棚。入庫の無いロットは最後(既定: 組立からの到着連絡は作らない) */}
+          {lots.filter(l => l.location === 'arrival').slice().sort((a, b) => (Number(a.entryAt) || Infinity) - (Number(b.entryAt) || Infinity)).map(lot => <LotCard key={lot.id} lot={lot} workers={workers} templates={templates} mapZones={mapZones} onOpenExecution={()=>{}} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} onEdit={onEditLot} onDelete={onDeleteLot} minimal={false}/>)}
         </ZoneList>
       </div>
       <div className="col-span-9 flex flex-col h-full min-h-0">
@@ -13849,7 +14069,7 @@ const ArrivalPlanningView = ({ onBack, lots, workers, templates, handleMoveLot, 
             </div>
             {/* 🛌休止中の人はこの並びから外す。ただし作業が残っている間はレーンごと残す(行方不明にしない)。 */}
             {laneWorkersOf(workers, lots).map(w => {
-              const { plannedRemainingSec: wPlannedTime, actualDoneSec: wCompletedTime, inProgressCount: wInProgress, processingCount: wProcessing } = computeWorkerTimes(lots, w.id);
+              const { plannedRemainingSec: wPlannedTime, actualDoneSec: wCompletedTime, inProgressCount: wInProgress, processingCount: wProcessing } = computeWorkerTimes(lots, w.id, w.name);
               return (
               <div key={w.id} data-drop-zone="planned" data-worker-id={w.id} className="min-w-[200px] flex-1 border border-blue-100 bg-blue-50/30 rounded-lg p-3 flex flex-col min-h-0" onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>{e.preventDefault(); const id=e.dataTransfer.getData('lotId'); if(id) handleMoveLot(id, 'planned', w.id);}}>
                 <div className="text-sm font-bold text-blue-800 mb-1 flex items-center justify-between shrink-0">
@@ -13898,7 +14118,7 @@ const PlanningExecutionView = ({ onBack, workers, lots, templates, handleMoveLot
              {laneWorkersOf(workers, lots).map(w => {
                if (filterWorkerId && filterWorkerId !== w.id) return null;
                const workerLots = lots.filter(l => l.location === 'planned' && l.workerId === w.id);
-               const { plannedRemainingSec: wPlanTime, actualDoneSec: wDoneTime, inProgressCount: wInProgress, processingCount: wProcessing } = computeWorkerTimes(lots, w.id);
+               const { plannedRemainingSec: wPlanTime, actualDoneSec: wDoneTime, inProgressCount: wInProgress, processingCount: wProcessing } = computeWorkerTimes(lots, w.id, w.name);
                return (
                  <div key={w.id} className="bg-white border border-slate-200 rounded-lg shadow-sm flex flex-col overflow-hidden shrink-0">
                    <div
@@ -14614,6 +14834,13 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
         next[idx] = { ...next[idx], daysBefore: daysBefore };
         writeTemplateEntries(selectedQs.id, next);
     };
+    // 🚚 P054 進捗管理表の取込の日数(出荷日の何日前を納期にするか・入荷は納期の何日前か)。空(null)なら取込の既定
+    const setEntryField = (idx, patch) => {
+        if (!selectedQs) return;
+        const next = [...templateEntries];
+        next[idx] = { ...next[idx], ...patch };
+        writeTemplateEntries(selectedQs.id, next);
+    };
 
     const updateEntryOverrides = (idx, newOverrides) => {
         if (!selectedQs) return;
@@ -14993,6 +15220,22 @@ const QualityStandardsPanel = ({ templates, lots, qualityStandards, modelStandar
                                             />
                                             <span className="text-xs text-emerald-700">日</span>
                                         </div>
+                                        {/* 🚚 P054 出荷日(AD列)の何日前までに検査を終えるか = 一番大事な納期(空なら既定 1日) */}
+                                        <label className="flex items-center gap-1 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5" title="進捗管理表の出荷日(AD列)の何日前を納期にするか。空なら取込の既定(1日前)">
+                                            <span className="text-xs text-rose-700 font-bold">出荷日の</span>
+                                            <input type="number" value={entry.shipDaysBefore ?? ''} placeholder="1"
+                                                onChange={e => setEntryField(entryIdx, { shipDaysBefore: e.target.value === '' ? null : parseInt(e.target.value) || 0 })}
+                                                className="w-12 border rounded p-0.5 text-xs text-center font-mono bg-white" />
+                                            <span className="text-xs text-rose-700">日前</span>
+                                        </label>
+                                        {/* 🚚 P054 入荷は納期の何日前か(表に入荷の日が無い時に使う。空なら既定 3日) */}
+                                        <label className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title="入荷の日が表に無い時、入荷は納期の何日前とするか。空なら取込の既定(3日前)">
+                                            <span className="text-xs text-amber-700 font-bold">入荷は納期の</span>
+                                            <input type="number" value={entry.entryDaysBefore ?? ''} placeholder="3"
+                                                onChange={e => setEntryField(entryIdx, { entryDaysBefore: e.target.value === '' ? null : parseInt(e.target.value) || 0 })}
+                                                className="w-12 border rounded p-0.5 text-xs text-center font-mono bg-white" />
+                                            <span className="text-xs text-amber-700">日前</span>
+                                        </label>
                                         <select
                                             value={entry.templateId || ''}
                                             onChange={e => setEntryTemplateId(entryIdx, e.target.value)}
@@ -23262,7 +23505,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
    saveData('workers', w.id, resumePatch(Date.now()));
  };
 
- const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onOpenStrictManager = null, currentUserName = '', parentTabs = null }) => {
+ const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onRegisterPending = null, onRemovePending = null, onOpenStrictManager = null, currentUserName = '', parentTabs = null }) => {
   // 🏅 P117 卒業の直後に開く「独り立ちの記録」(SignoffModal)の相手。hooks は関数の先頭
   const [signoffFor, setSignoffFor] = useState(null);
   const [newProcessOpt, setNewProcessOpt] = useState('');
@@ -23937,6 +24180,11 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
 
          {/* 🧯 重複ロット(同じ指図×品目コード×テンプレの未完了)。記録の無い方だけ消す口(P071・製品と同じ判定) */}
          <LotDuplicatesPanel lots={lots} templates={templates} deleteData={deleteData} />
+         {/* 📊 P053 進捗管理表の読み方(表ごと・シート名・開始行・列の字・Z列の意味・出荷日の日数) */}
+         <ProgressSheetMapPanel settings={settings} saveSettings={saveSettings} openBook={openProgressBook_pi} />
+
+         {/* 🗂 P057 未登録リスト(進捗管理表の取込で品質規格マスタに紐付けが無く落ちた行。無ければ何も出さない) */}
+         <PendingImportPanel settings={settings} onRegisterPending={onRegisterPending} onRemovePending={onRemovePending} />
 
          {/* 品質規格マスタ (新方式: 品目コード → 品質規格 → 公差/測定条件) */}
          <div data-qs-panel>
@@ -27055,7 +27303,7 @@ const ReportPreview = ({ lot: _originalLot, workers, onClose }) => {
 // ・週次/月次の必要時間と必要人数を可視化 → 採用判断・残業計画に活用
 // ===========================
 // 1日の作業者活動を時間軸で可視化するガントチャート
-const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
+const DailyWorkerGantt = ({ lots, workers, workSchedule, factoryCalendar = null }) => {
   const localDateStr = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const [selectedDate, setSelectedDate] = useState(() => localDateStr(new Date()));
   const [tick, setTick] = useState(0);
@@ -27295,7 +27543,10 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
       // === 実績: 各タスク(項目×台)を、記録された実開始→実終了でそのまま配置する(再構成しない) ===
       workerLots.forEach(lot => {
         const { auto, manual, noTimeCount: ntc } = buildTaskBars(lot);
-        noTimeCount += ntc;
+        // 時刻の無い記録は日付が分からないので、その日に触ったロット(その日に時刻の在る記録か、その日に完了)の分だけ数える(製品 70de730 と同じ)
+        const touchedThatDay = [...auto, ...manual].some(b => toLocalDateStr(b.start) === selectedDate)
+          || (typeof lot.completedAt === 'number' && toLocalDateStr(lot.completedAt) === selectedDate);
+        if (touchedThatDay) noTimeCount += ntc;
         const pushBar = (b, arr) => {
           if (toLocalDateStr(b.start) !== selectedDate) return;
           const startStr = new Date(b.start).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
@@ -27317,7 +27568,9 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
       });
 
       // === 予定 (未着手) — 当日/未来のみ。実バーの最後 or 現在時刻から前方に概算配置 ===
-      if (selectedDate >= todayStr) {
+      // 工場の暦が休みの日は予定の破線を置かない(実績はそのまま出す)
+      const selectedIsWorkday = makeIsWorkday(factoryCalendar)(new Date(`${selectedDate}T12:00:00`).getTime());
+      if (selectedDate >= todayStr && selectedIsWorkday) {
         const now = Date.now();
         const lastEnd = [...autoRaw, ...manualRaw].reduce((mx, b) => Math.max(mx, b.end), 0);
         let planCursor = (selectedDate === todayStr && now >= dayStartMs && now <= dayEndMs) ? Math.max(lastEnd, now) : (lastEnd > 0 ? lastEnd : dayStartMs);
@@ -27340,7 +27593,7 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
       const manualPacked = packLanes(mergeActual(manualRaw));
       return { worker, autoBlocks: autoPacked.bars, autoLaneCount: autoPacked.laneCount, manualBlocks: manualPacked.bars, manualLaneCount: manualPacked.laneCount, realLaborSec, autoLaborSec, manualLaborSec, taskCount, lotCountActual: taskCount, lotCountPlanned, noTimeCount };
     });
-  }, [workers, lots, dayStartMs, dayEndMs, tick, todayStr, selectedDate]);
+  }, [workers, lots, dayStartMs, dayEndMs, tick, todayStr, selectedDate, factoryCalendar]);
 
   const totalActuals = workerActivities.reduce((sum, w) => sum + (w.taskCount || 0), 0);
   const totalPlanned = workerActivities.reduce((sum, w) => sum + (w.lotCountPlanned || 0), 0);
@@ -27455,7 +27708,7 @@ const DailyWorkerGantt = ({ lots, workers, workSchedule }) => {
                     {taskCount}項目 / 予{lotCountPlanned}ロット
                   </div>
                   {noTimeCount > 0 && (
-                    <div className="text-xs text-amber-500 ml-6 leading-tight font-bold" title="開始時刻が記録されていないため時間軸に表示できない項目数">時刻なし{noTimeCount}</div>
+                    <div className="text-xs text-amber-500 ml-6 leading-tight font-bold" title="この日に触ったロットのうち、開始時刻が記録されていないため時間軸に置けない項目の数(作業していない時間ではありません)">時刻の記録なし {noTimeCount}項目</div>
                   )}
                 </div>
                 <div className="flex-1 flex flex-col gap-0.5">
@@ -27541,7 +27794,7 @@ const rosterAdjustedAvailable = (settings, names, fromMs, toMs, baseline, factor
   }
   return days > 0 ? { avg: sum / days, days, anyEntry } : { avg: baseline, days: 0, anyEntry: false };
 };
-const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, days = 7 }) => {
+const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, days = 7, factoryCalendar = null }) => {
   const names = useMemo(() => [...new Set((workers || []).map(w => w.name).filter(Boolean))], [workers]);
   const today0 = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }, []);
   const cols = useMemo(() => Array.from({ length: days }, (_, i) => today0 + i * 86400000), [today0, days]);
@@ -27560,7 +27813,8 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
     saveSettings && saveSettings({ workerRoster: roster, ...(dead.length ? { __deleteMapKeys: dead } : {}) });
   };
   const DOW = ['日', '月', '火', '水', '木', '金', '土'];
-  const cellOf = (s) => s === 'off' ? { t: '休', c: 'bg-slate-200 text-slate-500' } : s === 'other' ? { t: '他', c: 'bg-amber-100 text-amber-700' } : { t: '出', c: 'bg-emerald-100 text-emerald-700' };
+  // 工場の暦で休みの日は「出」でなく「休業」(製品 0a4021b)
+  const cellOf = (s, factoryOff = false) => s === 'off' ? { t: '休', c: 'bg-slate-200 text-slate-500' } : s === 'other' ? { t: '他', c: 'bg-amber-100 text-amber-700' } : factoryOff ? { t: '休業', c: 'bg-slate-100 text-slate-400' } : { t: '出', c: 'bg-emerald-100 text-emerald-700' };
   if (names.length === 0) return null;
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -27583,12 +27837,12 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
             {names.map(w => (
               <tr key={w} className="border-t border-slate-50">
                 <td className="px-2 py-1 font-bold text-slate-700 sticky left-0 bg-white whitespace-nowrap z-10">{w}</td>
-                {cols.map(ms => { const ymd = rymd(ms); const cd = cellOf(rosterStatusOf(settings, ymd, w)); return <td key={ms} className="px-1 py-1 text-center"><button onClick={() => cycle(ymd, w)} className={`w-7 h-6 rounded font-bold ${cd.c} hover:opacity-80`}>{cd.t}</button></td>; })}
+                {cols.map(ms => { const ymd = rymd(ms); const cd = cellOf(rosterStatusOf(settings, ymd, w), !isWorkdayYmd(ymd, factoryCalendar)); return <td key={ms} className="px-1 py-1 text-center"><button onClick={() => cycle(ymd, w)} className={`min-w-11 h-11 px-1 rounded font-bold ${cd.c} hover:opacity-80`}>{cd.t}</button></td>; })}
               </tr>
             ))}
             <tr className="border-t-2 border-slate-200 font-bold">
               <td className="px-2 py-1 text-slate-500 sticky left-0 bg-white z-10">在席</td>
-              {cols.map(ms => { const st = rosterDayStats(settings, names, rymd(ms)); return <td key={ms} className="px-1 py-1 text-center"><span className="text-emerald-700">{st.present}</span>{(st.off + st.other) > 0 && <span className="text-xs text-slate-400">/{st.total}</span>}</td>; })}
+              {cols.map(ms => { const st = rosterDayStats(settings, names, rymd(ms)); if (!isWorkdayYmd(rymd(ms), factoryCalendar)) return <td key={ms} className="px-1 py-1 text-center text-slate-300">—</td>; return <td key={ms} className="px-1 py-1 text-center"><span className="text-emerald-700">{st.present}</span>{(st.off + st.other) > 0 && <span className="text-xs text-slate-400">/{st.total}</span>}</td>; })}
             </tr>
           </tbody>
         </table>
@@ -27607,7 +27861,9 @@ const WorkerRosterPanel = ({ workers = [], settings = {}, saveSettings = null, d
   );
 };
 
-const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSettings, indirectWork = [], factoryCalendar = null }) => {
+const ProgressOverviewView = ({ lots, workers, pausedCount = 0, settings, templates = [], saveSettings, indirectWork = [], factoryCalendar = null }) => {
+  // 📅 工場の暦(土日+登録した祝日・全社休業)で休みの日かを決める(製品 worksOnCal と同じ)
+  const worksOnCal = useMemo(() => makeIsWorkday(factoryCalendar), [factoryCalendar]);
   const [tickN, setTickN] = useState(0);
   // 週次仕事量で展開中の週 (null = なし)
   const [expandedWeekIdx, setExpandedWeekIdx] = useState(null);
@@ -27645,7 +27901,9 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
   // 間接作業を加味した実効直工キャパ
   //   factor = 間接込み係数 (1.0 = 間接ゼロ, 1.3 = 直工1hあたり間接0.3h など)
   //   必要人数(間接込み) = 直工必要人数 × factor、実効直工キャパ = 名目キャパ ÷ factor
-  const factor = Number(settings?.indirectFactor) || 1;
+  // 🧮 P151 係数を仕事量に掛けるかの口(settings.operationPolicy.applyIndirectFactor)。
+  //   既定: 部品は今までどおり掛ける(false と選んだ時だけ掛けない)。製品の既定(掛けない)に揃えるかは清水さんの判断待ち。
+  const factor = settings?.operationPolicy?.applyIndirectFactor === false ? 1 : (Number(settings?.indirectFactor) || 1);
   // 余力判定しきい値 (稼働率% で判定)。未設定なら現行挙動 (50/85/100) を維持。
   const capLevels = settings?.capLevels || { yoyu: 50, tekisei: 85, manKado: 100 };
   // 1人1日の最大残業時間 (超過分を残業/土曜出勤に振り分ける計算で使用)。未設定なら 2.0h。
@@ -27656,6 +27914,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
   }, [lots]);
 
   // 各作業者の現在の状況
+  const factoryOffToday = !worksOnCal(Date.now());
   const workerStatuses = useMemo(() => {
     // 🛌 「空いています → 次のロットを割当できます」を出す所なので、休止中の人は外す。
     //   ただし作業が残っている間は残す(その人のロットが盤から消えない為)。
@@ -27665,16 +27924,23 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
       const paused = myLots.find(l => l.status === 'paused' && (!processing || l.id !== processing.id));
       const activeLot = processing || paused;
       const queued = myLots.filter(l => l !== activeLot);
+      const rs = rosterStatusOf(settings, rymd(Date.now()), w.name);
+      const away = rs === 'off' ? { code: 'off', text: '休み' } : rs === 'other' ? { code: 'other', text: '他工場' } : null;
 
-      // 残り推定時間 (全担当ロットの未完了タスク × 想定時間)
+      // 残り推定時間: 終わっていないタスクの目標時間から数える(個数×平均60秒はやめた・製品と同じ lotRemainingSec)
       const remainingSec = myLots.reduce((acc, lot) => {
-        const p = computeLotProgress(lot);
-        if (!p) return acc + calculateLotEstimatedTime(lot);
-        return acc + (p.remainingTasks * (p.avgTaskTime || 60));
+        const elapsedMs = getLotElapsedMs(lot);
+        return acc + lotRemainingSec(
+          lot, targetSecOfStep(lot), calculateLotEstimatedTime(lot), elapsedMs / 1000,
+          { lotOnceKeys: lotOnceKeysOf },
+        ).sec;
       }, 0);
 
       let state, stateLabel, stateColor;
       if (processing) { state = 'processing'; stateLabel = '作業中'; stateColor = 'emerald'; }
+      // 👥 ロスターで今日「休」「他」の人・工場の暦で休業の日は「空いています」と出さない(一時停止のロットが在る事は消さない・製品 0a4021b)
+      else if (away) { state = 'away'; stateLabel = paused ? `${away.text}・一時停止中` : away.text; stateColor = away.code === 'off' ? 'slate' : 'amber'; }
+      else if (factoryOffToday) { state = 'factoryOff'; stateLabel = paused ? '休業・一時停止中' : '休業'; stateColor = 'slate'; }
       else if (paused) { state = 'paused'; stateLabel = '一時停止'; stateColor = 'amber'; }
       else if (queued.length > 0) { state = 'waiting'; stateLabel = '待機'; stateColor = 'blue'; }
       else { state = 'idle'; stateLabel = 'アイドル'; stateColor = 'slate'; }
@@ -27683,7 +27949,9 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
 
       // 推奨アクション (UI ヒント)
       let hint = '';
-      if (state === 'idle') hint = '空いています → 次のロットを割当できます';
+      if (state === 'away') hint = `今日は${away.text} → この工場では割り当てない${queued.length ? `（待ち ${queued.length} 件はそのまま）` : ''}`;
+      else if (state === 'factoryOff') hint = '今日は工場の暦で休業 → 次の勤務日に割り当てる';
+      else if (state === 'idle') hint = '空いています → 次のロットを割当できます';
       else if (state === 'waiting') hint = `待ち ${queued.length} 件 → 作業開始を促せます`;
       else if (state === 'paused') hint = '一時停止中 → 再開を促しましょう';
       else if (activeProgress?.delayLevel === 'critical') hint = '⚠ 大幅遅延中 → サポートが必要かも';
@@ -27691,7 +27959,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
 
       return { worker: w, state, stateLabel, stateColor, processing, paused, queued, myLots, remainingSec, activeProgress, hint, activeLot };
     });
-  }, [activeLots, workers, tickN]);
+  }, [activeLots, workers, tickN, settings, factoryOffToday]);
 
   // 未割当ロット (workerId なし)
   const unassignedLots = useMemo(() => activeLots.filter(l => !l.workerId), [activeLots]);
@@ -27935,6 +28203,16 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
               >実測値を係数に反映</button>
             </div>
           </div>
+          {/* 🧮 P151 係数を仕事量に掛けるか(製品 42193 の口を写した・既定は部品の今までどおり掛ける) */}
+          <div className="flex flex-col gap-1 basis-full">
+            <label className="flex items-center gap-2 text-xs font-bold min-h-11 cursor-pointer">
+              <input type="checkbox" className="w-5 h-5" data-progress-apply-factor={settings?.operationPolicy?.applyIndirectFactor === false ? '0' : '1'}
+                checked={settings?.operationPolicy?.applyIndirectFactor !== false}
+                onChange={e => { if (!saveSettings) return; const cur = (settings && settings.operationPolicy && typeof settings.operationPolicy === 'object') ? settings.operationPolicy : {}; saveSettings({ operationPolicy: { ...cur, applyIndirectFactor: !!e.target.checked } }); }}
+              />
+              <span className="text-slate-700">間接込み係数を仕事量のキャパに掛ける：{settings?.operationPolicy?.applyIndirectFactor === false ? '掛けていません（係数 1.00 として数える）' : '掛けています'}</span>
+            </label>
+          </div>
         </div>
       </details>
 
@@ -28015,10 +28293,11 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
         lots={lots}
         workers={workers}
         workSchedule={settings?.workSchedule}
+        factoryCalendar={factoryCalendar}
       />
 
       {/* 作業者ロスター（日次の在席）— 下のキャパ計算の作業者数に反映 */}
-      <WorkerRosterPanel workers={workers} settings={settings} saveSettings={saveSettings} days={7} />
+      <WorkerRosterPanel workers={workers} settings={settings} saveSettings={saveSettings} days={7} factoryCalendar={factoryCalendar} />
 
       {/* セクション 2: 週次仕事量 (納期ベース) */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
@@ -28043,7 +28322,7 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
             </div>
           </div>
           <div className="text-xs text-slate-500">
-            想定: <span className="font-bold">{HOURS_PER_DAY.toFixed(2)}h/日 ({includeOT ? '残業込' : '定時'}) × {DAYS_PER_WEEK}日</span> = {HOURS_PER_WEEK.toFixed(1)}h/週 ・<span title={isWorkerOverride ? `マスタ設定で上書き (登録${registeredWorkers}人)` : isRosterDriven ? `作業者ロスターの今週平均在席 (登録${registeredWorkers}人・休/他工場を除く)` : '登録作業者数'}>{isWorkerOverride ? '想定' : isRosterDriven ? '在席' : '在籍'} <span className="font-bold">{totalWorkers}</span>人{isWorkerOverride && <span className="text-amber-600 text-xs ml-0.5">(設定値)</span>}{isRosterDriven && <span className="text-indigo-600 text-xs ml-0.5">(ロスター)</span>}</span> → 実効直工キャパ <span className="font-bold">{teamCapacityWeekH.toFixed(1)}h/週</span>{factor !== 1 && <span className="text-indigo-600 ml-0.5">(間接込み係数{factor.toFixed(2)})</span>}
+            {pausedCount > 0 ? <span className="mr-2 rounded bg-slate-100 px-1.5 py-0.5 font-bold text-slate-600" data-progress-paused={pausedCount}>休止中 {pausedCount}人 は人数に入れていません</span> : null}想定: <span className="font-bold">{HOURS_PER_DAY.toFixed(2)}h/日 ({includeOT ? '残業込' : '定時'}) × {DAYS_PER_WEEK}日</span> = {HOURS_PER_WEEK.toFixed(1)}h/週 ・<span title={isWorkerOverride ? `マスタ設定で上書き (登録${registeredWorkers}人)` : isRosterDriven ? `作業者ロスターの今週平均在席 (登録${registeredWorkers}人・休/他工場を除く)` : '登録作業者数'}>{isWorkerOverride ? '想定' : isRosterDriven ? '在席' : '在籍'} <span className="font-bold">{totalWorkers}</span>人{isWorkerOverride && <span className="text-amber-600 text-xs ml-0.5">(設定値)</span>}{isRosterDriven && <span className="text-indigo-600 text-xs ml-0.5">(ロスター)</span>}</span> → 実効直工キャパ <span className="font-bold">{teamCapacityWeekH.toFixed(1)}h/週</span>{factor !== 1 && <span className="text-indigo-600 ml-0.5">(間接込み係数{factor.toFixed(2)})</span>}
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -28082,6 +28361,8 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                   const dayLots = wk.lots.filter(l => {
                     if (!l.dueDate) return false;
                     const due = new Date(l.dueDate); due.setHours(0,0,0,0);
+                    // 📅 休みの日(土日+登録した祝日)に来た納期は下で月曜へ集める。ここで二重に数えない。
+                    if (!worksOnCal(due)) return false;
                     return due.getTime() === ds.getTime();
                   });
                   // 月曜セルに以下を集める:
@@ -28099,8 +28380,8 @@ const ProgressOverviewView = ({ lots, workers, settings, templates = [], saveSet
                     wk.lots.forEach(l => {
                       if (!l.dueDate) return;
                       const due = new Date(l.dueDate); due.setHours(0,0,0,0);
-                      const dow = due.getDay();
-                      if ((dow === 0 || dow === 6) && due >= wk.start && due <= wk.end) {
+                      // 📅 土日だけでなく工場の暦の休み(祝日・全社休業)も月曜へ集める
+                      if (!worksOnCal(due) && due >= wk.start && due <= wk.end) {
                         dayLots.push(l);
                       }
                     });
@@ -28462,7 +28743,9 @@ const MonthlyReportView = ({ lots = [], workers = [], settings = {}, customTarge
   const effectiveWorkers = (overrideWorkers && Number(overrideWorkers) > 0) ? Number(overrideWorkers) : registeredWorkers;
   const capacityWorkers = effectiveWorkers || 1; // 0除算回避用
   // 間接作業を加味した実効直工キャパ (ProgressOverviewView と同一の前提)
-  const factor = Number(settings?.indirectFactor) || 1;
+  // 🧮 P151 係数を仕事量に掛けるかの口(settings.operationPolicy.applyIndirectFactor)。
+  //   既定: 部品は今までどおり掛ける(false と選んだ時だけ掛けない)。製品の既定(掛けない)に揃えるかは清水さんの判断待ち。
+  const factor = settings?.operationPolicy?.applyIndirectFactor === false ? 1 : (Number(settings?.indirectFactor) || 1);
   const capLevels = settings?.capLevels || { yoyu: 50, tekisei: 85, manKado: 100 };
   // 1人1日の最大残業時間 (超過分を残業/土曜出勤に振り分ける計算で使用)。ProgressOverviewView と同一の前提。
   const maxOtPerDay = (settings?.maxOvertimeHoursPerDay != null && Number(settings.maxOvertimeHoursPerDay) >= 0) ? Number(settings.maxOvertimeHoursPerDay) : 2.0;
@@ -30137,6 +30420,8 @@ const QuotaStoppedPanel = ({ until }) => (
    const backupInputRef = useRef(null);
    const progressMgmtInputRef = useRef(null);
    const [progressImportPreview, setProgressImportPreview] = useState(null);  // 工機進捗管理表 取込プレビュー結果
+   const [progressImportBusy, setProgressImportBusy] = useState(false);       // ⏳ P097 進捗管理表を読んでいる最中(大きい表は20秒ほどかかる。黙って待たせない)
+   const [progressImportSaving, setProgressImportSaving] = useState('');      // ⏳ P097 確定の書き込み中「N/M」
  
    // State: Execution Modal
    const [executionLotId, setExecutionLotId] = useState(null);
@@ -30846,6 +31131,30 @@ const QuotaStoppedPanel = ({ until }) => (
      }, 5000);
      return () => clearInterval(iv);
    }, [lots, executionLotId, currentUserName, workers, templates]);
+   // 👤 現場マップのカードから作業画面を開く口(製品 openExecutionFromMap を写した)。
+   //   担当が自分と違えば1回だけ聞く(替える/そのまま)。使用者を選んでいない・フリー・管理者は今までどおり何も聞かない。
+   //   ⚠ saveData は材料(deps)に入れず、置き場(ref)から最新を読む(製品 70765e1 の直し)。
+   const saveDataRef = useRef(null);
+   useEffect(() => { saveDataRef.current = saveData; }); // 毎描画で最新に差し替える(deps は付けない)
+   const openExecutionFromMap = useCallback((lotId) => {
+     const id = typeof lotId === 'string' ? lotId : (lotId && lotId.id);
+     if (!id) return;
+     const lot = lots.find((l) => l.id === id);
+     const me = String(currentUserName || '').trim();
+     const owner = lot ? (workers.find((w) => w.id === lot.workerId) || {}).name || '' : '';
+     if (lot && me && owner && owner !== me && !['フリー', '管理者'].includes(me)) {
+       const mine = workers.find((w) => w.name === me);
+       const swap = window.confirm(
+         `このロットの担当は「${owner}」さんです。\n`
+         + `このまま進むと、作業の記録は「${owner}」さんの名前で残ります。\n\n`
+         + `担当を「${me}」さんに替えますか？\n`
+         + `\u3000OK … 「${me}」さんに替えて開く\n`
+         + `\u3000キャンセル … 「${owner}」さんのまま開く`,
+       );
+       if (swap && mine && mine.id) saveDataRef.current('lots', id, { workerId: mine.id });
+     }
+     setExecutionLotId(id);
+   }, [lots, workers, currentUserName]);
 
    const retryLastSave = async () => {
      const p = lastFailedPayloadRef.current;
@@ -31934,20 +32243,138 @@ const QuotaStoppedPanel = ({ until }) => (
    };
 
    // === 工機進捗管理表 取込: パース → プレビュー ===
+   // === 工機進捗管理表 取込(P022): 判定は domain/progressSheet.js の planProgressImport(製品と同じ純関数)。ここはセルを読むだけ。
+   //   部品には型式マスタが無いので modelMasters は {}(品目コード → 品質規格 → テンプレに落ちる)。到着予定も無いので entryPinned は {}。
+   // 🛡 P052 表に載っている指図のロットをサーバから取り寄せて、画面に読めている物と1つにする(読むだけ・30指図ずつ)。
+   //   🚨 失敗したら投げる(呼ぶ側が取込を止める)。分からないまま「無い」と決めて作らない。
+   const fetchLotsForImport = async (rows) => {
+     const orderNos = orderNosOfRows(rows);
+     const got = [];
+     for (const chunk of orderNoChunks(orderNos)) {
+       const page = await DATA(db).getPage(APP_DATA_ID, 'lots', orderNoLotsSpec(chunk), { source: 'server' });
+       got.push(...((page && page.rows) || []));
+     }
+     const merged = mergeLotsForImport(lots, got);
+     return { ...merged, check: { asked: orderNos.length, added: merged.added.length, addedOpen: merged.addedOpen, addedDone: merged.addedDone } };
+   };
+   const progressPlanCtx = () => ({
+     lots,
+     modelMasters: {},
+     qualityStandards: settings.qualityStandards || {},
+     modelStandardMap: settings.modelStandardMap || {},
+     templates,
+     today: localYMD(new Date()),
+   });
+   const replanProgress = (rows, opts, smap, ctxOverride = null) => planProgressImport(rows, {
+     ...progressPlanCtx(),
+     ...(ctxOverride && typeof ctxOverride === 'object' ? ctxOverride : {}),
+     options: {
+       calendar: factoryCalendar || null,
+       includeProvisional: !!opts.includeProvisional,
+       entryHHMM: DEFAULT_IMPORT_OPTIONS.entryHHMM,
+       defaultEntryDaysBefore: DEFAULT_IMPORT_OPTIONS.defaultEntryDaysBefore,
+       doneStages: smap.doneStages, doneProgress: smap.doneProgress,
+       entryPinned: {},
+       k33Means: smap.k33Means,
+       defaultShipDaysBefore: smap.shipDaysBefore,
+       colLabels: { k33: smap.cols.k33, assyDone: smap.cols.assyDone, start: smap.cols.start, shipDate: smap.cols.shipDate },
+     },
+   });
+   // 品名は表の値ではなく品目名簿から引く(resolveItemName。名簿に無ければ空)
+   const progressRowModelText = (c) => resolveItemName(c.model, '', settings.itemMaster) || '';
+   // 🗂 取込で作るロットの書き手ただ1本(製品 writeProgressCreates を写した。分納の便 arrival_times は部品には無いので作らない)
+   const writeProgressCreates = async (createLots, { timestamp, tick }) => {
+     for (const c of createLots) {
+       const id = generateId();
+       const baseSteps = templates.find(t => t.id === c.templateId)?.steps || DEMO_STEPS;
+       const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(c.model, baseSteps, settings, c.templateId);
+       const serials = Array.from({ length: c.quantity }, (_, i) => `#${i + 1}`);
+       const modelText = progressRowModelText(c);
+       await saveData('lots', id, {
+         id, batchId: generateId(),
+         model: c.model, orderNo: c.orderNo,
+         ...(modelText ? { modelText } : {}),
+         serialNo: c.orderNo,
+         quantity: c.quantity,
+         unitSerialNumbers: serials,
+         templateId: c.templateId,
+         priority: 'normal',
+         dueDate: c.dueDate,
+         dueDateProvisional: c.dueDateProvisional || false,
+         // 🚚 出荷日(AD列)。読めた行だけ書く
+         ...(c.shipDate ? { shipDate: c.shipDate } : {}),
+         importedFromExcel: true,
+         importSource: 'progress-sheet',
+         // 🔑 納期と入荷を何から決めたかの印(P124。後で日数を変えた時に同じ元から数える為)
+         ...(c.dueBasis ? { dueBasis: c.dueBasis } : {}),
+         ...(c.entryBasis ? { entryBasis: c.entryBasis } : {}),
+         ...(c.entryBase ? { entryBase: c.entryBase } : {}),
+         // 🚚 P022 入庫は表の入荷の日(純関数が決めた物)。以前は「取込を押した瞬間」だった
+         entryAt: c.entryAt || timestamp,
+         status: 'waiting',
+         location: 'arrival',
+         mapZoneId: null,
+         x: 0, y: 0,
+         workerId: null,
+         createdAt: timestamp,
+         currentStepIndex: 0,
+         steps,
+         totalWorkTime: 0,
+         workStartTime: null,
+         ...profileSkippedPatch(steps, naStepIds, c.quantity),
+         ...templateSkipPatch({ model: c.model, templateId: c.templateId, steps, qty: c.quantity, lots, settings, at: timestamp }),
+         interruptions: [],
+         appliedStandard,
+       });
+       tick('作っています');
+     }
+   };
+   // プレビューの選び口を変えたら、同じ行から計画を作り直す(Excel を読み直さない)
+   const setProgressImportOpt = (patch) => {
+     setProgressImportPreview(prev => {
+       if (!prev) return prev;
+       const opts = { ...prev.opts, ...patch };
+       return { ...prev, ...replanProgress(prev.rows, opts, prev.sheetMap, { lots: prev.knownLots || lots }), opts };
+     });
+   };
+   // 🏁 確定した時に本当に作る行(既定ではアプリで検査済みの指図×テンプレは作らない)
+   const progressCreateList = (pv) => (!pv ? []
+     : [...(pv.createLots || []), ...((pv.opts && pv.opts.createDone) ? (pv.alreadyDone || []) : [])]);
    const handleProgressMgmtUpload = async (e) => {
      const file = e.target.files[0];
      if (!file) return;
      e.target.value = '';
+     setProgressImportBusy(true);
      try {
-       const ExcelJS = await loadExcelJS();
-       const wb = new ExcelJS.Workbook();
-       const buf = await file.arrayBuffer();
-       await wb.xlsx.load(buf);
-       const sheet = wb.getWorksheet('進捗管理表');
-       if (!sheet) { alert('「進捗管理表」シートが見つかりません'); return; }
+       // 📊 P023 ExcelJS で開き、落ちたら JSZip で読み直す(製品 openProgressBook_pi と同じ)。getWorksheet は await で呼ぶ
+       const wb = await openProgressBook_pi(await file.arrayBuffer());
+       // 📚 P053 どの表の読み方で読むかを、開いたブックのシート名・ファイル名から決める(製品 guessProfile と同じ)。
+       //   既定: 決められない時は いま選んでいる表で読む(製品のように選ぶ窓は出さない。プレビューに どの表で読んだかを出す)
+       const bookSheets = (wb.worksheets || []).map(w => w.name);
+       const { profiles, activeId } = normalizeSheetProfiles(settings, DEFAULT_SHEET_MAP);
+       let chosen = profiles.find(p => p.id === activeId) || profiles[0];
+       let chosenWhy = `いま選んでいる「${chosen.name}」で読みました`;
+       const guessed = guessProfile(bookSheets, file.name, profiles);
+       if (guessed && guessed.profile.id !== chosen.id) {
+         chosen = guessed.profile; chosenWhy = `「${chosen.name}」で読みました（${guessed.why}）`;
+         saveSettings(profilesToSettings(profiles, chosen.id, DEFAULT_SHEET_MAP));
+       } else if (guessed) {
+         chosenWhy = `「${chosen.name}」で読みました（${guessed.why}）`;
+       }
+       const smap = chosen.map;
+       // 🚨 割付に穴があると取込は黙って0件になる。読む前に止めて、直す場所を教える
+       const mapHoles = sheetMapProblems(smap, DEFAULT_SHEET_MAP);
+       if (mapHoles.length) {
+         alert(`「${chosen.name}」の読み方に穴があります。このままだと1行も取り込めません。\n\n・${mapHoles.join('\n・')}\n\nマスタ設定の「📊 進捗管理表の読み方（表ごと）」で直してください。`);
+         return;
+       }
+       const sheet = await wb.getWorksheet(smap.sheetName);
+       if (!sheet) {
+         alert(`「${chosen.name}」は「${smap.sheetName}」シートを読みますが、このファイルにはありません。\n\nこのファイルに入っているシート:\n・${bookSheets.join('\n・')}\n\nマスタ設定の「📊 進捗管理表の読み方（表ごと）」で、この中の どれかにシート名を直してください。`);
+         return;
+       }
 
        // 品質規格マスタを参照 (modelStandardMap[model] → qualityStandards[qsId].templates[])
-       const qualityStandards = settings.qualityStandards || {};
        const modelStandardMap = settings.modelStandardMap || {};
        if (Object.keys(modelStandardMap).length === 0) {
          if (!confirm('「品目コード → 品質規格」のマッピングが未設定です。\n品質規格マスタで品目コードに規格を割り当ててください。\n\nそれでも続けますか? (どの行も取り込まれません)')) return;
@@ -31968,268 +32395,209 @@ const QuotaStoppedPanel = ({ until }) => (
          }
          return String(v).trim();
        };
-       const getDate = (cell) => {
+       // 🩶 灰色行(出荷済)の判定は domain/progressSheet.js の isShippedGrayFills ただ1本(製品と同じ)。ここは塗りを集めて渡すだけ。
+       const isShippedGray = (row) => {
+         const fills = [];
+         for (let c = 1; c <= 10; c++) {
+           const fill = row.getCell(c)?.fill;
+           if (fill?.type === 'pattern' && fill.fgColor) fills.push({ col: c, fgColor: fill.fgColor });
+         }
+         return isShippedGrayFills(fills, { orderCol: colToIndex(smap.cols.orderNo) + 1 });
+       };
+       // 日付の列は「生の値」(Date / 数値 / 文字)のまま純関数へ渡す(数式なら計算結果)。読み方は純関数が持つ。
+       const rawOf = (cell) => {
          const v = cell?.value;
          if (v == null) return null;
-         if (v instanceof Date) return v;
-         if (v && v.formula && v.result instanceof Date) return v.result;
-         if (typeof v === 'string') {
-           const s = v.trim();
-           if (s === '' || s === '-' || s === 'ー') return null;
-           // 試しに parse
-           const d = new Date(s);
-           if (!isNaN(d.getTime())) return d;
-         }
-         return null;
+         if (v instanceof Date || typeof v === 'number' || typeof v === 'string') return v;
+         if (Array.isArray(v.richText)) return v.richText.map(t => t.text).join('');
+         if (v.formula !== undefined) return (v.result instanceof Date || typeof v.result === 'number' || typeof v.result === 'string') ? v.result : null;
+         return String(v);
        };
-       // 行のfillが灰色 (出荷済) かを判定
-       const isShippedGray = (row) => {
-         // 行内のセルをいくつか見て、灰色(theme:0 + tint負)が支配的か簡易判定
-         let grayCount = 0, total = 0;
-         for (let c = 1; c <= 10; c++) {
-           const cell = row.getCell(c);
-           const fill = cell?.fill;
-           if (fill?.type === 'pattern' && fill.fgColor) {
-             total++;
-             const fg = fill.fgColor;
-             // 灰色: theme:0 で tint が -0.15 〜 -0.5 の範囲
-             if (fg.theme === 0 && typeof fg.tint === 'number' && fg.tint < -0.1 && fg.tint > -0.5) {
-               grayCount++;
-             }
-           }
-         }
-         return total > 0 && grayCount >= Math.ceil(total / 2);
-       };
-       // 品目コード → 品質規格 → テンプレ entry 配列 を解決
-       //   1. 完全一致を最優先
-       //   2. 大文字小文字無視
-       //   3. ハイフン/カンマ/スペース揺れ吸収して再試行
-       const normalize = (s) => (s || '').toString().toUpperCase().replace(/[\s\-_,\.]/g, '');
-       const findQsEntriesForModel = (model) => {
-         const m = (model || '').trim();
-         if (!m) return null;
-         // 直接一致
-         let qsId = modelStandardMap[m];
-         if (!qsId) {
-           // 正規化して照合
-           const norm = normalize(m);
-           for (const [registeredModel, mapped] of Object.entries(modelStandardMap)) {
-             if (normalize(registeredModel) === norm) { qsId = mapped; break; }
-           }
-         }
-         if (!qsId) return null;
-         const qs = qualityStandards[qsId];
-         if (!qs) return null;
-         const entries = getQsTemplateEntries(qs);
-         return { qs, entries };
-       };
-       // 「①Z5/15②Z5/18」のような複数日付文字列から最初の日付を抽出
-       const parseFirstDate = (str) => {
-         if (!str) return null;
-         const s = String(str);
-         // 日付パターン M/D を探す
-         const m = s.match(/(\d{1,2})\/(\d{1,2})/);
-         if (m) {
-           const month = parseInt(m[1]);
-           const day = parseInt(m[2]);
-           const now = new Date();
-           let year = now.getFullYear();
-           // 過去日付すぎたら翌年と仮定
-           let d = new Date(year, month - 1, day);
-           if (d.getTime() < now.getTime() - 90 * 86400000) {
-             d = new Date(year + 1, month - 1, day);
-           }
-           return d;
-         }
-         return null;
-       };
-
-       const result = {
-         createLots: [],   // 新規作成予定
-         updateLots: [],   // 既存更新予定
-         skipped: [],      // スキップ (理由付き)
-         warnings: [],     // 警告 (複数日付など)
-         totalRows: 0,
-       };
-
-       const today = new Date();
+       // 📄 P022 列は製品と同じ既定(B 指図 / C 品目番号 / D 品目コード / E 数量 / Z 入荷 / AB 基準開始日付 / AD 出荷日)。
+       //   既定: 部品の表も Z列=入荷の日として読む(製品と同じ読み方)。表ごとの読み方の設定(P053)は後で入れる。
+       const cellAt = (row, key) => { const i = colToIndex(smap.cols[key]); return i < 0 ? null : row.getCell(i + 1); };
+       const strAt = (row, key) => { const c = cellAt(row, key); return c ? getStr(c) : ''; };
+       const rawAt = (row, key) => { const c = cellAt(row, key); return c ? rawOf(c) : null; };
+       const rows = [];
        const totalRows = sheet.rowCount;
-       for (let r = 3; r <= totalRows; r++) {  // 行1,2はヘッダ
+       for (let r = smap.firstDataRow; r <= totalRows; r++) {  // 開始行より上は見出し
          const row = sheet.getRow(r);
-         const orderNo = getStr(row.getCell('B'));
-         if (!orderNo || !/^\d+$/.test(orderNo)) continue;  // 指図無し or 数値以外はスキップ (静かに)
-         result.totalRows++;
-
-         const productNo = getStr(row.getCell('C'));
-         const model = getStr(row.getCell('D'));
-         const qtyStr = getStr(row.getCell('E'));
-         const quantity = parseInt(qtyStr) || 1;
-         const zVal = row.getCell('Z').value;
-         const zStr = getStr(row.getCell('Z'));
-         const abDate = getDate(row.getCell('AB'));
-
-         // スキップ判定
-         if (zStr === '-' || zStr === 'ー') {
-           result.skipped.push({ row: r, orderNo, model, reason: 'Z列="-": 検査終了済' });
-           continue;
-         }
-         if (isShippedGray(row)) {
-           result.skipped.push({ row: r, orderNo, model, reason: '灰色行: 出荷済の可能性' });
-           continue;
-         }
-         if (!model) {
-           result.skipped.push({ row: r, orderNo, model: '(空)', reason: '品目コードが空' });
-           continue;
-         }
-         if (productNo && productNo.includes('PARTS')) {
-           result.skipped.push({ row: r, orderNo, model, reason: 'PARTS品 (検査対象外)' });
-           continue;
-         }
-
-         // 基準日決定: Z > AB の優先順
-         let baseDate = getDate(row.getCell('Z'));
-         let baseDateProvisional = false;
-         let multiDateWarning = false;
-         if (!baseDate) {
-           // Z列の文字列から最初の日付を抽出
-           const parsed = parseFirstDate(zStr);
-           if (parsed) {
-             baseDate = parsed;
-             if (zStr.match(/[①②③④⑤]/) || (zStr.match(/\d{1,2}\/\d{1,2}/g) || []).length > 1) {
-               multiDateWarning = true;
-             }
-           }
-         }
-         if (!baseDate) {
-           // Z空 → AB を仮基準日に
-           if (abDate) {
-             baseDate = abDate;
-             baseDateProvisional = true;
-           } else {
-             result.skipped.push({ row: r, orderNo, model, reason: 'Z列・AB列ともに日付なし' });
-             continue;
-           }
-         }
-
-         // 品目コード → 品質規格 → テンプレ entry を解決
-         const qsResult = findQsEntriesForModel(model);
-         if (!qsResult) {
-           result.skipped.push({ row: r, orderNo, model, reason: '品質規格マスタに品目コードの紐付けなし' });
-           continue;
-         }
-         const { qs, entries } = qsResult;
-         const validEntries = entries.filter(e => e.templateId);
-         if (validEntries.length === 0) {
-           result.skipped.push({ row: r, orderNo, model, reason: `品質規格「${qs.standardNo}」にテンプレ未割当` });
-           continue;
-         }
-
-         // 各テンプレ × 指図 でロットを作成 or 更新判定
-         for (const e of validEntries) {
-           const tpl = templates.find(t => t.id === e.templateId);
-           if (!tpl) {
-             result.skipped.push({ row: r, orderNo, model, reason: `テンプレ未存在 (${e.templateId})` });
-             continue;
-           }
-           const daysBefore = e.daysBefore ?? 0;  // 未設定なら 0日 (K33当日)
-           const dueDate = new Date(baseDate);
-           dueDate.setDate(dueDate.getDate() + daysBefore);
-           const dueDateStr = localYMD(dueDate);
-
-           // 既存ロット判定 (指図 + テンプレID)
-           const existing = lots.find(l => l.orderNo === orderNo && l.templateId === e.templateId && l.location !== 'completed');
-           const lotData = {
-             orderNo,
-             model,
-             quantity,
-             templateId: e.templateId,
-             templateName: tpl.name,
-             dueDate: dueDateStr,
-             dueDateProvisional: baseDateProvisional,
-             qsName: `${qs.standardNo} ${qs.name}`,
-             baseDate: localYMD(baseDate),
-             daysBefore,
-           };
-           if (existing) {
-             result.updateLots.push({ ...lotData, existingId: existing.id, oldDueDate: existing.dueDate });
-           } else {
-             result.createLots.push(lotData);
-           }
-           if (multiDateWarning) {
-             result.warnings.push({ row: r, orderNo, model, message: `Z列に複数日付検出: "${zStr.slice(0,40)}" → 最初の日付を採用 (${baseDate.toLocaleDateString()})` });
-           }
-         }
+         const orderNo = strAt(row, 'orderNo');
+         if (!orderNo) continue;
+         rows.push({
+           row: r, orderNo,
+           productNo: strAt(row, 'productNo'), model: strAt(row, 'model'), qty: strAt(row, 'qty'),
+           k33: rawAt(row, 'k33'), assyDone: rawAt(row, 'assyDone'), start: rawAt(row, 'start'), shipDate: rawAt(row, 'shipDate'),
+           stage: strAt(row, 'stage'), progress: strAt(row, 'progress'),
+           isGray: smap.grayIsShipped ? isShippedGray(row) : false,
+         });
        }
-
-       setProgressImportPreview(result);
+       // 既定: 日付の無い行は仮で作らない・納期は直す・アプリで検査済みの指図は作らない(製品と同じ)
+       // 🗑 P095 表では終わっている物を消すは既定 ON(製品と同じ)。消すのは作業記録の無い物だけ・確定の前に一覧を見せてもう一度聞く
+       const opts = { includeProvisional: false, updateDue: true, deleteStale: true, createDone: false };
+       // 🛡 P052 在る／無いを決める前に、サーバへ指図番号で問い合わせる(画面に読めていないロットも「在る」に入れる)
+       let known = null;
+       try { known = await fetchLotsForImport(rows); } catch (err) {
+         console.error('[取込] サーバへの問い合わせに失敗', err);
+         alert('サーバに在るロットを確かめられなかったので、取込を止めました（何も作っていません）。\n電波の良い所でもう一度お試しください。\n\n' + (err && err.message ? err.message : ''));
+         return;
+       }
+       const plan = replanProgress(rows, opts, smap, { lots: known.lots });
+       // 🚨 安全弁: 消す対象が検査リストの未完了ロットの3割を超えたら、既定を OFF に落とす(列やシートが合っていない時にごっそり消さない)
+       const openLotCount = (known.lots || []).filter(l => !(l.status === 'completed' || l.location === 'completed')).length;
+       const deletable = plan.counts?.staleDeletable || 0;
+       const guardLimit = Math.floor(openLotCount * STALE_DELETE_MAX_RATIO);
+       const staleGuard = (deletable > 0 && deletable > guardLimit)
+         ? { deletable, deletableOrders: plan.counts?.staleDeletableOrders || 0, openLotCount, limit: guardLimit, pct: Math.round(STALE_DELETE_MAX_RATIO * 100) }
+         : null;
+       if (staleGuard) opts.deleteStale = false;
+       // 🔎 P152 元表の食い違い。数えるだけ(取込は止めない)
+       const audit = auditProgressRows(rows, { today: new Date(), labels: smap.cols, k33Means: smap.k33Means, startHeader: strAt(sheet.getRow(1), 'start'), sourceEndHeader: '' });
+       setProgressImportPreview({ ...plan, knownLots: known.lots, serverCheck: known.check, rows, opts, staleGuard, audit, fileName: file.name, reader: wb.reader, sheetMap: smap, profileName: chosen.name, profileWhy: chosenWhy });
      } catch (err) {
        console.error('Progress Mgmt parse error:', err);
        alert('取込み中にエラーが発生しました: ' + (err.message || err));
+     } finally {
+       setProgressImportBusy(false);
      }
    };
 
    // 取込プレビューの確定 (Firebase 一括保存)
    const confirmProgressImport = async () => {
      if (!progressImportPreview) return;
-     const { createLots, updateLots } = progressImportPreview;
+     const { updateLots, stale = [], opts = {} } = progressImportPreview;
+     let createLots = progressCreateList(progressImportPreview);
+     const applyUpdates = opts.updateDue === false ? [] : updateLots;
+     // 🗑 P095 表では終わっているのに検査リストに残っている物のうち 作業記録の無い物だけ。消す前に一覧を見せて確認する
+     const toDelete = opts.deleteStale ? stale.filter(x => !x.hasTasks) : [];
+     if (toDelete.length) {
+       const list = toDelete.slice(0, 12).map(x => `・${x.orderNo} ${x.model}`).join('\n') + (toDelete.length > 12 ? `\n…ほか ${toDelete.length - 12}件` : '');
+       const delOrders = new Set(toDelete.map(x => String(x.orderNo || '').trim())).size;
+       if (!window.confirm(`進捗管理表では終わっている ${toDelete.length}件（${delOrders}指図）を検査リストから消します（作業記録の無い物だけ）。\n${list}\n\n※ この操作は取り消せません。よろしいですか？`)) return;
+     }
+     // 🛡 P052 書く直前にもう一度サーバへ確かめる(プレビューを開いている間に別の端末が同じ表を取り込んだ時も二重に作らない)
+     if (createLots.length) {
+       try {
+         const fresh = await fetchLotsForImport(progressImportPreview.rows);
+         const freshPlan = replanProgress(progressImportPreview.rows, opts, progressImportPreview.sheetMap, { lots: fresh.lots });
+         const r = dropAlreadyExisting(createLots, progressCreateList({ ...freshPlan, opts }));
+         if (r.dropped.length) alert(`確かめ直したら ${r.dropped.length}件は もう検査リストに在りました。その分は作りません。\n` + r.dropped.slice(0, 10).map(c => `・${c.orderNo} ${c.model}`).join('\n'));
+         createLots = r.keep;
+       } catch (err) {
+         console.error('[取込] 書く直前の確かめに失敗', err);
+         alert('サーバに在るロットを確かめ直せなかったので、取込を止めました（何も書いていません）。');
+         return;
+       }
+     }
      setProgressImportPreview(null);
+     const totalWrites = createLots.length + applyUpdates.length + toDelete.length;
+     let doneWrites = 0;
+     const tick = (what) => { doneWrites++; setProgressImportSaving(`${what}… ${doneWrites}/${totalWrites}`); };
+     setProgressImportSaving(`書き込んでいます… 0/${totalWrites}`);
      try {
        const timestamp = Date.now();
-       // 新規作成
-       for (const c of createLots) {
-         const id = generateId();
-         const baseSteps = templates.find(t => t.id === c.templateId)?.steps || DEMO_STEPS;
-         const { steps, appliedStandard, naStepIds } = applyQualityStandardToSteps(c.model, baseSteps, settings, c.templateId);
-         const serials = Array.from({ length: c.quantity }, (_, i) => `#${i + 1}`);
-         await saveData('lots', id, {
-           id, batchId: generateId(),
-           model: c.model, orderNo: c.orderNo,
-           serialNo: c.orderNo,
-           quantity: c.quantity,
-           unitSerialNumbers: serials,
-           templateId: c.templateId,
-           priority: 'normal',
-           dueDate: c.dueDate,
-           dueDateProvisional: c.dueDateProvisional || false,
-           importedFromExcel: true,
-           entryAt: timestamp,
-           status: 'waiting',
-           location: 'arrival',
-           mapZoneId: null,
-           x: 0, y: 0,
-           workerId: null,
-           createdAt: timestamp,
-           currentStepIndex: 0,
-           steps,
-           totalWorkTime: 0,
-           workStartTime: null,
-           ...profileSkippedPatch(steps, naStepIds, c.quantity), // 品目別プロファイルの該当なし工程を事前スキップ(🚨空なら tasks のキーごと送らない)
-           ...templateSkipPatch({ model: c.model, templateId: c.templateId, steps, qty: c.quantity, lots, settings, at: timestamp }),
-           // 🚨stepTimes の空マップ {} は送らない(2026-08-31 SS-403)。読む側は lot.stepTimes || {}。
-           interruptions: [],
-           appliedStandard,
-         });
-       }
-       // 既存更新 (dueDate / quantity のみ)
-       for (const u of updateLots) {
+       await writeProgressCreates(createLots, { timestamp, tick });
+       // 既存更新(製品と同じ: 納期・印・入庫は entryChange の時だけ・出荷日・台数は qtyChange の時だけ)
+       for (const u of applyUpdates) {
          const updates = {
            dueDate: u.dueDate,
            dueDateProvisional: u.dueDateProvisional || false,
+           ...(u.dueBasis ? { dueBasis: u.dueBasis } : {}),
+           ...(u.entryBasis ? { entryBasis: u.entryBasis } : {}),
+           ...(u.entryBase ? { entryBase: u.entryBase } : {}),
          };
-         // quantity が変わってる場合のみ更新 (タスク整合性のため、進捗ありなら quantity は触らない)
+         // 🚚 入庫を動かすのは純関数が entryChange:true と言った物だけ(作業記録のあるロットは止まる)
+         if (u.entryChange && u.entryAt) updates.entryAt = u.entryAt;
+         if (u.shipChange && u.shipDate) updates.shipDate = u.shipDate;
          const existingLot = lots.find(l => l.id === u.existingId);
-         const hasProgress = existingLot && existingLot.tasks && Object.keys(existingLot.tasks).length > 0;
-         if (!hasProgress && existingLot?.quantity !== u.quantity) {
+         if (u.qtyChange) {
            updates.quantity = u.quantity;
            updates.unitSerialNumbers = Array.from({ length: u.quantity }, (_, i) => existingLot?.unitSerialNumbers?.[i] || `#${i + 1}`);
          }
          await saveData('lots', u.existingId, updates);
+         tick('直しています');
        }
-       alert(`✓ 取込み完了\n新規作成: ${createLots.length}件\n更新: ${updateLots.length}件`);
+       let deleted = 0;
+       for (const x of toDelete) { await deleteData('lots', x.lotId); deleted++; tick('消しています'); }
+       const entryMoved = applyUpdates.filter(u => u.entryChange && u.entryAt).length;
+       const notMade = opts.createDone ? 0 : (progressImportPreview.alreadyDone || []).length;
+       // 🗂 P057 品質規格マスタに紐付けの無い品目コードの行は「未登録リスト」へ(表の値のまま)。失敗しても取込は終わっている
+       const pendingNow = pendingRowsFromPlan(progressImportPreview.rows, progressImportPreview);
+       let pendingSaved = false;
+       if (pendingNow.length) {
+         try {
+           const prev = (settings && settings.progressImportPending && Array.isArray(settings.progressImportPending.rows)) ? settings.progressImportPending.rows : [];
+           await saveSettings({ progressImportPending: {
+             at: timestamp, fileName: progressImportPreview.fileName || '',
+             sheetMap: progressImportPreview.sheetMap || null,
+             opts: { includeProvisional: !!opts.includeProvisional },
+             rows: mergePendingRows(prev, pendingNow, PENDING_MAX_ROWS),
+           } });
+           pendingSaved = true;
+         } catch (e) { console.warn('未登録リストの保存に失敗(取込そのものは終わっています)', e); }
+       }
+       setProgressImportSaving('');
+       alert(`✓ 取込み完了\n新規作成: ${createLots.length}件\n更新: ${applyUpdates.length}件（うち入庫を直した: ${entryMoved}件）${deleted ? `\n検査リストから消した: ${deleted}件` : ''}${notMade ? `\nアプリではもう検査が終わっていたので作らなかった: ${notMade}件` : ''}${pendingSaved ? `\n品質規格マスタに紐付けの無い品目コード（マスタ設定の未登録リストへ）: ${new Set(pendingNow.map(r => r.model)).size}種 ${pendingNow.length}行` : ''}`);
      } catch (err) {
+       setProgressImportSaving('');
        console.error(err);
        alert('保存中にエラーが発生しました: ' + (err.message || err));
      }
+   };
+
+   // 🗂 P057 未登録リスト → 品質規格マスタに紐付けたら、その品目コードの行を検査リストへ(判定は取込と同じ純関数・書き手も同じ writeProgressCreates)
+   const registerPendingForModel = async (model) => {
+     const pend = settings && settings.progressImportPending;
+     if (!pend || !Array.isArray(pend.rows)) return;
+     const m = String(model || '').trim();
+     const mine = pend.rows.filter(r => r && String(r.model || '').trim() === m);
+     if (!mine.length) return;
+     const smap = normalizeSheetMap(pend.sheetMap || null, DEFAULT_SHEET_MAP);
+     let knownPend = null;
+     try { knownPend = await fetchLotsForImport(mine); } catch (err) {
+       console.error('[未登録リスト] サーバへの問い合わせに失敗', err);
+       alert('サーバに在るロットを確かめられなかったので、登録を止めました（何も作っていません）。');
+       return;
+     }
+     const plan = replanProgress(mine, { includeProvisional: !!(pend.opts && pend.opts.includeProvisional) }, smap, { lots: knownPend.lots });
+     const createLots = plan.createLots || [];
+     const stillNoTpl = (plan.skipped || []).filter(x => x.reason === PS_REASON.NO_MASTER || String(x.reason || '').endsWith(PS_REASON.NO_TEMPLATE_ASSIGNED));
+     if (stillNoTpl.length) {
+       alert(`品目コード「${m}」には まだ品質規格(テンプレート)が割り当てられていません。\n品質規格マスタで割り当ててから、もう一度「検査リストへ登録」を押してください。`);
+       return;
+     }
+     const otherSkipped = (plan.skipped || []).length;
+     const exists = (plan.updateLots || []).length + (plan.unchangedLots || []).length + (plan.alreadyDone || []).length;
+     const list = createLots.slice(0, 12).map(c => `・${c.orderNo} ${c.model} ×${c.quantity} ${c.templateName || ''} 納期 ${c.dueDate || '—'}`).join('\n') + (createLots.length > 12 ? `\n…ほか ${createLots.length - 12}件` : '');
+     if (!window.confirm(`品目コード「${m}」の未登録 ${mine.length}行 → 検査リストへ ${createLots.length}件 を登録します。\n${list || '（作る物はありません）'}`
+       + (otherSkipped ? `\n\n取り込めない行 ${otherSkipped}件（未登録リストから外します）` : '')
+       + (exists ? `\n\n既に検査リストに在る指図 ${exists}件 は作りません（納期の更新は Excel の取込で）` : '')
+       + '\n\nよろしいですか？')) return;
+     setProgressImportSaving(`書き込んでいます… 0/${createLots.length}`);
+     try {
+       const timestamp = Date.now();
+       let doneWrites = 0;
+       const tick = (what) => { doneWrites++; setProgressImportSaving(`${what}… ${doneWrites}/${createLots.length}`); };
+       await writeProgressCreates(createLots, { timestamp, tick });
+       const rest = pend.rows.filter(r => !(r && String(r.model || '').trim() === m));
+       await saveSettings({ progressImportPending: { ...pend, at: timestamp, rows: rest } });
+       alert(`✓ 品目コード「${m}」の ${createLots.length}件 を検査リストへ登録しました。\n未登録リストから外しました（残り ${rest.length}行）。`);
+     } catch (err) {
+       console.error(err);
+       alert('保存中にエラーが発生しました: ' + (err.message || err));
+     } finally {
+       setProgressImportSaving('');
+     }
+   };
+   // 🗂 未登録リストから品目コードごとに外す(登録せずに消す)
+   const removePendingModel = async (model) => {
+     const pend = settings && settings.progressImportPending;
+     if (!pend || !Array.isArray(pend.rows)) return;
+     const m = String(model || '').trim();
+     const mine = pend.rows.filter(r => r && String(r.model || '').trim() === m);
+     if (!mine.length) return;
+     if (!window.confirm(`品目コード「${m}」の ${mine.length}行 を未登録リストから外します（検査リストには登録しません。次に Excel を取り込むと また入ります）。よろしいですか？`)) return;
+     await saveSettings({ progressImportPending: { ...pend, rows: pend.rows.filter(r => !(r && String(r.model || '').trim() === m)) } });
    };
 
    // === Excel一括登録: アップロード処理 ===
@@ -32306,19 +32674,21 @@ const QuotaStoppedPanel = ({ until }) => (
          m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/); if (m) return realYMD_pl(+m[3], +m[1], +m[2]);
          const d = new Date(s); return isNaN(d) ? '' : toYMD_pl(d);
        };
-       const rows = [];
+       const rawRows = [];
        ws.eachRow((row, rowNum) => {
          if (rowNum === 1) return; // ヘッダースキップ
          const model = row.getCell(C_MODEL).value?.toString?.() || row.getCell(C_MODEL).value;
          const orderNo = row.getCell(C_ORDER).value?.toString?.() || row.getCell(C_ORDER).value;
          if (!model || !orderNo) return; // 空行スキップ
          const qty = parseInt(row.getCell(C_QTY).value) || 1;
-         const templateId = row.getCell(C_TEMPLATE).value?.toString?.() || 'demo';
+         // 🧩 P125 テンプレID列が空なら 'demo' にせず、下で品質規格のテンプレへ展開する(planRowLots)
+         const templateIdRaw = String(row.getCell(C_TEMPLATE).value?.toString?.() || '').trim();
          const priorityRaw = row.getCell(C_PRIORITY).value?.toString?.() || '通常';
          const priority = priorityFromImportText(priorityRaw);
          const dueDate = parseDueYMD_pl(row.getCell(C_DUE).value);
-         // 入庫日時: 入力があればそれ(Date型セルも安全に)。空欄なら「納期の3日前 08:30」(納期あり時)=製品と同じ既定。
+         // 入庫日時: 入力があればそれ(Date型セルも安全に)。空欄なら下の planRowLots が 品質規格の「入荷は納期の N日前」(無ければ3日前)と工場の暦で決める。
          const entryAtRaw = row.getCell(C_ENTRY).value;
+         const entryGiven = entryAtRaw != null && entryAtRaw !== '';
          let entryAt;
          if (entryAtRaw != null && entryAtRaw !== '') {
            const sRaw = String(entryAtRaw).trim();
@@ -32344,23 +32714,49 @@ const QuotaStoppedPanel = ({ until }) => (
            const sn = row.getCell(C_SERIAL_START + i).value?.toString?.() || '';
            serials.push(sn || `#${i + 1}`);
          }
-         rows.push({ model, modelText, orderNo, qty, templateId, priority, dueDate, entryAt, serials });
+         rawRows.push({ model, modelText, orderNo, qty, templateIdRaw, priority, dueDate, entryAt, entryGiven, serials });
        });
 
-       if (rows.length === 0) { alert('有効なデータ行がありません'); return; }
+       // 🧩 P125 入荷登録Excel 1行 → 何ロットになるかは純関数 planRowLots が決める(製品と同じ)。
+       //   テンプレID列があればそれ1本。空なら 品目コード → 品質規格 のテンプレ全部へ展開する(部品には型式マスタが無いので modelMasters は {})。
+       //   入荷は Excel に書いてあればそれ、無ければ 品質規格の日数と工場の暦から。
+       const pad2x = (n) => String(n).padStart(2, '0');
+       const msToYmdHm = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad2x(d.getMonth() + 1)}-${pad2x(d.getDate())} ${pad2x(d.getHours())}:${pad2x(d.getMinutes())}`; };
+       const rows = [];
+       const expandSkipped = [];
+       for (const r of rawRows) {
+         const res = planRowLots(
+           { model: String(r.model), orderNo: String(r.orderNo), qty: r.qty, dueYMD: r.dueDate, entryRaw: r.entryGiven ? msToYmdHm(r.entryAt) : '', templateIdFromExcel: r.templateIdRaw },
+           { modelMasters: {}, qualityStandards: settings.qualityStandards || {}, modelStandardMap: settings.modelStandardMap || {}, templates, options: { calendar: factoryCalendar || null } },
+         );
+         for (const sk of res.skipped) expandSkipped.push(`⏭ ${r.orderNo} ${r.model} — ${sk.reason === '型式マスタにこの型式の登録がありません' ? '品質規格マスタに品目コードの紐付けがありません' : sk.reason === '型式マスタにテンプレートが割り当てられていません' ? '品質規格にテンプレートが割り当てられていません' : sk.reason}`);
+         for (const l of res.lots) {
+           rows.push({ model: r.model, modelText: r.modelText, orderNo: r.orderNo, qty: r.qty, templateId: l.templateId, priority: r.priority,
+             dueDate: l.dueYMD || r.dueDate, entryAt: Number.isFinite(l.entryAt) ? l.entryAt : (r.entryGiven ? r.entryAt : Date.now()), serials: r.serials });
+         }
+       }
 
+       if (rows.length === 0) { alert('有効なデータ行がありません' + (expandSkipped.length ? '\n\n' + expandSkipped.slice(0, 20).join('\n') : '')); return; }
+
+       // 🛡 P052 在る／無いを決める前に、サーバへ指図番号で問い合わせる(画面に読めていないロットも「在る」に入れる)。失敗したら止める
+       let knownLots = lots;
+       try { knownLots = (await fetchLotsForImport(rows)).lots; } catch (err) {
+         console.error('[入荷登録Excel] サーバへの問い合わせに失敗', err);
+         alert('サーバに在るロットを確かめられなかったので、取込を止めました（何も作っていません）。電波の良い所でもう一度お試しください。');
+         return;
+       }
        // ===== パス1: 計画づくり(書き込みは一切しない) =====
        //   旧実装は保存し終えた後に confirm「OKで確定」を出しており、キャンセルしても取り消せない嘘UIだった(監査確定)。
        //   先に計画+プレビューを見せ、OKされてから書き込む。
-       let newCount = 0, updateCount = 0, skipCount = 0;
-       const details = [];
+       let newCount = 0, updateCount = 0, skipCount = expandSkipped.length;
+       const details = [...expandSkipped];
        const plan = [];
        const processedKeys = new Set(); // このバッチで作成予定の「指図+テンプレID」(二重作成防止)
        for (const row of rows) {
          // 重複判定は「指図番号 + テンプレートID」で行う。
          //   こうしないと、同じ指図で複数テンプレ(別ロット)を登録しても1つに潰れてしまう。
          const dupKey = `${row.orderNo}__${row.templateId}`;
-         const existing = lots.find(l => l.orderNo === row.orderNo && l.templateId === row.templateId);
+         const existing = knownLots.find(l => l.orderNo === row.orderNo && l.templateId === row.templateId);
 
          if (existing && existing.status === 'processing') {
            skipCount++;
@@ -33340,21 +33736,21 @@ const QuotaStoppedPanel = ({ until }) => (
          <div className="flex-1 min-h-0 overflow-hidden p-4 relative">
          {activeTab === 'main' && (
            <div className="h-full">
-             {viewMode === 'dashboard' && <DashboardView onSetMode={setViewMode} lots={lots} workers={workers} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setExecutionLotId={setExecutionLotId} settings={settings} templates={templates} onEditLot={onEditLot} onDeleteLot={onDeleteLot} handleImageUpload={handleImageUpload} saveSettings={saveSettings} mapZones={settings.mapZones} currentUserName={currentUserName} />}
+             {viewMode === 'dashboard' && <DashboardView onSetMode={setViewMode} lots={lots} workers={workers} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setExecutionLotId={openExecutionFromMap} settings={settings} templates={templates} onEditLot={onEditLot} onDeleteLot={onDeleteLot} handleImageUpload={handleImageUpload} saveSettings={saveSettings} mapZones={settings.mapZones} currentUserName={currentUserName} />}
              {viewMode === 'arrival-planning' && <ArrivalPlanningView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} handleAddWorker={handleAddWorker} onEditLot={onEditLot} onDeleteLot={onDeleteLot} mapZones={settings.mapZones} />}
-             {viewMode === 'planning-execution' && <PlanningExecutionView onBack={() => setViewMode('dashboard')} workers={workers} lots={lots} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} handleImageUpload={handleImageUpload} settings={settings} mapRef={mapRef} handleDropOnMap={handleDropOnMap} setExecutionLotId={setExecutionLotId} onEditLot={onEditLot} onDeleteLot={onDeleteLot} saveSettings={saveSettings} mapZones={settings.mapZones} currentUserName={currentUserName} />}
+             {viewMode === 'planning-execution' && <PlanningExecutionView onBack={() => setViewMode('dashboard')} workers={workers} lots={lots} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} handleImageUpload={handleImageUpload} settings={settings} mapRef={mapRef} handleDropOnMap={handleDropOnMap} setExecutionLotId={openExecutionFromMap} onEditLot={onEditLot} onDeleteLot={onDeleteLot} saveSettings={saveSettings} mapZones={settings.mapZones} currentUserName={currentUserName} />}
              {viewMode === 'completed-list' && (
                quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
                : !lotsHistoryReady ? <DataLoadingPanel what="完了したロット" />
                : <CompletedListView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} mapZones={settings.mapZones} saveData={saveData} onEditLot={onEditLot} onDeleteLot={onDeleteLot} />
              )}
-             {viewMode === 'map-only' && <MapOnlyView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setExecutionLotId={setExecutionLotId} settings={settings} handleImageUpload={handleImageUpload} saveSettings={saveSettings} mapZones={settings.mapZones} onEditLot={onEditLot} onDeleteLot={onDeleteLot} execOpen={!!executionLotId} />}
+             {viewMode === 'map-only' && <MapOnlyView onBack={() => setViewMode('dashboard')} lots={lots} workers={workers} templates={templates} handleMoveLot={handleMoveLot} saveData={saveData} setDraggedLotId={setDraggedLotId} draggedLotId={draggedLotId} setExecutionLotId={openExecutionFromMap} settings={settings} handleImageUpload={handleImageUpload} saveSettings={saveSettings} mapZones={settings.mapZones} onEditLot={onEditLot} onDeleteLot={onDeleteLot} execOpen={!!executionLotId} />}
            </div>
          )}
          {activeTab === 'progress' && (
            quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} />
            : !progressDataReady ? <DataLoadingPanel what="過去のロットと間接作業" />
-           : <ProgressOverviewView lots={lots} /* 🧹 2026-09-23 休止中の人を在籍・ロスター・タイムラインに数えない(製品と同じ。作業者の現状の5人と合わせる) */ workers={activeWorkersOf(workers || [])} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} />
+           : <ProgressOverviewView lots={lots} /* 🧹 2026-09-23 休止中の人を在籍・ロスター・タイムラインに数えない(製品と同じ。作業者の現状の5人と合わせる) */ workers={activeWorkersOf(workers || [])} pausedCount={Math.max(0, (workers || []).length - activeWorkersOf(workers || []).length)} settings={settings} templates={templates} saveSettings={saveSettings} indirectWork={indirectWork} factoryCalendar={factoryCalendar} />
          )}
          {activeTab === 'inspection' && <InspectionListView lots={lots} workers={workers} templates={templates} settings={settings} onEditLot={onEditLot} onDeleteLot={onDeleteLot} setExecutionLotId={setExecutionLotId} currentUserName={currentUserName} saveData={saveData} parentTabs={renderTabGroupButtons(TAB_GROUPS.inspection)} />}
          {activeTab === 'analysis' && (quotaBlock ? <QuotaStoppedPanel until={quotaBlock.until} /> : !analysisDataReady ? <DataLoadingPanel what="分析に使う過去のデータ" /> : null)}
@@ -33453,7 +33849,7 @@ const QuotaStoppedPanel = ({ until }) => (
            )
          )}
          {activeTab === 'measurement-settings' && <MeasurementSettingsView settings={settings} saveSettings={saveSettings} comboPresets={settings?.comboPresets || []} templates={templates} />}
-         {activeTab === 'templates' && <TemplatesView editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
+         {activeTab === 'templates' && <TemplatesView onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel} editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} />}
          </div>
        </main>
        
@@ -33818,6 +34214,10 @@ const QuotaStoppedPanel = ({ until }) => (
          </div>
        )}
 
+       {/* ⏳ P097 進捗管理表を読んでいる最中・書き込み中の合図(製品 51417 と同じ) */}
+       {(progressImportBusy || progressImportSaving) && (
+         <div data-progress-import-busy="1" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] bg-indigo-700 text-white px-4 py-3 rounded-xl shadow-xl text-sm font-bold flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin"/> {progressImportSaving || '進捗管理表を読んでいます…（大きい表だと20秒ほどかかります）'}</div>
+       )}
        {/* 工機進捗管理表 取込プレビュー モーダル */}
        {progressImportPreview && (
          <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
@@ -33829,6 +34229,8 @@ const QuotaStoppedPanel = ({ until }) => (
                    <h2 className="text-lg font-bold">工機進捗管理表 — 取込プレビュー</h2>
                    <div className="text-xs opacity-90">
                      データ {progressImportPreview.totalRows}行 / 新規 {progressImportPreview.createLots.length}件 / 更新 {progressImportPreview.updateLots.length}件 / スキップ {progressImportPreview.skipped.length}件
+                     {progressImportPreview.profileWhy ? <span data-progress-profile={progressImportPreview.profileName}> ・{progressImportPreview.profileWhy}</span> : null}
+                     {progressImportPreview.reader ? <span data-progress-reader={progressImportPreview.reader}> ・読み手 {progressImportPreview.reader === 'jszip' ? 'JSZip（ExcelJS で読めなかったので読み直し）' : 'ExcelJS'}</span> : null}
                    </div>
                  </div>
                </div>
@@ -33849,6 +34251,8 @@ const QuotaStoppedPanel = ({ until }) => (
                    </div>
                  </div>
                )}
+               {/* 📊 P095/P152 元表の食い違い・安全弁・選び口・検査済みの指図・表では終わっている物(新ファイル ProgressImportExtras.jsx) */}
+               <ProgressImportExtras preview={progressImportPreview} templates={templates} onSetOpt={setProgressImportOpt} />
 
                {/* 新規作成 */}
                {progressImportPreview.createLots.length > 0 && (
@@ -33947,7 +34351,8 @@ const QuotaStoppedPanel = ({ until }) => (
                              <td className="p-2 font-mono text-slate-400">{s.row}</td>
                              <td className="p-2 font-mono">{s.orderNo}</td>
                              <td className="p-2">{s.model}</td>
-                             <td className="p-2 text-slate-500">{s.reason}</td>
+                             {/* 部品の言葉に: 純関数の理由「型式マスタに型式の登録なし」= 品質規格マスタに品目コードの紐付けなし */}
+                             <td className="p-2 text-slate-500">{s.reason === PS_REASON.NO_MASTER ? '品質規格マスタに品目コードの紐付けなし（未登録リストへ）' : s.reason}</td>
                            </tr>
                          ))}
                        </tbody>
@@ -33965,13 +34370,13 @@ const QuotaStoppedPanel = ({ until }) => (
 
              <div className="border-t bg-slate-50 p-3 flex justify-between items-center shrink-0">
                <div className="text-xs text-slate-500">
-                 確定すると、新規 {progressImportPreview.createLots.length}件 を作成、更新 {progressImportPreview.updateLots.length}件 を反映します
+                 確定すると、新規 {progressCreateList(progressImportPreview).length}件 を作成、更新 {progressImportPreview.opts?.updateDue === false ? 0 : progressImportPreview.updateLots.length}件 を反映します{progressImportPreview.opts?.deleteStale && (progressImportPreview.counts?.staleDeletable || 0) > 0 ? `、検査リストから ${progressImportPreview.counts.staleDeletable}件 を消します` : ''}
                </div>
                <div className="flex gap-2">
                  <button onClick={() => setProgressImportPreview(null)} className="px-4 py-2 border rounded font-bold text-slate-600 hover:bg-white">キャンセル</button>
                  <button
                    onClick={confirmProgressImport}
-                   disabled={progressImportPreview.createLots.length === 0 && progressImportPreview.updateLots.length === 0}
+                   disabled={progressCreateList(progressImportPreview).length === 0 && (progressImportPreview.opts?.updateDue === false || progressImportPreview.updateLots.length === 0) && !(progressImportPreview.opts?.deleteStale && (progressImportPreview.counts?.staleDeletable || 0) > 0)}
                    className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded font-bold shadow flex items-center gap-2"
                  >
                    <Check className="w-4 h-4"/> 取込み確定
