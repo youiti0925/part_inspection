@@ -218,7 +218,7 @@ const PAIRS = [
   { file: 'domain/opsimRules.js', product: 'product-inspection-app/src/domain/opsimRules.js', md5: '6d9424352af9ae67c914da2c2b3589a7' },
   { file: 'domain/parallelLab/adoption.js', product: 'product-inspection-app/src/domain/parallelLab/adoption.js', md5: '1131091501252fdb0bd065feb00eba15' },
   { file: 'domain/parallelLab/compareThree.js', product: 'product-inspection-app/src/domain/parallelLab/compareThree.js', md5: 'f056bed519f4c82d91142b511835bf56' },
-  { file: 'domain/parallelLab/fullPairInput.js', product: 'product-inspection-app/src/domain/parallelLab/fullPairInput.js', md5: 'c8abcf96027b599b126cfc2dcf07f36a' },
+  { file: 'domain/parallelLab/fullPairInput.js', product: 'product-inspection-app/src/domain/parallelLab/fullPairInput.js', md5: '9de478eb09bcefb9b8f091dc99c52bdd' },
   { file: 'domain/parallelLab/juggling.js', product: 'product-inspection-app/src/domain/parallelLab/juggling.js', md5: 'ed8d2f146fd1982b75e753604ad866eb' },
   { file: 'domain/parallelLab/lotPair.js', product: 'product-inspection-app/src/domain/parallelLab/lotPair.js', md5: '5f870ea061f019c8a324ba34f7e03996' },
   { file: 'domain/parallelLab/lotParallel.js', product: 'product-inspection-app/src/domain/parallelLab/lotParallel.js', md5: '23486f8922cc8508cbcf57cca050fed9' },

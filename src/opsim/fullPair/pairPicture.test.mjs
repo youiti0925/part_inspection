@@ -37,7 +37,7 @@ test('PIC-1 帯の行は 作業者・Aの機械・Bの機械。区切りは計�
 test('PIC-2 止まった時: 時間の無い工程・途中/不良の工程・機械が未確認の工程に 赤い印。場所と片道は移動の所へ', () => {
   const tC = [T('look', 0, '外観', 5), T('size', 1, '寸法', null), T('volt', 2, '耐圧試験', 12, { auto: true }), T('off', 3, '取外し', 2, { machine: true })];
   const C = { id: 'c', lot: lotOf('c', 2, tC, { 'look-0': { status: 'ng' } }), times: tC, zoneId: '', label: 'C型' };
-  const p = fullPairInputOf({ A, B: C, travelMin: null });
+  const p = fullPairInputOf({ A, B: C, travelMin: null, conditions: { inProgressAsWhole: false } }); // 途中を止める側の印を確かめる(既定は止めない)
   assert.equal(p.ok, false);
   const strips = stepStripsOf(A, C);
   const x = problemsOf(p.errors, strips);

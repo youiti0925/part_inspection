@@ -21,7 +21,9 @@ export const FULL_PAIR_CONDITIONS = Object.freeze({
   sameMachine: false,       // AとBで同じ機械を使う(取り合う)
   mayLeave: true,           // 自動運転の間は 人が離れてよい
   anyone: true,             // 誰でもどの工程もできる(最終検査の既定と同じ考え)
-  inProgressAsWhole: false, // 残時間・占有状態のない途中工程は計算を止める
+  // 🔧 2026-09-28 清水さん「シミュが何回も止まって一回も試せていない」: 途中・停止中・不良の工程が1つあるだけで計算全体を止めていた。
+  //   既定は「残りを1工程分まるごと」と仮定して計算を続ける(実際より長めに出る側=短縮を多めに言わない)。仮定は画面の札に出す。false で前の止め方に戻る。
+  inProgressAsWhole: true,
   holdToNext: true,         // 製品を取り外すまで機械を空き扱いにしない
   maxDelayA: 0,             // 組む前より Aが何分まで遅れてよいか
   maxDelayB: 0,             // 組む前より Bが何分まで遅れてよいか
@@ -68,8 +70,8 @@ export function fullPairJobsOf({ lotKey, lot, times, machineId, conditions = FUL
     if (!s || s === 'waiting' || s === 'pending') return 'waiting';
     if (DONE.has(s)) return 'done';
     inProgress += 1;
-    blocked.add('作業中・停止中・不良の工程があります。残時間と設備占有を確認してから比較してください');
-    return 'waiting'; // diagnostics only: blocked prevents this input reaching the scheduler
+    if (!c.inProgressAsWhole) blocked.add('作業中・停止中・不良の工程があります。残時間と設備占有を確認してから比較してください');
+    return 'waiting'; // 残りを1工程分まるごととして計算に入れる(inProgressAsWhole=false の時だけ止める)
   };
   const push = (job, unit) => {
     jobs.push(job);
@@ -96,7 +98,7 @@ export function fullPairJobsOf({ lotKey, lot, times, machineId, conditions = FUL
       // 不良を完了扱いにしない。ロット共通の途中状態は下で拒否する。
       if (lotOnceTasksOf(tasks, s, idx).some((x) => LOT_DONE.has(str(x && x.status)))) return;
       if (lotOnceTasksOf(tasks, s, idx).some((x) => !['', 'waiting', 'pending'].includes(str(x && x.status)))) {
-        inProgress += 1; blocked.add('ロット共通工程の途中・不良が残っています。確認後に比較してください');
+        inProgress += 1; if (!c.inProgressAsWhole) blocked.add('ロット共通工程の途中・不良が残っています。確認後に比較してください');
       }
       for (let u = 0; u < q; u += 1) flush(u);
       if (c.holdToNext && t.machine && q > 1 && lastMachineJob.some(Boolean)) {
@@ -199,9 +201,11 @@ export function fullPairInputOf({ A, B, travelMin = null, sameZone = false, trav
   assumptions.push(c.mayLeave ? '自動運転の間は 人が離れてよい' : '自動運転の間も 人はそばで見ている');
   assumptions.push(c.holdToNext ? '連続する設備工程は次の対応まで機械を占有する' : '工程ごとに機械を解放する試算。実際に取り外せることの確認が必要');
   if (c.anyone) assumptions.push('誰でもどの工程もできる');
-  if (ja.inProgress + jb.inProgress > 0) assumptions.push(`途中・不良の工程 ${ja.inProgress + jb.inProgress}件は残時間未確認のため計算を止めた`);
+  if (ja.inProgress + jb.inProgress > 0) assumptions.push(c.inProgressAsWhole
+    ? `途中・不良の工程 ${ja.inProgress + jb.inProgress}件は 残りを1工程分まるごとと仮定(長めに出る)`
+    : `途中・不良の工程 ${ja.inProgress + jb.inProgress}件は残時間未確認のため計算を止めた`);
   if (merged) assumptions.push(`工程が多いので 続いている手作業を台ごとに1つの塊にした(${ja.merged + jb.merged}工程。組む前が長めに出て 短縮が多めに出ることがある)`);
-  assumptions.push(sameZone && !sameMin ? '同じ区画なので 移動は0分' : `片道 ${Number.isFinite(travelMin) ? travelMin : '—'}分${travelNote ? `(${travelNote})` : ''}`);
+  assumptions.push(sameZone && !sameMin ? '同じ区画なので 移動は0分' : `片道 ${Number.isFinite(travelMin) ? Math.round(travelMin * 10) / 10 : '—'}分${travelNote ? `(${travelNote})` : ''}`);
   assumptions.push(context ? `指定した勤務日・休憩・終業を反映（勤務外の自動運転は${context.autoOutsideWindows ? '続ける' : '続けない'}）` : `時間の相性を見る試算。休憩・終業は未反映。${availability ? '到着待ちを含む共通の基準時点' : '2ロットがそろった時点'}から数えた`);
   assumptions.push('登録納期は日付のみ。時刻つきの納期確認は別途必要');
   if (context?.errors?.length) errors.push(...context.errors);
