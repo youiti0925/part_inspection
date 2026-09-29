@@ -183,7 +183,7 @@ import { liveSecOf, rebuildBatchStartTimes, mergeRestoredBatchStartTimes } from 
 import { isAutoStep as isAutoStepShared, buildStepMasterIndex } from './domain/workExecution.js';
 import { annualOccurrencesOf, laborSecOf, machineSecOf } from './domain/goal/occurrence.js';
 // 🚶 自動終了の後追い・掛け持ち案内(製品検査 src/domain/juggleGuide.js と md5 一致の写し)
-import { juggleCandidates, autoLimitSecOf, autoCatchUp, manualRunningOn } from './domain/juggleGuide.js';
+import { juggleCandidates, autoLimitSecOf, autoCatchUp } from './domain/juggleGuide.js';
 import { setEstimatedSession } from './domain/workSessions.js';
 import ZoneTravelSettings from './ZoneTravelSettings.jsx';
 import { JuggleGuideSwitch } from './JuggleGuideSwitch.jsx'; // 🚶 掛け持ち案内の ON/OFF(既定 OFF)
@@ -200,7 +200,7 @@ import { seqTaskKeyOf, seqTaskOf, seqMovesOf, seqStatusGridOf, seqNextOf, seqWhi
 // 🖐 順序実行の作業画面の部品(製品検査 src/workscreen/SeqParts.jsx と1バイト同じ写し)
 import { SeqPresetSwitch, SeqTimeBand, SeqOrderStrip, SeqOrderSheet, SeqPanel, SeqUpcoming, SeqZoom, SeqWaitCard } from './workscreen/SeqParts.jsx';
 // 🚦 全ロットを見る開始ガード(1人の手作業は同時に1つ・自動測定は別。製品検査 src/domain/lotStartGuard.js と md5 一致の写し)
-import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY, stepForTask } from './domain/lotStartGuard.js';
+import { guardLotTaskStart, REWORK_STEP, SEQUENTIAL_KEY } from './domain/lotStartGuard.js';
 // 工場の暦(祝日・全社休業・休日出勤)。4アプリで同じ物(md5 一致)。
 //   🚨 登録が空なら 月〜金 = 今までと1ミリも同じ挙動。
 //   置き場所は検査アプリ共通の棚 contact-shared-v1/settings/config.factoryCalendar。
@@ -10883,9 +10883,13 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
           // 🖐 2026-09-27 製品 25370c7 と同じ: 手作業が1つも動いておらず自動測定だけが動いている時は「動かしたまま閉じる」を選べる。
           //   手作業が動いている時は今までどおり(一時停止して閉じる)。
           const liveLot = { ...lot, tasks: tasksRef.current || tasks || lot.tasks || {} };
-          const autoRunning = Object.keys(liveLot.tasks).some((k) => { const t = liveLot.tasks[k]; if (!t || t.status !== 'processing') return false; const st = stepForTask(liveLot.steps || [], k); return !!st && isAutoStep(st); });
-          if (autoRunning && !manualRunningOn(liveLot, isAutoStep)) {
-              if (confirm('自動測定が動いています。\n動かしたまま閉じますか？(時間は進み続け、開き直すと続きから)\n\n［キャンセル］で「一時停止して閉じる / やめる」を選べます')) {
+          // 🖐 2026-09-29 清水さん「自動測定のみが動作している場合だけじゃなくて全部で変更して」:
+          //   9/27 の直しは「自動測定だけが動いている時」しか効かず、工程の合間・手作業中・三次元測定(テンプレで手作業扱い)では
+          //   一時停止しか選べなかった(本番の記録で確認)。→ 何かが動いていれば、いつでも「止めずに閉じる」を選べる。
+          //   時間は工程ごとの開始時刻で数え続け、開き直すと続きから。［キャンセル］で今までの「一時停止して閉じる / やめる」。
+          const anyRunning = !!isTimerRunning || Object.keys(liveLot.tasks).some((k) => { const t = liveLot.tasks[k]; return !!t && (t.status === 'processing' || (t.status === 'reworking' && !!t.reworkStartTime && !t.reworkPausedAt)); });
+          if (anyRunning) {
+              if (confirm('作業中です。\n止めずに閉じますか？(時間は進み続け、開き直すと続きから)\n\n［キャンセル］で「一時停止して閉じる / やめる」を選べます')) {
                   result = await settleSaveBriefly(onSave({ measurementResults }));
                   if (result === 'error') { keepOpen = true; alert('🚨 保存ができませんでした。画面は閉じません。\n\n画面上の赤い帯の内容を確認してください。入力はそのまま残っています。'); return; }
                   return;
