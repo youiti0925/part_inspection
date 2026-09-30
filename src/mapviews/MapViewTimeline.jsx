@@ -967,7 +967,7 @@ export default function MapViewTimeline(props) {
               <div key={b.lot.id} className="absolute inset-x-0" style={{ top: `${b.row * BAR_ROW_REM + 0.25}rem`, height: `${BAR_ROW_REM - 0.35}rem` }}>
                 <TimeBar
                   lot={b.lot} sum={b.sum} eta={b.eta} zone={zoneOf(b.lot)}
-                  workerName={(workersArr.find((w) => w.id === b.lot.workerId) || {}).name || ''}
+                  workerName={(() => { const lw = workersArr.find((w) => w.id === b.lot.workerId); return lw ? laneNameOf(lw, lw.name || '') : ''; })()}
                   late={b.late} locked={locked} carried={b.carried} tplName={tplNameOf(b.lot)}
                   dragProps={dragPropsFor(b.lot, locked)} onOpen={openExec} dragging={dragLotId === b.lot.id}
                   leftPct={startPct} measuredPct={Math.max(measuredEnd - startPct, 0)} forecastPct={Math.max(totalEnd - measuredEnd, 0)}

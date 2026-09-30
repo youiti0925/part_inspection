@@ -69,17 +69,25 @@ export const toTimeStr = (ms) => {
 const WDAY = ['日', '月', '火', '水', '木', '金', '土'];
 
 // 本日(7/29 火) / 明日(7/30 水) / あさって。曜日まで出す = 「明日って何日だっけ」を無くす。
-export const quickDateOptions = (now = Date.now(), count = 3) => {
+// 🚨 2026-09-25 組立からの声「本日・明日・明後日に土日祝(出勤日でない日)が出る。金曜なら 金・月・火 にして」
+//   → isWorkday(ms→真偽。factoryCalendar の makeIsWorkday)を渡すと、出勤日だけを count 個並べる。
+//     名前は「本当に今日から0/1/2日後」の時だけ 本日/明日/あさって。金曜の次の月曜は「明日」ではないので 日付を名前にする。
+//     今日が休みなら「本日」は出さず、次の出勤日から並べる。isWorkday を渡さなければ前と同じ(暦日で count 個)。
+export const quickDateOptions = (now = Date.now(), count = 3, isWorkday = null) => {
     const base = new Date(now); base.setHours(0, 0, 0, 0);
     const names = ['本日', '明日', 'あさって'];
     const out = [];
-    for (let i = 0; i < Math.max(1, count); i++) {
+    const want = Math.max(1, count);
+    for (let i = 0; out.length < want && i < 60; i++) {
         const d = new Date(base); d.setDate(d.getDate() + i);
+        if (typeof isWorkday === 'function' && !isWorkday(d.getTime())) continue;
+        const md = `${d.getMonth() + 1}/${d.getDate()}`;
+        const name = names[i] || (typeof isWorkday === 'function' ? `${WDAY[d.getDay()]}曜` : `${i}日後`);
         out.push({
-            key: `d${i}`,
+            key: `d${out.length}`,
             value: toDateStr(d.getTime()),
-            label: `${names[i] || `${i}日後`}(${d.getMonth() + 1}/${d.getDate()} ${WDAY[d.getDay()]})`,
-            short: names[i] || `${i}日後`,
+            label: `${name}(${md} ${WDAY[d.getDay()]})`,
+            short: name,
         });
     }
     return out;

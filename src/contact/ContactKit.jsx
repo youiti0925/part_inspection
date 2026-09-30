@@ -38,6 +38,7 @@ import { addWorkSeconds } from '../domain/workClock.js';
 import { buildArrivalItems } from '../domain/arrivalActual.js';
 import { finishEta, finishEtaView } from '../domain/finishEta.js';
 import { layoutInfo, nextLayoutMode, readLayoutMode, saveLayoutMode, layoutModeLabel } from '../domain/layoutMode.js';
+import { makeIsWorkday } from '../domain/factoryCalendar.js';
 import Viz from '../opsim/vizKit.jsx';
 import { FeedbackModal } from '../AppFeedback.jsx';
 import { NoticePopup } from '../AppNotice.jsx';
@@ -3236,7 +3237,7 @@ const ArrivalSheet = ({
   const mTap = narrow ? ' min-h-11' : '';
   const mTapSq = narrow ? ' min-h-11 min-w-11 flex items-center justify-center' : '';
   const t11 = narrow ? 'text-xs' : 'fi-tap-text';
-  const [date, setDate] = useState(current?.date || todayStr);
+  const [date, setDate] = useState(current?.date || dates[0]?.value || todayStr);
   const [time, setTime] = useState(current?.time || '');
   const [manual, setManual] = useState(false);
   // 💬ひとこと。msg=本文 / serial=機番・番号(指図は上に大きく出ているので、足りないのは機番だけ)
@@ -3597,7 +3598,7 @@ const NewLotSheet = ({ models = [], dates = [], times = [], todayStr, onSubmit, 
   const [dueDate, setDueDate] = useState('');
   // 到着予定は任意。押した時だけ日付・時刻を出す(「まだ分からない」でも送れるようにするため)。
   const [arrOn, setArrOn] = useState(false);
-  const [date, setDate] = useState(todayStr);
+  const [date, setDate] = useState(dates[0]?.value || todayStr);
   const [time, setTime] = useState('');
   const [manual, setManual] = useState(false);
   // 二度押しで同じ申告が2件できるのを防ぐ。⚠送るのをやめた時は必ず戻す(押せないまま固まらせない)。
@@ -4099,7 +4100,8 @@ const ContactPortal = ({ lots, contactRequests, arrivalTimes, saveData, settings
     : modelPick.type === 'prefix' ? modelPick.p
     : (modelFams.find(g => g.id === modelPick.id)?.label || 'その他');
   const byName = name.trim() || group;
-  const quickDates = useMemo(() => quickDateOptions(nowTick, 3), [nowTick]);
+  // 🚨 2026-09-25 組立の声: 休みの日(土日祝)をボタンに出さない。暦がまだ届いていない時も土日は外れる(makeIsWorkday(null)=月〜金)。(製品と同じ直し・09-30 部品へ)
+  const quickDates = useMemo(() => quickDateOptions(nowTick, 3, makeIsWorkday(factoryCalWs)), [nowTick, factoryCalWs]);
   const quickTimes = useMemo(() => quickTimesOf(settings), [settings]);
   // 返信・回答は検査側の端末(side:'app')へプッシュ通知(設定済みなら)
   const appLink = (() => { try { return `${window.location.origin}/`; } catch (e) { return ''; } })();

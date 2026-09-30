@@ -158,6 +158,69 @@
    "who": "清水",
    "why": "作業標準の資料PDFの実体(P061・製品と同じ)。資料の一覧を開いた時だけ1回読む。資料の登録数に律速(部品は今0件)。",
    "maxDocs": 10
+  },
+  {
+   "app": "parts",
+   "file": "src/App.jsx",
+   "col": "lots",
+   "kind": "getAll",
+   "who": "清水",
+   "why": "部品の P136 週次ブリーフ(generateWeeklyBrief・設定 weeklyBrief.enabled が true の時だけ・週1回1端末)で、年間目標の3アプリ合算の為に **最終検査のロット** を読む所。製品の同じ例外(製品 src/App.jsx lots getAll 上限3000)を写した(2026-09-30)。製品の理由: 年間目標の3アプリ合算で **他のアプリ(最終検査・部品検査)のロット** を読む所。①測る窓は max(いちばん古い実績, 直近90日) で、先に絞ると『いちばん古い実績』が動いて窓の長さが変わり年換算の金額が変わる ②年間目標の画面は改善カルテの対策実施日(年度のはじめまで遡る)以降の実施回数を数える。製品自身のロットは窓+ページ送りで読んでいる。実測 最終391件・部品0件。",
+   "maxDocs": 3000
+  },
+  {
+   "app": "parts",
+   "file": "src/App.jsx",
+   "col": "improvements",
+   "kind": "getAll",
+   "who": "清水",
+   "why": "部品の P136 週次ブリーフで **製品と最終検査の改善カルテ** を読む所(製品が作る物と同じ中身にする為)。製品の同じ例外(製品 src/App.jsx improvements getAll 上限200)を写した(2026-09-30)。製品の理由: 改善カルテ。年度の貯金箱(確定と実施中の金額)を全カードから合計するので、件数で切ると確定した金額が黙って減る。年間目標では最終検査ぶんも同じ形で読む。実測4件。",
+   "maxDocs": 200
+  },
+  {
+   "app": "parts",
+   "file": "src/App.jsx",
+   "col": "templates",
+   "kind": "getAll",
+   "who": "清水",
+   "why": "部品の P136 週次ブリーフで **製品のテンプレ** を名前解決用に読む所。製品の同じ例外(製品 src/App.jsx templates getAll 上限60)を写した(2026-09-30)。製品の理由: 検査テンプレのマスタは全件が画面の土台。件数は型式数に律速され急に増えない(実測28件)。",
+   "maxDocs": 60
+  },
+  {
+   "app": "parts",
+   "file": "src/App.jsx",
+   "col": "video_recipes",
+   "kind": "watchCollection",
+   "who": "清水",
+   "why": "🎬 E42 動画の再生レシピ(製品から写した画面と同じ使い方)。製品の同じ例外(製品 src/App.jsx video_recipes watchCollection 上限60)を写した(2026-09-30)。製品の理由: 動画の再生レシピ。書類の id がDriveのファイルidで、🚨並べ替えられる日付の項目が1つも無い。工程キーで引く使い方なので新しい順にも切れない。Driveの動画の本数=工程マスタに律速される。実測2件。",
+   "maxDocs": 60
+  },
+  {
+   "app": "parts",
+   "file": "src/App.jsx",
+   "col": "model_templates",
+   "kind": "watchCollection",
+   "who": "清水",
+   "why": "📋 P130 品目コード専用テンプレ。製品の同じ例外(製品 src/App.jsx model_templates watchCollection 上限100)を写した(2026-09-30)。製品の理由: 型式マスタに律速される一覧(実測0件)。急に増えない。",
+   "maxDocs": 100
+  },
+  {
+   "app": "parts",
+   "file": "src/liveRooms.js",
+   "col": "live_rooms",
+   "kind": "getAll",
+   "who": "清水",
+   "why": "ライブ配信の部屋の掃除(src/liveRooms.js は製品と同じ中身)。製品の同じ例外(製品 src/liveRooms.js live_rooms getAll 上限100)を写した(2026-09-30)。製品の理由: 古い部屋の掃除は全件照会が本質。親の無い部屋は照会しないと一生消えない。TTLで平常時はほぼ0件。",
+   "maxDocs": 100
+  },
+  {
+   "app": "parts",
+   "file": "src/liveRooms.js",
+   "col": "live_frames",
+   "kind": "getAll",
+   "who": "清水",
+   "why": "ライブ配信の絵の掃除(src/liveRooms.js は製品と同じ中身)。製品の同じ例外(製品 src/liveRooms.js live_frames getAll 上限300)を写した(2026-09-30)。製品の理由: 親の無い絵の掃除は全件照会が本質。掃除しないと一生残る。",
+   "maxDocs": 300
   }
  ]
 }

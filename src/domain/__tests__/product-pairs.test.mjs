@@ -67,7 +67,7 @@ const PAIRS = [
   { file: 'domain/arrivalActual.js', product: 'product-inspection-app/src/domain/arrivalActual.js', md5: '21a3bdfa635f8a4090bddab4273c0561' },
   { file: 'domain/arrivalSplits.js', product: 'product-inspection-app/src/domain/arrivalSplits.js', md5: '6e92853720d04ee1922b02f3dc5c16a6' },
   { file: 'domain/completeSplit.js', product: 'product-inspection-app/src/domain/completeSplit.js', md5: '379f1fbe7f753972f254859cd843c109' },
-  { file: 'domain/contactBoard.js', product: 'product-inspection-app/src/domain/contactBoard.js', md5: 'e481dccf297dedb4e103e28422043ccc' },
+  { file: 'domain/contactBoard.js', product: 'product-inspection-app/src/domain/contactBoard.js', md5: 'ceab0c4fd329cf879887859ac33f2bb8' },
   { file: 'domain/dailyWork.js', product: 'product-inspection-app/src/domain/dailyWork.js', md5: '9b7a8345c294337d7b5818d48ddc4252' },
   { file: 'domain/diagramOffload.js', product: 'product-inspection-app/src/domain/diagramOffload.js', md5: '7a89bbb10934294a761274be46291c68' },
   { file: 'domain/dispatchWords.js', product: 'product-inspection-app/src/domain/dispatchWords.js', md5: '10d0d8fc7ac71f49a71a7bd7f8404ff0' },

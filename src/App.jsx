@@ -36,7 +36,7 @@ import MapViewLanes from './mapviews/MapViewLanes.jsx';
 import MapViewTimeline from './mapviews/MapViewTimeline.jsx';
 import { fmtWorkSec } from './domain/incomingWork.js';
 import { auditProgressRows } from './domain/progressSheetAudit.js';
-import { orderNosOfRows, orderNoChunks, orderNoLotsSpec, mergeLotsForImport, dropAlreadyExisting } from './domain/importExistingCheck.js';
+import { orderNosOfRows, orderNoChunks, mergeLotsForImport, dropAlreadyExisting } from './domain/importExistingCheck.js';
 import { judgeTemplateSkip, buildTemplateSkippedTasks, isTemplateSkippedLot } from './domain/templateSkip.js';
 // 🏷 品目名簿 (品目コード → 品名)。2026-09-21 清水さん「品目テキストという枠が必要なぐらい」。
 //   直す前は読む所が3箇所あるのに書く所が0で、名簿は「在るのに永久に空」だった。
@@ -123,7 +123,7 @@ import {
 // 📉 2026-09-28 ロットは「前回の続きだけ読む」(製品 bb9933d・最終 b73f22f と同じ考えを部品の窓の形に合わせた)。
 //   決まりは純関数(domain/lotsDeltaSync.js)、順番は係(domain/lotsDeltaController.js)。試験: src/domain/__tests__/lotsDeltaSync.test.mjs
 import {
-  LOTS_TOMB_COL, DELTA_WAKE_GAP_MS, deltaLotsSpec, tombLotsSpec, tombDocOf, tsMs, isServerStamp,
+  LOTS_TOMB_COL, DELTA_WAKE_GAP_MS, DELTA_LIMIT, TOMB_LIMIT, tombDocOf, tsMs, isServerStamp,
 } from './domain/lotsDeltaSync.js';
 import { createLotsDeltaSync } from './domain/lotsDeltaController.js';
 /** 📉 端末の控え(persistentLocalCache)を作れたか。作れない端末は毎回ぜんぶ読む(今までどおり)。 */
@@ -4994,8 +4994,10 @@ const InteractiveMap = ({ lots, workers, templates, handleMoveLot, saveData, set
            zoneLots.forEach(l => {
              const isProcessing = checkLotProcessing(l);
              const worker = workers.find(w => w.id === l.workerId);
-             const wName = worker?.name || (zone.isPersonal ? zone.name : null);
-             if (!wName) return;
+             const baseName = worker?.name || (zone.isPersonal ? zone.name : null);
+             if (!baseName) return;
+             // 🛌 休止中の人の名前は 🛌 を付ける(作業が残っている間は出す決まり。休止したのに消えていないように見えるのを無くす)(製品と同じ・09-30)
+             const wName = worker ? laneNameOf(worker, baseName) : baseName;
              if (isProcessing) activeWorkers.add(wName);
              else assignedWorkers.add(wName);
            });
@@ -33212,10 +33214,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        ns: APP_DATA_ID, enabled, storage,
        getCachedLots: () => P.getCachedDocs(APP_DATA_ID, 'lots', {}, { map: cachedRowOf }),
        // ⚠ includeMetadataChanges: 切れて戻った合図を課金の見込みの帳面(P-L1)が受け取れるように(①が控えに移ったので、その役をこちらが持つ)
-       openDelta: (sinceMs, next, onErr) => P.watchQuery(APP_DATA_ID, 'lots', deltaLotsSpec(sinceMs), metered('lots(差分)', next),
+       // 📖 絞り込みは字面で書く(読み取りの枠の見張りが where を静的に読めるように・最終と同じ形)。中身は deltaLotsSpec(sinceMs) と同じ(試験 DS26)
+       openDelta: (sinceMs, next, onErr) => P.watchQuery(APP_DATA_ID, 'lots', { where: [['updatedAt', '>', new Date(sinceMs)]], orderBy: [['updatedAt', 'asc']], limit: DELTA_LIMIT }, metered('lots(差分)', next),
          { map: deltaRowOf, includeMetadataChanges: true, onError: onErr }),
        // ⚠ includeMetadataChanges: 最初の答えが控えから来た時も「サーバで確かめた」合図を受ける(受けないと差分読みの控え帳が書けない)
-       openTombs: (sinceMs, next, onErr) => P.watchQuery(APP_DATA_ID, LOTS_TOMB_COL, tombLotsSpec(sinceMs), metered('lots_deleted(墓標)', next),
+       //   墓標も同じ。中身は tombLotsSpec(sinceMs) と同じ(試験 DS26)
+       openTombs: (sinceMs, next, onErr) => P.watchQuery(APP_DATA_ID, LOTS_TOMB_COL, { where: [['deletedAt', '>', new Date(sinceMs)]], orderBy: [['deletedAt', 'asc']], limit: TOMB_LIMIT }, metered('lots_deleted(墓標)', next),
          { includeMetadataChanges: true, onError: onErr }),
        refetch: (id) => P.refreshDocFromServer(APP_DATA_ID, 'lots', id).then((r) => { countReads('lots(消えたロットの読み直し)', 1); return r; }),
        count: (spec) => P.countQuery(APP_DATA_ID, 'lots', spec).then((n) => { countReads('lots(件数だけ)', Math.max(1, Math.ceil((Number(n) || 0) / 1000))); return n; }),
@@ -33431,7 +33435,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      setArchive('loading');
      (async () => {
        try {
-         const page = await DATA(db).getPage(APP_DATA_ID, 'lots', archiveLotsSpec(before), {});
+         const LOTS_ARCHIVE_SPEC = archiveLotsSpec(before); // where createdAt < 窓の始まり / orderBy createdAt desc / limit ARCHIVE_LIMIT(製品と同じ形)
+         const page = await DATA(db).getPage(APP_DATA_ID, 'lots', LOTS_ARCHIVE_SPEC, {});
          const rows = (page && page.rows) || [];
          countReads('lots(過去の取り寄せ)', queryReads(rows.length));
          if (dead) return;
@@ -35006,7 +35011,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      const orderNos = orderNosOfRows(rows);
      const got = [];
      for (const chunk of orderNoChunks(orderNos)) {
-       const page = await DATA(db).getPage(APP_DATA_ID, 'lots', orderNoLotsSpec(chunk), { source: 'server' });
+       // 📖 絞り込みは字面で書く(読み取りの枠の見張りが where を静的に読めるように)。中身は orderNoLotsSpec(chunk) と同じ(試験で突き合わせ)
+       const page = await DATA(db).getPage(APP_DATA_ID, 'lots', { where: [['orderNo', 'in', [...chunk]]] }, { source: 'server' });
        got.push(...((page && page.rows) || []));
      }
      const merged = mergeLotsForImport(lots, got);

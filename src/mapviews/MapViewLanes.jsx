@@ -606,7 +606,7 @@ export default function MapViewLanes(props) {
     zl.forEach((l) => {
       if (!l.workerId) return;
       const w = laneWorkers.find((x) => x.id === l.workerId);
-      const cur = byWorker.get(l.workerId) || { id: l.workerId, name: w ? w.name : String(l.workerId).slice(0, 6), trainee: !!(w && w.trainee), processing: false, paused: false };
+      const cur = byWorker.get(l.workerId) || { id: l.workerId, name: w ? laneNameOf(w, w.name) : String(l.workerId).slice(0, 6), trainee: !!(w && w.trainee), processing: false, paused: false };
       if (checkProcessing(l)) cur.processing = true;
       if (checkPaused(l) || (l.pauseReason && l.pauseReason.category)) cur.paused = true;
       byWorker.set(l.workerId, cur);
@@ -658,7 +658,7 @@ export default function MapViewLanes(props) {
               <div className="fi-tap-text text-slate-400 self-center px-2">担当ロットなし{canMove ? '（ここへ落とすとこの人の担当になります）' : ''}</div>
             )}
             {wl.map((l) => (
-              <LaneLotCard key={l.id} lot={l} zone={zoneOf(l)} workerName={w.name} arrival={arrivals[l.id]} nowMs={nowMs}
+              <LaneLotCard key={l.id} lot={l} zone={zoneOf(l)} workerName={laneNameOf(w, w.name)} arrival={arrivals[l.id]} nowMs={nowMs}
                 settings={settings} onOpenExecution={openExec} ArrivalTag={ArrivalTag} pauseColorOf={pauseColorOf} estSec={estSec} fmtSec={fmtSec}
                 dragProps={dragPropsFor(l)} dragging={dragLotId === l.id} locked={isLocked(l)} lockNote={lockNoteFor(l)} />
             ))}

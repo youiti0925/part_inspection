@@ -600,9 +600,26 @@ test('DS25 🚨 ②と墓標も「サーバで確かめた」合図を受ける(
   //   その合図が来ない → ②の server が立たず(①が上限の日は)控え帳が書けない・墓標の tombServer が立たず差分読みの控え帳が書けない。
   const app = read('App.jsx');
   assert.ok(app.includes("}, { where: [['status', '!=', 'completed']], limit: OPEN_LOTS_LIMIT, includeMetadataChanges: true, ...(src === 'cache' ? { source: 'cache' } : {}), onError:"), '②が「サーバで確かめた」合図を受けない');
-  assert.ok(/openTombs: \(sinceMs, next, onErr\) => P\.watchQuery\(APP_DATA_ID, LOTS_TOMB_COL, tombLotsSpec\(sinceMs\), metered\('lots_deleted\(墓標\)', next\),\s*\{ includeMetadataChanges: true, onError: onErr \}\)/.test(app), '墓標が「サーバで確かめた」合図を受けない');
+  assert.ok(/openTombs: \(sinceMs, next, onErr\) => P\.watchQuery\(APP_DATA_ID, LOTS_TOMB_COL, \{ where: \[\['deletedAt', '>', new Date\(sinceMs\)\]\], orderBy: \[\['deletedAt', 'asc'\]\], limit: TOMB_LIMIT \}, metered\('lots_deleted\(墓標\)', next\),\s*\{ includeMetadataChanges: true, onError: onErr \}\)/.test(app), '墓標が「サーバで確かめた」合図を受けない');
   // ⚠ 合図だけの答えは画面(setOpenLots・読みの数え)へ流さない = 再描画と読みメーターは今までと同じ
   assert.ok(app.includes("if (openMetaOnly) { if (lotsDeltaRef.current) lotsDeltaRef.current.onWindow('open', rows, snap, src); return; }"), '合図だけの答えで ②の画面を描き直している');
+});
+
+test('DS26 差分・墓標・指図の取り寄せの口は絞り込みを字面で書き、中身は決まりの関数と同じ(読み取りの枠の見張りが where を静的に読める・2026-09-30)', async () => {
+  const app = read('App.jsx');
+  // 差分: deltaLotsSpec と同じ where / orderBy / limit
+  assert.ok(app.includes("P.watchQuery(APP_DATA_ID, 'lots', { where: [['updatedAt', '>', new Date(sinceMs)]], orderBy: [['updatedAt', 'asc']], limit: DELTA_LIMIT }, metered('lots(差分)', next),"), '差分の口の字面が変わった');
+  assert.deepEqual(deltaLotsSpec(1000), { where: [['updatedAt', '>', new Date(1000)]], orderBy: [['updatedAt', 'asc']], limit: DELTA_LIMIT });
+  // 墓標: tombLotsSpec と同じ
+  assert.ok(app.includes("P.watchQuery(APP_DATA_ID, LOTS_TOMB_COL, { where: [['deletedAt', '>', new Date(sinceMs)]], orderBy: [['deletedAt', 'asc']], limit: TOMB_LIMIT }, metered('lots_deleted(墓標)', next),"), '墓標の口の字面が変わった');
+  assert.deepEqual(tombLotsSpec(1000), { where: [['deletedAt', '>', new Date(1000)]], orderBy: [['deletedAt', 'asc']], limit: TOMB_LIMIT });
+  // 指図の取り寄せ(進捗表の取込・30指図ずつ): orderNoLotsSpec と同じ
+  const { orderNoLotsSpec } = await import('../importExistingCheck.js');
+  assert.ok(app.includes("DATA(db).getPage(APP_DATA_ID, 'lots', { where: [['orderNo', 'in', [...chunk]]] }, { source: 'server' });"), '指図の取り寄せの字面が変わった');
+  assert.deepEqual(orderNoLotsSpec(['A', 'B']), { where: [['orderNo', 'in', ['A', 'B']]] });
+  // 過去の取り寄せは製品と同じ形(決まりの関数を変数に入れて渡す)
+  assert.ok(app.includes("const LOTS_ARCHIVE_SPEC = archiveLotsSpec(before);"));
+  assert.ok(app.includes("DATA(db).getPage(APP_DATA_ID, 'lots', LOTS_ARCHIVE_SPEC, {});"));
 });
 
 test('DS23 窓口: source を渡さない時の Firestore の呼び方は今までと同じ・控えだけ読む/1件読み直す/件数だけ が在る', async () => {
