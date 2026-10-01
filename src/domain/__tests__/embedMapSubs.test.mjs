@@ -21,7 +21,8 @@ const app = codeOf(path.join(ROOT, 'src', 'App.jsx'));
 
 // 主の購読の効果(--- Data Sync ---)の中身だけを見る
 const syncStart = app.lastIndexOf('if (LIVE_CODE) return;', app.indexOf("P.watchCollection(APP_DATA_ID, 'templates'"));
-const syncEnd = app.indexOf('}, [user, db, countReads, noteReadError]);', syncStart);
+// 2026-10-01: 枠切れの後の張り直しの合図(readRetryToken)を依存に足した
+const syncEnd = app.indexOf('}, [user, db, countReads, noteReadError, readRetryToken]);', syncStart);
 const sync = app.slice(syncStart, syncEnd);
 
 /** `...(EMBED_MAP ? [] : [` から、対になる `])` までを全部集める。 */
