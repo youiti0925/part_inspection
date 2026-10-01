@@ -35788,17 +35788,37 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    useEffect(() => {
      if (!db) return undefined;
      let alive = true;
-     Promise.all([
-       DATA(db).getOne(OPSIM_SHELF_NS, 'daily_load', 'parts').catch((e) => { console.warn('[共有棚] daily_load/parts が読めていません', e); return null; }),
-       DATA(db).getAll(OPSIM_SHELF_NS, 'placement_rules').catch((e) => { console.warn('[共有棚] placement_rules が読めていません', e); return null; }),
-     ]).then(([own, rules]) => {
-       if (!alive) return;
-       setOwnDailyLoad(own || null);
-       setPlacementRules(Array.isArray(rules) ? rules : null);
-       setCapacityShelfLoaded(true);
-     });
+     // 📅 曜日の配置(placement_rules)は、下の「いる人の名前で絞る」effect へ移した(2026-10-01)。
+     DATA(db).getOne(OPSIM_SHELF_NS, 'daily_load', 'parts').catch((e) => { console.warn('[共有棚] daily_load/parts が読めていません', e); return null; })
+       .then((own) => {
+         if (!alive) return;
+         setOwnDailyLoad(own || null);
+         setCapacityShelfLoaded(true);
+       });
      return () => { alive = false; };
    }, [db]);
+   // 📅 曜日の配置(毎週)。共有棚 capacity-shared-v1/placement_rules(人ごとに1件・書類の name 欄＝人の名前)。読めなければ null。
+   //   📉 2026-10-01 全件の1回読みをやめ、**この工場の名簿(workers) に居る名前の分だけ**(name in で絞る・30人ずつ)読む。製品と同じ形。
+   //     部品は相手の工場の名簿を持たない(操業シミュへ渡すのは部品の名簿だけ)ので、配置を引くのも部品の名簿の人だけ = 画面の答えは変わらない。
+   //     名簿が変わった時だけ読み直す。名前がまだ1つも無い間は読まない(null のまま＝まだ読めていない)。
+   //   ⚠1回読みのまま(購読にしない)。今までと同じ。
+   const placementNamesKey = useMemo(() => {
+     const s = new Set();
+     (workers || []).forEach((w) => { const n = w && w.name ? String(w.name).trim() : ''; if (n) s.add(n); });
+     return [...s].sort().join('␟');
+   }, [workers]);
+   useEffect(() => {
+     if (!db) return undefined;
+     const names = placementNamesKey ? placementNamesKey.split('␟') : [];
+     if (!names.length) return undefined;
+     let alive = true;
+     const chunks = [];
+     for (let i = 0; i < names.length; i += 30) chunks.push(names.slice(i, i + 30));
+     Promise.all(chunks.map((chunk) => DATA(db).getAll(OPSIM_SHELF_NS, 'placement_rules', { where: [['name', 'in', chunk]] })))
+       .then((parts) => { if (alive) setPlacementRules(parts.flat().filter((r) => r && r.name)); })
+       .catch((e) => { console.warn('[共有棚] placement_rules が読めていません', e); if (alive) setPlacementRules(null); });
+     return () => { alive = false; };
+   }, [db, placementNamesKey]);
    const publishDailyLoad = useCallback((doc) => {
      if (!db || !doc) return Promise.resolve(false);
      return DATA(db).save(OPSIM_SHELF_NS, 'daily_load', 'parts', doc, { merge: false }).then(() => true);
