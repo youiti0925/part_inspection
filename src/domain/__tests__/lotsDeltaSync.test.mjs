@@ -586,8 +586,9 @@ test('DS22 ①②は差分読みの時だけ端末の控えに張る(問い合�
   assert.ok(app.includes("}, { orderBy: [['createdAt', 'desc']], limit: LOTS_HISTORY_LIMIT, includeMetadataChanges: true, onError:"), '③過去の字面が変わった');
   assert.ok(app.includes("lotsDeltaRef.current.onWindow('live', rows, snap, src);"));
   assert.ok(app.includes("lotsDeltaRef.current.onWindow('open', rows, snap, src);"));
-  assert.ok(app.includes("}, [user, db, lotSubPlan.live, lotsSrc, countReads, noteReadError]);"), '①が張る所の変化で張り直さない');
-  assert.ok(app.includes("}, [lotSubPlan.open, lotsSrc, user, db, countReads, noteReadError]);"), '②が張る所の変化で張り直さない');
+  // 2026-10-01: 枠切れの後の張り直しの合図(readRetryToken)を依存に足した
+  assert.ok(app.includes("}, [user, db, lotSubPlan.live, lotsSrc, countReads, noteReadError, readRetryToken]);"), '①が張る所の変化で張り直さない');
+  assert.ok(app.includes("}, [lotSubPlan.open, lotsSrc, user, db, countReads, noteReadError, readRetryToken]);"), '②が張る所の変化で張り直さない');
   assert.ok(app.includes("if (!lotsSrc || lotsSrc === 'stopped') return;"), '①が張る所を決める前に張っている');
   assert.ok(app.includes('LOTS_CACHE.persistent = true;'), '端末の控えを作れた印が無い');
   assert.ok(app.includes("const enabled = !!(LOTS_CACHE.persistent && backendOf('lots') === 'firebase' && backendOf(LOTS_TOMB_COL) === 'firebase');"));

@@ -36,6 +36,7 @@ export const useContactHub = ({
   db, user, DATA, APP_DATA_ID, settings, saveSettings, saveData, deleteData, lots, lotsLoaded = true,
   currentUserName, activeTab, setActiveTab, contactShared, templates = [], setErrorMsg = null,
   calculateLotEstimatedTime = null, readFailed = null, cleanUndefined = (o) => o,
+  readRetryToken = 0,   // 🚨 2026-10-01 枠切れの後「もう一度読む」で張り直す合図(App の readRetryToken)
 }) => {
   const [contactRequests, setContactRequests] = useState([]);
   const [arrivalTimes, setArrivalTimes] = useState([]);
@@ -56,7 +57,7 @@ export const useContactHub = ({
       P.watchCollection(APP_DATA_ID, 'push_tokens', (rows) => setPushTokens(rows || []), { onError: onErr('push_tokens') }),
     ];
     return () => un.forEach(u => { try { if (typeof u === 'function') u(); } catch { /* noop */ } });
-  }, [user, db, contactFeatureOn]); // eslint-disable-line react-hooks/exhaustive-deps -- 窓口と名前空間は起動中に変わらない
+  }, [user, db, contactFeatureOn, readRetryToken]); // eslint-disable-line react-hooks/exhaustive-deps -- 窓口と名前空間は起動中に変わらない
   const arrivalByLot = useMemo(() => buildArrivalByLot(arrivalTimes, contactRequests, lots), [arrivalTimes, contactRequests, lots]);
   const contactSettings = useMemo(() => contactMergeShared(settings, contactShared), [settings, contactShared]);
   // 共通の棚(宛先グループ・班メンバー)への保存。製品・最終・部品で同じ班を見る。

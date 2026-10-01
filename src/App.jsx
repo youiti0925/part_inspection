@@ -120,6 +120,8 @@ import {
   READ_TALLY_STORAGE_KEY, FREE_TIER_DAILY_READS, LOTS_LIVE_LIMIT, LOTS_HISTORY_LIMIT, OPEN_LOTS_LIMIT,
   archiveLotsSpec, oldestCreatedAt, lotsOverflowOf, ARCHIVE_LIMIT,
 } from './domain/readBudget.js';
+// 🚨 2026-10-01 枠切れの帯: 「もう一度読む」は枠が戻るまで押せない・押したら購読の張り直し・閉じたら畳む(試験: src/domain/__tests__/quotaBand.test.mjs)
+import { quotaRetryState, quotaClockHHMM, isQuotaBandFolded, foldQuotaBand, unfoldQuotaBand } from './domain/quotaBand.js';
 // 📉 2026-09-28 ロットは「前回の続きだけ読む」(製品 bb9933d・最終 b73f22f と同じ考えを部品の窓の形に合わせた)。
 //   決まりは純関数(domain/lotsDeltaSync.js)、順番は係(domain/lotsDeltaController.js)。試験: src/domain/__tests__/lotsDeltaSync.test.mjs
 import {
@@ -8549,7 +8551,7 @@ const ModelQualityInfoPanel = ({ model, stepTitle, info, open, onToggle }) => {
   );
 };
 
-const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, juggleEnabled = false, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [], contactEnabled = false, contactRequests = [], contactGroups = [], contactMembers = {}, notifyPush = null, repairContactOnNg = false, reworkContactSkip = null, videoRecipes = [], onSaveVideoRecipe = null, onOpenKnowledge = null, knowledgeCourses = [], knowledgeRecords = [] }) => {
+const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = null, travelCfg = null, juggleEnabled = false, onClose, onSave: onSaveRaw, onFinish, defectProcessOptions, complaintOptions, lots, templates = [], comboPresets = [], voiceSettingsConfig = {}, voiceCommandsConfig = null, undoTimeout = 5, sharedNotes = [], onOpenWorkStandards = null, workers = [], mapZones = [], saveData = null, currentUserName = '', strictModeRules = {}, strictModeThreshold = 5, execFontScale = 100, onSetExecFontScale = null, modelGroups = [], customTargetTimes = {}, overrunAlertConfig = {}, db = null, rotaryConfig = {}, observationPlans = [], contactEnabled = false, contactRequests = [], contactGroups = [], contactMembers = {}, notifyPush = null, repairContactOnNg = false, reworkContactSkip = null, videoRecipes = [], onSaveVideoRecipe = null, onOpenKnowledge = null, knowledgeCourses = [], knowledgeRecords = [], alertBand = null }) => {
   // 📨 P058/P027 連絡・呼出の下書き(不具合報告の「📨 報告して連絡」からも開く)
   const [contactDraft, setContactDraft] = useState(null);
   // 親側で `lots.find(l => l.id === executionLotId)` が undefined を返すケースに備える。
@@ -13361,6 +13363,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         })()}
 
         <div className="bg-white w-full max-w-6xl h-full max-h-full rounded-2xl shadow-2xl flex flex-col overflow-hidden relative">
+          {/* 🚨 2026-10-01 枠切れの帯(App から渡す)。⚠ヘッダーの **上に流し込む**(重ねない = ヘッダーを覆わない)。 */}
+          {alertBand}
           <div className="bg-slate-800 text-white px-3 py-1.5 flex justify-between items-center shrink-0 gap-2">
              <div className="shrink-0 flex flex-wrap items-center gap-1.5"><h2 className="text-sm font-bold flex items-center gap-1.5"><button onClick={switchToSequential} className="bg-emerald-600 hover:bg-blue-600 px-2 py-0.5 rounded text-xs transition-colors" title="通常モードに切替">カスタム ⇄</button><span className="truncate max-w-[16rem]" title={itemLabel} data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70 text-xs">#{lot.serialNo}</span> {lotTemplate?.name && <span className="text-xs bg-white/15 px-1.5 py-0.5 rounded font-bold truncate max-w-[10rem]" title={`テンプレート: ${lotTemplate.name}`}>📋 {lotTemplate.name}</span>} <span className="text-xs opacity-70 shrink-0">({lot.quantity}台)</span></h2>{inspectorSelector}</div>
              <div className="flex flex-wrap gap-1.5 items-center justify-end">
@@ -14895,6 +14899,8 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
       )}
 
       <div data-exec-shell="seq" className={`bg-white w-full max-w-7xl rounded-2xl shadow-2xl flex flex-col overflow-hidden ${execFold ? 'min-h-full' : 'h-full max-h-full'}`}>
+        {/* 🚨 2026-10-01 枠切れの帯(App から渡す)。⚠ヘッダーの **上に流し込む**(重ねない = ヘッダーを覆わない)。 */}
+        {alertBand}
         <div data-exec-head="seq" className={`bg-slate-800 text-white flex justify-between items-center shrink-0 gap-2 ${execFold ? 'px-2 py-1.5' : 'px-4 py-2'}`}>
           {/* ⚠左の塊は縮む側(min-w-0)。右の【✕閉じる】を画面の外へ押し出さない。 */}
           <div className="min-w-0"><h2 className="text-lg font-bold flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 cursor-pointer"><button onClick={(e) => { e.stopPropagation(); switchToCustom(); }} className="bg-blue-600 hover:bg-emerald-600 px-3 rounded-lg text-sm transition-colors shrink-0 min-h-11" title="カスタムモードに切替">順序実行 ⇄</button><span className="truncate min-w-[4rem] max-w-[16rem]" title={`品目コード: ${lot.model || ''}${lot.modelText ? ` ${lot.modelText}` : ''}`} data-exec-item-label>{itemLabel}</span> <span className="font-mono opacity-70 truncate min-w-[3.5rem] max-w-[8rem]" title={`指図番号: ${lot.serialNo || ''}`}>#{lot.serialNo}</span> {inspectorSelector}</h2></div>
@@ -32077,7 +32083,7 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
 // ⚠戻り値の2つ目 ready が false の間は **数字を出さない**。0件と見分けが付かないため。
 // ⚠この関数はコンポーネントの外に置く(中に書くと毎回作り直され、見張り(eslint)も嫌がる)。
 const useLazyCollection = (ctx, colName, wanted, sortFn) => {
-  const { user, db, countReads, quotaBlockRef, onReadError } = ctx;
+  const { user, db, countReads, quotaBlockRef, onReadError, readRetryToken = 0 } = ctx;
   const [rows, setRows] = useState(null); // null = まだ一度も読んでいない
   const [everWanted, setEverWanted] = useState(false);
   useEffect(() => { if (wanted) setEverWanted(true); }, [wanted]);
@@ -32098,7 +32104,7 @@ const useLazyCollection = (ctx, colName, wanted, sortFn) => {
     countReads(colName, 0, { attach: true }); // 張った事は0件でも残す
     return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [everWanted, colName, user, db]);
+  }, [everWanted, colName, user, db, readRetryToken]);   // 🚨 readRetryToken: 枠切れの後「もう一度読む」で張り直す(2026-10-01)
   return [rows || [], rows !== null];
 };
 
@@ -32309,6 +32315,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
   // 🚨 枠切れ(429)。**自動で何度も読みに行かない**(枠を更に食う)。人が押すまで止めたままにする。
    const [quotaBlock, setQuotaBlock] = useState(null); // { at, until, cols: string[] }
    const quotaBlockRef = useRef(null);
+   // 🚨 2026-10-01 「もう一度読む」= 画面を開き直さず **購読を張り直す** 合図(最終の readRetryToken と同じ形)。
+   //   ⚠開き直す(reload)と、枠切れの間はまた 429 で同じ帯が出て、開き直すたびに読みも増えた。
+   //   ⚠押せるのは枠が戻る時刻(quotaBlock.until)を過ぎてから(quotaRetryState)。
+   const [readRetryToken, setReadRetryToken] = useState(0);
+   // 帯を閉じたら until まで畳む(端末に覚える・try/catch は quotaBand.js の中)。
+   const [quotaBandFolded, setQuotaBandFolded] = useState(() => { try { return isQuotaBandFolded(window.localStorage, Date.now()); } catch { return false; } });
    const [showReadBudget, setShowReadBudget] = useState(false);
    // 過去のロットを一度でも要求したか(要求したら張り続ける = 開くたびに読み直さない)。
    const [lotHistoryWanted, setLotHistoryWanted] = useState(false);
@@ -32793,7 +32805,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
 
    // 🚨 「その画面でしか使わない物」は開いた時だけ読む。
    //   ⚠読み終わるまで ready が false。**false の間は数字を出さない**(0件と見分けが付かない)。
-   const lazyCtx = { user, db, countReads, quotaBlockRef, namespace: APP_DATA_ID, onReadError: noteReadError };
+   const lazyCtx = { user, db, countReads, quotaBlockRef, namespace: APP_DATA_ID, onReadError: noteReadError, readRetryToken };
    const [indirectWork, indirectWorkReady] = useLazyCollection(
      lazyCtx, 'indirectWork',
      lotHistoryNeededNow || showDailySummary || showShiftHandover,
@@ -33158,7 +33170,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      ['templates', 'workers', 'notes', 'announcements', ...(EMBED_MAP ? [] : ['observationPlans']), 'model_templates', DIAGRAM_COLLECTION, 'settings/config', 'contact_shared/settings'].forEach(c => countReads(c, 0, { attach: true }));
      if (stopped) stopAll(); // 張っている最中に枠切れが来た時の取りこぼし防止
      return () => { stopped = true; unsubs.forEach(u => { try { u(); } catch { /* 既に止まっていても構わない */ } }); };
-   }, [user, db, countReads, noteReadError]);
+   }, [user, db, countReads, noteReadError, readRetryToken]);
 
    // ==========================================================================
    // 📉 2026-09-28 ロットは「前回の続きだけ読む」(製品 bb9933d・最終 b73f22f と同じ考え・部品の窓の形に合わせた)
@@ -33266,7 +33278,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        if (lotsDeltaRef.current === ctl) lotsDeltaRef.current = null;
        setLotsSrc(null);
      };
-   }, [user, db, countReads, noteReadError]);
+   }, [user, db, countReads, noteReadError, readRetryToken]);
 
    // ① 普段の窓(いつも購読する分)。⚠並び順・件数・メタデータ変更は「ただの配列/数/真偽」で窓口へ渡す。
    //   行の作り方も今までと同じ {...d.data(), id: d.id}(窓口の既定 = ROW_DOCID_WINS)。
@@ -33307,7 +33319,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      }, { orderBy: [['createdAt', 'desc']], limit: LOTS_LIVE_LIMIT, includeMetadataChanges: true, ...(src === 'cache' ? { source: 'cache' } : {}), onError: (e) => { noteReadError('lots', e); lotsLoadedRef.current = false; setLotsLoaded(false); } });
      countReads('lots(普段の窓)', 0, { attach: true }); // 張った事は0件でも残す
      return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } if (lotsDeltaRef.current) lotsDeltaRef.current.windowOff('live', src); };
-   }, [user, db, lotSubPlan.live, lotsSrc, countReads, noteReadError]);
+   }, [user, db, lotSubPlan.live, lotsSrc, countReads, noteReadError, readRetryToken]);
 
    // 🚨🚨🚨 突き合わせ(直す前 ⇔ 直した後)を **本番のデータで動かしたまま** にする。
    //   historyLots は **今までの購読そのもの**({orderBy createdAt desc, limit 500})。
@@ -33367,7 +33379,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      }, { orderBy: [['createdAt', 'desc']], limit: LOTS_HISTORY_LIMIT, includeMetadataChanges: true, onError: (e) => { noteReadError('lots(過去)', e); lotsLoadedRef.current = false; setLotsLoaded(false); } });
      countReads('lots(過去)', 0, { attach: true }); // 張った事は0件でも残す
      return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } if (lotsDeltaRef.current) lotsDeltaRef.current.windowOff('history', 'server'); };
-   }, [lotSubPlan.history, user, db, countReads, noteReadError]);
+   }, [lotSubPlan.history, user, db, countReads, noteReadError, readRetryToken]);
 
    // ② 窓に入らないが **まだ終わっていない** ロット。窓が上限まで埋まった時だけ張る。
    //   ⚠これが無いと、古いまま作業中のロットが作業画面から消える(現場が止まる)。
@@ -33404,7 +33416,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      }, { where: [['status', '!=', 'completed']], limit: OPEN_LOTS_LIMIT, includeMetadataChanges: true, ...(src === 'cache' ? { source: 'cache' } : {}), onError: (e) => noteReadError('lots(未完了)', e) });
      countReads('lots(未完了)', 0, { attach: true }); // 張った事は0件でも残す
      return () => { try { unsub(); } catch { /* 既に止まっていても構わない */ } if (lotsDeltaRef.current) lotsDeltaRef.current.windowOff('open', src); };
-   }, [lotSubPlan.open, lotsSrc, user, db, countReads, noteReadError]);
+   }, [lotSubPlan.open, lotsSrc, user, db, countReads, noteReadError, readRetryToken]);
 
    // ==========================================================================
    // 🗄 P114 過去の取り寄せ(製品 App.jsx の ③ と同じ考え)。
@@ -33453,6 +33465,84 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      })();
      return () => { dead = true; if (lotsArchiveRef.current === 'loading') lotsArchiveRef.current = 'idle'; };
    }, [needArchive, archiveRetry, user, db, countReads, noteReadError]);
+
+   // ==========================================================================
+   // 🚨 2026-10-01 枠切れ(429)の帯 — 見せ方だけ(保存を止める門は1つも緩めない)
+   // --------------------------------------------------------------------------
+   // ・「もう一度読む」は枠が戻る時刻(quotaBlock.until・日本時間16:00)より前は **押せない**(押すと枠を食い、開き直すとまた429)。
+   // ・押したら **購読を張り直す**(readRetryToken)。画面は開き直さない(入力が残る)。
+   // ・帯は **流し込み**(fixed で上に重ねない)。一覧の画面ではヘッダーの上、作業画面では作業画面のヘッダーの上に1行。
+   // ・閉じたら until まで畳む(細い1行の札。押すと開く)。
+   // ==========================================================================
+   const retryReadsAfterQuota = () => {
+     quotaBlockRef.current = null;
+     setQuotaBlock(null);
+     setReadErrors({});
+     unfoldQuotaBand(typeof window !== 'undefined' ? window.localStorage : null);
+     setQuotaBandFolded(false);
+     // 過去の取り寄せが 429 で止まっていたら、それも取り寄せ直せる形に戻す(要る画面を開いている時だけ読む)。
+     if (lotsArchiveRef.current === 'blocked') { setArchive('idle'); setArchiveRetry(n => n + 1); }
+     setReadRetryToken(n => n + 1);
+   };
+   const onQuotaBandButton = () => {
+     const st = quotaRetryState(quotaBlockRef.current || quotaBlock, Date.now());
+     if (!st.canRetry) return;   // ⚠押せない間は何もしない(disabled の上でも念のため)
+     if (st.action === 'endDrill') { quotaBlockRef.current = null; setQuotaBlock(null); setReadErrors({}); setQuotaBandFolded(false); return; }
+     retryReadsAfterQuota();
+   };
+   const foldQuotaBandNow = () => {
+     if (quotaBlock && !quotaBlock.drill) { try { foldQuotaBand(window.localStorage, quotaBlock.until); } catch { /* 覚えられない端末はその場だけ畳む */ } }
+     setQuotaBandFolded(true);
+   };
+   const unfoldQuotaBandNow = () => {
+     try { unfoldQuotaBand(window.localStorage); } catch { /* noop */ }
+     setQuotaBandFolded(false);
+   };
+   // 🧪 開発時だけの入口(製品の __previewReadQuotaBand と同じ名前)。本番ビルドには入らない(import.meta.env.DEV)。
+   //   ⚠読み書きは1件も起きない。本当の枠切れと同じ形(drill ではない)で帯を出す。false で消す。
+   useEffect(() => {
+     if (!import.meta.env.DEV) return undefined;
+     window.__previewReadQuotaBand = (on = true, untilMs = null) => {
+       if (!on) { quotaBlockRef.current = null; setQuotaBlock(null); return; }
+       const now = Date.now();
+       const rec = { at: now, until: Number.isFinite(untilMs) ? untilMs : nextQuotaResetAt(now), cols: ['(開発時の見本)'] };
+       quotaBlockRef.current = rec; setQuotaBlock(rec);
+     };
+     return () => { try { delete window.__previewReadQuotaBand; } catch { /* noop */ } };
+   }, []);
+   const renderQuotaBand = (where = 'main') => {
+     if (!quotaBlock) return null;
+     const now = Date.now();
+     const st = quotaRetryState(quotaBlock, now);
+     const clock = quotaClockHHMM(quotaBlock.until);
+     const left = formatRemaining(quotaBlock.until - now);
+     const detail = `無料枠は 1日 ${FREE_TIER_DAILY_READS.toLocaleString()}件で、4つのアプリで1つです。止まった読み取り: ${(quotaBlock.cols || []).join(' / ')}（自動では読み直しません）`;
+     if (quotaBandFolded && !quotaBlock.drill) {
+       return (
+         <div data-quota-band="folded" data-quota-where={where} className="shrink-0 bg-rose-700 text-white px-3 h-7 flex items-center gap-2 text-xs font-bold" title={detail}>
+           <Ban className="w-3.5 h-3.5 shrink-0"/>
+           <span className="truncate min-w-0 flex-1">ロットの保存は {clock} 頃まで止めています（読み取りの枠切れ・紙に控えてください）</span>
+           <button onClick={unfoldQuotaBandNow} className="shrink-0 underline decoration-white/60 px-1">開く</button>
+         </div>
+       );
+     }
+     return (
+       <div data-quota-band="1" data-quota-where={where} className="shrink-0 bg-rose-700 text-white px-3 py-1 flex items-center gap-2 text-xs font-bold shadow-md" title={detail}>
+         <Ban className="w-4 h-4 shrink-0"/>
+         <span className="min-w-0 flex-1 truncate">
+           {quotaBlock.drill
+             ? '🧪 練習です（本当は止まっていません）— 枠切れの時はこの帯が出ます'
+             : <>🚨 ロットの保存は <b className="text-sm">{clock} 頃</b>まで止めています（読み取りの枠切れ・{left}）。紙に控え、画面は閉じないでください</>}
+         </span>
+         <button onClick={() => setShowReadBudget(true)} className="shrink-0 bg-white/15 hover:bg-white/25 px-2 min-h-[32px] rounded">通信量</button>
+         <button onClick={onQuotaBandButton} disabled={!st.canRetry} data-quota-retry={st.canRetry ? 'on' : 'off'}
+           className={`shrink-0 px-2 min-h-[32px] rounded flex items-center gap-1 ${st.canRetry ? 'bg-white text-rose-700 hover:bg-rose-50' : 'bg-rose-900/60 text-white/70 cursor-not-allowed'}`}>
+           <RefreshCw className="w-3 h-3"/> {st.label}
+         </button>
+         {!quotaBlock.drill && <button onClick={foldQuotaBandNow} className="shrink-0 hover:bg-white/20 rounded p-1" title={`${clock} まで畳む`}><X className="w-4 h-4"/></button>}
+       </div>
+     );
+   };
 
 
    // --- Font Size Application ---
@@ -33549,8 +33639,11 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          const until = quotaBlockRef.current.until;
          const reason = `読み取りの上限(429)に達しているため、ロットの保存を止めています。\n`
            + `枠が戻るのは ${formatClock(until)} 頃（${formatRemaining(until - Date.now())}）です。\n`
-           + `入力した内容は画面に残っています。画面を閉じないでください。`;
-         note({ reason, counts: null });
+           + `入力した内容は画面に残っています。画面を閉じないでください。紙に控えてください。`;
+         // 🚨 2026-10-01 枠切れの間は **保存を押すたびに** 「消える保存を止めました」の帯(上に固定・ヘッダーを覆う)と
+         //   alert(「画面を開き直して」)が出直していた。開き直すとまた 429 で読みも増える。
+         //   → 知らせるのは上の枠切れの帯1枚だけ(「ロットの保存は止めています」と書いてある)。
+         //   ⚠門はそのまま: ここで必ず投げる(書かない)。呼び出し側へ投げ返す事も今までどおり。
          const e = new Error(reason);
          e.name = 'ReadQuotaBlocked';
          throw e;
@@ -33620,6 +33713,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          }
        }
      } catch (e) {
+       // 🚨 2026-10-01 枠切れで止めた時は alert を出さない(帯1枚で知らせている)。⚠投げるのは同じ。
+       if (e && e.name === 'ReadQuotaBlocked') { console.warn('🚨 枠切れの間はロットを保存しません', col, id); throw e; }
        console.error('🚨 作業の記録が消える保存を止めました', col, id, e);
        alert(`🚨 保存を止めました\n\n${e.message}\n\nこの保存を通すと検査記録(時間取り)が失われます。`
          + `\n画面を開き直して、記録が見えている状態でもう一度お試しください。`);
@@ -34088,7 +34183,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    };
    // 📨 工程連絡(P060/P070/P126/P140/P142/P162/P163)。状態・購読・見回りは src/contact/ContactHub.jsx の1か所。
    //   ⚠ 既定: 部品では連絡は OFF(マスタ設定→工程連絡で入れる)。相手(組立・機械加工)が部品の棚を読む画面がまだ無いため。
-   const contactHub = useContactHub({ db, user, DATA, APP_DATA_ID, settings, saveSettings, saveData, deleteData, lots, lotsLoaded, currentUserName, activeTab, setActiveTab, contactShared, templates, setErrorMsg, calculateLotEstimatedTime, cleanUndefined });
+   const contactHub = useContactHub({ db, user, DATA, APP_DATA_ID, settings, saveSettings, saveData, deleteData, lots, lotsLoaded, currentUserName, activeTab, setActiveTab, contactShared, templates, setErrorMsg, calculateLotEstimatedTime, cleanUndefined, readRetryToken });
    // 📬 P136 週次ブリーフの自動生成(製品と同じ: 週の最初に開いた端末が1回だけ・起動8秒後)。
    //   ⚠書き込み・プッシュをするので 設定 weeklyBrief.enabled が true の時だけ(既定 OFF・連絡設定タブで切替)。
    const weeklyBriefTriedRef = useRef(false);
@@ -36525,27 +36620,9 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        {/* 🚨🚨🚨 読み取りの枠切れ(429)。**検査画面(作業画面)より上に出す**(z は作業画面より大きい)。
               ⚠「エラー」ではなく「いつ直るか」を出す。無料枠は米西部の0時に戻る(いまの季節は日本時間16:00)。
               ⚠この間、自動では読みに行かない(枠を更に食う)。読み直すのは人が押した時だけ。 */}
-       {quotaBlock && (
-         <div className="fixed top-0 left-0 right-0 z-[600] bg-rose-700 text-white px-4 py-3 flex items-start gap-3 shadow-2xl border-b-4 border-rose-300">
-           <Ban className="w-6 h-6 shrink-0 mt-0.5"/>
-           <div className="flex-1 text-sm">
-             <div className="font-black text-base">{quotaBlock.drill ? '🧪 これは練習です（本当は止まっていません）' : '🚨 読み取りの上限に達しました（429）— 画面の数字は当てになりません'}</div>
-             <div className="text-xs opacity-95 mt-1">
-               直るのは <b className="text-base">{formatClock(quotaBlock.until)} 頃</b>（{formatRemaining(quotaBlock.until - Date.now())}）。
-               無料枠は 1日 {FREE_TIER_DAILY_READS.toLocaleString()}件で、<b>4つのアプリで1つ</b>です。
-             </div>
-             <div className="text-xs opacity-95 mt-1">
-               🚨 <b>この間、ロットの保存は止めています</b>（手元が空のまま書くと検査記録が消えるため）。
-               入力した内容は画面に残っています。<b>画面を閉じないでください。</b>
-             </div>
-             <div className="text-xs opacity-80 mt-1">止まった読み取り: {quotaBlock.cols.join(' / ')}（自動では読み直しません）</div>
-           </div>
-           <div className="flex flex-col gap-1 shrink-0">
-             <button onClick={() => setShowReadBudget(true)} className="bg-white text-rose-700 px-3 py-1 rounded font-bold text-xs hover:bg-rose-50">通信量を見る</button>
-             <button onClick={() => { const wasDrill = quotaBlock.drill; quotaBlockRef.current = null; setQuotaBlock(null); setReadErrors({}); if (!wasDrill) window.location.reload(); }} className="bg-rose-900 text-white px-3 py-1 rounded font-bold text-xs hover:bg-rose-950 flex items-center gap-1"><RefreshCw className="w-3 h-3"/> {quotaBlock.drill ? '練習を終わる' : 'もう一度読む'}</button>
-           </div>
-         </div>
-       )}
+       {/* ⚠2026-10-01 前は fixed・z-600 で作業画面のヘッダーまで覆い、「もう一度読む」が reload だった。
+              いまは **流し込み**(ヘッダーを押し下げるだけ)。作業画面の中には alertBand で同じ帯を出す。 */}
+       {renderQuotaBand('main')}
        {/* 📡 この端末が今日読んだ件数。⚠**この端末の分だけ**(他の端末・他の3アプリの分は見えない)。 */}
        {showReadBudget && (
          <div className="fixed inset-0 z-[610] bg-black/50 flex items-center justify-center p-4" onClick={() => setShowReadBudget(false)}>
@@ -37235,6 +37312,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          <WorkExecutionModal
            key={executionLotId}
            lot={lots.find(l => l.id === executionLotId)}
+           alertBand={renderQuotaBand('work')}
            itemMaster={settings?.itemMaster || null}
            {...contactPropsOf(contactHub)}
            // 🎬🎥📚 手本動画・教材撮影・必修の案内(製品と同じ入口)。video_recipes は既に購読している物を渡すだけ
