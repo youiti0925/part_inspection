@@ -108,9 +108,15 @@ jobs:
         run: npm ci
 
       - name: 試験 (npm test)
+        # 🚫🌐 外への通信の見張り(scripts/net-guard.mjs)。127.0.0.1/::1/localhost 以外へ繋ぐと例外で止まる。npm ci と配備の step には掛けない
+        env:
+          NODE_OPTIONS: "--import=file://${{ github.workspace }}/scripts/net-guard.mjs"
         run: npm test
 
       - name: ビルド (npm run build)
+        # 🚫🌐 外への通信の見張り(scripts/net-guard.mjs)。127.0.0.1/::1/localhost 以外へ繋ぐと例外で止まる。npm ci と配備の step には掛けない
+        env:
+          NODE_OPTIONS: "--import=file://${{ github.workspace }}/scripts/net-guard.mjs"
         run: npm run build
 
   # ---------------------------------------------------------------------------
@@ -137,4 +143,7 @@ jobs:
         run: npm ci
 
       - name: 見張り一式 (npm run check)
+        # 🚫🌐 外への通信の見張り(scripts/net-guard.mjs)。127.0.0.1/::1/localhost 以外へ繋ぐと例外で止まる。npm ci と配備の step には掛けない
+        env:
+          NODE_OPTIONS: "--import=file://${{ github.workspace }}/scripts/net-guard.mjs"
         run: npm run check

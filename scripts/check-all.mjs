@@ -42,6 +42,12 @@
 //     「無いと書いてある物が実は在る」を **機械で** 見つけて赤にする(もう古くならない)。
 // =============================================================================
 
+// 🚫🌐 2026-10-03: **最初の import** で外への通信の見張りを掛ける(順番を変えない事)。
+//   この process と、ここから起こす子・孫の node 全部(NODE_OPTIONS で継ぐ)は
+//   127.0.0.1 / ::1 / localhost 以外へ繋いだ瞬間に例外で止まる。
+//   10-03 の事故(第15段が子で走らせた2本が本番 lot_images 約4,450件・lots を読んでいた)の根元の手当て。
+//   見張りのファイルが消えたら、この行で落ちる＝ゲートは赤(黙って見張り無しで走らない)。
+import './net-guard.mjs';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -53,6 +59,22 @@ const BAIL = process.argv.includes('--bail');
 
 const node = process.execPath;
 const S = (f) => path.join('scripts', f);
+
+// 🚫🌐 子の node に見張りが本当に掛かっているか(わざと 192.0.2.1 へ繋がせて、止まるのを見る)。
+//   192.0.2.1 は RFC 5737 の TEST-NET-1(インターネットに経路が無い)。本番へは繋がない。
+function verifyNetGuardInChild() {
+  const code = "const net=require('node:net');const g=globalThis[Symbol.for('inspection.netGuard')];if(g)g.expectBlocks=true;" +
+    "try{const s=net.connect({host:'192.0.2.1',port:443});s.on('error',()=>{});s.destroy();console.log('OPEN');}" +
+    "catch(e){console.log(e.code==='ERR_NET_GUARD_BLOCKED'?'BLOCKED':'ERR '+e.code);}";
+  const r = spawnSync(node, ['-e', code], { cwd: ROOT, encoding: 'utf8' });
+  const out = String(r.stdout || '').trim();
+  if (out === 'BLOCKED') {
+    console.log(`  ✅ 子の node から 192.0.2.1:443 へ繋がせた → 通信前に止まった(NODE_OPTIONS=${process.env.NODE_OPTIONS})`);
+    return true;
+  }
+  console.log(`  ❌ 子の node が外へ繋げてしまう(見張りが継がれていない) … ${out || r.stderr}`);
+  return false;
+}
 
 // -----------------------------------------------------------------------------
 // 🚨 試験の対象（2段目）。ここが「黙って0件」になると、ゲートは緑のまま何も見なくなる。
@@ -281,6 +303,19 @@ const STAGES = [
     //     「いま緑だから要らない」ではなく、**戻ったら赤になる**ようにここに置く。
     id: 16, name: 'エミュレータの繋ぎ先と、端末の控え',
     steps: [{ title: '自己試験+判定', cmd: [node, S('verify-emulator-wiring.mjs')] }],
+  },
+  {
+    // 🚫🌐 2026-10-03 新設。見張りの段(verify-watchdogs-read-code)が子で走らせた見張り2本(最終検査)が、出荷・CI のたびに本番を読んでいた事故の根元の手当て。
+    //   「firebase の import の字面」を探すのでは、自作モジュール経由・REST・別 SDK・環境変数ですり抜ける。
+    //   → 通信そのものを止める見張り(net-guard.mjs)を、この check-all の最初の import で掛けている。
+    //   この段は、その見張りが **本当に効いているか** を、わざと外へ繋がせて・わざと壊して 赤を見て確かめる。
+    //   ⚠この段を消す時は必ず理由を書いて人に言う事。黙って消さない。
+    id: 17, name: '外への通信の見張り(子・孫から本番へ繋がせない / 外したら赤)',
+    steps: [
+      { title: '子の node に見張りが掛かっているか(実際に繋がせて止まるか)', fn: verifyNetGuardInChild },
+      { title: '見張り自身の試験(A02: 子→孫から外へ / 握り潰し / 1か所ずつ壊す)', cmd: [node, S('selftest-net-guard.mjs')] },
+      { title: '本番の道具は CI では動かない・エミュレータが無ければ本番へ戻らない(A01/A03)', cmd: [node, S('selftest-no-prod-in-ci.mjs')] },
+    ],
   },
 ];
 

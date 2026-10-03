@@ -79,15 +79,26 @@ jobs:
             echo "::error::手元で 1回だけ: firebase init hosting:github (docs/引き継ぎ.md の 4章)。値はチャットや Git に貼らない。"
             exit 1
           fi
-          echo "$SA" > "$RUNNER_TEMP/firebase-sa.json"
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-sa.json" >> "$GITHUB_ENV"
-          echo "✅ 鍵を置きました(中身は出しません)"
+          echo "✅ 鍵は在ります(置くのは試験が済んでから。中身は出しません)"
 
       - name: 部品を入れる (npm ci)
         run: npm ci
 
       - name: 試験 (npm test) — 赤なら出さない
+        # 🚫🌐 外への通信の見張り(scripts/net-guard.mjs)。127.0.0.1/::1/localhost 以外へ繋ぐと例外で止まる。npm ci と配備の step には掛けない
+        # 🔑 2026-10-03: 本番の鍵は試験が済んでから置く(依存の取得・試験の間は鍵が無い)。念のため空にもする。
+        env:
+          NODE_OPTIONS: "--import=file://${{ github.workspace }}/scripts/net-guard.mjs"
+          GOOGLE_APPLICATION_CREDENTIALS: ''
         run: npm test
+
+      - name: 鍵を置く(試験が済んでから。ここから先は配備の段＝見張りは掛けない)
+        env:
+          SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_INSPECTION_TIME_C4FD3 }}
+        run: |
+          echo "$SA" > "$RUNNER_TEMP/firebase-sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-sa.json" >> "$GITHUB_ENV"
+          echo "✅ 鍵を置きました(中身は出しません)"
 
       - name: 出す先(hosting の target)を読む
         id: target
