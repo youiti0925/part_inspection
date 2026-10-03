@@ -37222,8 +37222,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        {showAnnouncementModal && <AnnouncementModal announcements={announcements} workers={workers} saveData={saveData} deleteData={deleteData} loadImage={loadNoteImage} onClose={() => setShowAnnouncementModal(false)} currentUserName={currentUserName} />}
 
        {/* 📦🔄 共有棚 daily_load/parts の書き直し(画面は出ない)。古い時だけ・1回だけ・操業シミュを開いている時は出さない(製品と同じ) */}
+      {/* 📉 2026-10-03 A6: 裏の書き直しには保存計画の棚(planShelf)を渡さない(null)。
+            publishOnly は画面を1つも描かず、採った計画(useAdoptedPlan)は描く所でしか使わない = daily_load の中身(指紋)は同じ。
+            渡すと head の購読・readHead・版の本体を、書き直しのたびにサーバから読んでいた(plan_control/plan_versions)。
+            写しで指紋が直す前と同じ事を確かめた。見張り: src/domain/__tests__/bgPublishNoPlanShelf.test.mjs */}
       {bgLoadArmed && wantDailyLoadRefresh && (
-        <OperationsSimulationPanel publishOnly planShelf={planShelf} isAdmin={currentUserName === '管理者'} readOverviewMap={readOverviewMap}
+        <OperationsSimulationPanel publishOnly planShelf={null} isAdmin={currentUserName === '管理者'} readOverviewMap={readOverviewMap}
           lots={lots} templates={templates} workers={opsimWorkers} settings={settings}
           canEdit={false} saveSettings={null} savePlacementRule={null} factoryCalendar={factoryCalendar}
           ownDailyLoad={ownDailyLoad} publishDailyLoad={publishDailyLoad} capacityShelfLoaded={capacityShelfLoaded} placementRules={placementRules}
