@@ -15,7 +15,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  LOTS_TOMB_COL, DELTA_LIMIT, TOMB_LIMIT, DELTA_MARGIN_MS, DELTA_MAX_AGE_MS, DELTA_WAKE_GAP_MS,
+  LOTS_TOMB_COL, DELTA_LIMIT, TOMB_LIMIT, DELTA_MARGIN_MS, DELTA_WAKE_GAP_MS,
+  TOMB_RETENTION_MS, TOMB_RETENTION_MARGIN_MS, tombsCover,
   deltaStateKey, tsMs, isServerStamp, isOpenLot, deltaLotsSpec, tombLotsSpec, tombDocOf, maxServerMs,
   plainDocId, inCoveredRange, manifestEntryOf, normalizeDeltaState, planLotsSync, checkCachedLots,
   liveWindowInRange, buildDeltaState, fullWatermarkOf, reanchorSince, countChecksOf,
@@ -53,7 +54,7 @@ test('DS02 差分と墓標の指定: updatedAt/deletedAt より後・古い順�
   assert.deepEqual(t.orderBy, [['deletedAt', 'asc']]);
   assert.equal(t.limit, TOMB_LIMIT);
   assert.equal(DELTA_MARGIN_MS, 5 * 60 * 1000);
-  assert.equal(DELTA_MAX_AGE_MS, 7 * DAY);
+  assert.equal(TOMB_RETENTION_MS, Infinity, '墓標は消さない(2026-10-03 に「7日」をやめた)');
 });
 
 test('DS03 時刻の読み方(Timestamp・数・Date・秒/ナノ秒)。送信待ち(null)と数の updatedAt は目印にしない', () => {
@@ -75,14 +76,18 @@ test('DS04 未完了の決まりは Firestore の != と同じ(項目が無い�
   assert.equal(isOpenLot({ status: null }), true);
 });
 
-test('DS05 開く時の決め方: 控え帳が無い・7日以上・時計が戻った・名前空間/版が違う・保管庫が違う → 全部読み', () => {
+test('DS05 開く時の決め方: 控え帳が無い・墓標の保持期間を超えた・時計が戻った・名前空間/版が違う・保管庫が違う → 全部読み', () => {
   const now = 100 * DAY;
   const s = buildDeltaState({ ns: NS, nowMs: now - DAY, liveRows: [], openRows: [], openOn: false, watermarkMs: now - DAY });
   assert.equal(s.whole, true);
   assert.equal(planLotsSync(null, { nowMs: now, ns: NS }).mode, 'full');
   assert.equal(planLotsSync(s, { nowMs: now, ns: NS, enabled: false }).mode, 'full');
   assert.equal(planLotsSync(s, { nowMs: now - 2 * DAY, ns: NS }).reason, '端末の時計が戻った');
-  assert.equal(planLotsSync(s, { nowMs: now - DAY + DELTA_MAX_AGE_MS, ns: NS }).reason, '前回から7日以上');
+  // 🪦 2026-10-03: 「前回から7日以上は全部」はやめた。墓標は消さない(無期限)ので、何日休んでも差分
+  for (const days of [7, 8, 30, 365]) assert.equal(planLotsSync(s, { nowMs: now - DAY + days * DAY, ns: NS }).mode, 'delta', `${days}日 休んでも差分`);
+  const R = 10 * DAY;
+  assert.equal(planLotsSync(s, { nowMs: now - DAY + R - TOMB_RETENTION_MARGIN_MS - 1, ns: NS, tombRetentionMs: R }).mode, 'delta');
+  assert.equal(planLotsSync(s, { nowMs: now - DAY + R - TOMB_RETENTION_MARGIN_MS, ns: NS, tombRetentionMs: R }).reason, '前回から墓標の保持期間より長くたった');
   assert.equal(planLotsSync(s, { nowMs: now, ns: 'other' }).mode, 'full');
   assert.equal(normalizeDeltaState({ ...s, v: 99 }, NS), null);
   assert.equal(normalizeDeltaState({ ...s, whole: false, edge: null }, NS), null, '上位N件なのに境目が無い控え帳は使わない');
@@ -651,4 +656,111 @@ test('DS24 地図: lots_deleted は検査本体の棚・部品も使う', async 
   const { COLLECTION_AREA, COLLECTION_APPS } = await import('../../data/routes.js');
   assert.equal(COLLECTION_AREA.lots_deleted, 'inspection');
   assert.ok(COLLECTION_APPS.lots_deleted.includes('parts'));
+});
+
+// ─── 🪦 連休明け(2026-10-03): 日数では全部読みに戻さない。上限は墓標の保持期間 ─────────────
+test('DS27 tombsCover: 無期限なら何日でも拾える・有限なら保持期間 − 糊しろ1日 まで・時刻が読めなければ拾えない扱い', () => {
+  assert.equal(TOMB_RETENTION_MS, Infinity, '墓標を消す処理を足したら、ここと DS30 を一緒に直す');
+  assert.equal(tombsCover(0, 3650 * DAY), true);
+  assert.equal(tombsCover(0, 8 * DAY, 10 * DAY), true);
+  assert.equal(tombsCover(0, 9 * DAY, 10 * DAY), false);
+  assert.equal(tombsCover(0, 9 * DAY, 0), false);
+  assert.equal(tombsCover(NaN, DAY), false);
+  assert.equal(tombsCover(0, NaN), false);
+});
+
+/** 1回目: 全部読みの端末 A と差分読みの端末 B を開いて閉じる。休みの days 日(毎日 ops 件・pruneMs を超えた墓標は消す)。2回目を開いて比べる。 */
+const holidayScenario = async (seed, { initial = 220, days = 30, ops = 2, tombless = 0, pruneMs = null, overridesB = {} } = {}) => {
+  const world = makeWorld(seed);
+  const devA = makeDevice(); const devB = makeDevice();
+  seedLots(world, initial);
+  let A = openApp(world, devA, { enabled: false });
+  let B = openApp(world, devB, { overrides: overridesB });
+  await settle(A, B); A.close(); B.close(); await settle(A, B);
+  for (let d = 0; d < days; d++) {
+    world.tick(DAY);
+    for (let k = 0; k < ops; k++) randomOp(world, { tombless });
+    if (pruneMs != null) for (const [id, t] of [...world.tombs]) if (tsMs(t.deletedAt) < world.now() - pruneMs) world.tombs.delete(id);
+  }
+  world.notify();
+  const r0A = devA.reads; const r0B = devB.reads;
+  A = openApp(world, devA, { enabled: false });
+  B = openApp(world, devB, { overrides: overridesB });
+  await settle(A, B);
+  const out = { A, B, world, readsA: devA.reads - r0A, readsB: devB.reads - r0B, same: keyOf(A.rows()) === keyOf(B.rows()) };
+  A.close(); B.close(); await settle(A, B);
+  return out;
+};
+
+test('DS28 🚨 30日 開かなかった端末(連休明け)でも差分で開き、全部読みと1件も違わない', async () => {
+  for (const seed of [3, 11, 27]) {
+    const r = await holidayScenario(seed, { initial: seed % 2 ? 220 : 80 });
+    assert.ok(r.same, `seed ${seed}: 30日ぶりの画面が全部読みと違う / ${r.B.app.logs.join(' / ')}`);
+    assert.ok(!r.B.app.logs.some((l) => l.includes('全部読み')), `seed ${seed}: 30日ぶりでも全部読みしない: ${r.B.app.logs.join(' / ')}`);
+    assert.ok(r.B.app.logs.some((l) => l.includes('前回の続きだけ読みます')), `seed ${seed}: 30日ぶりに差分で開いていない: ${r.B.app.logs.join(' / ')}`);
+    assert.ok(r.readsB < r.readsA, `seed ${seed}: 30日ぶりの読み 差分 ${r.readsB} は全部読み ${r.readsA} より少ない`);
+  }
+  // 墓標を残さない古い版の削除が混ざると、件数の確かめで全部読みへ戻り、画面は全部読みと同じ
+  const g = await holidayScenario(5, { tombless: 1, ops: 6 });
+  assert.ok(g.same, `墓標なしの削除の後の画面が全部読みと違う / ${g.B.app.logs.join(' / ')}`);
+});
+
+test('DS29 🚨 墓標の保持期間(有限にした時)より長く休んだ端末は全部読み(墓標が消えていて差分では拾えない)。保持期間の内なら差分', async () => {
+  const R = 10 * DAY;
+  const over = await holidayScenario(13, { days: 12, ops: 3, pruneMs: R, overridesB: { tombRetentionMs: R } });
+  assert.ok(over.B.app.logs.some((l) => l.includes('墓標の保持期間')), over.B.app.logs.join(' / '));
+  assert.ok(over.same, `保持期間を超えた後の画面が全部読みと違う / ${over.B.app.logs.join(' / ')}`);
+  const within = await holidayScenario(17, { days: 7, ops: 3, pruneMs: R, overridesB: { tombRetentionMs: R } });
+  assert.ok(!within.B.app.logs.some((l) => l.includes('全部読み')), within.B.app.logs.join(' / '));
+  assert.ok(within.same, `保持期間の内の画面が全部読みと違う / ${within.B.app.logs.join(' / ')}`);
+});
+
+/** 消す呼び出し remove( / delete( / deleteDoc( / deleteData( / purge…( / clear…( の括弧の中身(入れ子ごと)に name が在るか。 */
+const deleteCallsNaming = (text, name) => {
+  const re = /\b(remove|deleteDoc|deleteData|delete|purge\w*|clear\w*)\s*\(/g;
+  let m;
+  while ((m = re.exec(text))) {
+    let depth = 1; let i = re.lastIndex;
+    while (i < text.length && depth > 0) { const c = text[i]; if (c === '(') depth++; else if (c === ')') depth--; i++; }
+    if (name.test(text.slice(re.lastIndex, i))) return true;
+  }
+  return false;
+};
+
+test('DS30a 墓標を消す道の見張りは、本当に消す呼び出しを見つける(壊して赤を見る)', () => {
+  const N = /lots_deleted|LOTS_TOMB_COL/;
+  assert.equal(deleteCallsNaming('DATA(db).remove(APP_DATA_ID, LOTS_TOMB_COL, id)', N), true);
+  assert.equal(deleteCallsNaming("batch.delete(doc(db, base(ns), 'lots_deleted', id))", N), true);
+  assert.equal(deleteCallsNaming("deleteDoc(doc(db, 'artifacts', ns, 'public', 'data', LOTS_TOMB_COL, id))", N), true);
+  assert.equal(deleteCallsNaming('DATA(db).save(APP_DATA_ID, LOTS_TOMB_COL, id, tombDocOf(id, DATA_SERVER_NOW), { merge: false })', N), false, '書くのは消すではない');
+  assert.equal(deleteCallsNaming('deleteData(col, id); const x = LOTS_TOMB_COL;', N), false);
+});
+
+test('DS30 🚨 墓標(lots_deleted)を消す道・TTL が無い(= 保持期間は無期限)。足したら TOMB_RETENTION_MS をその長さにする', () => {
+  const root = new URL('../../../', import.meta.url);
+  const files = [];
+  const walk = (u) => {
+    for (const e of fs.readdirSync(u, { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name === '__tests__' || e.name.startsWith('.')) continue;
+      const c = new URL(e.name + (e.isDirectory() ? '/' : ''), u);
+      if (e.isDirectory()) walk(c);
+      else if (/\.(m?js|cjs|jsx|ts)$/.test(e.name)) files.push(c);
+    }
+  };
+  for (const d of ['src/', 'scripts/']) { const u = new URL(d, root); if (fs.existsSync(u)) walk(u); }
+  assert.ok(files.length > 20, '見る物が少なすぎる(道を間違えている)');
+  const N = /lots_deleted|LOTS_TOMB_COL/;
+  const bad = [];
+  for (const f of files) {
+    const t = fs.readFileSync(f, 'utf8');
+    if (!N.test(t)) continue;
+    if (deleteCallsNaming(t, N)) bad.push(decodeURIComponent(f.pathname));
+  }
+  assert.deepEqual(bad, [], '墓標を消す道が在る → TOMB_RETENTION_MS を保持期間に合わせ、DS27 を直す');
+  for (const name of ['firestore.indexes.json', 'firebase.json']) {
+    const u = new URL(name, root);
+    if (!fs.existsSync(u)) continue;
+    const j = fs.readFileSync(u, 'utf8');
+    assert.ok(!/"ttl"\s*:\s*true/i.test(j), `${name} に TTL が在る → 墓標の保持期間が有限になる`);
+  }
 });

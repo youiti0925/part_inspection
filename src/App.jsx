@@ -33183,7 +33183,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    //   ・控えを最新にするのは 差分の購読(updatedAt > 前回の時刻−5分・上限300)と
    //     墓標の購読(lots_deleted の deletedAt > …・上限200)。墓標を見たらそのロットをサーバから1件読み直す(控えから消える)。
    //   ・開く前に 控え帳(localStorage)と端末の控えを突き合わせる(通信なし)。差分と墓標が届いたら件数だけをサーバに聞いて確かめる。
-   //   ・全部読みに戻す: 控え帳が無い・前回から7日以上・時計が戻った・控えが前回と合わない・件数が合わない・
+   //   ・全部読みに戻す: 控え帳が無い・前回から墓標の保持期間(今は無期限。2026-10-03 に「7日」をやめた)より長い・時計が戻った・控えが前回と合わない・件数が合わない・
    //     差分/墓標が上限・購読が壊れた・①の控えの答えが前回の範囲の下へ伸びた(消されて窓が下がった)。
    //   ・差分の答えが150件まで育った時・25分以上 眠っていた/隠れていた/切れていた時は、新しい時刻で張り直す。
    //   決まりと試験: domain/lotsDeltaSync.js・domain/lotsDeltaController.js・src/domain/__tests__/lotsDeltaSync.test.mjs

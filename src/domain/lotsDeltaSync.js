@@ -6,7 +6,7 @@
 //   ⚠ 製品の lotsDeltaSync.js とは **1バイト同じにできない**。製品の窓は「作った日の30日の窓」(条件の窓)、
 //     部品の窓は「新しい順120件」(上位N件の窓)と「未完了400件」で、どのロットが窓に入るかの決まりが違う。
 //     名前・形を揃えた物: 墓標の置き場所(lots_deleted)と中身 {lotId, deletedAt}・差分/墓標の指定・時刻の読み方・
-//     余裕5分・7日・上限300/200・張り直し150件/25分。
+//     余裕5分・墓標の保持期間(2026-10-03 に「7日」から替えた)・上限300/200・張り直し150件/25分。
 //
 // なぜ要るか:
 //   Firestore の購読は **張った時** と **30分より長く切れて戻った時** に、答えを全部読み直す(全部課金)。
@@ -32,7 +32,7 @@
 //      ・届いた → 範囲 = 前回の120件目より上(createdAt が大きい・同じなら id が大きい = Firestore の並びと同じ)
 //        + 未完了の全部(②)。開いている間も ①の控えの答えの120件目が範囲の中に居るかを見張る
 //        (消されて窓が範囲の下へ伸びたら、その下は控えが古いかもしれない → 全部読みへ戻す)。
-//   ⑥ 全部読みに戻す時: 控え帳が無い・前回から7日以上・時計が戻った・控えが前回と合わない・
+//   ⑥ 全部読みに戻す時: 控え帳が無い・前回から墓標の保持期間より長い(今は無期限=日数では戻さない)・時計が戻った・控えが前回と合わない・
 //      件数が合わない・差分/墓標が上限・購読が壊れた・①の窓が範囲の下へ伸びた。
 //
 // 🚨 画面の数字は1つも変えない。変わるのは「どこから読むか」だけ。
@@ -50,8 +50,21 @@ const DAY_MS = 86400000;
 export const LOTS_TOMB_COL = 'lots_deleted';
 /** 前回の時刻から引く余裕。サーバの時刻どうしで比べるので、端末の時計のずれは入らない。取りこぼし防ぎの糊しろ。 */
 export const DELTA_MARGIN_MS = 5 * 60 * 1000;
-/** 前回からこれ以上たったら全部読む(控えが古すぎる・差分が大きすぎる)。 */
-export const DELTA_MAX_AGE_MS = 7 * DAY_MS;
+/**
+ * 🪦 墓標(lots_deleted)を残しておく長さ。**今は墓標を消す処理が無い = 無期限(Infinity)**(製品・最終と同じ)。
+ *   2026-10-03 に洗った: 部品・製品・最終・③の src / scripts に lots_deleted を消す道は無い(書くのは deleteData の前の save だけ)。
+ *   firestore.indexes.json / firebase.json に TTL も無い。Cloud Functions も無い。
+ * 🚨 前は「前回から7日以上たったら全部読み」(DELTA_MAX_AGE_MS = 7日)だった。
+ *   控え帳の syncedAt は控え帳を書くたびに進むので、毎日使う端末では7日は一度も効かず、
+ *   効いたのは **7日以上 開かなかった端末(連休明け)だけ** = 全端末が一斉に全部読み。
+ *   差分で取りこぼさない為に要るのは「休んでいた間に消した物の墓標がまだ残っている事」なので、上限は墓標の保持期間に合わせる。
+ *   墓標を書かない削除は件数の確かめ(countChecksOf)が拾う。差分が大きすぎる時は DELTA_LIMIT(300)・TOMB_LIMIT(200)で全部読みへ戻る。
+ * ⚠墓標を消す・TTL を付ける時は、ここをその長さにする(超えて休んだ端末は全部読みへ戻る)。
+ *   試験 DS30 が「墓標を消す道が無い事」を見張る(道を足すと赤になる)。
+ */
+export const TOMB_RETENTION_MS = Infinity;
+/** 墓標の保持期間の境目の糊しろ(端末の時計のずれ・消す処理の遅れ)。保持期間 − これ より長く休んだら全部読み。 */
+export const TOMB_RETENTION_MARGIN_MS = DAY_MS;
 /** 差分の購読の上限。これに当たったら全部読みへ戻す。 */
 export const DELTA_LIMIT = 300;
 /** 差分の答えがこの件数まで育ったら、新しい時刻で張り直す(30分超の切断から戻った時の読み直しを小さく保つ)。 */
@@ -66,6 +79,18 @@ export const DELTA_STATE_VERSION = 1;
 export const deltaStateKey = (ns) => `parts.lotsDelta.v${DELTA_STATE_VERSION}.${String(ns || '')}`;
 
 const fin = (v) => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * 前回の控え帳の時刻(syncedAt)から今までに消えた物を、墓標でまだ拾えるか(= 墓標の保持期間の内か)。
+ * ⚠控え帳は「墓標の購読がサーバの答えを受けた後」にしか書かれない = そこまでの消えた物は控えに入っている。
+ * @param retentionMs 墓標の保持期間(既定 TOMB_RETENTION_MS。試験で有限の長さを渡す)
+ */
+export const tombsCover = (syncedAt, nowMs, retentionMs = TOMB_RETENTION_MS) => {
+  if (!fin(syncedAt) || !fin(nowMs)) return false;
+  if (retentionMs === Infinity) return true;
+  if (!fin(retentionMs) || retentionMs <= 0) return false;
+  return nowMs - syncedAt < retentionMs - TOMB_RETENTION_MARGIN_MS;
+};
 
 /**
  * サーバの時刻(Timestamp)・数・Date・{seconds,nanoseconds} をミリ秒に。読めなければ null。
@@ -186,15 +211,16 @@ export const normalizeDeltaState = (raw, ns) => {
 /**
  * 開いた時に「差分で読むか・全部読むか」を決める。
  * @param state 控え帳(localStorage から読んだ生の物)
- * @param o { nowMs(端末の時計), ns, enabled(控えが使える保管庫か) }
+ * @param o { nowMs(端末の時計), ns, enabled(控えが使える保管庫か), tombRetentionMs(墓標の保持期間・試験用) }
  * @returns {{ mode:'delta', sinceMs, tombSinceMs, state } | { mode:'full', reason }}
  */
-export const planLotsSync = (state, { nowMs, ns, enabled = true } = {}) => {
+export const planLotsSync = (state, { nowMs, ns, enabled = true, tombRetentionMs = TOMB_RETENTION_MS } = {}) => {
   if (!enabled) return { mode: 'full', reason: '端末の控えが使えない保管庫' };
   const s = normalizeDeltaState(state, ns);
   if (!s) return { mode: 'full', reason: '前回の控え帳が無い' };
   if (!fin(nowMs) || s.syncedAt > nowMs) return { mode: 'full', reason: '端末の時計が戻った' };
-  if (nowMs - s.syncedAt >= DELTA_MAX_AGE_MS) return { mode: 'full', reason: '前回から7日以上' };
+  // 🪦 日数では戻さない(前の「7日以上」はやめた)。戻すのは、休んでいた間の墓標がもう消えているかもしれない時だけ。
+  if (!tombsCover(s.syncedAt, nowMs, tombRetentionMs)) return { mode: 'full', reason: '前回から墓標の保持期間より長くたった' };
   return {
     mode: 'delta',
     sinceMs: s.watermarkMs - DELTA_MARGIN_MS,

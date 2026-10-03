@@ -46,6 +46,7 @@ export const createLotsDeltaSync = (deps = {}) => {
     setSource = () => {}, onQuota = () => {}, isQuota = () => false,
     setTimer = (f, ms) => setTimeout(f, ms), clearTimer = (t) => clearTimeout(t),
     log = () => {}, saveDelayMs = 15000, recountDelayMs = 5000,
+    tombRetentionMs = undefined,   // 🪦 墓標の保持期間(今は無期限。試験で有限の長さを渡す)
   } = deps;
   const key = deltaStateKey(ns);
 
@@ -249,7 +250,7 @@ export const createLotsDeltaSync = (deps = {}) => {
   return {
     start() {
       if (stopped || mode != null) return;
-      const plan = planLotsSync(readState(), { nowMs: now(), ns, enabled });
+      const plan = planLotsSync(readState(), { nowMs: now(), ns, enabled, tombRetentionMs });
       if (plan.mode !== 'delta') {
         mode = 'full'; reason = plan.reason;
         if (enabled) log(`📉 ロット: 全部読み(${reason})`);
