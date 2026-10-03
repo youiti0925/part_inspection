@@ -726,6 +726,27 @@ export const scanFile = (rawSrc, file, globalConsts = {}, globalNums = {}) => {
       code: (lines[line - 1] || '').trim().slice(0, 120),
     });
   }
+  // 📉 N1(2026-10-03): 「前回の続きだけ読む」組(createColsSync)へ渡したコレクションも、起動時に張る読み口として数える。
+  //   中で張る購読は src/domain/colsSyncController.js の Q.watchQuery(ns, E.col, …) = 名前が変数なので上では拾えない。
+  //   ⚠ 冷たい端末(控え帳が無い・新しい端末)では今までどおり **全件** 読むので、ここも「where も limit も無い口」として数える
+  //     (控えが在る端末で減る分は、他の口と同じく **測っていない** 側に置く。数字を良く見せない)。
+  //   形: syncCol('templates', cb) / { col: 'contact_requests', onRows: … }
+  const SYNC_RE = /\bsyncCol\s*\(\s*['"]([^'"]+)['"]|\bcol\s*:\s*['"]([^'"]+)['"]\s*,\s*onRows\s*:/g;
+  let sm;
+  while ((sm = SYNC_RE.exec(src))) {
+    const col = sm[1] || sm[2];
+    const line = lineOf(src, sm.index);
+    const key = `${file}:${line}:${col}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      file, line, kind: 'watchCollection', col, ns: null,
+      live: KINDS.watchCollection.live, singleDoc: KINDS.watchCollection.doc,
+      hasWhere: false, hasLimit: false, whereRaw: '', limitRaw: '', whereClauses: null, limitNum: null, optsVar: '',
+      hasOrderBy: false, hasOnError: true, viaColsSync: true,
+      code: (lines[line - 1] || '').trim().slice(0, 120),
+    });
+  }
   return out;
 };
 
@@ -1243,6 +1264,11 @@ const provider = { watchCollection: call('watchCollection'), getAll: call('getAl
     "🚨 `const u = watchCollection(ns,'logs',cb)` を読み口として数える(2026-09-01 まで見ていなかった)");
   say(nm.some((x) => x.col === 'lots' && x.hasLimit), '`let u = watchQuery(…, {limit})` も数える');
   say(nm.length === 2, '窓口の一覧(`watchCollection: call(…)`)は今まで通り数えない');
+  // 📉 N1(2026-10-03): 「前回の続きだけ読む」組へ渡した棚も、起動時の読み口として数える(冷たい端末では全件)
+  const CS = scanFile(`const g = createColsSync({ cols: [ syncCol('templates', (d) => setT(d)), { col: 'contact_requests', onRows: (r) => setC(r), onError: f } ] });`, '(memory)');
+  say(CS.some((x) => x.col === 'templates' && x.kind === 'watchCollection' && !x.hasWhere && !x.hasLimit)
+    && CS.some((x) => x.col === 'contact_requests' && x.kind === 'watchCollection'),
+    "📉 colsSync へ渡した棚(syncCol('x') / { col: 'x', onRows })を起動時の読み口として数える(冷たい端末は全件)");
   // ⚠ 棚の件数を口ごとに分けてある: lots は 900件(limit 500 が本当に絞る側)、logs は 179件。
   //   ここを一律 179件にすると、limit 500 が「棚より大きい＝絞れていない」に当たってしまい、
   //   この試験が見たい物(**絞り込みの無い口が ❌ になるか**)がぼやける。
