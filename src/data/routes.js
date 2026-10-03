@@ -115,6 +115,9 @@ export const COLLECTION_AREA = Object.freeze({
 
   // --- 共有棚 capacity-shared-v1(操業シミュ・2026-09-27 部品へ移植)。docId = parts ----------
   daily_load: 'analytics',
+  // ⏱ 2026-10-03 B3 「最新にする」の印(capacity-shared-v1 の共有棚)。1アプリ1件(docId = product|final|parts)。押した時だけ丸ごと置き換える。
+  //   書く側の端末が1台だけ取引(claimOnce)で受けて、5分を待たずに daily_load を書く。
+  daily_load_requests: 'analytics',
   placement_rules: 'analytics',
   // 📋 2026-09-27 保存計画(head/版/審査)と別エリアへ移す案(製品と同じ・docId = parts)
   plan_control: 'analytics',
@@ -190,6 +193,7 @@ export const COLLECTION_APPS = Object.freeze({
   app_notices: ['final', 'product', 'parts'],
   weekly_briefs: ['final', 'product', 'parts'], // P166 部品は読むだけ
   daily_load: ['final', 'product', 'parts'],
+  daily_load_requests: ['final', 'product', 'parts', 'overview'],
   placement_rules: ['final', 'product', 'parts'],
   plan_control: ['final', 'product', 'parts'],
   plan_versions: ['final', 'product', 'parts'],
