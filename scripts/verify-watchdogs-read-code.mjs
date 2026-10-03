@@ -55,6 +55,10 @@ export const RISKS = [
   { re: /\b(?:playwright|puppeteer)\b/, why: '実物のブラウザを開く' },
   { re: /(?<![\w$.])fetch\s*\(|node:https?\b|https?\.request\s*\(/, why: '通信する' },
   { re: /node:child_process|\bexecSync\s*\(|\bspawnSync\s*\(|\bspawn\s*\(/, why: '子プロセスを起こす' },
+  // 🚨🚨(2026-10-03)Firebase の部品で通信する物も **走らせない**。fetch/https の字が無いので上の2つをすり抜け、
+  //   verify-ai-photo-size.mjs(本番の lot_images を全部=約4,450件) と verify-words-realdata.mjs(本番の lots) が
+  //   出荷の確かめ・GitHub の push ごとの確かめ・試しの走らせのたびに **本番の読み取り枠を食っていた**(監査ログで確定)。
+  { re: /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"](?:firebase(?:\/[\w-]+)?|@firebase\/[\w-]+|firebase-admin(?:\/[\w-]+)?|@google-cloud\/firestore)['"]/, why: 'Firebase に繋ぐ(本番の読み取り枠を食う)' },
 ];
 /** 走らせてよいか。理由(走らせない時)を返す。 */
 export const runRisk = (src) => {
@@ -160,6 +164,9 @@ export const selftest = () => {
     '負の対照: コメントに playwright と書いてあるだけでは走らせない側に倒さない');
   say(runRisk('const r = await fetch(url);') !== '', '通信する物は走らせない');
   say(runRisk("import { execSync } from 'node:child_process';") !== '', '子プロセスを起こす物は走らせない');
+  say(runRisk("const { initializeApp } = await import('firebase/app');") !== '', '🚨 Firebase に繋ぐ物(動的 import)は走らせない(本番の枠を食う・2026-10-03)');
+  say(runRisk("import { getFirestore } from 'firebase/firestore';") !== '', '🚨 Firebase に繋ぐ物(import)は走らせない');
+  say(runRisk("// import { getFirestore } from 'firebase/firestore';  ← 説明") === '', '負の対照: コメントに firebase と書いてあるだけでは走らせない側に倒さない');
   say(runRisk("const s = fs.readFileSync('src/App.jsx','utf8');") === '',
     '負の対照: ただ読むだけの見張りは走らせてよい');
   say(runRisk("// 例: await fetch(url) と書いてもコメントなら関係ない\nconst s = fs.readFileSync('a','utf8');") === '',
