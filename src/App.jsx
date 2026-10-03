@@ -33162,7 +33162,13 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          setContactShared(data || {}); // P026: 班・メンバーも同じ書類から受け取る(読むだけ)
        }, { onError: readFailed('contact_shared/settings') }),
        // P028/P099: 要望箱とお知らせ(検査アプリ共通の箱)。全件を読む(未対応の数・未読の判定が全件で行うため)。
+       // 📉 2026-10-03 A15(最終 2026-09-27 G5 と同じ): ③の埋め込み(?embed=map)では要望箱を張らない。
+       //   使うのは マスタ設定の「アプリへの要望」タブ・要望の窓(押して開く)・札の数・連絡ポータルだけで、どれも埋め込みでは出ない
+       //   (埋め込みは地図だけ・操作バーも出さず、押す所は全部ふさいでいる)。
+       //   ⚠ お知らせ(app_notices)は外さない: 「アプリを更新しました」の窓(NoticePopup)は埋め込みの中でも出る(最終も外していない)。
+       ...(EMBED_MAP ? [] : [
        P.watchCollection(CONTACT_SHARED_NS, FEEDBACK_COL, (rows) => setAppFeedback(rows || []), { onError: readFailed(FEEDBACK_COL) }),
+       ]),
        P.watchCollection(CONTACT_SHARED_NS, NOTICE_COL, (rows) => setAppNotices(rows || []), { onError: readFailed(NOTICE_COL) })
      ];
      // 張った事は0件でも残す(「読んでいない」と「そもそも購読していない」を人が見分けられるように)。
