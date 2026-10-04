@@ -77,6 +77,9 @@ import { OperationsSimulationPanel } from './OperationsSimulationPanel.jsx';
 import { StackBar as VizStackBar } from './opsim/vizKit.jsx';
 import { useOperationsSimulation as useOpsimForOverview, makeScopeFilter as makeOpsimScopeFilter } from './useOperationsSimulation.js';
 import { buildWeeklyRule as opsimBuildWeeklyRule, weeklyRuleDocId as opsimWeeklyRuleDocId, shouldRefreshDailyLoad as opsimShouldRefreshDailyLoad } from './domain/operationsSimulation/sharedWorkerPlan.js';
+// ⏱ 2026-10-03 B3 共有棚 daily_load の「5分に1回まで」と「最新にする」(③が部品の要約を頼む印 daily_load_requests/parts に応える)。配線は opsim/dailyLoadRefresh.js
+import { DAILY_LOAD_REQUEST_COL } from './domain/operationsSimulation/dailyLoadThrottle.js';
+import { useDailyLoadRefreshHub, DailyLoadForceContext } from './opsim/dailyLoadRefresh.js';
 import { DATA_DELETE, DATA_SERVER_NOW, withDeletions } from './data/sentinels.js';
 // 🚨🚨 作業時間が「保存で消える」のを止める見張り(2026-08-17 最終検査の事故と同じ形を部品でも塞ぐ)。
 //   ⚠このファイルは最終検査/製品検査と **1バイトも同じ**。片方だけ直すと静かに巻き戻る。
@@ -35924,6 +35927,13 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      if (!db || !doc) return Promise.resolve(false);
      return DATA(db).save(OPSIM_SHELF_NS, 'daily_load', 'parts', doc, { merge: false }).then(() => true);
    }, [db]);
+   // ⏱ 2026-10-03 B3 「最新にする」の印(capacity-shared-v1/daily_load_requests/parts)の口。③の「納期・人手」が部品の要約を頼む。
+   //   聞く: 1件だけ購読 / 受ける: 取引で1台だけ(2台が同時に応えても書くのは1回)。部品から相手へ頼む口は無い(部品は相手の要約を表示しない)。
+   const dailyLoadReqApi = useMemo(() => (!db ? null : {
+     writeRequest: () => Promise.resolve(false),
+     watchRequest: (app, cb, onError) => DATA(db).watchDoc(OPSIM_SHELF_NS, DAILY_LOAD_REQUEST_COL, app, cb, { onError: (e) => { console.warn('[共有棚] 最新にするの印が読めていません', e); if (typeof onError === 'function') onError(e); } }),
+     claim: (app, reqId, by) => DATA(db).claimOnce(OPSIM_SHELF_NS, DAILY_LOAD_REQUEST_COL, app, { reqId, claimedBy: null }, { claimedBy: by, claimedAt: Date.now() }),
+   }), [db]);
    const savePlacementRule = useCallback((rule) => {
      if (!db) return Promise.resolve(false);
      const doc = opsimBuildWeeklyRule({ name: rule && rule.name, weekly: rule && rule.weekly, days: rule && rule.days, updatedBy: 'parts', nowMs: Date.now() });
@@ -35981,6 +35991,9 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      const t = setTimeout(() => setBgLoadArmed(true), 3000 + Math.floor(Math.random() * 60000));
      return () => clearTimeout(t);
    }, [wantDailyLoadRefresh]);
+   /* ⏱ 2026-10-03 B3 ③の「最新にする」を受ける側(製品・最終と同じ)。画面を開いている端末は画面が、開いていない端末は下の書き直し役が書く。
+      🚨 画面を開いている間の書き直しは5分に1回まで(画面の部品の中)。 */
+   const dlRefresh = useDailyLoadRefreshHub({ api: dailyLoadReqApi, hereApp: 'parts', screenOpen: opsimScreenOpen, active: capacityShelfLoaded, docsByApp: null });
    const [analysisCombo, setAnalysisCombo] = useState(null); // 実データ分析モーダルの対象コンボ {model, templateId, templateName}
    const [strictModeHistory, setStrictModeHistory] = useState([]);
    const strictPanelActive = showStrictManager || (activeTab === 'optimize' && optimizeView === 'strict');
@@ -36546,6 +36559,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      );
    }
    return (
+     <DailyLoadForceContext.Provider value={dlRefresh.forceValue}>
      <WorkScheduleContext.Provider value={workScheduleWithCalendar}>
      <LotCardDisplayContext.Provider value={settings.lotCardDisplay || DEFAULT_LOT_CARD_DISPLAY}>
      <ItemMasterContext.Provider value={settings.itemMaster || null}>
@@ -37232,7 +37246,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
             publishOnly は画面を1つも描かず、採った計画(useAdoptedPlan)は描く所でしか使わない = daily_load の中身(指紋)は同じ。
             渡すと head の購読・readHead・版の本体を、書き直しのたびにサーバから読んでいた(plan_control/plan_versions)。
             写しで指紋が直す前と同じ事を確かめた。見張り: src/domain/__tests__/bgPublishNoPlanShelf.test.mjs */}
-      {bgLoadArmed && wantDailyLoadRefresh && (
+      {/* ⏱ 2026-10-03 B3 ③の「最新にする」をこの端末が受けた時も出す(画面を開いていない時だけ。書いたら消える) */}
+      {((bgLoadArmed && wantDailyLoadRefresh) || dlRefresh.bgForce) && (
         <OperationsSimulationPanel publishOnly planShelf={null} isAdmin={currentUserName === '管理者'} readOverviewMap={readOverviewMap}
           lots={lots} templates={templates} workers={opsimWorkers} settings={settings}
           canEdit={false} saveSettings={null} savePlacementRule={null} factoryCalendar={factoryCalendar}
@@ -37787,5 +37802,6 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      </ItemMasterContext.Provider>
      </LotCardDisplayContext.Provider>
      </WorkScheduleContext.Provider>
+     </DailyLoadForceContext.Provider>
    );
  }
