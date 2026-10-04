@@ -30,6 +30,9 @@ import {
 import { sharedWorkerNames } from '../domain/operationsSimulation/sharedWorker.js';
 import { LATE_TONE } from './lateTone.js';
 import { SharedWorkerStrip } from './SharedWorkerStrip.jsx';
+// ⏱ 2026-10-03 B3 「最新にする」(相手の端末へ今すぐ計算して書いてと頼む)。App が口を配っていない所では何も出さない。
+import { DailyLoadRefreshButton } from './DailyLoadRefreshButton.jsx';
+import { targetAppOf } from './dailyLoadRefresh.js';
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 const fmtInt = (n) => (num(n) == null ? '—' : Math.round(Number(n)).toLocaleString('ja-JP'));
@@ -645,10 +648,13 @@ export function SharedWorkerPlan({
                   <div className="mt-0.5 text-slate-600">
                     {thereWritten ? `${thereWritten} の書類` : '書いた時刻が入っていないので いつの物か分かりません'}
                     。置き分けた後の数は {thereLabel}アプリで引き直すと出ます
+                    <DailyLoadRefreshButton target={targetAppOf({ doc: thereDoc, label: thereLabel })} className="ml-2" />
                   </div>
                 </>
               ) : (
-                <div className="mt-0.5 text-slate-600">の負荷は読めていません（{thereLabel}アプリが書いた書類が届いていません）</div>
+                <div className="mt-0.5 text-slate-600">の負荷は読めていません（{thereLabel}アプリが書いた書類が届いていません）
+                  <DailyLoadRefreshButton target={targetAppOf({ doc: thereDoc, label: thereLabel })} className="ml-2" />
+                </div>
               )}
             </div>
 
