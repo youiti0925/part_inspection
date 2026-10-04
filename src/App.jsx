@@ -68,6 +68,8 @@ import { providerFor, ROW_DATA_WINS } from './data/provider.js';
 // P153: 名前空間と保管庫の行き先を routes.js の1か所から引く(製品 App.jsx:49・52 と同じ)。
 //   PocketBase は読み込んでも切り替わらない。切り替わるのは保存された行き先が enabled:true の時だけ。
 import { NS as DATA_NS, DEFAULT_PROVIDERS, providersFromSettings } from './data/routes.js';
+// 📊 2026-10-04 生産達成率を ③ へ渡す共有棚(capacity-shared-v1/achieve_rate/parts)。4アプリで同じ物(md5)。
+import { ACHIEVE_NS, ACHIEVE_COL, makeAchievePublisher, countCalibrated } from './domain/achieveShelf.js';
 import { fetchAllPaged } from './domain/goal/pager.js';
 import { goalGapOf, candidateOf, planPortfolio } from './domain/goal/portfolioPlanner.js';
 import { sendPushViaWorker } from './push.js';
@@ -18681,55 +18683,63 @@ const ManagerDashboard = ({ lots = [], settings = {}, minorReports = [] }) => {
   );
 };
 
+// 📊 2026-10-04 達成率の行を作る係(画面と ③ へ渡す集計で **同じ1つ** を使う。数える作業の決まりを2か所に書かない)。
+//   行に足した物: worker(担当)・cal(較正済みの標準秒。customTargetTimes(+型式グループ)に無ければ 0 = 標準時間が未設定)。
+//   ⚠ tgt(画面の達成率の目標)は今までどおり getEffectiveTargetTime(較正値 → 無ければテンプレ既定)。ここは1文字も変えていない。
+// 全完了タスクを {完了時刻, 品目コード, テンプレ, 工程名, 目標秒, 実績秒} に展開 (抜取スキップ/目標未設定/0秒は除外)
+const achieveRowsOf = (lots, customTargetTimes, settings, templates) => {
+  const toMs = (raw) => { if (raw == null) return null; if (typeof raw === 'number') return raw; if (raw.seconds) return raw.seconds * 1000; const t = new Date(raw).getTime(); return isNaN(t) ? null : t; };
+  const groups = modelGroupsOf(settings);
+  const out = [];
+  (lots || []).forEach(l => {
+    const steps = l.steps || []; const qty = l.quantity || 1; const tasks = l.tasks || {};
+    const lotMs = toMs(l.completedAt) || toMs(l.updatedAt);
+    const tpl = (templates || []).find(tp => tp.id === l.templateId)?.name || '(テンプレなし)';
+    steps.forEach((st, si) => {
+      const tgt = getEffectiveTargetTime(st, l.model, customTargetTimes, groups);
+      if (!(tgt > 0)) return;
+      const cal = getCalibratedTargetTime(st, l.model, customTargetTimes, groups); // 📊 較正済みだけ(無ければ 0 = 標準時間が未設定)
+      // ロット1回工程: 回数キー(lot-k)の実績を1回=1行で収集 (目標は1回あたり)
+      if (st.lotOnce) {
+        lotOnceKeysOf(tasks, st).forEach(k => {
+          const t = tasks[k];
+          if (!t || (t.status !== 'completed' && t.status !== 'ng')) return;
+          if (!isStatTask(t)) return; // 抜取スキップ(0秒扱い)・教育中はロット1回工程でも入れない(製品と同じ)
+          const d = t.duration || 0; if (d <= 0) return;
+          const ms = toMs(t.endTime) || lotMs; if (!ms) return;
+          out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt, worker: t.workerName || '', cal });
+        });
+        return;
+      }
+      for (let u = 0; u < qty; u++) {
+        const t = tasks[st.id ? `${st.id}-${u}` : `${si}-${u}`] || tasks[`${si}-${u}`];
+        if (!t || (t.status !== 'completed' && t.status !== 'ng')) continue;
+        if (!isStatTask(t)) continue; // 抜取スキップ/教育中は除外
+        const d = t.duration || 0; if (d <= 0) continue;
+        const ms = toMs(t.endTime) || lotMs; if (!ms) continue;
+        out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt, worker: t.workerName || '', cal });
+      }
+    });
+  });
+  return out;
+};
+
 // =============================================================================
 //  達成率分析 — 標準時間(目標)に対する実績の達成率(能率)
 //  達成率 = 目標時間合計 ÷ 実績時間合計 ×100 (100%超 = 目標より速い)
 //  ①品目別×期間指定 ②品目コード関係なく週毎/月毎の全体推移。読み取り集計のみ。
 // =============================================================================
 const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {}, templates = [] }) => {
-  const toMs = (raw) => { if (raw == null) return null; if (typeof raw === 'number') return raw; if (raw.seconds) return raw.seconds * 1000; const t = new Date(raw).getTime(); return isNaN(t) ? null : t; };
   const [mode, setMode] = useState('model');      // 'model' | 'trend'
   const [groupBy, setGroupBy] = useState('model'); // 'model' | 'modelTpl' (品目コード / 品目×テンプレ)
   const [expanded, setExpanded] = useState(null);  // クリックで工程別詳細を開いている行のkey
   const [from, setFrom] = useState('');           // YYYY-MM-DD ('' = 制限なし)
   const [to, setTo] = useState('');
   const [bucket, setBucket] = useState('month');  // 'month' | 'week'
-  const groups = modelGroupsOf(settings);
 
   // 全完了タスクを {完了時刻, 品目コード, テンプレ, 工程名, 目標秒, 実績秒} に展開 (抜取スキップ/目標未設定/0秒は除外)
-  const rows = useMemo(() => {
-    const out = [];
-    (lots || []).forEach(l => {
-      const steps = l.steps || []; const qty = l.quantity || 1; const tasks = l.tasks || {};
-      const lotMs = toMs(l.completedAt) || toMs(l.updatedAt);
-      const tpl = (templates || []).find(tp => tp.id === l.templateId)?.name || '(テンプレなし)';
-      steps.forEach((st, si) => {
-        const tgt = getEffectiveTargetTime(st, l.model, customTargetTimes, groups);
-        if (!(tgt > 0)) return;
-        // ロット1回工程: 回数キー(lot-k)の実績を1回=1行で収集 (目標は1回あたり)
-        if (st.lotOnce) {
-          lotOnceKeysOf(tasks, st).forEach(k => {
-            const t = tasks[k];
-            if (!t || (t.status !== 'completed' && t.status !== 'ng')) return;
-            if (!isStatTask(t)) return; // 抜取スキップ(0秒扱い)・教育中はロット1回工程でも入れない(製品と同じ)
-            const d = t.duration || 0; if (d <= 0) return;
-            const ms = toMs(t.endTime) || lotMs; if (!ms) return;
-            out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt });
-          });
-          return;
-        }
-        for (let u = 0; u < qty; u++) {
-          const t = tasks[st.id ? `${st.id}-${u}` : `${si}-${u}`] || tasks[`${si}-${u}`];
-          if (!t || (t.status !== 'completed' && t.status !== 'ng')) continue;
-          if (!isStatTask(t)) continue; // 抜取スキップ/教育中は除外
-          const d = t.duration || 0; if (d <= 0) continue;
-          const ms = toMs(t.endTime) || lotMs; if (!ms) continue;
-          out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt });
-        }
-      });
-    });
-    return out;
-  }, [lots, customTargetTimes, settings, templates]);
+  // 📊 行は achieveRowsOf(③ へ渡す集計と同じ係)。中身は 2026-10-04 より前のここの useMemo と同じ(担当と較正の印を足しただけ)。
+  const rows = useMemo(() => achieveRowsOf(lots, customTargetTimes, settings, templates), [lots, customTargetTimes, settings, templates]);
 
   const pctColor = (p) => p >= 100 ? 'text-emerald-600' : p >= 80 ? 'text-amber-600' : 'text-rose-600';
   const barColor = (p) => p >= 100 ? 'bg-emerald-500' : p >= 80 ? 'bg-amber-500' : 'bg-rose-500';
@@ -32653,6 +32663,47 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    // State: UI
    const [viewMode, setViewMode] = useState(EMBED_MAP ? 'map-only' : 'dashboard'); // 埋め込みは「マップだけ」画面(現場マップの地図そのもの)
    const [activeTab, setActiveTab] = useState('main');
+   // ═══════════════════════════════════════════════════════════════════════
+   // 📊 2026-10-04 生産達成率を ③ へ(共有棚 capacity-shared-v1/achieve_rate/parts・1件を丸ごと置き換え)
+   //   清水さん「こっちが押したらすぐそっちも出せる用意しておいて」(目標時間の較正 = 最適化提案のボタン)
+   //   ・書くのは ① 分析を開いて過去のロットがそろった時(開くたびに1回) ② 目標時間を較正して保存した直後 だけ。
+   //   ・🚨 読みは増やさない(分析が使う lots をそのまま数えるだけ)。
+   //   ・過去の取り寄せが上限で頭打ちの時は complete:false と理由を一緒に置く(③ が「古い分は入っていません」と出す)。
+   //   ・中身(月×人の 標準秒・実績秒・未設定の実績秒)が前と同じなら書かない(domain/achieveShelf.js)。
+   //   ・行は達成率の画面と同じ係(achieveRowsOf)。
+   // ═══════════════════════════════════════════════════════════════════════
+   const achievePublisher = useMemo(() => ((!db || EMBED_MAP || LIVE_CODE) ? null : makeAchievePublisher({
+     app: 'parts',
+     save: (doc) => DATA(db).save(ACHIEVE_NS, ACHIEVE_COL, 'parts', doc, { merge: false }),
+     storage: { get: (k) => localStorage.getItem(k), set: (k, v) => localStorage.setItem(k, v) },
+   })), [db]);
+   const achieveInRef = useRef(null);
+   achieveInRef.current = { lots, settings, templates, history: skillGridHistory };
+   const achieveCalibRef = useRef(false); // 目標時間(customTargetTimes)を保存した印。届いた後に1回だけ書く
+   const publishAchieve = useCallback((reason) => {
+     if (!achievePublisher) return;
+     const cur = achieveInRef.current || {};
+     const st = cur.settings || {};
+     const hist = cur.history || { complete: false, note: '' };
+     let rows;
+     try {
+       rows = achieveRowsOf(cur.lots, st.customTargetTimes || {}, st, cur.templates || [])
+         .map(r => ({ ms: r.ms, worker: r.worker, act: r.act, cal: r.cal }));
+     } catch (e) { console.error('📊 達成率の集計に失敗(③へは書きません)', e); return; }
+     achievePublisher.publish({ rows, calibrated: countCalibrated(st.customTargetTimes), complete: !!hist.complete, note: hist.complete ? '' : hist.note, reason })
+       .then((r) => { if (r.written) console.info(`📊 達成率を共有棚へ書きました(${reason}・${r.doc.cells.length}行)`); })
+       .catch((e) => console.warn('📊 達成率を共有棚へ書けませんでした(次に分析を開いた時にもう一度)', e));
+   }, [achievePublisher]);
+   const analysisOpenForAchieve = activeTab === 'analysis';
+   useEffect(() => {
+     if (analysisOpenForAchieve && lotsHistoryReady) publishAchieve('open');
+   }, [analysisOpenForAchieve, lotsHistoryReady, publishAchieve]);
+   const achieveCtt = settings ? settings.customTargetTimes : null;
+   useEffect(() => {
+     if (!achieveCalibRef.current || !lotsHistoryReady) return;
+     achieveCalibRef.current = false;
+     publishAchieve('calibrate');
+   }, [achieveCtt, lotsHistoryReady, publishAchieve]);
    // ⤢ 広く使う(製品と同じ・端末ごと localStorage 'pi-analysis-wide')。効かせるのは分析タブの間だけ(⤢ボタンが分析の画面の中に在る = 戻る道が消えない)。
    const [wideMode, setWideMode] = useState(() => { try { return localStorage.getItem('pi-analysis-wide') === '1'; } catch { return false; } });
    const toggleWideMode = () => setWideMode(v => { const n = !v; try { localStorage.setItem('pi-analysis-wide', n ? '1' : '0'); } catch { /* 端末が拒否しても畳めること自体は動く */ } return n; });
@@ -33949,6 +34000,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    };
 
    const saveSettings = async (newSettings) => {
+     // 📊 目標時間(較正値)の保存 = ③ の生産達成率を書き直す合図(届いた customTargetTimes で1回だけ・achieveCalibRef)
+     if (newSettings && newSettings.customTargetTimes !== undefined) achieveCalibRef.current = true;
      // 🚨🚨🚨 2026-08-23: サインインが終わっていない間の設定の保存を **黙って捨てない**。
      //   前はここで無言 return していたので `await` した側には正常に返り、
      //   画面だけ先へ進んで Firestore には何も行かなかった(2026-08-17 の事故と同じ形)。
