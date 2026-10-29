@@ -73,7 +73,7 @@ import { goalGapOf, candidateOf, planPortfolio } from './domain/goal/portfolioPl
 import { sendPushViaWorker } from './push.js';
 import './data/connectPocketbase.js';
 // 🏢 2026-10-29 社内サーバ版(VITE_ONPREM=1 のビルドだけ)。スイッチの無いビルドでは何もしない。
-import { dataFor, applyOnpremRoute, currentProviders, savedRouteFromSettings, DATA_ROUTE_KEY } from './dataRoute.js';
+import { dataFor, applyOnpremRoute, currentProviders } from './dataRoute.js';
 import { IS_ONPREM_BUILD, ONPREM_DB, ONPREM_USER, loadOnpremConfig } from './onprem.js';
 // 🏭 2026-09-27 製品→部品 移植: 操業シミュレーションの画面と共有棚の書類を作る純関数(製品と同じ)
 import { OperationsSimulationPanel } from './OperationsSimulationPanel.jsx';
@@ -463,9 +463,9 @@ const estMeter = (api) => {
 };
 /** 窓口へ渡すのはこちら(数えるだけの覆いを着せた物)。⚠鍵の一覧は FS_API と同じ。 */
 const FS_EST = estMeter(FS_API);
-// ---- どの保管庫へ書くか(切替の入口・製品 App.jsx:222-261 と同じ形) ----
-// ⚠ 2026-10-29 中身は src/dataRoute.js へ移した(回転計測からも同じ行き先を引く為・点検 G5)。中身は同じ。
-// ⚠ 既定は必ず Firebase。保存された行き先に enabled === true と接続先がはっきり入っている時、または社内サーバ版のビルドの時だけ切り替わる。
+// ---- どの保管庫へ書くか(切替の入口) ----
+// ⚠ 2026-10-29 中身は src/dataRoute.js へ移した(回転計測からも同じ行き先を引く為・点検 G5)。
+// 🚨 2026-10-30 いつものビルド(本番)は必ず全部 Firebase(共有の設定・端末の記憶では切り替わらない)。PocketBase は社内サーバ版のビルド(VITE_ONPREM=1)だけ。
 const DATA = (db) => dataFor(db, FS_EST);   // 🧮 P-L1: 数えるだけの覆い(FS_EST)
 import {
   getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject
@@ -32523,22 +32523,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    const [appNotices, setAppNotices] = useState([]);   // P099: 更新のお知らせ(同じ共通の箱)
    const [feedbackOpen, setFeedbackOpen] = useState(false);
    const [settings, setSettings] = useState({ mapImage: null, mapZones: INITIAL_MAP_ZONES, defectProcessOptions: DEFAULT_DEFECT_PROCESS_OPTIONS, breakAlerts: [], complaintOptions: DEFAULT_COMPLAINT_OPTIONS, customTargetTimes: {}, targetTimeHistory: [], customLayouts: {}, measurementOverrides: {} });
-   // --- 🔌 保存先の設定(settings.pocketbase)を見張る(点検 G1・製品 App.jsx:47700-47719 と同じ形) ---
-   // ⚠⚠ 動いている最中に保存先を差し替えない。購読はもう張ってあるので、途中で差し替えると
-   //   「読みは古い方・書きは新しい方」になりかねない。端末に覚えて、**次に開いた時から**効かせる。
-   // ⚠ enabled === true と url が無ければ { enabled:false } を覚える = 今まで通り Firebase。
-   // ⚠ 社内サーバ版のビルドでは見ない(行き先は onprem-config.json で決まっている)。
-   useEffect(() => {
-     if (IS_ONPREM_BUILD) return;
-     const pb = settings?.pocketbase;
-     if (pb === undefined) return;
-     const nextKey = JSON.stringify(savedRouteFromSettings(pb));
-     let prevKey = '';
-     try { prevKey = localStorage.getItem(DATA_ROUTE_KEY) || ''; } catch { /* noop */ }
-     if (nextKey === prevKey) return;
-     try { localStorage.setItem(DATA_ROUTE_KEY, nextKey); } catch { /* noop */ }
-     console.info('[保存先] 設定の pocketbase が変わりました。次に開いた時から効きます:', nextKey.replace(/"password":"[^"]*"/, '"password":"***"'));
-   }, [settings?.pocketbase]);
+   // 🚨 2026-10-30 設定の pocketbase(settings.pocketbase)を見て端末に行き先を覚える作りは消した。
+   //   いつものビルド(本番)は共有の設定が何であっても Firebase のまま。PocketBase は社内サーバ版のビルドだけ(src/dataRoute.js)。
 
    // 勤務表 + 工場の暦 を1つにした物(WorkScheduleContext に流す)。
    // 🚨 毎描画で新しい物を作ってはいけない。文脈の値が変わったと見なされ、

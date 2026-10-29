@@ -18,7 +18,7 @@ import {
   IS_ONPREM_BUILD, ONPREM_PROVIDERS, ONPREM_DB, normalizeOnpremConfig, loadOnpremConfig, pbConfigOfOnprem,
 } from '../../onprem.js';
 import {
-  applyDataRoute, applyOnpremRoute, currentProviders, dataFor, savedRouteFromSettings, isOnpremRoute, __resetDataRouteForTest,
+  applyOnpremRoute, currentProviders, dataFor, isOnpremRoute, __resetDataRouteForTest, __setOnpremBuildForTest,
 } from '../../dataRoute.js';
 import { DEFAULT_PROVIDERS, AREAS, NS } from '../../data/routes.js';
 import { registerPocketbaseFactory } from '../../data/provider.js';
@@ -38,27 +38,55 @@ test('O01 node(=スイッチの無いビルド)では社内版ではない・行
   assert.equal(isOnpremRoute(), false);
 });
 
-test('O02 設定の pocketbase: enabled===true と url が両方ある時だけ覚える(点検 G1)', () => {
-  assert.deepEqual(savedRouteFromSettings(undefined), { enabled: false });
-  assert.deepEqual(savedRouteFromSettings({ enabled: true }), { enabled: false }, 'url が無ければ切り替えない');
-  assert.deepEqual(savedRouteFromSettings({ enabled: 'true', url: 'http://x' }), { enabled: false }, '文字の true では切り替えない');
-  const s = savedRouteFromSettings({ enabled: true, url: 'http://pb:8090/', email: 'e', password: 'p' });
-  assert.deepEqual(s, { enabled: true, url: 'http://pb:8090', email: 'e', password: 'p', authCollection: 'device_users', areas: null });
+test('O02 いつものビルド: 共有の設定・端末の記憶・社内版の行き先のどれでも PocketBase へ切り替わらない(2026-10-30)', async () => {
+  __resetDataRouteForTest();
+  assert.equal(IS_ONPREM_BUILD, false);
+  // 端末に前の作りの行き先(data.route.v1)が覚えてあっても読まない
+  let touched = 0;
+  globalThis.localStorage = {
+    getItem: () => { touched++; return JSON.stringify({ enabled: true, url: 'http://pb:8090', email: 'e', password: 'p' }); },
+    setItem: () => { touched++; },
+  };
+  assert.deepEqual(currentProviders(), DEFAULT_PROVIDERS);
+  // 社内版の行き先を呼ばれても、ビルドが社内版でなければ何もしない(二重の止め)
+  const r = applyOnpremRoute({ url: 'http://pb:8090', email: 'e', password: 'p' });
+  assert.deepEqual(r.providers, DEFAULT_PROVIDERS);
+  assert.equal(r.pbConfig, null);
+  assert.equal(isOnpremRoute(), false);
+  // 窓口も全部 Firebase(PocketBase の工場は呼ばれない)
+  let pbMade = 0;
+  registerPocketbaseFactory(() => { pbMade++; return { kind: 'pocketbase' }; });
+  const P = dataFor({ db: 'normal' }, FS_MIN);
+  for (const [ns, col] of [[NS.parts, 'lots'], [NS.parts, 'lot_images'], [NS.contact, 'contact_requests'], [NS.parts, 'push_tokens'],
+    [NS.goals, 'settings'], [NS.product, 'rotaryMeasurements']]) {
+    assert.equal(P.routeOf(ns, col).backend, 'firebase', `${ns}/${col}`);
+  }
+  assert.equal(pbMade, 0, 'PocketBase の窓口を作らない');
+  assert.equal(touched, 0, '端末の記憶を読み書きしない');
+  globalThis.localStorage = undefined;
+  // 切替の口(設定から行き先を作る・端末に覚える)はもう出していない
+  const mod = await import('../../dataRoute.js');
+  for (const k of ['applyDataRoute', 'savedRouteFromSettings', 'DATA_ROUTE_KEY', 'ensureDataRoute']) assert.equal(mod[k], undefined, k);
+  // 画面: 共有の設定(settings.pocketbase)を見て端末に覚える所が無い
+  const app = read('src/App.jsx');
+  assert.ok(!/settings\?\.pocketbase/.test(app), 'settings.pocketbase を見ない');
+  assert.ok(!/data\.route\.v1|DATA_ROUTE_KEY/.test(app), '端末に行き先を覚えない');
+  assert.ok(!/localStorage\s*\./.test(read('src/dataRoute.js')), 'dataRoute.js は端末の記憶に触らない');
+  __resetDataRouteForTest();
 });
 
 test('O03 社内版の行き先: 全部の領域が PocketBase(連絡と通知の宛先も)・以後 設定や端末の記憶で戻らない', () => {
   __resetDataRouteForTest();
+  __setOnpremBuildForTest(true);
   assert.ok(AREAS.every((a) => ONPREM_PROVIDERS[a] === 'pocketbase'), '6つの領域すべて');
   const r = applyOnpremRoute({ url: 'http://pb:8090', email: 'e', password: 'p', authCollection: 'device_users' });
   assert.equal(r.providers, ONPREM_PROVIDERS);
   assert.equal(r.pbConfig.url, 'http://pb:8090');
-  // 設定の pocketbase(enabled:false)が来ても Firebase へ戻らない
-  applyDataRoute({ enabled: false });
-  assert.equal(currentProviders(), ONPREM_PROVIDERS);
   // 端末に覚えた行き先も読まない
   globalThis.localStorage = { getItem: () => { throw new Error('社内版で端末の記憶を読んだ'); } };
   assert.equal(currentProviders(), ONPREM_PROVIDERS);
   globalThis.localStorage = undefined;
+  __resetDataRouteForTest();
 });
 
 test('O04 社内版の窓口: db の代わりの鍵で作れ、検査・写真・連絡・通知・共有棚が全部 PocketBase へ行き、Firebase の関数は1つも呼ばない', async () => {
@@ -72,6 +100,7 @@ test('O04 社内版の窓口: db の代わりの鍵で作れ、検査・写真�
   };
   let gotCfg = null;
   registerPocketbaseFactory((cfg) => { gotCfg = cfg; return fakePb; });
+  __setOnpremBuildForTest(true);
   applyOnpremRoute({ url: 'http://pb:8090', email: 'e', password: 'p' });
   const P = dataFor(ONPREM_DB, FS_MIN);
   assert.ok(P, 'db の代わりの鍵で窓口ができる');
@@ -140,7 +169,6 @@ test('O06 画面の入口の配線: 社内版は Firebase を起こす前に分�
   assert.match(branch, /applyOnpremRoute\(cfg/); assert.match(branch, /setDb\(ONPREM_DB\)/); assert.match(branch, /setUser\(ONPREM_USER\)/);
   assert.match(app, /const DATA = \(db\) => dataFor\(db, FS_EST\);/);
   assert.match(app, /if \(attachmentsOffFirebase\(\)\) return await uploadViaProvider\(base64DataUrl, pathHint, 'jpg'\);/);
-  assert.match(app, /if \(IS_ONPREM_BUILD\) return;\s*const pb = settings\?\.pocketbase;/, '設定の pocketbase は社内版では見ない');
   const main = read('src/main.jsx');
   assert.match(main, /if \('serviceWorker' in navigator && import\.meta\.env\.VITE_ONPREM !== '1'\)/);
   const kit = read('src/contact/ContactKit.jsx');
