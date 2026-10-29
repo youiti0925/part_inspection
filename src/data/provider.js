@@ -157,12 +157,38 @@ export const createFirebaseBackend = (db, fs) => {
       listen(docRef(ns, col, id), (snap) => cb(snap.exists() ? snap.data() : null, snap), opts.onError,
         opts.includeMetadataChanges ? { includeMetadataChanges: true } : null),
     getAll: async (ns, col, opts = {}) => (await fs.getDocs(queryRef(ns, col, opts))).docs.map(opts.map || ROW_DOCID_WINS),
-    getOne: async (ns, col, id) => { const s = await fs.getDoc(docRef(ns, col, id)); return s.exists() ? s.data() : null; },
+    /* 1件を読む。
+       🚨 opts.source === 'server' の時は **控えを見ない**(getDocFromServer)。
+         保存計画のように「書く直前にもう一度読んで 別の端末の保存を上書きしない」用途では
+         控えから返ると意味が無い(2026-09-19 に、控えが返るのを見落として3日間書けていなかった)。
+       ⚠ 渡さなければ今までどおり getDoc。既存の呼び出しは1つも変わらない。 */
+    getOne: async (ns, col, id, opts = {}) => {
+      // 📉 opts.source === 'cache' … 端末の控えだけを見る(サーバへ行かない・課金0)。控えに無ければ null。
+      //   中身が変わらない物(IDが中身から決まる参考画像 step_ref_images)だけが使う(2026-10-03)。
+      //   ⚠控えを読む口を渡していない保管庫では null(=呼ぶ側はサーバから読み直す)。
+      if (opts && opts.source === 'cache') {
+        if (typeof fs.getDocFromCache !== 'function') return null;
+        try {
+          const c = await fs.getDocFromCache(docRef(ns, col, id));
+          return c && c.exists() ? c.data() : null;
+        } catch { return null; }
+      }
+      const wantServer = opts && opts.source === 'server';
+      const read = (wantServer && typeof fs.getDocFromServer === 'function') ? fs.getDocFromServer : fs.getDoc;
+      const s = await read(docRef(ns, col, id));
+      if (wantServer && typeof fs.getDocFromServer !== 'function' && s && s.metadata && s.metadata.fromCache) {
+        throw new Error('サーバから読めませんでした（手元の控えしかありません）');
+      }
+      return s.exists() ? s.data() : null;
+    },
 
     // --- 絞り込み付きの読み ---------------------------------------------------
     // ⚠絞り込みの指定は「ただのデータ」で受け取る({where, orderBy, limit, after})。
     //   画面が Firestore の query()/where() を組み立てると、それは Firebase 固有の値なので
     //   窓口の外へ出てしまい、保管庫を差し替えられなくなる。
+    // 📉 opts.source === 'cache' の時だけ **端末の控えに張る**(サーバへは読みに行かない・課金0)。
+    //   最終検査の「前回の続きだけ読む」(domain/lotsDeltaSync.js)が使う。控えを最新にするのは別の差分の購読。
+    //   ⚠渡さなければ今までと1バイトも変わらない(Firestore に渡す第2引数も今までどおり)。
     watchQuery: (ns, col, spec = {}, cb, opts = {}) =>
       listen(queryRef(ns, col, { ...opts, ...spec }), (snap) => cb(snap.docs.map(opts.map || ROW_DOCID_WINS), snap), opts.onError,
         snapOptsOf(opts)),
@@ -202,7 +228,9 @@ export const createFirebaseBackend = (db, fs) => {
       if (fromServer && snap && snap.metadata && snap.metadata.fromCache) {
         throw new Error('サーバに繋がっていません（手元の控えしか読めませんでした）');
       }
-      return { rows: snap.docs.map(opts.map || ROW_DOCID_WINS), cursor: snap.docs.length ? snap.docs[snap.docs.length - 1] : null };
+      // ⚠fromCache を足しただけ(2026-09-27)。端末の控えだけの答えかを呼ぶ側が見分けられる。今までの呼び出しは読まないので変わらない。
+      return { rows: snap.docs.map(opts.map || ROW_DOCID_WINS), cursor: snap.docs.length ? snap.docs[snap.docs.length - 1] : null,
+        fromCache: !!(snap.metadata && snap.metadata.fromCache) };
     },
 
     // ========================================================================
@@ -232,7 +260,10 @@ export const createFirebaseBackend = (db, fs) => {
       //   枚数・容量・「全部そろった」の判定が静かに嘘になる(2026-08-31 実機で発生)。
       //   呼び元は fromCache:true を「読めなかった」として扱うこと。
       const full = async (why) => {
-        const snap = await fs.getDocs(queryRef(ns, col, { where: opts.where }));
+        // 📉(2026-10-01)並び順・件数(orderBy/limit)を渡された時だけ、落ちた先にも同じ絞りを渡す(渡さなければ今までと同じ)。
+        // 📷📄(2026-10-03 夜)続きの位置(opts.after = 前のページの最後の ID・__name__ の並びの時)も渡された時だけ同じ物を渡す。
+        const snap = await fs.getDocs(queryRef(ns, col, (opts.orderBy || opts.limit !== undefined)
+          ? { where: opts.where, orderBy: opts.orderBy, limit: opts.limit, ...(opts.after != null ? { after: opts.after } : {}) } : { where: opts.where }));
         return { rows: snap.docs.map(ROW_DOCID_WINS), projected: false, fellBack: why,
           fromCache: !!(snap.metadata && snap.metadata.fromCache) };
       };
@@ -255,9 +286,28 @@ export const createFirebaseBackend = (db, fs) => {
       const w = (opts.where || []).map(([f, op, v]) => ({ fieldFilter: { field: { fieldPath: f },
         op: ({ '==': 'EQUAL', '!=': 'NOT_EQUAL', '>=': 'GREATER_THAN_OR_EQUAL', '<=': 'LESS_THAN_OR_EQUAL',
           '>': 'GREATER_THAN', '<': 'LESS_THAN' })[op],
-        value: typeof v === 'number' ? { integerValue: String(v) } : { stringValue: String(v) } } }));
+        // 📉(2026-10-01)Date は時刻(timestampValue)で渡す。updatedAt(サーバの時刻)と比べる「差分だけ読む」用。
+        //   ⚠数・文字の渡し方は今までと1文字も変えない。
+        value: (v instanceof Date) ? { timestampValue: v.toISOString() }
+          : typeof v === 'number' ? { integerValue: String(v) } : { stringValue: String(v) } } }));
       if (w.length === 1) q.structuredQuery.where = w[0];
       else if (w.length > 1) q.structuredQuery.where = { compositeFilter: { op: 'AND', filters: w } };
+      // 📉(2026-10-01)並び順と件数の上限(getPage と同じ形の配列)。渡さなければ今までと同じ問い合わせ。
+      if (Array.isArray(opts.orderBy) && opts.orderBy.length) {
+        q.structuredQuery.orderBy = opts.orderBy.map((o) => {
+          const [f, dir] = Array.isArray(o) ? o : [o];
+          return { field: { fieldPath: f }, direction: dir === 'desc' ? 'DESCENDING' : 'ASCENDING' };
+        });
+      }
+      if (opts.limit !== undefined) q.structuredQuery.limit = Math.max(0, Math.floor(Number(opts.limit) || 0));
+      // 📷📄(2026-10-03 夜)続きから読む(startAfter)。⚠並びが __name__ の時だけ(ID で位置を言う)。
+      //   書類の名前(projects/…/documents/…/col/<ID>)で「この後ろから」を渡す(before:false = その ID は含めない)。
+      if (opts.after != null && Array.isArray(opts.orderBy) && opts.orderBy.length === 1
+        && String((Array.isArray(opts.orderBy[0]) ? opts.orderBy[0][0] : opts.orderBy[0])) === '__name__') {
+        q.structuredQuery.startAt = { values: [{ referenceValue: `${parent}/${segs[segs.length - 1]}/${String(opts.after)}` }], before: false };
+      } else if (opts.after != null) {
+        return full('続きの位置(after)は __name__ の並びの時だけ REST で渡せます');
+      }
       let res;
       try {
         res = await fetch(`${scheme}://${host}/v1/${parent}:runQuery`, { method: 'POST',
@@ -311,30 +361,6 @@ export const createFirebaseBackend = (db, fs) => {
       }
     },
 
-    /** 配列の項目を足す。合計が maxBytes を超えたら古い方から落とす。
-     *  ⚠2台で同時に足すと「読んで→足して→丸ごと書き戻す」では後から書いた側が
-     *    相手の1件を消す。書く直前に読み直して足す。 */
-    appendCapped: async (ns, col, id, field, item, opts = {}) => {
-      const ref = docRef(ns, col, id);
-      const max = Number(opts.maxBytes) || 900 * 1024;
-      const fallback = opts.fallback || {};
-      return await fs.runTransaction(db, async (tx) => {
-        const snap = await tx.get(ref);
-        const cur = snap.exists() ? (snap.data() || {}) : fallback;
-        const before = (cur && cur[field]) || [];
-        // 2026-09-27 製品と同じ opts.expectLength(審査の履歴が動いていたら書かず stale)
-        if (Number.isInteger(opts.expectLength) && before.length !== opts.expectLength) return { count: before.length, dropped: 0, stale: true };
-        let arr = [...before, item];
-        const size = () => JSON.stringify(arr).length;
-        let dropped = 0;
-        while (arr.length > 1 && size() > max) { arr = arr.slice(1); dropped++; }
-        // ⚠消えていた場合は中身ごと作り直す。field だけ書くと名前なしの幽霊になる。
-        if (!snap.exists()) tx.set(ref, prep({ ...fallback, [field]: arr, updatedAt: DATA_SERVER_NOW }));
-        else tx.set(ref, prep({ [field]: arr, updatedAt: DATA_SERVER_NOW }), { merge: true });
-        return { count: arr.length, dropped };
-      });
-    },
-
     /** 版を1つ足して、採用中の版を指す head を進める。全部が1つの取引。
      *  🚨「読んで→確かめて→書く」を端末側で分けると、2台が同じ版を確かめてから両方書けて
      *    後勝ちで片方が消える(2026-09-22 保存計画で再現)。取引の中で確かめて書く。
@@ -360,6 +386,51 @@ export const createFirebaseBackend = (db, fs) => {
         tx.set(verRef, prep(versionDoc));
         tx.set(headRef, prep({ ...headDoc, updatedAt: DATA_SERVER_NOW }));
         return { ok: true, headRevision: curRev + 1 };
+      });
+    },
+
+    /** 配列の項目を足す。合計が maxBytes を超えたら古い方から落とす。
+     *  ⚠2台で同時に足すと「読んで→足して→丸ごと書き戻す」では後から書いた側が
+     *    相手の1件を消す。書く直前に読み直して足す。 */
+    appendCapped: async (ns, col, id, field, item, opts = {}) => {
+      const ref = docRef(ns, col, id);
+      const max = Number(opts.maxBytes) || 900 * 1024;
+      const fallback = opts.fallback || {};
+      return await fs.runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        const cur = snap.exists() ? (snap.data() || {}) : fallback;
+        const before = (cur && cur[field]) || [];
+        // 🚨 2026-09-22 opts.expectLength: 呼ぶ側が「今の履歴を見て決めた」事を取引の中で確かめる。
+        //   履歴が動いていたら何も書かず stale(承認と差戻しを2台で同時に押すと両方通る穴)。
+        if (Number.isInteger(opts.expectLength) && before.length !== opts.expectLength) return { count: before.length, dropped: 0, stale: true };
+        let arr = [...before, item];
+        const size = () => JSON.stringify(arr).length;
+        let dropped = 0;
+        while (arr.length > 1 && size() > max) { arr = arr.slice(1); dropped++; }
+        // ⚠消えていた場合は中身ごと作り直す。field だけ書くと名前なしの幽霊になる。
+        if (!snap.exists()) tx.set(ref, prep({ ...fallback, [field]: arr, updatedAt: DATA_SERVER_NOW }));
+        else tx.set(ref, prep({ [field]: arr, updatedAt: DATA_SERVER_NOW }), { merge: true });
+        return { count: arr.length, dropped };
+      });
+    },
+
+    /** 📉(2026-10-03 夜・最終検査 A8)「入れた印」の書類を取引の中で読み、まだなら **本体と印を同じ取引で** 書く。
+     *  開いている全端末が同じ知らせを同時に受けて、全員が本体と印を書く(書き込みが台数分 全端末へ配られる)のを1台にする。
+     *  - 印(col/id)の今の中身(無ければ null)を done に渡し、真なら何も書かず { applied:false, reason:'done' }。
+     *  - まだなら targetPatch を本体(targetCol/targetId)へ **在る時だけ**(tx.update)、markPatch を印へ merge:true で書く。
+     *    どちらにも updatedAt(サーバの時刻)を付ける(saveData と同じ)。
+     *  🚨 本体と印は1つの取引 = 印だけ残る事が無い(2026-08-31「印は本体の返事の後」を同じ取引の中で守る)。
+     *  ⚠本体が無い・通信が無い・取り合いに負け続けた時は取引ごと失敗する(投げる)。呼ぶ側が今までの道へ落とす。 */
+    applyWithMark: async (ns, col, id, { done, markPatch, targetCol, targetId, targetPatch } = {}) => {
+      const markRef = docRef(ns, col, id);
+      const targetRef = targetCol && targetId != null ? docRef(ns, targetCol, targetId) : null;
+      return await fs.runTransaction(db, async (tx) => {
+        const ms = await tx.get(markRef);
+        const cur = ms.exists() ? (ms.data() || {}) : null;
+        if (typeof done === 'function' && done(cur)) return { applied: false, reason: 'done' };
+        if (targetRef && targetPatch) tx.update(targetRef, prep({ ...targetPatch, updatedAt: DATA_SERVER_NOW }));
+        tx.set(markRef, prep({ ...(markPatch || {}), updatedAt: DATA_SERVER_NOW }), { merge: true });
+        return { applied: true, reason: 'ok' };
       });
     },
 
@@ -463,6 +534,8 @@ export const createProvider = ({ backends, providers = DEFAULT_PROVIDERS, onUnkn
     // --- 割り込まれない書き込み(意図の名前で呼ぶ) ----------------------------
     claimOnce: callAsync('claimOnce'),
     appendCapped: callAsync('appendCapped'),
+    // 📉(2026-10-03 夜・A8)印がまだなら本体と印を同じ取引で書く。対応しない保管庫では「対応していません」で落ちる(呼ぶ側が今までの道へ落とす)。
+    applyWithMark: callAsync('applyWithMark'),
     commitVersion: callAsync('commitVersion'),
     createOnce: callAsync('createOnce'),
 

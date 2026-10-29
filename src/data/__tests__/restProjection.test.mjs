@@ -104,3 +104,31 @@ test('metadata を返さない保管庫(試験の偽物など)は fromCache:fals
   const r = await be.getPageFields('ns', 'lot_images', ['lotId'], {});
   assert.equal(r.fromCache, false);
 });
+
+// --- 📷📄(2026-10-03 夜)続きから読む(after = 前のページの最後の ID)。全件の整理を1回の上限で止めて、続きは人が押す為 ---
+test('続きの位置(after): REST は __name__ の並びの時だけ startAt(before:false・書類の名前)で渡す', async () => {
+  const be = createFirebaseBackend(fakeDb, fakeFs([]));
+  let sent = null;
+  globalThis.fetch = async (url, init) => { sent = JSON.parse(init.body); return { ok: true, status: 200, json: async () => ([]) }; };
+  await be.getPageFields('ns', 'lot_images', ['lotId'], { getToken: async () => 't', orderBy: [['__name__', 'asc']], limit: 1000, after: 'img00999' });
+  assert.equal(sent.structuredQuery.limit, 1000);
+  assert.deepEqual(sent.structuredQuery.orderBy, [{ field: { fieldPath: '__name__' }, direction: 'ASCENDING' }]);
+  assert.equal(sent.structuredQuery.startAt.before, false, 'その ID 自身をもう一度読まない');
+  assert.match(sent.structuredQuery.startAt.values[0].referenceValue, /\/documents\/artifacts\/ns\/public\/data\/lot_images\/img00999$/);
+  // 1ページ目(after 無し)は startAt を付けない
+  await be.getPageFields('ns', 'lot_images', ['lotId'], { getToken: async () => 't', orderBy: [['__name__', 'asc']], limit: 1000 });
+  assert.equal(sent.structuredQuery.startAt, undefined);
+});
+
+test('続きの位置(after): 全部読みへ落ちた時も同じ位置・上限を SDK に渡す(落ちても全件にしない)', async () => {
+  const seen = [];
+  const fs = { ...fakeFs([{ id: 'x' }]),
+    query: (base, ...parts) => ({ base, parts }),
+    where: (...a) => ({ where: a }), orderBy: (...a) => ({ orderBy: a }), startAfter: (v) => ({ startAfter: v }), limit: (n) => ({ limit: n }),
+    getDocs: async (q) => { seen.push(q); return { docs: [], metadata: { fromCache: false } }; } };
+  const be = createFirebaseBackend(fakeDb, fs);
+  const r = await be.getPageFields('ns', 'lot_images', [], { orderBy: [['__name__', 'asc']], limit: 500, after: 'img00499' });
+  assert.equal(r.projected, false);
+  const parts = seen[0].parts;
+  assert.deepEqual(parts, [{ orderBy: ['__name__', 'asc'] }, { startAfter: 'img00499' }, { limit: 500 }]);
+});

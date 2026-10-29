@@ -155,14 +155,16 @@ test('P04 commitVersion: まとめ書きの途中で別の端末に同じ版を�
   assert.equal(docOf(srv, 'plan_versions', 'v2').data.by, 'other', '相手の版を消していない');
 });
 
-test('P05 getPageFields: 項目を絞って返す・読めなかった時は fromCache:true(「全部そろった」と言わない)', async () => {
+// ⚠2026-10-29 4アプリで揃えた時に決めた形: 項目は絞らず全項目を返し、projected:false と理由で言う
+//   (最終の写真の整理は projected:true を「Firestore の REST で読んだ」として数えるため)。
+test('P05 getPageFields: 絞り込みを当てた全項目の行を projected:false で返す・読めなかった時は fromCache:true(「全部そろった」と言わない)', async () => {
   const srv = makeServer();
   await srv.create('docs', { ns: NS, col: 'plan_versions', docId: 'a', data: { app: 'parts', at: 1, body: 'x'.repeat(100) }, rev: 1 });
   await srv.create('docs', { ns: NS, col: 'plan_versions', docId: 'b', data: { app: 'final', at: 2, body: 'y' }, rev: 1 });
   const be = mk(srv);
   const r = await be.getPageFields(NS, 'plan_versions', ['app', 'at'], { where: [['app', '==', 'parts']] });
-  assert.deepEqual(r.rows, [{ app: 'parts', at: 1, id: 'a' }]);
-  assert.equal(r.projected, true); assert.equal(r.fromCache, false);
+  assert.deepEqual(r.rows, [{ app: 'parts', at: 1, body: 'x'.repeat(100), id: 'a' }]);
+  assert.equal(r.projected, false); assert.ok(r.fellBack); assert.equal(r.fromCache, false);
 
   const srv2 = makeServer(); const be2 = mk(srv2);
   srv2.failNext('docs', 'list', new PbNetworkError(new Error('切れた'), '/x'));

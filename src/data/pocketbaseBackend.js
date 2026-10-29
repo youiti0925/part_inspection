@@ -18,8 +18,8 @@
 
 import { createDocStore, PbConflictError, PbCommandMismatchError, DOCS_COL } from './pbDocStore.js';
 import { createOutbox, createIdbStore, createMemoryStore, STATUS } from './outbox.js';
-import { mergeDoc, overwriteDoc, setFieldsDoc, DATA_SERVER_NOW } from './docMerge.js';
-import { withDeletions } from './sentinels.js';
+import { mergeDoc, overwriteDoc, setFieldsDoc } from './docMerge.js';
+import { withDeletions, DATA_SERVER_NOW } from './sentinels.js';
 import { POCKETBASE_CAPABILITIES } from './capabilities.js';
 import { applyQuery } from './queryLocal.js';
 
@@ -269,6 +269,22 @@ export const createPocketbaseBackend = (client, {
     p.set(docId, next === undefined ? REMOVED : next);
     emit(k);
   };
+  /** 送信待ちを通さずに書いた1件を、手元の一覧(cache)にだけ読み直す。⚠見込みの値(pending)は触らない。
+   *  (refreshDoc は見込みの値を下ろすので、送信待ちに同じ書類の保存が残っている時に使うと画面から消える) */
+  const reloadDoc = async (ns, col, docId) => {
+    const k = keyOf(ns, col);
+    if (!cache.has(k)) return;   // まだ読んでいない一覧は、読む時にサーバから揃う
+    try {
+      const rec = await store.findRecord(ns, col, docId);
+      const m = cache.get(k);
+      if (!revs.has(k)) revs.set(k, new Map());
+      const rv = revs.get(k);
+      if (rec) { m.set(docId, rec.data || {}); rv.set(docId, Number(rec.rev) || 0); }
+      else { m.delete(docId); rv.delete(docId); }
+      emit(k);
+    } catch { /* 読めなくても購読の知らせで揃う */ }
+  };
+
   /** 送り終わった見込みの値を下ろし、その1件だけサーバから読み直す。 */
   const refreshDoc = async (ns, col, docId) => {
     const k = keyOf(ns, col);
@@ -435,51 +451,90 @@ export const createPocketbaseBackend = (client, {
     appendCapped: async (ns, col, id, field, item, opts = {}) =>
       outbox.enqueue({ op: 'appendCapped', ns, col, docId: id, field, item, opts }),
 
-    // --- 2026-10-29 点検 G4: Firebase 版にあって、こちらに無かった操作 ---------------
+    // ========================================================================
+    // 2026-10-29 社内サーバ移行の準備: Firebase 版にあって、こちらに無かった操作。
+    //   無いと窓口(provider.js)が「保管庫 pocketbase は … に対応していません」で投げ、
+    //   画面のその機能(計画の版の一覧・保存・移動案・到着予定の自動反映・写真の整理など)が止まっていた。
+    //   製品・最終・部品の3アプリが同じ日に別々に足した物を1つにまとめた(src/data は4アプリで同じ中身)。
+    //   ⚠⚠ 下は **送信待ちの箱に入れない**(権利取りと同じ)。Firebase 版も取引・サーバへの問い合わせなので
+    //     電波が無ければ失敗する。オフラインで「できた」ことにしない。
     // ⚠getCachedDocs / refreshDocFromServer(前回の続きだけ読む)は **作らない**。
     //   こちらは最初から全部を手元に持つので要らない。呼べば窓口が「対応していません」で止める
     //   (ロットの差分読みは lots が firebase の時だけ動くよう画面側で守ってある)。
+    // ========================================================================
 
     /**
-     * 項目を選んで読む(Firebase 版は REST の runQuery)。こちらは手元の一覧から項目を絞るだけ。
-     * ⚠形は Firebase 版と同じ { rows, projected, fellBack, fromCache }。
-     *   サーバから読めていなければ fromCache:true(呼び元は「読めなかった」として扱う決まり)。
+     * 📉 項目を選んで読む(Firebase 版は REST で重い項目を運ばない)。
+     * ⚠PocketBase は手元に全部持ってから絞る作りなので、**項目は選ばない**(全項目の行を返す)。
+     *   その事を projected:false と fellBack で必ず言う(黙って「選べた」ことにしない)。
+     *   Firebase 版が全件読みへ落ちた時と同じ形。⚠projected:true にすると、呼ぶ側が
+     *   「REST で読んだ = Firestore の読み取り」として数えてしまう(最終の写真の整理)。
+     * ⚠絞り込み・並び・件数・続き(after = 前のページの最後の書類ID・__name__ の並びの時)は効かせる。
+     * ⚠サーバから読めていなければ fromCache:true(呼び元は「読めなかった」として扱う決まり・Firebase 版と同じ)。
+     * ⚠getToken は呼ばない(PocketBase のログインは窓口の中で済んでいる)。
      */
     getPageFields: async (ns, col, fields = [], opts = {}) => {
       await softLoad(ns, col);
       const k = keyOf(ns, col);
-      const docs = docsOf(k, { where: opts.where });
-      const pickAll = !Array.isArray(fields) || fields.length === 0;
-      const rows = docs.map((d) => {
-        const data = d.data() || {};
-        if (pickAll) return { ...data, id: d.id };
-        const o = {};
-        for (const f of fields) if (Object.prototype.hasOwnProperty.call(data, f)) o[f] = data[f];
-        o.id = d.id;
-        return o;
-      });
-      return { rows, projected: !pickAll, fellBack: pickAll ? '取る項目が指定されていません' : '', fromCache: !loaded.has(k) };
+      const after = opts.after == null ? undefined
+        : (typeof opts.after === 'object' ? opts.after : { id: String(opts.after), data: {} });
+      const rows = rowsOf(k, null, { where: opts.where, orderBy: opts.orderBy, limit: opts.limit, after });
+      const n = Array.isArray(fields) ? fields.length : 0;
+      return {
+        rows, projected: false,
+        fellBack: n ? `PocketBase は手元の一覧から返します(指定の${n}項目に絞らず全項目)` : '取る項目が指定されていません',
+        fromCache: !loaded.has(k),
+      };
     },
 
-    /** 件数だけ。⚠読めなかった時は 0 を返さず投げる(「0件」と「読めない」を混ぜない)。 */
+    /**
+     * 📉 件数だけ数える。
+     * ⚠サーバから読めていない時は **数えない(投げる)**。手元の0件を「0件」と答えると、
+     *   呼ぶ側の「控えとサーバの件数が合っている」の判定が嘘になる。
+     */
     countQuery: async (ns, col, spec = {}) => {
       await ensureLoaded(ns, col);
       return docsOf(keyOf(ns, col), specOf(spec)).length;
     },
 
-    /** 無い時だけ作る。⚠送信待ちに入れない(つながっていない時は取れない、が正しい)。 */
+    /**
+     * 無い時だけ作る。在れば何も書かず taken。updatedAt はサーバ時刻の印(Firebase 版と同じ)。
+     * ⚠docs の UNIQUE(ns,col,docId) への create がそのまま「1台だけ」の門になる(pbDocStore.createOnce)。
+     */
     createOnce: async (ns, col, id, doc) => {
-      const r = await store.createOnce(ns, col, id, { ...withDeletions(doc), updatedAt: DATA_SERVER_NOW });
-      if (r.acquired) await refreshDoc(ns, col, id);
+      const r = await store.createOnce(ns, col, id, withDeletions({ ...(doc || {}), updatedAt: DATA_SERVER_NOW }));
+      if (r.acquired) await reloadDoc(ns, col, id);
       return r;
     },
 
-    /** 版を足して head を進める(まとめて1回)。⚠送信待ちに入れない。 */
+    /**
+     * 「入れた印」がまだなら、本体を直してから印を書く。
+     * ⚠⚠ Firebase 版は1つの取引。PocketBase には複数の書類をまとめる取引が無い(batch API は既定で無効)。
+     *   ここでは **本体 → 印** の順に書く。途中で落ちても「印だけ残る」は起きない
+     *   (印が無ければ次の変化でもう一度試す = 2026-08-31 の決まりと同じ向き)。
+     *   2台が同時に来ると両方が同じ値を書くことはある(値は同じなので壊れない。書き込みが1件増えるだけ)。
+     * ⚠本体が無い時は Firebase 版(tx.update)と同じく投げる。呼ぶ側が今までの道へ落とす。
+     */
+    applyWithMark: async (ns, col, id, { done, markPatch, targetCol, targetId, targetPatch } = {}) => {
+      const markRec = await store.findRecord(ns, col, id);
+      const cur = markRec ? (markRec.data || {}) : null;
+      if (typeof done === 'function' && done(cur)) return { applied: false, reason: 'done' };
+      if (targetCol && targetId != null && targetPatch) {
+        await store.setFields(ns, targetCol, targetId, withDeletions({ ...targetPatch, updatedAt: DATA_SERVER_NOW }));
+        await reloadDoc(ns, targetCol, targetId);
+      }
+      await store.save(ns, col, id, withDeletions({ ...(markPatch || {}), updatedAt: DATA_SERVER_NOW }), { merge: true });
+      await reloadDoc(ns, col, id);
+      return { applied: true, reason: 'ok' };
+    },
+
+    /** 版を足して head を進める(作り方は pbDocStore.commitVersion)。⚠送信待ちに入れない。 */
     commitVersion: async (ns, args) => {
       const r = await store.commitVersion(ns, args);
       if (r && r.ok) {
-        await refreshDoc(ns, args.headCol, args.headId);
-        await refreshDoc(ns, args.versionCol, args.versionId);
+        await reloadDoc(ns, args.headCol, args.headId);
+        await reloadDoc(ns, args.versionCol, args.versionId);
+        for (const c of (args.chunks || [])) await reloadDoc(ns, args.versionCol, c.id);
       }
       return r;
     },

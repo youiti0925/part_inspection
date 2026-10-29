@@ -286,6 +286,53 @@ test('P24 appendCapped: 消えていたら名前ごと作り直す(幽霊にし�
 });
 
 // ============================================================================
+// P24a-P24d commitVersion(版を足して head を進める・1つの取引)
+// ============================================================================
+const CV_NS = 'capacity-shared-v1';
+const cvArgs = (over = {}) => ({ headCol: 'plan_control', headId: 'product', versionCol: 'plan_versions', versionId: 'product__v1', expectRevision: 0,
+  versionDoc: { revision: 1, tasks: [] }, headDoc: { kind: 'head', revision: 1, versionId: 'product__v1' }, ...over });
+
+test('P24a commitVersion: head が期待した版なら 版と head を同じ取引で書く', async () => {
+  const { p, calls } = build();
+  const r = await p.commitVersion(CV_NS, cvArgs());
+  assert.equal(r.ok, true);
+  assert.equal(r.headRevision, 1);
+  const sets = calls.filter((c) => c.op === 'tx.set');
+  assert.equal(sets.length, 2, '版と head の2つを書く');
+  assert.equal(sets[0].ref.segs.at(-1), 'product__v1');
+  assert.equal(sets[1].ref.segs.at(-1), 'product');
+  assert.equal(sets[1].data.updatedAt, '<<serverTimestamp>>');
+  assert.equal(calls.filter((c) => c.op === 'runTransaction').length, 1, '取引の外で書いている');
+});
+
+test('P24b commitVersion: 🚨 head の版が動いていたら 何も書かず stale', async () => {
+  const { p, calls } = build(DEFAULT_PROVIDERS, { ['artifacts/' + CV_NS + '/public/data/plan_control/product']: { kind: 'head', revision: 1 } });
+  const r = await p.commitVersion(CV_NS, cvArgs());
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'stale');
+  assert.equal(r.headRevision, 1);
+  assert.equal(calls.filter((c) => c.op === 'tx.set').length, 0, '版が動いているのに書いた');
+});
+
+test('P24c commitVersion: 同じ版の書類が既に在れば 何も書かず exists(再試行で二重に作らない)', async () => {
+  const { p, calls } = build(DEFAULT_PROVIDERS, { ['artifacts/' + CV_NS + '/public/data/plan_versions/product__v1']: { revision: 1 } });
+  const r = await p.commitVersion(CV_NS, cvArgs());
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'exists');
+  assert.equal(calls.filter((c) => c.op === 'tx.set').length, 0);
+});
+
+test('P24d commitVersion: preserveOld が返した物も同じ取引で書く(古い形の head を版へ移す)', async () => {
+  const old = { revision: 1, tasks: [{ key: 'k' }] };
+  const { p, calls } = build(DEFAULT_PROVIDERS, { ['artifacts/' + CV_NS + '/public/data/plan_control/product']: old });
+  const r = await p.commitVersion(CV_NS, cvArgs({ expectRevision: 1, versionId: 'product__v2', versionDoc: { revision: 2 }, headDoc: { kind: 'head', revision: 2 },
+    preserveOld: (cur) => ({ col: 'plan_versions', id: 'product__v' + cur.revision, doc: { ...cur, migratedFrom: 'plan_control' } }) }));
+  assert.equal(r.ok, true);
+  const sets = calls.filter((c) => c.op === 'tx.set').map((c) => c.ref.segs.at(-1));
+  assert.deepEqual(sets, ['product__v1', 'product__v2', 'product'], '古い版・新しい版・head の順で3つ');
+});
+
+// ============================================================================
 // P25-P28 その他
 // ============================================================================
 
@@ -402,4 +449,32 @@ test('P34 getAll にも同じ絞り込みが効く', async () => {
   const c = calls.filter((x) => x.op === 'getDocs').at(-1);
   assert.equal(c.ref.__kind, 'query');
   assert.deepEqual(c.ref.parts.at(-1), { __c: 'limit', n: 5 });
+});
+
+// ============================================================================
+// P35-P36 取引の中で確かめる(審査の同時押し・移動案の初回保存)
+// ============================================================================
+test('P35 appendCapped: expectLength と履歴の件数が違えば 何も書かず stale(承認と差戻しを2台で同時に押しても両方通らない)', async () => {
+  const { p, calls } = build(DEFAULT_PROVIDERS, { 'artifacts/capacity-shared-v1/public/data/plan_reviews/final__v1': { history: ['submitted', 'approved'] } });
+  const stale = await p.appendCapped(CV_NS, 'plan_reviews', 'final__v1', 'history', 'returned', { expectLength: 1 });
+  assert.equal(stale.stale, true);
+  assert.equal(calls.filter((c) => c.op === 'tx.set').length, 0, '🚨 履歴が動いていたのに書いた');
+  const ok = await p.appendCapped(CV_NS, 'plan_reviews', 'final__v1', 'history', 'returned', { expectLength: 2 });
+  assert.equal(ok.stale, undefined);
+  assert.deepEqual(lastSet(calls).data.history, ['submitted', 'approved', 'returned']);
+  const none = await p.appendCapped(CV_NS, 'plan_reviews', 'final__v1', 'history', 'x');
+  assert.equal(none.count, 3, 'expectLength を渡さない今までの呼び方が変わった'); // 写しは tx.set を保存しない(2件+1)
+});
+
+test('P36 createOnce: 無い時だけ作る(取引)。在れば何も書かず taken', async () => {
+  const { p, calls } = build();
+  const a = await p.createOnce(CV_NS, 'route_drafts', 'final__abc', { revision: 1, note: 'x' });
+  assert.equal(a.acquired, true);
+  assert.equal(lastSet(calls).opts, undefined, '初回は全体を書く(merge ではない)');
+  assert.equal(lastSet(calls).data.revision, 1);
+  const { p: p2, calls: c2 } = build(DEFAULT_PROVIDERS, { 'artifacts/capacity-shared-v1/public/data/route_drafts/final__abc': { revision: 1 } });
+  const b = await p2.createOnce(CV_NS, 'route_drafts', 'final__abc', { revision: 1 });
+  assert.equal(b.acquired, false);
+  assert.equal(b.reason, 'taken');
+  assert.equal(c2.filter((c) => c.op === 'tx.set').length, 0, '🚨 在るのに上書きした');
 });
