@@ -937,7 +937,9 @@ const CONTACT_SHARED_NS = 'contact-shared-v1';
 //  データは APP_DATA_ID="parts-inspection-v1" の別名前空間 (artifacts/parts-inspection-v1/...) に入るので、
 //  製品(product-inspection-v1)・最終(final-inspection-v1)のデータには一切混ざらない。
 //  ※このapiKeyはFirebaseのwebキー(公開前提・秘密ではない)。守りはFirestore/Storageルール側。
-const USER_DEFINED_CONFIG = {
+// 🏢 2026-10-30 社内サーバ版(IS_ONPREM_BUILD)では空にする: Firebase を起こさないので要らず、本番の行き先(プロジェクト名・キー)を社内版の出力へ入れない。
+//   いつものビルドでは IS_ONPREM_BUILD は定数 false なので、中身は前と同じ。
+const USER_DEFINED_CONFIG = IS_ONPREM_BUILD ? {} : {
   apiKey: "AIzaSyDiIS-TDH6MgXaLvG9T2VRioFDomQ_zQ9E",
   authDomain: "inspection-time-c4fd3.firebaseapp.com",
   projectId: "inspection-time-c4fd3",
@@ -955,7 +957,7 @@ const FIREBASE_CONFIG = (USER_DEFINED_CONFIG.apiKey && USER_DEFINED_CONFIG.apiKe
 
 
 // 🏢 社内版でログインできない時に出す案内(onprem-config.json の置き場所)。
-const ONPREM_CONFIG_HINT = 'index.html と同じ場所の onprem-config.json の pocketbase.email / password(端末用アカウント)を確かめてください。';
+const ONPREM_CONFIG_HINT = 'index.html と同じ場所の onprem-config.json の email / password(端末用アカウント)を確かめてください。';
 
 const COLORS = {
   primary: '#2563eb',

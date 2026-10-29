@@ -102,6 +102,19 @@ test('O05 設定ファイル: 優先・無ければ VITE_PB_URL・合言葉は�
   assert.equal(none.ok, false); assert.equal(none.url, ''); assert.ok(none.problems.length >= 1);
   assert.equal(normalizeOnpremConfig({ url: 'pb:8090', email: 'e', password: 'p' }).ok, false, 'http(s):// が無ければ駄目');
 
+  // 2026-10-30 4アプリ共通の形(鍵は一番上)・appUrls は文字だけ拾う・前の形({pocketbase:{...}})も読める
+  const flat = normalizeOnpremConfig({ url: 'http://pb:8090/', email: 'e', password: 'p', authCollection: 'devs',
+    appUrls: { 'final-inspection-v1': ' http://srv/final/ ', bad: 3, empty: '' } }, { VITE_PB_URL: 'http://other' });
+  assert.equal(flat.ok, true); assert.equal(flat.url, 'http://pb:8090'); assert.equal(flat.source, 'config');
+  assert.equal(flat.email, 'e'); assert.equal(flat.authCollection, 'devs');
+  assert.deepEqual(flat.appUrls, { 'final-inspection-v1': 'http://srv/final/' });
+  assert.deepEqual(normalizeOnpremConfig(null, {}).appUrls, {});
+  const both = normalizeOnpremConfig({ url: 'http://top', pocketbase: { url: 'http://nested', email: 'ne', password: 'np' } });
+  assert.equal(both.url, 'http://top', '一番上が優先'); assert.equal(both.email, 'ne', '一番上に無い鍵は前の形から拾う');
+  const example = JSON.parse(read('docs/onprem-config.example.json'));
+  for (const k of ['url', 'email', 'password', 'authCollection']) assert.equal(typeof example[k], 'string', `見本は一番上に ${k}`);
+  assert.equal(example.pocketbase, undefined, '見本は前の形を使わない');
+
   const fetch404 = async () => ({ ok: false, status: 404 });
   const r1 = await loadOnpremConfig({ fetchImpl: fetch404, env: { VITE_PB_URL: 'http://env' } });
   assert.equal(r1.url, 'http://env'); assert.match(r1.readProblem, /404/);
@@ -160,6 +173,29 @@ test('O08 vite の設定: mode=onprem だけ dist-onprem・SW を外す。いつ
   const on = mod.default({ mode: 'onprem', command: 'build' });
   assert.equal(on.build.outDir, 'dist-onprem');
   assert.ok(on.plugins.flat().some((p) => p && p.name === 'onprem-drop-firebase-files'));
+  // 2026-10-30 社内版かどうかはビルドの時の定数(いつものビルドは false = 社内版の道が出力から消える)
+  assert.equal(prod.define.__ONPREM__, 'false');
+  assert.equal(on.define.__ONPREM__, 'true');
+});
+
+test('O10 本番へ社内版が混ざらない関門: いつものビルドに VITE_ONPREM=1 があれば止める', async () => {
+  const mod = await import('../../../vite.config.js');
+  const P = mod.onpremBuildProblem;
+  assert.match(P({ mode: 'production', command: 'build', flag: '1' }), /VITE_ONPREM=1/);
+  assert.match(P({ mode: 'staging', command: 'build', flag: '1' }), /本番の dist/);
+  assert.equal(P({ mode: 'production', command: 'build', flag: '' }), '');
+  assert.equal(P({ mode: 'development', command: 'serve', flag: '1' }), '', '開発サーバは止めない');
+  assert.match(P({ mode: 'onprem', command: 'build', flag: '' }), /VITE_ONPREM=1 がありません/);
+  assert.equal(P({ mode: 'onprem', command: 'build', flag: '1' }), '');
+  // 本物の設定関数も、環境変数の 1 で止まる
+  const before = process.env.VITE_ONPREM;
+  process.env.VITE_ONPREM = '1';
+  try {
+    assert.throws(() => mod.default({ mode: 'production', command: 'build' }), /\[onprem-guard\]/);
+  } finally {
+    if (before === undefined) delete process.env.VITE_ONPREM; else process.env.VITE_ONPREM = before;
+  }
+  assert.doesNotThrow(() => mod.default({ mode: 'production', command: 'build' }));
 });
 
 test('O09 社内版の写し: index.html は最後・onprem-config.json は写さない・外の字を数える', async () => {
