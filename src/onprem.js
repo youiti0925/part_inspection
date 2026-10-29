@@ -10,7 +10,8 @@
 //   ・保管庫は全部の領域(検査・写真・分析・年間目標・連絡・通知の宛先)を PocketBase へ
 //   ・PocketBase の行き先は、index.html の横に置いた onprem-config.json を最初に読んで決める
 //     (url が無ければビルドの時の VITE_PB_URL。端末用アカウントは設定ファイルにだけ書く)
-//   ・プッシュ通知は使わない(push.js が「社内版では通知を使いません」を返す)
+//   ・プッシュ通知は使う(2026-10-30 決定 D4)。Firebase は通知の為だけに起こす(src/onpremPush.js)。
+//   ・アプリは / でも /parts/ のような下の階層でも動く(相対で読む・2026-10-30 決定 D1/D2)。
 //
 // ⚠ここには firebase も pocketbase も import しない(node の試験で読めるように)。
 // ============================================================================
@@ -88,7 +89,11 @@ export const normalizeOnpremConfig = (json, env = {}) => {
   else if (!/^https?:\/\//i.test(url)) problems.push(`PocketBase の行き先が http(s):// で始まっていません: ${url}`);
   if (!email || !password) problems.push(`端末用アカウント(email と password)がありません(${ONPREM_CONFIG_FILE} の email と password に書いてください)。ログインできないので読み書きできません`);
   const source = pb.url ? 'config' : (env.VITE_PB_URL ? 'env' : 'none');
-  return { ok: problems.length === 0, url, email, password, authCollection, appUrls, source, problems };
+  // 2026-10-30 外の中継(AI)の行き先も設定ファイルで変えられる(ビルドし直さない)。無ければビルドの時の値。
+  const aiProxyUrl = trimUrl(typeof j.aiProxyUrl === 'string' ? j.aiProxyUrl : '');
+  // 通知の公開設定(書かなければ既定・false なら通知を使わない)。形の確かめは onpremPush.js の pushFirebaseOf。
+  const pushFirebase = j.pushFirebase === undefined ? null : j.pushFirebase;
+  return { ok: problems.length === 0, url, email, password, authCollection, appUrls, aiProxyUrl, pushFirebase, source, problems };
 };
 
 /**
@@ -122,5 +127,20 @@ export const pbConfigOfOnprem = (cfg, extra = {}) => ({
   onAuthError: extra.onAuthError,
 });
 
-/** 社内版ではプッシュ通知を使わない時の文言(push.js・連絡の画面で同じ字を出す)。 */
-export const ONPREM_PUSH_OFF = '社内版では通知を使いません(画面のバッジで確認してください)';
+/** 起動の所が設定ファイルから入れる、実行中の値(⚠ Object.freeze で包まない・上の注意と同じ理由)。
+ *  aiProxyUrl … AI の中継の行き先(空ならビルドの時の VITE_GEMINI_PROXY_URL)。 */
+export const ONPREM_RUNTIME = { aiProxyUrl: '' };
+
+/** AI の中継の行き先。いつものビルドでは渡した値(ビルドの時の VITE_GEMINI_PROXY_URL)そのまま。 */
+export const aiProxyUrlOr = (buildValue) => ((IS_ONPREM_BUILD && ONPREM_RUNTIME.aiProxyUrl) || buildValue);
+
+/** アプリの入口の URL(末尾 /)。通知のリンク・ポータルのリンクに使う。
+ *  いつものビルド: 今まで通り `${location.origin}/`。社内版: 今開いている index.html の階層(例 https://kensa.local/parts/)。 */
+export const appHome = () => {
+  if (IS_ONPREM_BUILD) { try { return new URL('./', window.location.href).href; } catch { /* 下へ */ } }
+  return `${window.location.origin}/`;
+};
+
+/** 社内版の1件の大きさの上限(PocketBase の data 列の maxSize = 20,000,000 バイト・tools/migration/pbSchema.mjs)。
+ *  Firestore の 1MB の見張り(写真を増やす保存を止める)は、社内版ではこの上限に合わせて測る。 */
+export const ONPREM_DOC_LIMIT = 20_000_000;

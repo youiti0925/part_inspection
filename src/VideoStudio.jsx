@@ -27,6 +27,7 @@ import { DRIVE_PROXY_URL, driveFileUrl, driveFmtSize, driveKindOf, DRIVE_KIND_IC
 import { DriveFileViewer } from './DriveFileViewer.jsx';
 
 const GEMINI_PROXY_URL = String(import.meta.env.VITE_GEMINI_PROXY_URL || '').replace(/\/+$/, '');
+import { aiProxyUrlOr } from './onprem.js';   // 🏢 社内版は onprem-config.json の aiProxyUrl が優先(いつものビルドは今まで通り)
 
 
 // 動画を加工: 圧縮(再エンコードで容量削減)/合体(複数動画を1本に)。canvas.captureStream+MediaRecorderで再録画(ffmpeg不要・実時間)。
@@ -757,7 +758,7 @@ const VideoProcessModal = ({ sections = [], driveVideos = [], steps = [], model 
           ✕を2回押させることになる。 */}
       {editorOn && (
         <VideoEditor sources={srcMeta} initial={editorInit} busy={phase === 'working'}
-          proxyUrl={GEMINI_PROXY_URL} hint={[model, ...(steps || []).slice(0, 6).map(s2 => s2.label)].filter(Boolean).join(' / ')}
+          proxyUrl={aiProxyUrlOr(GEMINI_PROXY_URL)} hint={[model, ...(steps || []).slice(0, 6).map(s2 => s2.label)].filter(Boolean).join(' / ')}
           onSaveWorkStandard={onSaveWorkStandard} userName={userName}
           recipe={preloadRecipe} onSaveRecipe={saveRecipeDoc} steps={steps}
           recipeFileId={(preload && preload.id) || ''} recipeFileName={(preload && preload.name) || ''}

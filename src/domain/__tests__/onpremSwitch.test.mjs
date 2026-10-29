@@ -158,7 +158,7 @@ test('O05 設定ファイル: 優先・無ければ VITE_PB_URL・合言葉は�
   assert.equal(pbConfigOfOnprem(r3).authCollection, 'device_users');
 });
 
-test('O06 画面の入口の配線: 社内版は Firebase を起こす前に分かれる・SW を登録しない・通知を使わない・外の Worker を既定に入れない', () => {
+test('O06 画面の入口の配線: 社内版は Firebase を起こす前に分かれる・本番の SW を登録しない・通知は社内版の道(onpremPush)・外の Worker を既定に入れない', () => {
   const app = read('src/App.jsx');
   const eff = app.indexOf('if (IS_ONPREM_BUILD) {');
   const init = app.indexOf('const app = initializeApp(FIREBASE_CONFIG);');
@@ -172,10 +172,14 @@ test('O06 画面の入口の配線: 社内版は Firebase を起こす前に分�
   const main = read('src/main.jsx');
   assert.match(main, /if \('serviceWorker' in navigator && import\.meta\.env\.VITE_ONPREM !== '1'\)/);
   const kit = read('src/contact/ContactKit.jsx');
-  assert.match(kit, /const pushSupportProblem = \(\) => \(IS_ONPREM_BUILD \? ONPREM_PUSH_OFF : pushSupportProblemFcm\(\)\);/);
-  assert.match(kit, /const sendPushViaWorker = \(workerUrl, msg\) => \(IS_ONPREM_BUILD \? Promise\.resolve\(\{ ok: false, skipped: true/);
-  assert.match(kit, /const enablePush = \(vapidKey\) => \(IS_ONPREM_BUILD \? Promise\.reject/);
-  assert.match(app, /if \(!IS_ONPREM_BUILD && cfg\.vapidKey && cfg\.workerUrl && targets\.length\)/, '週報の通知も社内版では送らない');
+  // 2026-10-30 決定 D4: 社内版も通知を使う。社内版は onpremPush(相対の SW・通知だけの Firebase)、いつものビルドは push.js のまま。
+  assert.match(kit, /const pushSupportProblem = \(\) => \(IS_ONPREM_BUILD \? onpremPushSupportProblem\(\) : pushSupportProblemFcm\(\)\);/);
+  assert.match(kit, /const enablePush = \(vapidKey\) => \(IS_ONPREM_BUILD \? onpremEnablePush\(vapidKey\) : enablePushFcm\(vapidKey\)\);/);
+  assert.match(kit, /const sendPushViaWorker = sendPushViaWorkerFcm;/, '送る道(外の中継)は本番と同じ');
+  assert.ok(!kit.includes('ONPREM_PUSH_OFF'), '「社内版では通知を使いません」は消した');
+  assert.match(app, /if \(cfg\.vapidKey && cfg\.workerUrl && targets\.length\)/, '週報の通知も社内版で送る');
+  assert.match(branch, /setOnpremPush\(cfg\.pushFirebase\);/); assert.match(branch, /registerOnpremSw\(\)/);
+  assert.match(branch, /ONPREM_RUNTIME\.aiProxyUrl = cfg\.aiProxyUrl/);
   assert.equal(read('src/push.js').includes('ONPREM'), false, 'push.js は製品と同じ中身のまま(product-pairs)');
   assert.match(kit, /import\.meta\.env\.VITE_ONPREM === '1' \? '' : 'https:\/\/gemini-proxy\.you0925\.workers\.dev'/);
   const rot = read('src/RotaryMeasurements.jsx');
@@ -222,4 +226,81 @@ test('O09 社内版の写し: index.html は最後・onprem-config.json は写�
   assert.deepEqual(p.order, ['assets/a.js', 'assets/b.js', 'manifest.json', 'index.html']);
   assert.deepEqual(p.skip, ['onprem-config.json']);
   assert.equal(countExternal('x workers.dev y workers.dev firebaseapp.com')['workers.dev'], 2);
+});
+
+
+// ============================================================================
+// 2026-10-30 清水さんの決定 D1/D2/D4/D5(部品)
+// ============================================================================
+test('O11 D1/D2 下の階層(/parts/)でも動く: 社内版だけ base が相対・manifest と版の見張りを相対にする・いつものビルドは前のまま', async () => {
+  const mod = await import('../../../vite.config.js');
+  assert.equal(mod.default({ mode: 'production', command: 'build' }).base, undefined, 'いつものビルドは base を書かない(= /)');
+  assert.equal(mod.default({ mode: 'onprem', command: 'build' }).base, './');
+  const m = mod.relativizeManifest(JSON.parse(read('public/manifest-renraku.json')));
+  assert.equal(m.start_url, './?renraku=1'); assert.equal(m.scope, './');
+  assert.ok(m.icons.every((i) => !i.src.startsWith('/')), 'アイコンも相対');
+  assert.equal(mod.relativizeManifest({ start_url: '/', icons: [{ src: 'https://x/y.png' }] }).start_url, './');
+  assert.equal(mod.relativizeManifest({ icons: [{ src: 'https://x/y.png' }] }).icons[0].src, 'https://x/y.png', '外の URL は触らない');
+  const html = read('index.html');
+  assert.ok(html.includes("fetch('/index.html?__v='"), '元の index.html(いつものビルド)は前のまま');
+  const out = mod.relativizeIndexHtml(html);
+  assert.ok(!out.includes("fetch('/index.html") && out.includes("fetch('index.html?__v='"), '社内版は隣のアプリの版を見ない');
+  // 通知・ポータルのリンクは入口(appHome)から作る(いつものビルドは location.origin + '/')
+  for (const f of ['src/contact/ContactKit.jsx', 'src/contact/ContactHub.jsx']) {
+    const t = read(f);
+    assert.ok(!t.includes('${window.location.origin}/'), `${f}: 一番上 '/' 決め打ちのリンクが残っていない`);
+  }
+  // 設定ファイルの見本: 仮の名前 https://kensa.local・4アプリの置き場
+  const ex = JSON.parse(read('docs/onprem-config.example.json'));
+  assert.equal(ex.url, 'https://kensa.local');
+  assert.deepEqual(ex.appUrls, {
+    'product-inspection-v1': 'https://kensa.local/product/', 'final-inspection-v1': 'https://kensa.local/final/',
+    'parts-inspection-v1': 'https://kensa.local/parts/', 'overview-app-v1': 'https://kensa.local/overview/',
+  });
+  for (const k of ['aiProxyUrl', 'pushFirebase']) assert.equal(ex[k], undefined, `見本に ${k} を書かない(情報課へ渡す見本に社外の行き先を載せない)`);
+});
+
+test('O12 D2/D4 設定ファイル: aiProxyUrl・pushFirebase を読む。いつものビルドでは AI の行き先・リンクは前と同じ', async () => {
+  const { aiProxyUrlOr, appHome, ONPREM_RUNTIME } = await import('../../onprem.js');
+  const c = normalizeOnpremConfig({ url: 'https://kensa.local', email: 'e', password: 'p', aiProxyUrl: ' https://ai.example/ ', pushFirebase: false });
+  assert.equal(c.aiProxyUrl, 'https://ai.example'); assert.equal(c.pushFirebase, false);
+  assert.equal(normalizeOnpremConfig({ url: 'https://kensa.local' }).aiProxyUrl, '');
+  assert.equal(normalizeOnpremConfig({ url: 'https://kensa.local' }).pushFirebase, null);
+  ONPREM_RUNTIME.aiProxyUrl = 'https://ai.example';
+  assert.equal(aiProxyUrlOr('https://build'), 'https://build', 'いつものビルド(node)では設定ファイルの値を使わない');
+  ONPREM_RUNTIME.aiProxyUrl = '';
+  globalThis.window = { location: { origin: 'https://h', href: 'https://h/parts/?renraku=1' } };
+  try { assert.equal(appHome(), 'https://h/', 'いつものビルドは今まで通り origin + /'); } finally { delete globalThis.window; }
+});
+
+test('O13 D4 社内版の通知: 相対の SW・既定は本番と同じ通知の窓口・false で止められる・公開値だけを SW へ渡す', async () => {
+  const p = await import('../../onpremPush.js');
+  const def = p.pushFirebaseOf(undefined);
+  assert.deepEqual(Object.keys(def).sort(), ['apiKey', 'appId', 'messagingSenderId', 'projectId']);
+  assert.equal(p.pushFirebaseOf(false), null);
+  const own = { apiKey: 'k', projectId: 'p', messagingSenderId: 's', appId: 'a', password: 'x' };
+  assert.deepEqual(p.pushFirebaseOf(own), { apiKey: 'k', projectId: 'p', messagingSenderId: 's', appId: 'a' }, '4つの公開値以外は捨てる');
+  assert.deepEqual(p.pushFirebaseOf({ apiKey: 'k' }), def, '欠けていれば既定');
+  const url = p.onpremSwUrl(def);
+  assert.ok(url.startsWith('onprem-sw.js?fb='), '相対(index.html の階層)');
+  assert.deepEqual(JSON.parse(decodeURIComponent(url.split('?fb=')[1])), def);
+  assert.equal(p.onpremSwUrl(null), 'onprem-sw.js');
+  // 本番の SW と同じ公開値(ずれたら社内版の端末に通知が届かない)
+  const sw = read('public/firebase-messaging-sw.js');
+  for (const v of Object.values(p.ONPREM_PUSH_FIREBASE_DEFAULT)) assert.ok(sw.includes(v), `本番の SW と同じ値: ${v}`);
+  const osw = read('onprem-public/onprem-sw.js');
+  assert.ok(!osw.includes("'/firebase") && !osw.includes("link || '/'"), '社内版の SW は一番上 / を決め打ちしない');
+  assert.ok(osw.includes("searchParams.get('fb')"));
+  // vite: 社内版だけ SW と設定の見本を写す
+  const vc = read('vite.config.js');
+  assert.match(vc, /copyFileSync\(path\.resolve\('onprem-public', 'onprem-sw\.js'\)/);
+  assert.match(vc, /'onprem-config\.sample\.json'/);
+});
+
+test('O14 D5 社内版(PocketBase・上限 20MB)では 1MB の警告を出さない・本番は今まで通り', () => {
+  const app = read('src/App.jsx');
+  assert.match(app, /if \(!IS_ONPREM_BUILD\) try \{\r?\n\s+const merged = capMerge\(settings \|\| \{\}, withDeletions\(newSettings \|\| \{\}\)\);/, '設定の 1MB の警告');
+  assert.match(app, /if \(!IS_ONPREM_BUILD\) try \{\r?\n\s+const approxSize = JSON\.stringify\(\{ steps,/, 'テンプレートの 1MB の警告');
+  assert.match(app, /const capDanger = IS_ONPREM_BUILD \? Math\.round\(ONPREM_DOC_LIMIT \* 0\.86\) : CAP_DANGER;/, 'ロットの見張りは社内版の上限で測る');
+  assert.match(app, /decideCapacity\(before, merged, bytes, capDanger\)/);
 });

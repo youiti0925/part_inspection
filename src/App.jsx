@@ -74,7 +74,8 @@ import { sendPushViaWorker } from './push.js';
 import './data/connectPocketbase.js';
 // 🏢 2026-10-29 社内サーバ版(VITE_ONPREM=1 のビルドだけ)。スイッチの無いビルドでは何もしない。
 import { dataFor, applyOnpremRoute, currentProviders } from './dataRoute.js';
-import { IS_ONPREM_BUILD, ONPREM_DB, ONPREM_USER, loadOnpremConfig } from './onprem.js';
+import { IS_ONPREM_BUILD, ONPREM_DB, ONPREM_USER, ONPREM_RUNTIME, ONPREM_DOC_LIMIT, aiProxyUrlOr, loadOnpremConfig } from './onprem.js';
+import { setOnpremPush, registerOnpremSw } from './onpremPush.js';
 // 🏭 2026-09-27 製品→部品 移植: 操業シミュレーションの画面と共有棚の書類を作る純関数(製品と同じ)
 import { OperationsSimulationPanel } from './OperationsSimulationPanel.jsx';
 import { StackBar as VizStackBar } from './opsim/vizKit.jsx';
@@ -2003,7 +2004,7 @@ const generateWeeklyBrief = async (db, { lots, settings: partsSettings, contactS
     try {
       const cfg = WEEKLY_BRIEF_PUSH_OF(contactSettings);
       const targets = (pushTokens || []).filter(t => t && t.token && t.enabled !== false && t.admin === true);
-      if (!IS_ONPREM_BUILD && cfg.vapidKey && cfg.workerUrl && targets.length) {   // 🏢 社内版は通知を送らない
+      if (cfg.vapidKey && cfg.workerUrl && targets.length) {   // 🏢 2026-10-30 社内版も通知を送る(決定 D4・送り先は設定の Worker URL)
         const man = (n) => `${Math.round(n / 10000)}万`;
         await sendPushViaWorker(cfg.workerUrl, {
           tokens: [...new Set(targets.map(t => t.token))],
@@ -4385,10 +4386,11 @@ const GEMINI_PROXY_URL = String(import.meta.env.VITE_GEMINI_PROXY_URL || '').rep
  * @param {string} modelName
  */
 const callGeminiViaProxy = async (payload, modelName = 'gemini-2.5-flash') => {
-  if (!GEMINI_PROXY_URL) {
+  const proxyUrl = aiProxyUrlOr(GEMINI_PROXY_URL);   // 🏢 社内版は onprem-config.json の aiProxyUrl が優先(いつものビルドは今まで通り)
+  if (!proxyUrl) {
     throw new Error('AIサーバーが未設定です。\n管理者: .env の VITE_GEMINI_PROXY_URL に Worker の URL を設定して、ビルドし直してください。');
   }
-  const res = await fetch(`${GEMINI_PROXY_URL}/generate`, {
+  const res = await fetch(`${proxyUrl}/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: modelName, ...payload }),
@@ -4548,7 +4550,7 @@ const VideoToPhotosModal = ({ contextLabel = '', existingDescription = '', onApp
   const [applying, setApplying] = useState(false);
   // 🚨 鍵の有無ではなく **AIサーバー(Worker)の設定の有無** で押せるか決める。
   //   鍵はブラウザに置かない(2026-07 の漏洩)。ここに VITE_GEMINI_API_KEY を戻さない事。
-  const hasAiKey = !!GEMINI_PROXY_URL;
+  const hasAiKey = !!aiProxyUrlOr(GEMINI_PROXY_URL);
 
   const pickVideo = (e) => {
     const f = e.target.files?.[0]; if (!f) { return; }
@@ -6661,7 +6663,8 @@ const TemplateEditor = ({ template, onSave, onCancel, customLayouts = {}, onSave
     };
     const hasOverview = overviewClean.images.length || overviewClean.description || overviewClean.pdfs.length;
     // 1MB 上限警告 (Firestore document サイズ ~ 1MB)。overview の概要写真(base64フォールバック分)も含めて計測する。
-    try {
+    // 🏢 2026-10-30 社内版(PocketBase・上限 20MB)では出さない(決定 D5)。
+    if (!IS_ONPREM_BUILD) try {
       const approxSize = JSON.stringify({ steps, overview: hasOverview ? overviewClean : null }).length;
       if (approxSize > 900_000) {
         if (!confirm(`このテンプレートのデータ量が ${(approxSize / 1024).toFixed(0)} KB と大きく、保存に失敗するリスクがあります（Firestore 1MB 上限）。\n\n対策: 画像を削減/圧縮してください。\n\nこのまま保存しますか？`)) return;
@@ -32564,7 +32567,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          try {
            new Notification('🔔 通知をONにしました', {
              body: '不具合が発生したら、この端末に通知します。',
-             icon: '/favicon.svg'
+             icon: IS_ONPREM_BUILD ? 'favicon.svg' : '/favicon.svg'   // 🏢 社内版は下の階層(/parts/)でも出るよう相対
            });
          } catch {}
        }
@@ -32624,7 +32627,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          try {
            const n = new Notification(title, {
              body,
-             icon: '/favicon.svg',
+             icon: IS_ONPREM_BUILD ? 'favicon.svg' : '/favicon.svg',
              tag: `defect-${d.id}`,
              requireInteraction: true,
              vibrate: [200, 100, 200],
@@ -32939,6 +32942,10 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
            return;
          }
          if (!cfg.ok) console.error('[社内版]', cfg.problems.join(' / '));
+         // 2026-10-30 決定 D4: 社内版も通知を使う(SW は index.html の横・相対で登録)。AI の中継の行き先も設定ファイルから。
+         ONPREM_RUNTIME.aiProxyUrl = cfg.aiProxyUrl || '';
+         setOnpremPush(cfg.pushFirebase);
+         registerOnpremSw().catch((e) => console.warn('[社内版] Service Worker を登録できません(通知・アプリとして入れる が使えないだけ)', e));
          applyOnpremRoute(cfg, {
            onAuthError: (e) => setErrorMsg(`社内サーバにログインできませんでした: ${(e && e.message) || e}\n${ONPREM_CONFIG_HINT}`),
          });
@@ -33723,9 +33730,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        if (before) {
          const merged = capMerge(before, data);
          const bytes = capBytes(merged);
-         const d = decideCapacity(before, merged, bytes, CAP_DANGER);
+         // 🏢 2026-10-30 社内版は PocketBase の上限(20MB)で測る(決定 D5: 1MB の警告は出さない)。本番は今まで通り 1MB。
+         const capDanger = IS_ONPREM_BUILD ? Math.round(ONPREM_DOC_LIMIT * 0.86) : CAP_DANGER;
+         const capLimit = IS_ONPREM_BUILD ? ONPREM_DOC_LIMIT : CAP_LIMIT;
+         const d = decideCapacity(before, merged, bytes, capDanger);
          if (d.action === 'block') {
-           const res = { reason: capacityBlockMessage(bytes, CAP_LIMIT), counts: null };
+           const res = { reason: capacityBlockMessage(bytes, capLimit), counts: null };
            note(res);
            const e = new Error(res.reason);
            e.name = 'LotCapacityError';
@@ -33734,7 +33744,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          // 🚨 通したが、危ない事は **黙らない**。記録は守りつつ、写真を減らす必要を人に見せる。
          if (d.action === 'warn') {
            console.warn('📦 上限に迫ったロットの保存を通しました(記録だけ/縮む保存)', id, bytes, d.reason);
-           setCapacityWarn({ at: Date.now(), id, bytes, limit: CAP_LIMIT });
+           setCapacityWarn({ at: Date.now(), id, bytes, limit: capLimit });
          }
        }
      } catch (e) {
@@ -33994,7 +34004,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      }
      // 📏 P030 設定の箱も1MB上限(製品 saveSettings の関所と同じ3段)。溢れると 品質規格マスタ・目標時間・宛先・文字サイズ・品目名簿 がどれも保存できなくなる。
      //   ⚠測る時は withDeletions を通す(通さないと __deleteMapKeys が一番大きいと出る)。保存へは今のまま生の newSettings を渡す(窓口が解く)。
-     try {
+     //   🏢 2026-10-30 社内版(PocketBase・上限 20MB)ではこの 1MB の警告を出さない(決定 D5)。本番は今まで通り。
+     if (!IS_ONPREM_BUILD) try {
        const merged = capMerge(settings || {}, withDeletions(newSettings || {}));
        const size = capBytes(merged);
        if (size > CAP_SAFE) {
