@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "prebuild": "node scripts/guard-not-onprem.mjs --no-dist",
+    "guard:not-onprem": "node scripts/guard-not-onprem.mjs",
     "build:onprem": "vite build --mode onprem",
     "deploy:onprem": "node scripts/deploy-onprem.mjs",
     "deploy": "node scripts/deploy.mjs",

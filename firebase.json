@@ -9,6 +9,7 @@
     ],
     "predeploy": [
       "npm run build",
+      "node scripts/guard-not-onprem.mjs",
       "node scripts/keep-old-assets.mjs"
     ],
     "rewrites": [

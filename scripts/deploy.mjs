@@ -108,6 +108,9 @@ const bootstrapLedger = async () => {
 // ---------------------------------------------------------------------------
 const main = async () => {
   if (has('--bootstrap-ledger')) { await bootstrapLedger(); return; }
+  // ⓪ 🛡 社内版(VITE_ONPREM=1)の切替が環境変数・.env 系に残っていないか(4アプリ共通・scripts/guard-not-onprem.mjs)。
+  //   残ったまま build すると dist/ が社内版になる。出力先の中身は predeploy の build の直後に同じ script で見る。
+  run('⓪ 🛡 社内版の切替が残っていないか(guard-not-onprem)', 'node', ['scripts/guard-not-onprem.mjs', '--no-dist']);
 
   const pkg = readJson('package.json') || {};
   const scripts = pkg.scripts || {};
@@ -161,6 +164,7 @@ const main = async () => {
     console.log('');
     console.log('⚠ firebase.json に predeploy が無い。ここで自分で ビルド と 持ち越し を走らせます。');
     run('③-1 🏗 ビルド', 'npm', ['run', 'build']);
+    run('③-1b 🛡 dist/ が社内版でないか(guard-not-onprem)', 'node', ['scripts/guard-not-onprem.mjs']);
     if (existsSync(join(ROOT, 'scripts/keep-old-assets.mjs'))) {
       run('③-2 🧳 古い部品の持ち越し', 'node', ['scripts/keep-old-assets.mjs']);
     } else {
@@ -171,6 +175,7 @@ const main = async () => {
   } else if (DRY) {
     // 出さない時は predeploy が動かないので、同じ事を手で通して中身を見せる
     run('③-1 🏗 ビルド（--dry-run なので手で）', 'npm', ['run', 'build']);
+    run('③-1b 🛡 dist/ が社内版でないか(guard-not-onprem)', 'node', ['scripts/guard-not-onprem.mjs']);
     run('③-2 🧳 古い部品の持ち越し', 'node', ['scripts/keep-old-assets.mjs']);
     run('③-3 🛡 出す直前の確かめ（dist と突き合わせ）', 'node', ['scripts/verify-deploy-safety.mjs', '--post']);
   }

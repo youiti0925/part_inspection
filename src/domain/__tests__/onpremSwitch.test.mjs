@@ -206,24 +206,14 @@ test('O08 vite の設定: mode=onprem だけ dist-onprem・SW を外す。いつ
   assert.equal(on.define.__ONPREM__, 'true');
 });
 
-test('O10 本番へ社内版が混ざらない関門: いつものビルドに VITE_ONPREM=1 があれば止める', async () => {
+test('O10 本番へ社内版が混ざらない関門: vite の設定の先頭に4アプリ共通の関門(guard-not-onprem)がある', async () => {
+  // ⚠決め方と本物の vite で止まる事は src/domain/__tests__/guardNotOnprem.test.mjs(4アプリ同じ中身)で見る。
   const mod = await import('../../../vite.config.js');
-  const P = mod.onpremBuildProblem;
-  assert.match(P({ mode: 'production', command: 'build', flag: '1' }), /VITE_ONPREM=1/);
-  assert.match(P({ mode: 'staging', command: 'build', flag: '1' }), /本番の dist/);
-  assert.equal(P({ mode: 'production', command: 'build', flag: '' }), '');
-  assert.equal(P({ mode: 'development', command: 'serve', flag: '1' }), '', '開発サーバは止めない');
-  assert.match(P({ mode: 'onprem', command: 'build', flag: '' }), /VITE_ONPREM=1 がありません/);
-  assert.equal(P({ mode: 'onprem', command: 'build', flag: '1' }), '');
-  // 本物の設定関数も、環境変数の 1 で止まる
-  const before = process.env.VITE_ONPREM;
-  process.env.VITE_ONPREM = '1';
-  try {
-    assert.throws(() => mod.default({ mode: 'production', command: 'build' }), /\[onprem-guard\]/);
-  } finally {
-    if (before === undefined) delete process.env.VITE_ONPREM; else process.env.VITE_ONPREM = before;
+  for (const mode of ['production', 'onprem']) {
+    const c = mod.default({ mode, command: 'build' });
+    assert.equal(c.plugins[0].name, 'guard-not-onprem', `mode=${mode} でも先頭`);
   }
-  assert.doesNotThrow(() => mod.default({ mode: 'production', command: 'build' }));
+  assert.equal(mod.onpremBuildProblem, undefined, 'アプリごとの関門は残していない(1つに揃えた)');
 });
 
 test('O09 社内版の写し: index.html は最後・onprem-config.json は写さない・外の字を数える', async () => {
