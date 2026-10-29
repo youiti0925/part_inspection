@@ -569,7 +569,8 @@ export const createPocketbaseBackend = (client, {
       const rec = await client.create(opts.filesCol || 'blobs', fd);
       const name = rec && (Array.isArray(rec.file) ? rec.file[0] : rec.file);
       if (!rec || !rec.id || !name) throw new Error('上げたファイルの名前が返ってきませんでした');
-      return client.fileUrl(rec.collectionName || opts.filesCol || 'blobs', rec.id, name);
+      // 🏢 2026-10-30 記録に残すのは住所を含まない形(画面と PB が同じ口の時)。住所を変えても写真が切れない。
+      return (client.storedFileUrl || client.fileUrl)(rec.collectionName || opts.filesCol || 'blobs', rec.id, name);
     },
   };
 };

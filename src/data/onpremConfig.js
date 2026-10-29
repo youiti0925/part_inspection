@@ -44,9 +44,15 @@ const str = (v) => (typeof v === 'string' ? v.trim() : '');
  */
 export const parseOnpremConfig = (raw, build = {}, device = null) => {
   const errors = [];
-  const cfg = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
-  const url = (str(cfg.url) || str(build.url)).replace(/\/+$/, '');
-  const source = str(cfg.url) ? ONPREM_CONFIG_FILE : (str(build.url) ? 'VITE_PB_URL' : '');
+  const hasFile = !!(raw && typeof raw === 'object' && !Array.isArray(raw));
+  const cfg = hasFile ? raw : {};
+  // 🏢 2026-10-30 設定ファイルの url が空・書いていない = **画面と同じ口(オリジン)**。入口(https-front)が
+  //   各アプリの口の /api/ を PocketBase へ渡すので、住所を書くのは appUrls だけで済む。
+  //   ⚠設定ファイルが無い時は同じ口にしない(端末用アカウントも無いので、ビルド時の VITE_PB_URL か「無い」と言う)。
+  const origin = str(build.origin).replace(/\/+$/, '');
+  const sameOrigin = hasFile && !str(cfg.url) && /^https?:\/\/[^\s/]+/i.test(origin);
+  const url = (str(cfg.url) || (sameOrigin ? origin : '') || str(build.url)).replace(/\/+$/, '');
+  const source = str(cfg.url) ? ONPREM_CONFIG_FILE : (sameOrigin ? 'same-origin' : (str(build.url) ? 'VITE_PB_URL' : ''));
   if (!url) errors.push(`接続先がありません(${ONPREM_CONFIG_FILE} の url か、ビルド時の VITE_PB_URL)`);
   else if (!/^https?:\/\/[^\s/]+/i.test(url)) errors.push(`接続先の形がおかしいです: ${url}(http:// か https:// で始めてください)`);
   const authCollection = str(cfg.authCollection) || str(build.authCollection) || 'device_users';

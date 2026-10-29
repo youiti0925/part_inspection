@@ -39,6 +39,23 @@ export class PbNetworkError extends Error {
 /** 権利取りの結果。⚠4つを混ぜない。 */
 export const CLAIM = Object.freeze({ OK: 'ok', TAKEN: 'taken', MISSING: 'missing', ERROR: 'error' });
 
+/** PB のファイルの道(住所なし)。 */
+export const pbFilePath = (col, recId, filename) =>
+  `/api/files/${encodeURIComponent(col)}/${encodeURIComponent(recId)}/${encodeURIComponent(filename)}`;
+
+/**
+ * 記録に残すファイルの URL を決める(純関数・試験あり)。
+ * @param base        PB の住所(例 https://kensa.local:8441)
+ * @param filePath    pbFilePath の値
+ * @param pageOrigin  画面の住所(既定 location.origin)。PB と同じなら住所を落とす
+ */
+export const addressFreeFileUrl = (base, filePath, pageOrigin = (typeof location !== 'undefined' && location && location.origin) || '') => {
+  try {
+    if (pageOrigin && new URL(base).origin === new URL(pageOrigin).origin) return filePath;
+  } catch { /* 形が変なら下の絶対 URL */ }
+  return `${String(base).replace(/\/+$/, '')}${filePath}`;
+};
+
 export const createPbClient = ({ url, fetchImpl } = {}) => {
   if (!url) throw new Error('createPbClient: url が必要です');
   const base = String(url).replace(/\/+$/, '');
@@ -136,7 +153,10 @@ export const createPbClient = ({ url, fetchImpl } = {}) => {
     },
     count: async (col, filter) => (await api.listPage(col, { page: 1, perPage: 1, filter, fields: 'id' })).totalItems ?? 0,
 
-    fileUrl: (col, recId, filename) => `${base}/api/files/${encodeURIComponent(col)}/${encodeURIComponent(recId)}/${encodeURIComponent(filename)}`,
+    fileUrl: (col, recId, filename) => `${base}${pbFilePath(col, recId, filename)}`,
+    /** 🏢 2026-10-30 記録に残す写真の URL。PB が画面と同じ口(オリジン)なら **住所を含まない** /api/files/… にする
+     *  (サーバーの名前・ポートを後で変えても、前に撮った写真が切れない)。別の口の PB の時だけ絶対 URL。 */
+    storedFileUrl: (col, recId, filename) => addressFreeFileUrl(base, pbFilePath(col, recId, filename)),
     fetchFileResponse: (col, recId, filename) => req(`/api/files/${encodeURIComponent(col)}/${encodeURIComponent(recId)}/${encodeURIComponent(filename)}`, { raw: true }),
 
     // --- 購読(SSE) ---------------------------------------------------------

@@ -125,3 +125,50 @@ test('OP09 社内用の窓口は Firebase の関数を1つも呼ばない(連絡
   assert.deepEqual(touched, [], 'Firebase の関数は1つも呼ばれない');
   assert.ok(calls.length >= pairs.length * 3);
 });
+
+// 🏢 2026-10-30 口(オリジン)ごとに1アプリ: 設定ファイルの url が空・無し = 画面と同じ口。写真の URL は住所を含まない。
+test('OP10 url が空・無しの設定ファイル = 画面と同じ口(設定ファイルが無い時は同じ口にしない)', () => {
+  const origin = 'https://kensa.local:8442';
+  const a = parseOnpremConfig({ url: '', email: 'd@x', password: 'p' }, { url: 'http://build:8090', origin });
+  assert.equal(a.ok, true); assert.equal(a.url, origin); assert.equal(a.source, 'same-origin');
+  const b = parseOnpremConfig({ email: 'd@x', password: 'p' }, { origin: origin + '/' });
+  assert.equal(b.url, origin, '書いていない時も同じ口・末尾の / は落とす');
+  const c = parseOnpremConfig({ url: 'https://other:9000/', email: 'd@x', password: 'p' }, { origin });
+  assert.equal(c.url, 'https://other:9000'); assert.equal(c.source, 'onprem-config.json', '書いてあればそれ');
+  const d = parseOnpremConfig(null, { url: 'http://build:8090', origin });
+  assert.equal(d.url, 'http://build:8090', 'ファイルが無い時はビルド時の値');
+  const e = parseOnpremConfig(null, { origin });
+  assert.equal(e.ok, false, 'ファイルもビルド時の値も無ければ起動しない(黙って同じ口へ行かない)');
+});
+
+test('OP11 写真の URL: PB が画面と同じ口なら住所を含まない /api/files/…・別の口なら住所ごと', async () => {
+  const { addressFreeFileUrl, pbFilePath, createPbClient } = await import('../pbClient.js');
+  const p = pbFilePath('blobs', 'r1', 'a b.jpg');
+  assert.equal(p, '/api/files/blobs/r1/a%20b.jpg');
+  assert.equal(addressFreeFileUrl('https://kensa.local:8441', p, 'https://kensa.local:8441'), p);
+  assert.equal(addressFreeFileUrl('https://kensa.local:8441/', p, 'https://kensa.local:8441'), p);
+  assert.equal(addressFreeFileUrl('https://kensa.local:8441', p, 'https://kensa.local:8442'), 'https://kensa.local:8441' + p, '口が違えば住所ごと');
+  assert.equal(addressFreeFileUrl('http://127.0.0.1:8090', p, ''), 'http://127.0.0.1:8090' + p, '画面が無い(Node)時は住所ごと');
+  const cl = createPbClient({ url: 'http://127.0.0.1:8090', fetchImpl: async () => { throw new Error('通信しない'); } });
+  assert.equal(cl.fileUrl('blobs', 'r1', 'x.jpg'), 'http://127.0.0.1:8090/api/files/blobs/r1/x.jpg', 'fileUrl(表示用)は今まで通り');
+  assert.equal(typeof cl.storedFileUrl, 'function');
+});
+
+test('OP12 窓口の uploadFile は記録に残す URL に住所を含めない(画面と PB が同じ口の時)', async () => {
+  const { createPocketbaseBackend } = await import('../pocketbaseBackend.js');
+  const { createMemoryStore } = await import('../outbox.js');
+  const { addressFreeFileUrl, pbFilePath } = await import('../pbClient.js');
+  const base = 'https://kensa.local:8441';
+  const fake = {
+    create: async (col, fd) => ({ id: 'rec1', collectionName: col, file: 'p_abc.jpg', _n: fd && typeof fd.get === 'function' ? fd.get('ns') : '' }),
+    fileUrl: (c, r, f) => `${base}${pbFilePath(c, r, f)}`,
+    storedFileUrl: (c, r, f) => addressFreeFileUrl(base, pbFilePath(c, r, f), base),
+  };
+  const be = createPocketbaseBackend(fake, { outboxStore: createMemoryStore(), autoRealtime: false });
+  const url = await be.uploadFile('product-inspection-v1', 'lots', 'defect-photos', 'data:image/jpeg;base64,/9j/AA==', { ext: 'jpg' });
+  assert.equal(url, '/api/files/blobs/rec1/p_abc.jpg');
+  // 古い作りの client(storedFileUrl が無い)でも落ちない
+  const old = { ...fake }; delete old.storedFileUrl;
+  const be2 = createPocketbaseBackend(old, { outboxStore: createMemoryStore(), autoRealtime: false });
+  assert.equal(await be2.uploadFile('n', 'lots', 'x', 'data:image/jpeg;base64,/9j/AA==', { ext: 'jpg' }), `${base}/api/files/blobs/rec1/p_abc.jpg`);
+});

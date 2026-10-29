@@ -252,10 +252,11 @@ test('O11 D1/D2 下の階層(/parts/)でも動く: 社内版だけ base が相�
   }
   // 設定ファイルの見本: 仮の名前 https://kensa.local・4アプリの置き場
   const ex = JSON.parse(read('docs/onprem-config.example.json'));
-  assert.equal(ex.url, 'https://kensa.local');
+  // 2026-10-30 既定はアプリごとに口(ポート)を分ける・url は空 = 画面と同じ口
+  assert.equal(ex.url, '');
   assert.deepEqual(ex.appUrls, {
-    'product-inspection-v1': 'https://kensa.local/product/', 'final-inspection-v1': 'https://kensa.local/final/',
-    'parts-inspection-v1': 'https://kensa.local/parts/', 'overview-app-v1': 'https://kensa.local/overview/',
+    'product-inspection-v1': 'https://kensa.local:8441/', 'final-inspection-v1': 'https://kensa.local:8442/',
+    'parts-inspection-v1': 'https://kensa.local:8443/', 'overview-app-v1': 'https://kensa.local:8444/',
   });
   for (const k of ['aiProxyUrl', 'pushFirebase']) assert.equal(ex[k], undefined, `見本に ${k} を書かない(情報課へ渡す見本に社外の行き先を載せない)`);
 });
@@ -303,4 +304,16 @@ test('O14 D5 社内版(PocketBase・上限 20MB)では 1MB の警告を出さな
   assert.match(app, /if \(!IS_ONPREM_BUILD\) try \{\r?\n\s+const approxSize = JSON\.stringify\(\{ steps,/, 'テンプレートの 1MB の警告');
   assert.match(app, /const capDanger = IS_ONPREM_BUILD \? Math\.round\(ONPREM_DOC_LIMIT \* 0\.86\) : CAP_DANGER;/, 'ロットの見張りは社内版の上限で測る');
   assert.match(app, /decideCapacity\(before, merged, bytes, capDanger\)/);
+});
+
+test('O20 設定ファイルの url が空・無し = 画面と同じ口(ビルド時の VITE_PB_URL より先)・ファイルが無い時はしない(2026-10-30)', () => {
+  const o = 'https://kensa.local:8443';
+  const a = normalizeOnpremConfig({ url: '', email: 'd@x', password: 'p' }, { VITE_PB_URL: 'http://b:8090' }, o);
+  assert.equal(a.url, o); assert.equal(a.source, 'same-origin'); assert.equal(a.ok, true);
+  const b = normalizeOnpremConfig({ email: 'd@x', password: 'p' }, {}, o + '/');
+  assert.equal(b.url, o);
+  const c = normalizeOnpremConfig(null, { VITE_PB_URL: 'http://b:8090' }, o);
+  assert.equal(c.url, 'http://b:8090');
+  const d = normalizeOnpremConfig({ url: 'https://x:9/', email: 'd@x', password: 'p' }, {}, o);
+  assert.equal(d.url, 'https://x:9'); assert.equal(d.source, 'config');
 });

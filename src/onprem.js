@@ -68,8 +68,9 @@ const trimUrl = (v) => String(v || '').trim().replace(/\/+$/, '');
  * @param env   import.meta.env の写し({VITE_PB_URL, VITE_PB_AUTH_COLLECTION})
  * @returns { ok, url, email, password, authCollection, appUrls, source, problems[] }
  */
-export const normalizeOnpremConfig = (json, env = {}) => {
-  const j = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
+export const normalizeOnpremConfig = (json, env = {}, origin = '') => {
+  const hasFile = !!(json && typeof json === 'object' && !Array.isArray(json));
+  const j = hasFile ? json : {};
   // ⚠ 2026-10-30 4アプリ共通の形: 鍵は一番上に {url, email, password, authCollection, appUrls?}。
   //   前の見本の形({ pocketbase: {...} })も読む(一番上に無い鍵だけ、そちらから拾う)。
   const nested = (j.pocketbase && typeof j.pocketbase === 'object' && !Array.isArray(j.pocketbase)) ? j.pocketbase : {};
@@ -78,7 +79,10 @@ export const normalizeOnpremConfig = (json, env = {}) => {
   const appUrls = (j.appUrls && typeof j.appUrls === 'object' && !Array.isArray(j.appUrls))
     ? Object.fromEntries(Object.entries(j.appUrls).filter(([, v]) => typeof v === 'string' && v.trim()).map(([k, v]) => [k, v.trim()]))
     : {};
-  const url = trimUrl(pb.url || env.VITE_PB_URL);
+  // 🏢 2026-10-30 設定ファイルの url が空・無し = 画面と同じ口(4アプリ共通の決まり)。入口(https-front)が各アプリの口の
+  //   /api/ を PocketBase へ渡す。⚠設定ファイルが無い時は同じ口にしない(端末用アカウントも無いので VITE_PB_URL か「無い」)。
+  const sameOrigin = hasFile && !trimUrl(pb.url) && /^https?:\/\/[^\s/]+/i.test(trimUrl(origin));
+  const url = trimUrl(pb.url) || (sameOrigin ? trimUrl(origin) : trimUrl(env.VITE_PB_URL));
   // ⚠ 端末用アカウントは設定ファイルからだけ読む。VITE_ の値はビルドで JS へ焼き込まれるので、
   //   合言葉を VITE_ に置かない決まり(scripts/verify-no-browser-api-key.mjs が見張っている)。
   const email = String(pb.email || '');
@@ -88,7 +92,7 @@ export const normalizeOnpremConfig = (json, env = {}) => {
   if (!url) problems.push(`PocketBase の行き先がありません(${ONPREM_CONFIG_FILE} の url か、ビルドの時の VITE_PB_URL を入れてください)`);
   else if (!/^https?:\/\//i.test(url)) problems.push(`PocketBase の行き先が http(s):// で始まっていません: ${url}`);
   if (!email || !password) problems.push(`端末用アカウント(email と password)がありません(${ONPREM_CONFIG_FILE} の email と password に書いてください)。ログインできないので読み書きできません`);
-  const source = pb.url ? 'config' : (env.VITE_PB_URL ? 'env' : 'none');
+  const source = trimUrl(pb.url) ? 'config' : (sameOrigin ? 'same-origin' : (env.VITE_PB_URL ? 'env' : 'none'));
   // 2026-10-30 外の中継(AI)の行き先も設定ファイルで変えられる(ビルドし直さない)。無ければビルドの時の値。
   const aiProxyUrl = trimUrl(typeof j.aiProxyUrl === 'string' ? j.aiProxyUrl : '');
   // 通知の公開設定(書かなければ既定・false なら通知を使わない)。形の確かめは onpremPush.js の pushFirebaseOf。
@@ -112,7 +116,8 @@ export const loadOnpremConfig = ({ fetchImpl, env = readEnv(), path = ONPREM_CON
         ? Promise.resolve(res.json()).then((json) => ({ json, readProblem: '' }))
         : fail(res ? res.status : '返事なし')))
       .catch((e) => fail((e && e.message) || e));
-  return read.then(({ json, readProblem }) => ({ ...normalizeOnpremConfig(json, env), readProblem }));
+  const origin = (typeof location !== 'undefined' && location && location.origin) || '';
+  return read.then(({ json, readProblem }) => ({ ...normalizeOnpremConfig(json, env, origin), readProblem }));
 };
 
 /** 窓口へ渡す PocketBase の接続設定(connectPocketbase.js が受け取る形)。 */
