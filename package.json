@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:onprem": "vite build --mode onprem",
+    "deploy:onprem": "node scripts/deploy-onprem.mjs",
     "deploy": "node scripts/deploy.mjs",
     "deploy:dry": "node scripts/deploy.mjs --dry-run",
     "deploy-safety": "node scripts/selftest-deploy-safety.mjs && node scripts/verify-deploy-safety.mjs",

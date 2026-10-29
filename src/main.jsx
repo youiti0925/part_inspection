@@ -17,7 +17,9 @@ import { installReloadGate } from './reloadGate.js'
 // ⚠以前は push.js の ensureSw() だけが登録しており、それは「この端末で通知を受け取る」を押した
 //   端末でしか走らなかった。押していない端末はSWゼロ=インストール不可だった(実際にそうなっていた)。
 // 同じURL/スコープなので、後から push.js が register しても同じ登録が返るだけ(二重にならない)。
-if ('serviceWorker' in navigator) {
+// 🏢 2026-10-29 社内サーバ版(VITE_ONPREM=1)では登録しない。この SW は gstatic(外)から Firebase を取りに行き、
+//   通知も使わないため。⚠そのため社内版は「アプリとして入れる」が出ない(https と SW の作りは清水さんの判断待ち・点検 G8)。
+if ('serviceWorker' in navigator && import.meta.env.VITE_ONPREM !== '1') {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/firebase-messaging-sw.js').catch(() => { /* 失敗時はインストールできないだけ。画面は普通に動く */ })
   })

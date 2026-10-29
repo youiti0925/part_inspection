@@ -5,12 +5,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, orderBy, query, limit, where } from 'firebase/firestore';
-import { providerFor } from './data/provider.js';
+// 🏢 2026-10-29 行き先は App と同じ所(src/dataRoute.js)から引く(点検 G5)。前は providerFor(d, FS_API) で、切替が効かずいつも Firebase だった。
+//   切替が off の時は今までと同じ Firebase。
+import { dataFor } from './dataRoute.js';
 
 // 保管庫の窓口(PocketBase移行 Phase M1)。中身は Firebase のまま。
 // ⚠Firestore の関数は「窓口へ渡す」だけ。画面で呼ばない(deleteField()/serverTimestamp() も含む)。
 const FS_API = { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, serverTimestamp, deleteField, updateDoc, runTransaction, query, where, orderBy, limit };
-const DATA = (d) => providerFor(d, FS_API);
+const DATA = (d) => dataFor(d, FS_API);
 import { Ruler, Search, Loader2, AlertTriangle, CheckCircle2, Thermometer, User, Calendar, FileImage } from 'lucide-react';
 
 const APP_DATA_ID = 'product-inspection-v1';

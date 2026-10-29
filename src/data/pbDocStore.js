@@ -30,7 +30,7 @@
 //     消せてはいけないので、消せる入れ物を混ぜない。
 // ============================================================================
 
-import { mergeDoc, overwriteDoc, setFieldsDoc } from './docMerge.js';
+import { mergeDoc, overwriteDoc, setFieldsDoc, DATA_SERVER_NOW } from './docMerge.js';
 import { claimOnce, PbHttpError, PbNetworkError } from './pbClient.js';
 import { commandHash } from './payloadHash.js';
 
@@ -325,6 +325,85 @@ export const createDocStore = (client, {
      * @returns {acquired, reason} reason は 'ok' | 'taken' | 'missing' | 'error'
      * ⚠通信失敗・認証失敗・サーバーエラーを「取られた」と同じ扱いにしない。
      */
+    /**
+     * 無い時だけ作る(2026-10-29・点検 G4)。在れば何も書かず taken。
+     * ⚠docs の UNIQUE(ns,col,docId) への create 一発で決める(「読んで無ければ書く」の2段にしない)。
+     *   先に読むのは「在る」をすぐ返すためだけで、2台が同時に読んでも create で片方が落ちる。
+     * @returns {acquired, reason} reason は 'ok' | 'taken' | 'error'(通信の失敗を taken と混ぜない)
+     */
+    createOnce: async (ns, col, docId, doc) => {
+      try {
+        const cur = await findRecord(ns, col, docId);
+        if (cur) return { acquired: false, reason: 'taken' };
+        await client.create(docsCol, { ns, col, docId, data: overwriteDoc(doc), rev: 1, sourceUpdatedAt: null });
+        return { acquired: true, reason: 'ok' };
+      } catch (e) {
+        if (e instanceof PbHttpError && e.isUnique) return { acquired: false, reason: 'taken' };
+        return { acquired: false, reason: 'error', error: e };
+      }
+    },
+
+    /**
+     * 版を1つ足して head を進める(2026-10-29・点検 G4)。Firebase 版 commitVersion と同じ約束:
+     *   ・head の revision が expectRevision と違えば何も書かず stale
+     *   ・版の書類が既に在れば何も書かず exists
+     *   ・書く時は 版・欠片・preserveOld・head を **まとめて1回**(どれか1つだけ残らない)
+     * 作り方: ① head の「rev を R→R+1 へ進める権利」を門(doc_gates の UNIQUE)で1台だけが取る
+     *         ② 取れた1台だけが /api/batch(PocketBase のまとめ書き = 全部通るか全部戻る)で書く
+     *         ③ 書けなければ門を返す
+     * ⚠/api/batch はサーバの設定で有効にしてある事が要る(既定は無効で 404)。無効なら書かずに理由付きで投げる
+     *   (1件ずつ書いて「片方だけ残る」形へ黙って落とさない)。
+     * @returns {ok, reason?, headRevision}
+     */
+    commitVersion: async (ns, { headCol, headId, versionCol, versionId, expectRevision, versionDoc, headDoc, preserveOld = null, chunks = [] }) => {
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const head = await findRecord(ns, headCol, headId);
+        const curData = head ? (head.data || {}) : null;
+        const curRevision = curData ? (Number(curData.revision) || 0) : 0;
+        if (curRevision !== (Number(expectRevision) || 0)) return { ok: false, reason: 'stale', headRevision: curRevision };
+        if (await findRecord(ns, versionCol, versionId)) return { ok: false, reason: 'exists', headRevision: curRevision };
+
+        const headRev = head ? (Number(head.rev) || 0) : 0;
+        let g = null;
+        if (head) {
+          g = await gate(ns, headCol, headId, headRev);
+          if (!g.acquired) {
+            if (g.reason === 'taken') { await releaseStaleGate(ns, headCol, headId, headRev); continue; }
+            throw g.error || new Error('権利の取得に失敗しました');
+          }
+        }
+        const recUrl = `/api/collections/${encodeURIComponent(docsCol)}/records`;
+        const createReq = (c, id, body) => ({ method: 'POST', url: recUrl, body: { ns, col: c, docId: id, data: overwriteDoc(body), rev: 1, sourceUpdatedAt: null } });
+        const requests = [];
+        const keep = curData && typeof preserveOld === 'function' ? preserveOld(curData) : null;
+        if (keep && keep.col && keep.id && keep.doc) {
+          const old = await findRecord(ns, keep.col, keep.id);
+          if (old) requests.push({ method: 'PATCH', url: `${recUrl}/${encodeURIComponent(old.id)}`, body: { data: overwriteDoc(keep.doc), rev: (Number(old.rev) || 0) + 1 } });
+          else requests.push(createReq(keep.col, keep.id, keep.doc));
+        }
+        for (const c of (chunks || [])) requests.push(createReq(versionCol, c.id, c.doc));
+        requests.push(createReq(versionCol, versionId, versionDoc));
+        const headBody = { ...(headDoc || {}), updatedAt: DATA_SERVER_NOW };
+        if (head) requests.push({ method: 'PATCH', url: `${recUrl}/${encodeURIComponent(head.id)}`, body: { data: overwriteDoc(headBody), rev: headRev + 1 } });
+        else requests.push(createReq(headCol, headId, headBody));
+
+        try {
+          if (typeof client.batch !== 'function') throw new Error('この接続はまとめ書き(/api/batch)に対応していません');
+          await client.batch(requests);
+          return { ok: true, headRevision: curRevision + 1 };
+        } catch (e) {
+          if (g) await releaseGate(g.recordId);
+          if (e instanceof PbHttpError && e.status === 404) {
+            throw new Error('PocketBase のまとめ書き(/api/batch)が無効です。サーバの設定で有効にしてください(保存計画は書いていません)');
+          }
+          // 同じ瞬間に別の端末が同じ版・同じ head を作った → 読み直して stale / exists を返す
+          if (e instanceof PbHttpError && e.isUnique) continue;
+          throw e;
+        }
+      }
+      throw new Error(`保存計画の書き込みが${maxAttempts}回やり直しても通りませんでした(${docKey(ns, headCol, headId)})`);
+    },
+
     claimOnce: async (ns, col, docId, expect, patch) => {
       try {
         const cur = await findRecord(ns, col, docId);

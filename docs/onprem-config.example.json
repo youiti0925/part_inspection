@@ -1,0 +1,9 @@
+{
+  "_説明": "社内サーバ版(npm run build:onprem)の設定の見本。dist-onprem の index.html と同じ場所に onprem-config.json という名前で置く。⚠合言葉を書くので git に入れない・社内サーバの外へ出さない。",
+  "pocketbase": {
+    "url": "http://社内サーバ名:8090",
+    "email": "parts-device@example.local",
+    "password": "ここに端末用アカウントの合言葉",
+    "authCollection": "device_users"
+  }
+}

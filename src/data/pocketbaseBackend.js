@@ -18,7 +18,7 @@
 
 import { createDocStore, PbConflictError, PbCommandMismatchError, DOCS_COL } from './pbDocStore.js';
 import { createOutbox, createIdbStore, createMemoryStore, STATUS } from './outbox.js';
-import { mergeDoc, overwriteDoc, setFieldsDoc } from './docMerge.js';
+import { mergeDoc, overwriteDoc, setFieldsDoc, DATA_SERVER_NOW } from './docMerge.js';
 import { withDeletions } from './sentinels.js';
 import { POCKETBASE_CAPABILITIES } from './capabilities.js';
 import { applyQuery } from './queryLocal.js';
@@ -434,6 +434,88 @@ export const createPocketbaseBackend = (client, {
 
     appendCapped: async (ns, col, id, field, item, opts = {}) =>
       outbox.enqueue({ op: 'appendCapped', ns, col, docId: id, field, item, opts }),
+
+    // --- 2026-10-29 点検 G4: Firebase 版にあって、こちらに無かった操作 ---------------
+    // ⚠getCachedDocs / refreshDocFromServer(前回の続きだけ読む)は **作らない**。
+    //   こちらは最初から全部を手元に持つので要らない。呼べば窓口が「対応していません」で止める
+    //   (ロットの差分読みは lots が firebase の時だけ動くよう画面側で守ってある)。
+
+    /**
+     * 項目を選んで読む(Firebase 版は REST の runQuery)。こちらは手元の一覧から項目を絞るだけ。
+     * ⚠形は Firebase 版と同じ { rows, projected, fellBack, fromCache }。
+     *   サーバから読めていなければ fromCache:true(呼び元は「読めなかった」として扱う決まり)。
+     */
+    getPageFields: async (ns, col, fields = [], opts = {}) => {
+      await softLoad(ns, col);
+      const k = keyOf(ns, col);
+      const docs = docsOf(k, { where: opts.where });
+      const pickAll = !Array.isArray(fields) || fields.length === 0;
+      const rows = docs.map((d) => {
+        const data = d.data() || {};
+        if (pickAll) return { ...data, id: d.id };
+        const o = {};
+        for (const f of fields) if (Object.prototype.hasOwnProperty.call(data, f)) o[f] = data[f];
+        o.id = d.id;
+        return o;
+      });
+      return { rows, projected: !pickAll, fellBack: pickAll ? '取る項目が指定されていません' : '', fromCache: !loaded.has(k) };
+    },
+
+    /** 件数だけ。⚠読めなかった時は 0 を返さず投げる(「0件」と「読めない」を混ぜない)。 */
+    countQuery: async (ns, col, spec = {}) => {
+      await ensureLoaded(ns, col);
+      return docsOf(keyOf(ns, col), specOf(spec)).length;
+    },
+
+    /** 無い時だけ作る。⚠送信待ちに入れない(つながっていない時は取れない、が正しい)。 */
+    createOnce: async (ns, col, id, doc) => {
+      const r = await store.createOnce(ns, col, id, { ...withDeletions(doc), updatedAt: DATA_SERVER_NOW });
+      if (r.acquired) await refreshDoc(ns, col, id);
+      return r;
+    },
+
+    /** 版を足して head を進める(まとめて1回)。⚠送信待ちに入れない。 */
+    commitVersion: async (ns, args) => {
+      const r = await store.commitVersion(ns, args);
+      if (r && r.ok) {
+        await refreshDoc(ns, args.headCol, args.headId);
+        await refreshDoc(ns, args.versionCol, args.versionId);
+      }
+      return r;
+    },
+
+    /**
+     * 写真・資料を上げて、表示に使う URL を返す(点検 G3)。PocketBase の blobs(ファイル列 file)へ。
+     * @param col      置き場の領域を決めるためのコレクション名(窓口の振り分けに使う)
+     * @param pathHint Firebase Storage の時の置き場所の名前(template-images など)
+     * @param dataUrl  data:...;base64,...
+     * ⚠送信待ちに入れない(大きい物を IndexedDB に溜めない)。失敗は投げる(呼び元が今まで通り扱う)。
+     */
+    uploadFile: async (ns, col, pathHint, dataUrl, opts = {}) => {
+      const m = /^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(String(dataUrl || ''));
+      if (!m) throw new Error('data URL ではありません');
+      const mime = m[1] || 'application/octet-stream';
+      const bin = m[2] ? atob(m[3]) : decodeURIComponent(m[3]);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i) & 0xff;
+      const ext = String(opts.ext || (mime.split('/')[1] || 'bin')).replace(/[^a-z0-9]/gi, '') || 'bin';
+      const fileId = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${ext}`;
+      const fd = new FormData();
+      fd.append('ns', ns);
+      fd.append('col', col);
+      fd.append('docId', `${pathHint || 'files'}/${fileId}`);
+      fd.append('fieldPath', JSON.stringify([pathHint || 'files']));
+      fd.append('order', '0');
+      fd.append('filename', fileId);
+      fd.append('mime', mime);
+      fd.append('bytes', String(bytes.length));
+      fd.append('sha256', '');
+      fd.append('file', new Blob([bytes], { type: mime }), fileId);
+      const rec = await client.create(opts.filesCol || 'blobs', fd);
+      const name = rec && (Array.isArray(rec.file) ? rec.file[0] : rec.file);
+      if (!rec || !rec.id || !name) throw new Error('上げたファイルの名前が返ってきませんでした');
+      return client.fileUrl(rec.collectionName || opts.filesCol || 'blobs', rec.id, name);
+    },
   };
 };
 

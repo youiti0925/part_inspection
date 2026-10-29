@@ -30,7 +30,15 @@ import {
 import { UNREAD_LANES, initSeen, laneCounts, laneOfTab, parseSeen, totalNew, withSeen } from '../domain/unreadBadge.js';
 import { buildUnreadMessage, canMarkSeen, isEmbedded, parentOriginOf, parseActiveMessage, portalLayoutOf } from '../domain/portalBridge.js';
 import { completeStatusLabel, isDeclined, isPartiallyNotified, remainingQtyOf } from '../domain/completeSplit.js';
-import { disablePush, enablePush, listenForegroundPush, pushDeviceId, pushPlatform, pushSupportProblem, sendPushViaWorker } from '../push.js';
+import { disablePush as disablePushFcm, enablePush as enablePushFcm, listenForegroundPush as listenForegroundPushFcm, pushDeviceId, pushPlatform, pushSupportProblem as pushSupportProblemFcm, sendPushViaWorker as sendPushViaWorkerFcm } from '../push.js';
+// 🏢 2026-10-29 社内サーバ版(VITE_ONPREM=1)では通知を使わない(FCM を起こさない・外の Worker へ送らない)。
+//   ⚠ push.js は製品と1バイト同じに保つ決まり(product-pairs.test.mjs)なので、止めるのはここ(呼ぶ側)。スイッチの無いビルドでは push.js をそのまま呼ぶ。
+import { IS_ONPREM_BUILD, ONPREM_PUSH_OFF } from '../onprem.js';
+const pushSupportProblem = () => (IS_ONPREM_BUILD ? ONPREM_PUSH_OFF : pushSupportProblemFcm());
+const enablePush = (vapidKey) => (IS_ONPREM_BUILD ? Promise.reject(new Error(ONPREM_PUSH_OFF)) : enablePushFcm(vapidKey));
+const disablePush = () => (IS_ONPREM_BUILD ? Promise.resolve() : disablePushFcm());
+const listenForegroundPush = (handler) => (IS_ONPREM_BUILD ? Promise.resolve(() => {}) : listenForegroundPushFcm(handler));
+const sendPushViaWorker = (workerUrl, msg) => (IS_ONPREM_BUILD ? Promise.resolve({ ok: false, skipped: true, error: ONPREM_PUSH_OFF }) : sendPushViaWorkerFcm(workerUrl, msg));
 import { explainMissingOrder } from '../domain/progressSheet.js';
 import { feedbackConfigOf } from '../domain/appFeedback.js';
 import { noticeConfigOf } from '../domain/appNotices.js';
@@ -1451,7 +1459,8 @@ const PushSettingsPanel = ({ settings, saveSettings, saveShared = null, saveData
   const cfg = pushCfgOf(settings);
   const sideLabel = contactSideLabel(settings);
   const [vapidDraft, setVapidDraft] = useState(cfg.vapidKey);
-  const [workerDraft, setWorkerDraft] = useState(cfg.workerUrl || 'https://gemini-proxy.you0925.workers.dev');
+  // 🏢 2026-10-29 社内サーバ版(VITE_ONPREM=1)は外の Worker を既定に入れない(ビルドの時に字ごと消える書き方)。
+  const [workerDraft, setWorkerDraft] = useState(cfg.workerUrl || (import.meta.env.VITE_ONPREM === '1' ? '' : 'https://gemini-proxy.you0925.workers.dev'));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [info, setInfo] = useState('');

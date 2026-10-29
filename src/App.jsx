@@ -64,14 +64,17 @@ import {
 //   理由は2つ。① FieldValue は IndexedDB に保存できないので M2 のオフライン再送が
 //   原理的に作れない ② JSON にすると中身が消えて、送信待ちを人が確認できない。
 //   同じ理由で docRef()/colRef() の逃げ道も使わない(窓口に意図の名前で置く)。
-import { providerFor, ROW_DATA_WINS } from './data/provider.js';
+import { ROW_DATA_WINS } from './data/provider.js';
 // P153: 名前空間と保管庫の行き先を routes.js の1か所から引く(製品 App.jsx:49・52 と同じ)。
 //   PocketBase は読み込んでも切り替わらない。切り替わるのは保存された行き先が enabled:true の時だけ。
-import { NS as DATA_NS, DEFAULT_PROVIDERS, providersFromSettings } from './data/routes.js';
+import { NS as DATA_NS, DEFAULT_PROVIDERS } from './data/routes.js';
 import { fetchAllPaged } from './domain/goal/pager.js';
 import { goalGapOf, candidateOf, planPortfolio } from './domain/goal/portfolioPlanner.js';
 import { sendPushViaWorker } from './push.js';
 import './data/connectPocketbase.js';
+// 🏢 2026-10-29 社内サーバ版(VITE_ONPREM=1 のビルドだけ)。スイッチの無いビルドでは何もしない。
+import { dataFor, applyOnpremRoute, currentProviders, savedRouteFromSettings, DATA_ROUTE_KEY } from './dataRoute.js';
+import { IS_ONPREM_BUILD, ONPREM_DB, ONPREM_USER, loadOnpremConfig } from './onprem.js';
 // 🏭 2026-09-27 製品→部品 移植: 操業シミュレーションの画面と共有棚の書類を作る純関数(製品と同じ)
 import { OperationsSimulationPanel } from './OperationsSimulationPanel.jsx';
 import { StackBar as VizStackBar } from './opsim/vizKit.jsx';
@@ -461,35 +464,9 @@ const estMeter = (api) => {
 /** 窓口へ渡すのはこちら(数えるだけの覆いを着せた物)。⚠鍵の一覧は FS_API と同じ。 */
 const FS_EST = estMeter(FS_API);
 // ---- どの保管庫へ書くか(切替の入口・製品 App.jsx:222-261 と同じ形) ----
-// ⚠ 既定は必ず Firebase。保存された行き先に enabled === true と接続先がはっきり入っている時だけ切り替わる。
-let _routeProviders = DEFAULT_PROVIDERS;
-let _routePbConfig = null;
-const applyDataRoute = (pbSettings, extra = {}) => {
-  const next = providersFromSettings(pbSettings);
-  if (JSON.stringify(next) !== JSON.stringify(_routeProviders)) _routeProviders = next;
-  const usesPb = Object.values(next).includes('pocketbase');
-  const nextPb = usesPb ? {
-    url: String(pbSettings.url || '').replace(/\/+$/, ''),
-    email: pbSettings.email || '', password: pbSettings.password || '',
-    authCollection: pbSettings.authCollection || 'device_users',
-    owner: extra.owner || '', onPendingChange: extra.onPendingChange, onConflict: extra.onConflict,
-  } : null;
-  if ((nextPb?.url || '') !== (_routePbConfig?.url || '')) _routePbConfig = nextPb;
-  else if (nextPb) _routePbConfig = { ..._routePbConfig, ...nextPb };
-  return { providers: _routeProviders, pbConfig: _routePbConfig };
-};
-const DATA_ROUTE_KEY = 'data.route.v1';
-// ⚠ 読み込みは最初に使う時に行う(モジュールを読んだ瞬間に副作用を走らせない)。
-let _routeInit = false;
-const ensureDataRoute = () => {
-  if (_routeInit) return;
-  _routeInit = true;
-  try {
-    const saved = JSON.parse(localStorage.getItem(DATA_ROUTE_KEY) || 'null');
-    if (saved && saved.enabled === true && saved.url) applyDataRoute(saved);
-  } catch { /* 読めなければ Firebase のまま(安全側) */ }
-};
-const DATA = (db) => { ensureDataRoute(); return providerFor(db, FS_EST, _routeProviders, _routePbConfig); };   // 🧮 P-L1: 数えるだけの覆い(FS_EST)
+// ⚠ 2026-10-29 中身は src/dataRoute.js へ移した(回転計測からも同じ行き先を引く為・点検 G5)。中身は同じ。
+// ⚠ 既定は必ず Firebase。保存された行き先に enabled === true と接続先がはっきり入っている時、または社内サーバ版のビルドの時だけ切り替わる。
+const DATA = (db) => dataFor(db, FS_EST);   // 🧮 P-L1: 数えるだけの覆い(FS_EST)
 import {
   getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject
 } from "firebase/storage";
@@ -655,6 +632,16 @@ const DUE_VIZ = {
 const dueVizOf = (lot) => DUE_VIZ[bucketOfDue(dueMsOfLot(lot), todayStartMsNow())] || DUE_VIZ.noDue;
 const localYM = (d) => { const x = (d instanceof Date) ? d : new Date(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}`; };
 
+// 🏢 2026-10-29 写真・資料の上げ先(点検 G3)。置き場(attachments)が Firebase の時は下の Storage の道をそのまま使う。
+//   PocketBase の時だけ窓口の uploadFile へ渡す(PocketBase の blobs へ上げて、その URL を返す)。
+//   ⚠ 窓口は db ごとに作るので、画面が db を決めた時に覚えておく(setUploadDb)。
+let _uploadDb = null;
+const setUploadDb = (db) => { _uploadDb = db || null; };
+const attachmentsOffFirebase = () => { try { return currentProviders().attachments !== 'firebase'; } catch { return false; } };
+const uploadViaProvider = async (dataUrl, pathHint, ext) => {
+  if (!_uploadDb) throw new Error('保管庫の準備がまだです(写真を上げられません)');
+  return await DATA(_uploadDb).uploadFile(APP_DATA_ID, 'work_standard_files', pathHint, dataUrl, { ext });
+};
 let _storageInstance = null;
 const getStorageInstance = () => {
   if (_storageInstance) return _storageInstance;
@@ -673,6 +660,8 @@ const uploadImageToStorage = async (base64DataUrl, pathHint = 'images') => {
   const sizeKB = base64DataUrl.length / 1024;
   if (sizeKB < 100) return base64DataUrl;
   try {
+    // 🏢 写真・資料の置き場が PocketBase の時(社内版・切替後)は窓口を通す。Firebase の時は今までと同じ道(点検 G3)。
+    if (attachmentsOffFirebase()) return await uploadViaProvider(base64DataUrl, pathHint, 'jpg');
     const storage = getStorageInstance();
     if (!storage) return base64DataUrl;
     const fileId = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}.jpg`;
@@ -692,6 +681,7 @@ const uploadFileToStorage = async (base64DataUrl, pathHint = 'files', ext = 'bin
   if (!base64DataUrl || typeof base64DataUrl !== 'string') return base64DataUrl;
   if (!base64DataUrl.startsWith('data:')) return base64DataUrl; // 既に URL
   try {
+    if (attachmentsOffFirebase()) return await uploadViaProvider(base64DataUrl, pathHint, ext);
     const storage = getStorageInstance();
     if (!storage) return null;
     const fileId = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${ext}`;
@@ -963,6 +953,9 @@ const FIREBASE_CONFIG = (USER_DEFINED_CONFIG.apiKey && USER_DEFINED_CONFIG.apiKe
   ? USER_DEFINED_CONFIG 
   : (typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {});
 
+
+// 🏢 社内版でログインできない時に出す案内(onprem-config.json の置き場所)。
+const ONPREM_CONFIG_HINT = 'index.html と同じ場所の onprem-config.json の pocketbase.email / password(端末用アカウント)を確かめてください。';
 
 const COLORS = {
   primary: '#2563eb',
@@ -2008,7 +2001,7 @@ const generateWeeklyBrief = async (db, { lots, settings: partsSettings, contactS
     try {
       const cfg = WEEKLY_BRIEF_PUSH_OF(contactSettings);
       const targets = (pushTokens || []).filter(t => t && t.token && t.enabled !== false && t.admin === true);
-      if (cfg.vapidKey && cfg.workerUrl && targets.length) {
+      if (!IS_ONPREM_BUILD && cfg.vapidKey && cfg.workerUrl && targets.length) {   // 🏢 社内版は通知を送らない
         const man = (n) => `${Math.round(n / 10000)}万`;
         await sendPushViaWorker(cfg.workerUrl, {
           tokens: [...new Set(targets.map(t => t.token))],
@@ -32528,6 +32521,22 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    const [appNotices, setAppNotices] = useState([]);   // P099: 更新のお知らせ(同じ共通の箱)
    const [feedbackOpen, setFeedbackOpen] = useState(false);
    const [settings, setSettings] = useState({ mapImage: null, mapZones: INITIAL_MAP_ZONES, defectProcessOptions: DEFAULT_DEFECT_PROCESS_OPTIONS, breakAlerts: [], complaintOptions: DEFAULT_COMPLAINT_OPTIONS, customTargetTimes: {}, targetTimeHistory: [], customLayouts: {}, measurementOverrides: {} });
+   // --- 🔌 保存先の設定(settings.pocketbase)を見張る(点検 G1・製品 App.jsx:47700-47719 と同じ形) ---
+   // ⚠⚠ 動いている最中に保存先を差し替えない。購読はもう張ってあるので、途中で差し替えると
+   //   「読みは古い方・書きは新しい方」になりかねない。端末に覚えて、**次に開いた時から**効かせる。
+   // ⚠ enabled === true と url が無ければ { enabled:false } を覚える = 今まで通り Firebase。
+   // ⚠ 社内サーバ版のビルドでは見ない(行き先は onprem-config.json で決まっている)。
+   useEffect(() => {
+     if (IS_ONPREM_BUILD) return;
+     const pb = settings?.pocketbase;
+     if (pb === undefined) return;
+     const nextKey = JSON.stringify(savedRouteFromSettings(pb));
+     let prevKey = '';
+     try { prevKey = localStorage.getItem(DATA_ROUTE_KEY) || ''; } catch { /* noop */ }
+     if (nextKey === prevKey) return;
+     try { localStorage.setItem(DATA_ROUTE_KEY, nextKey); } catch { /* noop */ }
+     console.info('[保存先] 設定の pocketbase が変わりました。次に開いた時から効きます:', nextKey.replace(/"password":"[^"]*"/, '"password":"***"'));
+   }, [settings?.pocketbase]);
 
    // 勤務表 + 工場の暦 を1つにした物(WorkScheduleContext に流す)。
    // 🚨 毎描画で新しい物を作ってはいけない。文脈の値が変わったと見なされ、
@@ -32926,6 +32935,33 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
  
    // --- Firebase Initialization ---
    useEffect(() => {
+     // 🏢 2026-10-29 社内サーバ版(VITE_ONPREM=1 のビルドだけ・点検 G2)。
+     //   ⚠ Firebase を1つも起こさない(initializeApp・匿名ログイン・Firestore・Storage を呼ばない)。
+     //   index.html の横の onprem-config.json(無ければビルドの時の VITE_PB_URL)から PocketBase の行き先を読み、
+     //   全部の領域を PocketBase へ向けてから、db の代わりの鍵と user の代わりの印を渡す。
+     //   ⚠ スイッチの無いビルドでは IS_ONPREM_BUILD は false なので、下の今までの道だけを通る。
+     if (IS_ONPREM_BUILD) {
+       let alive = true;
+       (async () => {
+         const cfg = await loadOnpremConfig();
+         if (!alive) return;
+         if (cfg.readProblem) console.warn('[社内版]', cfg.readProblem, '— ビルドの時の値で続けます');
+         if (!cfg.url) {
+           setErrorMsg(['社内サーバの行き先が決まっていません。', ...cfg.problems].join('\n'));
+           return;
+         }
+         if (!cfg.ok) console.error('[社内版]', cfg.problems.join(' / '));
+         applyOnpremRoute(cfg, {
+           onAuthError: (e) => setErrorMsg(`社内サーバにログインできませんでした: ${(e && e.message) || e}\n${ONPREM_CONFIG_HINT}`),
+         });
+         console.info(`[社内版] 保管庫は全部 PocketBase(${cfg.url}・設定の出どころ=${cfg.source})。Firebase は使いません。`);
+         setUploadDb(ONPREM_DB);
+         setDb(ONPREM_DB);
+         setUser(ONPREM_USER);
+         setIsConnected(true);
+       })();
+       return () => { alive = false; };
+     }
      if (!FIREBASE_CONFIG.apiKey) return;
      const app = initializeApp(FIREBASE_CONFIG);
      const auth = getAuth(app);
@@ -33016,6 +33052,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        );
      }
 
+     setUploadDb(firestore);
      setDb(firestore);
  
      const initAuth = async () => {

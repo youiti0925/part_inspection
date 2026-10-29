@@ -42,7 +42,8 @@ test('UW-3 画面の読みメーターは今までの帳面だけを見る(推�
 
 test('UW-4 窓口(DATA)は数えるだけの覆い(FS_EST)を使う。覆いは同じ関数を呼ぶだけ', () => {
   assert.ok(app.includes('const FS_EST = estMeter(FS_API);'));
-  assert.ok(app.includes('return providerFor(db, FS_EST, _routeProviders, _routePbConfig);'), '窓口へ覆いの無い FS_API を渡している(推定が数えられない)');
+  // 2026-10-29 行き先の決定は src/dataRoute.js へ移した(回転計測と同じ所から引く為)。窓口へ渡す fs は今も FS_EST。
+  assert.ok(app.includes('const DATA = (db) => dataFor(db, FS_EST);'), '窓口へ覆いの無い FS_API を渡している(推定が数えられない)');
   const i = app.indexOf('const estMeter = (api) => {');
   const body = app.slice(i, app.indexOf('const FS_EST', i));
   // 画面の帳面(countReads)を覆いの中で呼ばない = 画面の数字を二重に数えない

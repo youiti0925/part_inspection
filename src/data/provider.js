@@ -271,6 +271,13 @@ export const createFirebaseBackend = (db, fs) => {
       return { rows: body.filter((x) => x && x.document).map((x) => decodeRestDoc(x.document)), projected: true, fellBack: '', fromCache: false };
     },
 
+    /**
+     * 📷 2026-10-29 写真・資料を上げて URL を返す(点検 G3)。Firebase は Storage の処理を **アプリが渡す**
+     *   (fs.uploadDataUrl)。ここに firebase/storage を import しない(試験で読めるように・使わないアプリに載せない)。
+     *   渡されていなければ、その場で名指しで落ちる。
+     */
+    uploadFile: async (ns, col, pathHint, dataUrl, opts = {}) =>
+      needLazy('uploadDataUrl', 'ファイルを上げる(uploadFile)')(ns, pathHint, dataUrl, opts),
     save: (ns, col, id, data, opts = {}) => fs.setDoc(docRef(ns, col, id), prep(data), { merge: opts.merge !== false }),
     remove: (ns, col, id) => fs.deleteDoc(docRef(ns, col, id)),
 
@@ -458,6 +465,9 @@ export const createProvider = ({ backends, providers = DEFAULT_PROVIDERS, onUnkn
     appendCapped: callAsync('appendCapped'),
     commitVersion: callAsync('commitVersion'),
     createOnce: callAsync('createOnce'),
+
+    // --- 写真・資料を上げる(2026-10-29・点検 G3)。置き場の領域(attachments など)で保管庫を選ぶ ---
+    uploadFile: callAsync('uploadFile'),
   };
 };
 
