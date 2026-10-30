@@ -40,8 +40,10 @@ export const pushFirebaseOf = (raw) => {
   return { ...ONPREM_PUSH_FIREBASE_DEFAULT };
 };
 
-/** Service Worker の URL(相対)。SW は設定ファイルを読めないので、通知の公開設定を ? の後ろで渡す(公開値だけ・合言葉は渡さない)。 */
-export const onpremSwUrl = (fb) => (fb ? `${ONPREM_SW_FILE}?fb=${encodeURIComponent(JSON.stringify(fb))}` : ONPREM_SW_FILE);
+/** Service Worker の URL(相対・index.html の横)。2026-10-30 製品・最終と同じファイル(onprem-public/onprem-sw.js・3アプリで1バイトも違わない)。
+ *  SW は外から何も読まず、push を自分で受けて通知を出す = Firebase の設定は要らない(前の ?fb= は渡さない)。
+ *  Firebase の公開設定を使うのは画面側の通知の登録(getToken・同梱の firebase/messaging)だけ。 */
+export const onpremSwUrl = () => `./${ONPREM_SW_FILE}`;
 
 let _fb = null;          // 起動の所が setOnpremPush で入れる
 let _swPromise = null;
@@ -51,7 +53,7 @@ export const onpremPushConfig = () => _fb;
 /** SW を登録する(起動の所で1回・「アプリとして入れる」にも要る)。scope は index.html の階層(相対 './')。 */
 export const registerOnpremSw = () => {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return Promise.resolve(null);
-  if (!_swPromise) _swPromise = navigator.serviceWorker.register(onpremSwUrl(_fb), { scope: './' });
+  if (!_swPromise) _swPromise = navigator.serviceWorker.register(onpremSwUrl(), { scope: './' });
   return _swPromise;
 };
 

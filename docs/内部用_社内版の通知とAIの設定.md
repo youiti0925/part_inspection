@@ -9,6 +9,7 @@
 - 端末の登録(push_tokens)は PocketBase に置く。
 - 端末側は Firebase を **通知(Messaging)の為だけ** に起こす(Firestore・ログイン・Storage は起こさない)。コード: `src/onpremPush.js`。
 - Service Worker は `index.html` の横の `onprem-sw.js`(相対・下の階層 `/parts/` でも動く)。本番の `firebase-messaging-sw.js` は社内版の出力から外す。
+  - 2026-10-30: `onprem-sw.js` は製品・最終・部品で1バイトも違わない同じファイル(`onprem-public/onprem-sw.js`)。外(gstatic)から何も読まず、push を自分で受けて通知を出す。Firebase の設定は画面側の登録(同梱の firebase/messaging)だけが使う。
 - 通知の公開設定は既定で本番と同じ公開値。変える・止める時だけ `onprem-config.json` に書く:
   - 変える: `"pushFirebase": { "apiKey": "…", "projectId": "…", "messagingSenderId": "…", "appId": "…" }`
   - 止める: `"pushFirebase": false`

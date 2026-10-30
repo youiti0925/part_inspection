@@ -282,16 +282,15 @@ test('O13 D4 社内版の通知: 相対の SW・既定は本番と同じ通知�
   const own = { apiKey: 'k', projectId: 'p', messagingSenderId: 's', appId: 'a', password: 'x' };
   assert.deepEqual(p.pushFirebaseOf(own), { apiKey: 'k', projectId: 'p', messagingSenderId: 's', appId: 'a' }, '4つの公開値以外は捨てる');
   assert.deepEqual(p.pushFirebaseOf({ apiKey: 'k' }), def, '欠けていれば既定');
-  const url = p.onpremSwUrl(def);
-  assert.ok(url.startsWith('onprem-sw.js?fb='), '相対(index.html の階層)');
-  assert.deepEqual(JSON.parse(decodeURIComponent(url.split('?fb=')[1])), def);
-  assert.equal(p.onpremSwUrl(null), 'onprem-sw.js');
+  // 2026-10-30 SW は製品・最終と同じ onprem-sw.js(外から何も読まない)。相対(index.html の階層)・設定は SW へ渡さない
+  assert.equal(p.onpremSwUrl(), './onprem-sw.js');
+  assert.match(read('src/onpremPush.js'), /register\(onpremSwUrl\(\), \{ scope: '\.\/' \}\)/);
   // 本番の SW と同じ公開値(ずれたら社内版の端末に通知が届かない)
   const sw = read('public/firebase-messaging-sw.js');
   for (const v of Object.values(p.ONPREM_PUSH_FIREBASE_DEFAULT)) assert.ok(sw.includes(v), `本番の SW と同じ値: ${v}`);
   const osw = read('onprem-public/onprem-sw.js');
   assert.ok(!osw.includes("'/firebase") && !osw.includes("link || '/'"), '社内版の SW は一番上 / を決め打ちしない');
-  assert.ok(osw.includes("searchParams.get('fb')"));
+  assert.ok(!/importScripts|gstatic|searchParams/.test(osw), '外から何も読まない・設定を URL で受けない');
   // vite: 社内版だけ SW と設定の見本を写す
   const vc = read('vite.config.js');
   assert.match(vc, /copyFileSync\(path\.resolve\('onprem-public', 'onprem-sw\.js'\)/);
