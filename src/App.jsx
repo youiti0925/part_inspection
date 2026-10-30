@@ -3351,7 +3351,14 @@ const LotCard = ({ lot, workers, templates, mapZones, onOpenExecution, saveData,
       const rect = cardRef.current?.getBoundingClientRect();
       const ghost = document.createElement('div');
       ghost.id = 'touch-drag-ghost';
-      ghost.innerHTML = `<div style="font-weight:bold;font-size:14px">${lot.orderNo}</div><div style="font-size:12px">${lot.model || ''}</div>`;
+      if (IS_ONPREM_BUILD) {
+        // 🔒 社内版: 指図番号・型式を innerHTML に入れない(保存型 XSS・SAST-02)。製品 App.jsx の同じ所と同じ形(textContent)
+        const l1 = document.createElement('div'); l1.style.cssText = 'font-weight:bold;font-size:14px'; l1.textContent = String(lot.orderNo ?? '');
+        const l2 = document.createElement('div'); l2.style.cssText = 'font-size:12px'; l2.textContent = String(lot.model || '');
+        ghost.appendChild(l1); ghost.appendChild(l2);
+      } else {
+        ghost.innerHTML = `<div style="font-weight:bold;font-size:14px">${lot.orderNo}</div><div style="font-size:12px">${lot.model || ''}</div>`;
+      }
       ghost.style.cssText = `position:fixed;z-index:9999;pointer-events:none;background:#fff;border:2px solid #3b82f6;border-radius:12px;padding:8px 12px;box-shadow:0 8px 24px rgba(0,0,0,0.3);opacity:0.9;transform:translate(-50%,-50%);left:${touch.clientX}px;top:${touch.clientY}px;min-width:80px;text-align:center;`;
       document.body.appendChild(ghost);
       t.ghost = ghost;

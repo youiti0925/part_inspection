@@ -109,11 +109,15 @@ jobs:
 
       - name: ③-a プレビューへ出す(本番の住所は変えない)
         if: ${{ inputs.preview }}
+        # 🔒 2026-10-30 入力(理由・枝)を台本の中へ直に展開しない(Semgrep run-shell-injection・SAST-06)。env から "$REASON" / "$REF" で読む
+        env:
+          REASON: ${{ inputs.reason }}
+          REF: ${{ inputs.ref }}
         run: |
           ch="pr-$(git rev-parse --short HEAD)-${GITHUB_RUN_NUMBER}"
           only=""
           if [ -n "${{ steps.target.outputs.target }}" ]; then only="--only ${{ steps.target.outputs.target }}"; fi
-          echo "理由: ${{ inputs.reason }}"
+          echo "理由: ${REASON}"
           npm run build
           npx firebase hosting:channel:deploy "$ch" --expires 7d $only --project inspection-time-c4fd3 --non-interactive | tee "$RUNNER_TEMP/preview.log"
           url=$(grep -oE 'https://[^ ]+--[^ ]+\.web\.app' "$RUNNER_TEMP/preview.log" | head -1)
@@ -121,30 +125,38 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "$url" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "版: $(git rev-parse --short HEAD) ／ 理由: ${{ inputs.reason }} ／ 7日で消えます。🚨 本番の Firestore に繋がっています。見るだけ。" >> "$GITHUB_STEP_SUMMARY"
+          echo "版: $(git rev-parse --short HEAD) ／ 理由: ${REASON} ／ 7日で消えます。🚨 本番の Firestore に繋がっています。見るだけ。" >> "$GITHUB_STEP_SUMMARY"
 
       - name: ③-b 本番へ出す(手元の npm run deploy と同じ道)
         if: ${{ !inputs.preview }}
+        # 🔒 2026-10-30 入力(理由・枝)を台本の中へ直に展開しない(Semgrep run-shell-injection・SAST-06)。env から "$REASON" / "$REF" で読む
+        env:
+          REASON: ${{ inputs.reason }}
+          REF: ${{ inputs.ref }}
         run: |
-          echo "理由: ${{ inputs.reason }}"
+          echo "理由: ${REASON}"
           node scripts/deploy.mjs --skip-check --frequency-ok
           echo "### 🚀 本番へ出しました" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "版: $(git rev-parse --short HEAD) ／ 理由: ${{ inputs.reason }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "版: $(git rev-parse --short HEAD) ／ 理由: ${REASON}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "前の版へ戻すには: この workflow を ref=前のコミット番号, preview=false でもう一度押す(古い部品は持ち越されるので開きっぱなしの端末も壊れない)。" >> "$GITHUB_STEP_SUMMARY"
 
       - name: ④ 台帳を枝へ書き戻す(枝でなければ成果物に残す)
         if: ${{ !inputs.preview }}
+        # 🔒 2026-10-30 入力(理由・枝)を台本の中へ直に展開しない(Semgrep run-shell-injection・SAST-06)。env から "$REASON" / "$REF" で読む
+        env:
+          REASON: ${{ inputs.reason }}
+          REF: ${{ inputs.ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git diff --quiet -- scripts/deploy-ledger.json; then echo "台帳に変化なし"; exit 0; fi
           git add scripts/deploy-ledger.json
-          git commit -m "📒 デプロイ台帳(GitHub から出した: ${{ inputs.reason }})"
-          if git show-ref --verify --quiet "refs/remotes/origin/${{ inputs.ref }}"; then
-            git push origin "HEAD:refs/heads/${{ inputs.ref }}"
-            echo "台帳を ${{ inputs.ref }} へ push しました"
+          git commit -m "📒 デプロイ台帳(GitHub から出した: ${REASON})"
+          if git show-ref --verify --quiet "refs/remotes/origin/${REF}"; then
+            git push origin "HEAD:refs/heads/${REF}"
+            echo "台帳を ${REF} へ push しました"
           else
             echo "::warning::ref がコミット番号なので台帳は push しません。成果物 deploy-ledger を枝へ入れてください。"
             echo "ledger_artifact=1" >> "$GITHUB_ENV"

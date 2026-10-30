@@ -3913,6 +3913,8 @@ const ContactPortal = ({ lots, contactRequests, arrivalTimes, saveData, settings
   useEffect(() => {
     if (!embedded || typeof window === 'undefined') return undefined;
     const on = (e) => {
+      // 🔒 社内版: 埋め込んだ親(③)からの合図だけを聞く(送り主の origin を見る・SAST-05)。埋め込める親は入口の CSP frame-ancestors で ③ だけに絞ってある
+      if (IS_ONPREM_BUILD && (e.source !== window.parent || !e.origin || e.origin !== parentOriginOf(document.referrer))) return;
       const m = parseActiveMessage(e.data);
       if (!m) return;             // 知らない形の message は捨てる
       embHeardRef.current = true;
@@ -3955,6 +3957,7 @@ const ContactPortal = ({ lots, contactRequests, arrivalTimes, saveData, settings
   // ③ へ未読の数を報告する。⚠渡すのは数だけ(連絡の中身は一切渡さない)。
   useEffect(() => {
     if (!embedded || typeof window === 'undefined') return;
+    if (IS_ONPREM_BUILD && !parentOriginOf(document.referrer)) return;   // 🔒 社内版: 宛先が分からない時は送らない('*' で送らない・SAST-05)
     const target = parentOriginOf(document.referrer) || '*';
     try { window.parent.postMessage(buildUnreadMessage({ app: 'product', group, counts: unread, at: Date.now() }), target); }
     catch (e) { /* 届かなくても画面は動く */ }
