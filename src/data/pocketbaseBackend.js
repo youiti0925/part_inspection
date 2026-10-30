@@ -22,6 +22,7 @@ import { mergeDoc, overwriteDoc, setFieldsDoc } from './docMerge.js';
 import { withDeletions, DATA_SERVER_NOW } from './sentinels.js';
 import { POCKETBASE_CAPABILITIES } from './capabilities.js';
 import { applyQuery } from './queryLocal.js';
+import { pbFilter } from './pbFilter.js';
 
 const keyOf = (ns, col) => `${ns}/${col}`;
 
@@ -158,7 +159,8 @@ export const createPocketbaseBackend = (client, {
         if (typeof client.isAuthed === 'function' && !client.isAuthed()) {
           throw new Error('まだログインできていません(この0件はデータが無い意味ではありません)');
         }
-        const recs = await client.listAll(docsCol, { filter: `ns="${String(ns).replace(/"/g, '\\"')}" && col="${String(col).replace(/"/g, '\\"')}"`, sort: 'docId' });
+        // 🔒R19: 値は pbFilter で入れる(「\」も直す・以前は「"」だけで、値に「\」があると読めない/別の物を読んだ)
+        const recs = await client.listAll(docsCol, { filter: pbFilter('ns={:ns} && col={:col}', { ns, col }), sort: 'docId' });
         const m = new Map(); const rv = new Map();
         recs.forEach((r) => { m.set(r.docId, r.data || {}); rv.set(r.docId, Number(r.rev) || 0); });
         cache.set(k, m); revs.set(k, rv);
@@ -320,8 +322,7 @@ export const createPocketbaseBackend = (client, {
      */
     refresh: async (ns, col) => {
       const k = keyOf(ns, col);
-      const q = (v) => String(v).replace(/"/g, '\\"');
-      const recs = await client.listAll(docsCol, { filter: `ns="${q(ns)}" && col="${q(col)}"`, sort: 'docId' });
+      const recs = await client.listAll(docsCol, { filter: pbFilter('ns={:ns} && col={:col}', { ns, col }), sort: 'docId' });
       const m = new Map(); const rv = new Map();
       // ⚠版番号も一緒に覚える。ここを忘れると、オフラインでの全上書きが
       //   ぶつかりを検出できず、復帰時に相手の変更を消す(実測で踏んだ)。

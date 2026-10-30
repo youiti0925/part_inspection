@@ -33,6 +33,7 @@
 import { mergeDoc, overwriteDoc, setFieldsDoc } from './docMerge.js';
 import { claimOnce, PbHttpError, PbNetworkError } from './pbClient.js';
 import { commandHash } from './payloadHash.js';
+import { pbFilter } from './pbFilter.js';
 import { withDeletions, DATA_SERVER_NOW } from './sentinels.js';
 
 export const DOCS_COL = 'docs';
@@ -83,9 +84,10 @@ export const createDocStore = (client, {
   docsCol = DOCS_COL, claimsCol = CLAIMS_COL, gatesCol = GATES_COL,
   maxAttempts = 12, owner = '', staleGateMs = STALE_GATE_MS, now = () => Date.now(),
 } = {}) => {
-  const esc = (v) => String(v).replace(/"/g, '\\"');
-  const filterOf = (ns, col, docId) =>
-    `ns="${esc(ns)}" && col="${esc(col)}"` + (docId === undefined ? '' : ` && docId="${esc(docId)}"`);
+  // 🔒R19: 値は必ず pbFilter で入れる(「\」も直す)。以前の「"だけ直す」形は値に「\」があると別の記録を取った。
+  const filterOf = (ns, col, docId) => (docId === undefined
+    ? pbFilter('ns={:ns} && col={:col}', { ns, col })
+    : pbFilter('ns={:ns} && col={:col} && docId={:docId}', { ns, col, docId }));
 
   const findRecord = async (ns, col, docId) => {
     const r = await client.listPage(docsCol, { perPage: 1, filter: filterOf(ns, col, docId) });
@@ -121,7 +123,7 @@ export const createDocStore = (client, {
   const releaseStaleGate = async (ns, col, docId, rev) => {
     try {
       const r = await client.listPage(gatesCol, {
-        perPage: 1, filter: `scope="${esc(gateScope(ns, col, docId))}" && claimId="rev:${rev}"`,
+        perPage: 1, filter: pbFilter('scope={:scope} && claimId={:claimId}', { scope: gateScope(ns, col, docId), claimId: `rev:${rev}` }),
       });
       const g = r.items?.[0];
       if (!g) return false;                       // もう外れている → やり直せば通る
@@ -262,7 +264,7 @@ export const createDocStore = (client, {
       //   同じIDで作り直すのは通る。
       const scope = gateScope(ns, col, docId);
       try {
-        const rows = await client.listAll(gatesCol, { filter: `scope="${esc(scope)}"`, fields: 'id' });
+        const rows = await client.listAll(gatesCol, { filter: pbFilter('scope={:scope}', { scope }), fields: 'id' });
         for (const r of rows) await client.remove(gatesCol, r.id);
       } catch (e) {
         if (!(e instanceof PbHttpError && (e.status === 403 || e.status === 401))) {
@@ -500,7 +502,7 @@ export const createDocStore = (client, {
      */
     pruneClaims: async ({ olderThanMs = 24 * 60 * 60 * 1000, limit = 5000, collection = claimsCol } = {}) => {
       const cutoff = new Date(now() - olderThanMs).toISOString().replace('T', ' ');
-      const rows = await client.listAll(collection, { filter: `created < "${cutoff}"`, fields: 'id', sort: 'created' });
+      const rows = await client.listAll(collection, { filter: pbFilter('created < {:cutoff}', { cutoff }), fields: 'id', sort: 'created' });
       let n = 0;
       for (const r of rows.slice(0, limit)) { await client.remove(collection, r.id); n++; }
       return { removed: n };
@@ -514,7 +516,7 @@ export const createDocStore = (client, {
      */
     pruneGates: async ({ olderThanMs = 60 * 60 * 1000, limit = 5000 } = {}) => {
       const cutoff = new Date(now() - olderThanMs).toISOString().replace('T', ' ');
-      const rows = await client.listAll(gatesCol, { filter: `created < "${cutoff}"`, fields: 'id', sort: 'created' });
+      const rows = await client.listAll(gatesCol, { filter: pbFilter('created < {:cutoff}', { cutoff }), fields: 'id', sort: 'created' });
       let n = 0;
       for (const r of rows.slice(0, limit)) { await client.remove(gatesCol, r.id); n++; }
       return { removed: n };
