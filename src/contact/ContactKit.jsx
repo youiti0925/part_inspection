@@ -30,17 +30,14 @@ import {
 import { UNREAD_LANES, initSeen, laneCounts, laneOfTab, parseSeen, totalNew, withSeen } from '../domain/unreadBadge.js';
 import { buildUnreadMessage, canMarkSeen, isEmbedded, parentOriginOf, parseActiveMessage, portalLayoutOf } from '../domain/portalBridge.js';
 import { completeStatusLabel, isDeclined, isPartiallyNotified, remainingQtyOf } from '../domain/completeSplit.js';
-import { disablePush as disablePushFcm, enablePush as enablePushFcm, listenForegroundPush as listenForegroundPushFcm, pushDeviceId, pushPlatform, pushSupportProblem as pushSupportProblemFcm, sendPushViaWorker as sendPushViaWorkerFcm } from '../push.js';
+import { disablePush, enablePush, listenForegroundPush, pushDeviceId, pushPlatform, pushSupportProblem, sendPushViaWorker } from '../push.js';
 // 🏢 2026-10-30 社内サーバ版(VITE_ONPREM=1)でも通知を使う(清水さんの決定 D4)。送る道は本番と同じ(連絡タブの設定の VAPID 鍵と Worker URL → 外の中継)。
 //   ⚠ push.js は製品と1バイト同じに保つ決まり(product-pairs.test.mjs)なので、社内版の違い(SW の場所が相対・通知だけの Firebase)は
 //     src/onpremPush.js に置き、ここ(呼ぶ側)で分ける。スイッチの無いビルドでは push.js をそのまま呼ぶ。
 import { IS_ONPREM_BUILD, appHome } from '../onprem.js';
 import { pushSupportProblem as onpremPushSupportProblem, enablePush as onpremEnablePush, disablePush as onpremDisablePush, listenForegroundPush as onpremListenForegroundPush } from '../onpremPush.js';
-const pushSupportProblem = () => (IS_ONPREM_BUILD ? onpremPushSupportProblem() : pushSupportProblemFcm());
-const enablePush = (vapidKey) => (IS_ONPREM_BUILD ? onpremEnablePush(vapidKey) : enablePushFcm(vapidKey));
-const disablePush = () => (IS_ONPREM_BUILD ? onpremDisablePush() : disablePushFcm());
-const listenForegroundPush = (handler) => (IS_ONPREM_BUILD ? onpremListenForegroundPush(handler) : listenForegroundPushFcm(handler));
-const sendPushViaWorker = sendPushViaWorkerFcm;
+// 🧪 2026-10-31 R2: 呼ぶ所で `(IS_ONPREM_BUILD ? 社内版の関数 : push.js の関数)(…)` と分ける(包む関数を作らない)。
+//   いつものビルドでは右側だけが残り、出力が基点(fff526a)と1バイトも変わらない。
 import { explainMissingOrder } from '../domain/progressSheet.js';
 import { feedbackConfigOf } from '../domain/appFeedback.js';
 import { noticeConfigOf } from '../domain/appNotices.js';
@@ -642,7 +639,7 @@ const ContactArrivalApplyModal = ({ entry, contactRequests = [], lots, templates
   const toDateStr = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const toTimeStr = (ts) => { const d = new Date(ts); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const tplName = (lot) => (templates || []).find(t => t.id === lot.templateId)?.name || '';
-  const portalLink = (() => { try { return `${appHome()}?renraku=1`; } catch (e) { return ''; } })();
+  const portalLink = (() => { try { return (IS_ONPREM_BUILD ? `${appHome()}?renraku=1` : `${window.location.origin}/?renraku=1`); } catch (e) { return ''; } })();
   const finishOn = finishReplyEnabled(settings);
   const doApply = (alsoReply) => {
     if (!arriveTs || !selLots.length) return;
@@ -1111,7 +1108,7 @@ const firePushNotify = (settings, pushTokens, { toGroup, toSide, title, body, li
         sendPushViaWorker(cfg.workerUrl, {
           tokens: [...new Set(ccTargets.map(t => t.token))],
           title: `📋 CC(${toGroup || 'あっち'}宛): ${title}`, body,
-          link: (typeof window !== 'undefined' ? `${appHome()}` : link), tag: `${tag || 'cc'}-cc`, ...osOpts,
+          link: (typeof window !== 'undefined' ? (IS_ONPREM_BUILD ? `${appHome()}` : `${window.location.origin}/`) : link), tag: `${tag || 'cc'}-cc`, ...osOpts,
         }).then(cleanup(ccTargets));
       }
     }
@@ -1157,7 +1154,7 @@ const ForegroundPushToast = ({ ready, settings }) => {
   useEffect(() => {
     if (!ready) return;
     let unsub = null; let dead = false;
-    listenForegroundPush((m) => setMsgs(ms => [...ms, { ...m, at: Date.now(), key: `${Date.now()}-${Math.random()}` }].slice(-Math.max(1, Math.floor(Number(cfgRef.current.maxStack) || 3)))))
+    (IS_ONPREM_BUILD ? onpremListenForegroundPush : listenForegroundPush)((m) => setMsgs(ms => [...ms, { ...m, at: Date.now(), key: `${Date.now()}-${Math.random()}` }].slice(-Math.max(1, Math.floor(Number(cfgRef.current.maxStack) || 3)))))
       .then(u => { if (dead) { try { u(); } catch (e) { /* noop */ } } else unsub = u; });
     return () => { dead = true; if (unsub) { try { unsub(); } catch (e) { /* noop */ } } };
   }, [ready]);
@@ -1234,7 +1231,7 @@ const ContactAlarm = ({ ready, settings, extraEvents }) => {
   useEffect(() => {
     if (!ready) return;
     let unsub = null, dead = false;
-    listenForegroundPush((m) => trigger(m)).then(u => { if (dead) { try { u(); } catch (e) { /* noop */ } } else unsub = u; });
+    (IS_ONPREM_BUILD ? onpremListenForegroundPush : listenForegroundPush)((m) => trigger(m)).then(u => { if (dead) { try { u(); } catch (e) { /* noop */ } } else unsub = u; });
     return () => { dead = true; if (unsub) { try { unsub(); } catch (e) { /* noop */ } } };
   }, [ready]);
   useEffect(() => {
@@ -1468,7 +1465,7 @@ const PushSettingsPanel = ({ settings, saveSettings, saveShared = null, saveData
   const [info, setInfo] = useState('');
   const deviceId = pushDeviceId();
   const mine = (pushTokens || []).find(t => t && t.id === deviceId);
-  const prob = pushSupportProblem();
+  const prob = (IS_ONPREM_BUILD ? onpremPushSupportProblem : pushSupportProblem)();
   const ready = !!(cfg.vapidKey && cfg.workerUrl);
   const plat = pushPlatform();
   // 役職(あっち側のみ): 職長=既定の宛先 / 工長・グループ長=上司(職長不在時・重い内容・エスカレーション先)
@@ -1481,7 +1478,7 @@ const PushSettingsPanel = ({ settings, saveSettings, saveShared = null, saveData
   const enableHere = async () => {
     setBusy(true); setErr(''); setInfo('');
     try {
-      const token = await enablePush(cfg.vapidKey);
+      const token = await (IS_ONPREM_BUILD ? onpremEnablePush : enablePush)(cfg.vapidKey);
       await saveData('push_tokens', deviceId, {
         token, side, group: group || '', name: personName || '',
         ...(side === 'portal' ? { role: role || '' } : {}),
@@ -1495,7 +1492,7 @@ const PushSettingsPanel = ({ settings, saveSettings, saveShared = null, saveData
   const disableHere = async () => {
     setBusy(true); setErr(''); setInfo('');
     try {
-      await disablePush();
+      await (IS_ONPREM_BUILD ? onpremDisablePush : disablePush)();
       if (mine && deleteData) await deleteData('push_tokens', deviceId);
       setInfo('この端末の通知を解除しました');
     } catch (e) { setErr(e?.message || String(e)); }
@@ -1507,7 +1504,7 @@ const PushSettingsPanel = ({ settings, saveSettings, saveShared = null, saveData
     const res = await sendPushViaWorker(cfg.workerUrl, {
       tokens: [mine.token], title: '✅ テスト通知', body: 'この端末に工程連絡の通知が届きます',
       // tagは毎回ユニークに(同じtagだと前の通知が残っている時に音なしで置き換わり「届かない」ように見える)
-      link: (typeof window !== 'undefined' ? `${appHome()}${side === 'portal' ? '?renraku=1' : ''}` : ''), tag: `push-test-${Date.now()}`,
+      link: (typeof window !== 'undefined' ? (IS_ONPREM_BUILD ? `${appHome()}${side === 'portal' ? '?renraku=1' : ''}` : `${window.location.origin}${side === 'portal' ? '/?renraku=1' : '/'}`) : ''), tag: `push-test-${Date.now()}`,
     });
     if (res?.ok && res.sent > 0) setInfo('この端末宛てにテスト通知を送りました（テストは押した端末だけに届きます。他の端末はその端末で押してください）');
     else setErr(`テスト送信に失敗: ${res?.results?.[0]?.error || res?.error || '不明なエラー'}`);
@@ -2105,7 +2102,7 @@ ${what}
     // 宛先グループの携帯へプッシュ通知(設定済みなら)。失敗しても連絡自体は届いている。
     if (notifyPush) {
       const m = contactPushMessage(payload);
-      notifyPush({ toGroup: payload.to, toSide: 'portal', toLevel: payload.toLevel || 'auto', title: m.title, body: m.body, link: `${appHome()}?renraku=1`, tag: `req-${reqId}` });
+      notifyPush({ toGroup: payload.to, toSide: 'portal', toLevel: payload.toLevel || 'auto', title: m.title, body: m.body, link: (IS_ONPREM_BUILD ? `${appHome()}?renraku=1` : `${window.location.origin}/?renraku=1`), tag: `req-${reqId}` });
     }
   };
   // あっちの「いつ終わる？」に検査側が終了予定を回答 → ポータルへ通知
@@ -2118,19 +2115,19 @@ ${what}
     saveData('contact_requests', r.id, { items: sv.items, itemAnswers: sv.itemAnswers, status: sv.answered ? 'answered' : 'waiting' });
     setFinishDraft(p => ({ ...p, [key]: {} }));
     const it = sv.items[idx];
-    if (notifyPush) notifyPush({ toSide: 'portal', toGroup: r.to, title: `🏁 検査終了予定: ${it.orderNo || ''} → ${it.date ? `${String(it.date).slice(5).replace('-', '/')} ` : ''}${it.time}`, body: `${currentUserName || '検査'} が回答しました`, link: `${appHome()}?renraku=1`, tag: `fina-${r.id}-${idx}` });
+    if (notifyPush) notifyPush({ toSide: 'portal', toGroup: r.to, title: `🏁 検査終了予定: ${it.orderNo || ''} → ${it.date ? `${String(it.date).slice(5).replace('-', '/')} ` : ''}${it.time}`, body: `${currentUserName || '検査'} が回答しました`, link: (IS_ONPREM_BUILD ? `${appHome()}?renraku=1` : `${window.location.origin}/?renraku=1`), tag: `fina-${r.id}-${idx}` });
   };
   // 社内連絡(現場→検査の職長/工長)を送る。組立ではなく検査側(side:'app')の役職端末へ通知。
   const sendInternal = (payload) => {
     const reqId = newContactId();
     saveData('contact_requests', reqId, payload);
-    if (notifyPush) notifyPush({ toSide: 'app', internal: true, title: `🏭 社内: ${payload.topic || ''}（${payload.from || '現場'}）`, body: `${payload.orderNo ? `指図${payload.orderNo}: ` : ''}${payload.message || ''}`.slice(0, 200), link: `${appHome()}`, tag: `int-${reqId}` });
+    if (notifyPush) notifyPush({ toSide: 'app', internal: true, title: `🏭 社内: ${payload.topic || ''}（${payload.from || '現場'}）`, body: `${payload.orderNo ? `指図${payload.orderNo}: ` : ''}${payload.message || ''}`.slice(0, 200), link: (IS_ONPREM_BUILD ? `${appHome()}` : `${window.location.origin}/`), tag: `int-${reqId}` });
     setShowInternal(false);
   };
   // 社内連絡に「対応します」= 検査側(現場含む全端末)に「△△が対応します」を通知して既読を返す。
   const ackInternal = (r) => {
     saveData('contact_requests', r.id, { status: 'answered', answer: { choice: 'ack', by: currentUserName || '職長', at: Date.now() } });
-    if (notifyPush) notifyPush({ toSide: 'app', title: `🏭 ${currentUserName || '職長'} が対応します`, body: `${r.topic || ''} ${String(r.message || '').slice(0, 80)}`, link: `${appHome()}`, tag: `intack-${r.id}` });
+    if (notifyPush) notifyPush({ toSide: 'app', title: `🏭 ${currentUserName || '職長'} が対応します`, body: `${r.topic || ''} ${String(r.message || '').slice(0, 80)}`, link: (IS_ONPREM_BUILD ? `${appHome()}` : `${window.location.origin}/`), tag: `intack-${r.id}` });
   };
   // 連絡カードの会話に検査側からコメント追加 → 相手(組立/社内)へ通知。
   const addComment = (r, text) => {
@@ -2138,8 +2135,8 @@ ${what}
     const c = { id: contactNewCommentId(), by: currentUserName || '検査', text, at: Date.now(), side: 'app' };
     saveData('contact_requests', r.id, { comments: [...(r.comments || []), c] });
     if (notifyPush) {
-      if (r.kind === 'internal') notifyPush({ toSide: 'app', internal: true, title: `💬 ${currentUserName || '検査'}: ${text.slice(0, 40)}`, body: `${r.topic || ''} の会話`, link: `${appHome()}`, tag: `cmt-${c.id}` });
-      else notifyPush({ toSide: 'portal', toGroup: r.to, title: `💬 ${currentUserName || '検査'}: ${text.slice(0, 40)}`, body: `${r.orderNo ? `指図${r.orderNo} ` : ''}${contactKindLabel(r)}の会話`, link: `${appHome()}?renraku=1`, tag: `cmt-${c.id}` });
+      if (r.kind === 'internal') notifyPush({ toSide: 'app', internal: true, title: `💬 ${currentUserName || '検査'}: ${text.slice(0, 40)}`, body: `${r.topic || ''} の会話`, link: (IS_ONPREM_BUILD ? `${appHome()}` : `${window.location.origin}/`), tag: `cmt-${c.id}` });
+      else notifyPush({ toSide: 'portal', toGroup: r.to, title: `💬 ${currentUserName || '検査'}: ${text.slice(0, 40)}`, body: `${r.orderNo ? `指図${r.orderNo} ` : ''}${contactKindLabel(r)}の会話`, link: (IS_ONPREM_BUILD ? `${appHome()}?renraku=1` : `${window.location.origin}/?renraku=1`), tag: `cmt-${c.id}` });
     }
   };
   // 検査が連絡を開いたら「既読」を記録(初回のみ)。相手側に「検査が見ました」と出る。
@@ -4118,7 +4115,7 @@ const ContactPortal = ({ lots, contactRequests, arrivalTimes, saveData, settings
   const quickDates = useMemo(() => quickDateOptions(nowTick, 3, makeIsWorkday(factoryCalWs)), [nowTick, factoryCalWs]);
   const quickTimes = useMemo(() => quickTimesOf(settings), [settings]);
   // 返信・回答は検査側の端末(side:'app')へプッシュ通知(設定済みなら)
-  const appLink = (() => { try { return `${appHome()}`; } catch (e) { return ''; } })();
+  const appLink = (() => { try { return (IS_ONPREM_BUILD ? `${appHome()}` : `${window.location.origin}/`); } catch (e) { return ''; } })();
   const reply = (r, choice) => {
     // 「行けない」だけは取り返しがつきにくいので誤タップ防止の確認を挟む
     if (choice === 'no' && !window.confirm('「行けない」と返信します。よろしいですか？')) return;

@@ -640,9 +640,11 @@ const localYM = (d) => { const x = (d instanceof Date) ? d : new Date(d); return
 let _uploadDb = null;
 const setUploadDb = (db) => { _uploadDb = db || null; };
 const attachmentsOffFirebase = () => { try { return currentProviders().attachments !== 'firebase'; } catch { return false; } };
-const uploadViaProvider = async (dataUrl, pathHint, ext) => {
-  if (!_uploadDb) throw new Error('保管庫の準備がまだです(写真を上げられません)');
-  return await DATA(_uploadDb).uploadFile(APP_DATA_ID, 'work_standard_files', pathHint, dataUrl, { ext });
+// 🧪 2026-10-31 R2: async を付けない(古い Safari 向けの書き換えで即時に呼ぶ包みが作られ、使わないいつものビルドにも残っていた)。
+//   返すのは同じ Promise(準備が無ければ失敗の Promise)。
+const uploadViaProvider = (dataUrl, pathHint, ext) => {
+  if (!_uploadDb) return Promise.reject(new Error('保管庫の準備がまだです(写真を上げられません)'));
+  return DATA(_uploadDb).uploadFile(APP_DATA_ID, 'work_standard_files', pathHint, dataUrl, { ext });
 };
 let _storageInstance = null;
 const getStorageInstance = () => {
@@ -663,7 +665,7 @@ const uploadImageToStorage = async (base64DataUrl, pathHint = 'images') => {
   if (sizeKB < 100) return base64DataUrl;
   try {
     // 🏢 写真・資料の置き場が PocketBase の時(社内版・切替後)は窓口を通す。Firebase の時は今までと同じ道(点検 G3)。
-    if (attachmentsOffFirebase()) return await uploadViaProvider(base64DataUrl, pathHint, 'jpg');
+    if (IS_ONPREM_BUILD && attachmentsOffFirebase()) return await uploadViaProvider(base64DataUrl, pathHint, 'jpg');
     const storage = getStorageInstance();
     if (!storage) return base64DataUrl;
     const fileId = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}.jpg`;
@@ -683,7 +685,7 @@ const uploadFileToStorage = async (base64DataUrl, pathHint = 'files', ext = 'bin
   if (!base64DataUrl || typeof base64DataUrl !== 'string') return base64DataUrl;
   if (!base64DataUrl.startsWith('data:')) return base64DataUrl; // 既に URL
   try {
-    if (attachmentsOffFirebase()) return await uploadViaProvider(base64DataUrl, pathHint, ext);
+    if (IS_ONPREM_BUILD && attachmentsOffFirebase()) return await uploadViaProvider(base64DataUrl, pathHint, ext);
     const storage = getStorageInstance();
     if (!storage) return null;
     const fileId = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${ext}`;
@@ -4394,11 +4396,11 @@ const GEMINI_PROXY_URL = String(import.meta.env.VITE_GEMINI_PROXY_URL || '').rep
  * @param {string} modelName
  */
 const callGeminiViaProxy = async (payload, modelName = 'gemini-2.5-flash') => {
-  const proxyUrl = aiProxyUrlOr(GEMINI_PROXY_URL);   // 🏢 社内版は onprem-config.json の aiProxyUrl が優先(いつものビルドは今まで通り)
-  if (!proxyUrl) {
+  // 🏢 社内版は onprem-config.json の aiProxyUrl が優先。🧪 R2: いつものビルドは右側(基点と同じ GEMINI_PROXY_URL)だけが残る。
+  if (!(IS_ONPREM_BUILD ? aiProxyUrlOr(GEMINI_PROXY_URL) : GEMINI_PROXY_URL)) {
     throw new Error('AIサーバーが未設定です。\n管理者: .env の VITE_GEMINI_PROXY_URL に Worker の URL を設定して、ビルドし直してください。');
   }
-  const res = await fetch(`${proxyUrl}/generate`, {
+  const res = await fetch(`${IS_ONPREM_BUILD ? aiProxyUrlOr(GEMINI_PROXY_URL) : GEMINI_PROXY_URL}/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: modelName, ...payload }),
@@ -4558,7 +4560,7 @@ const VideoToPhotosModal = ({ contextLabel = '', existingDescription = '', onApp
   const [applying, setApplying] = useState(false);
   // 🚨 鍵の有無ではなく **AIサーバー(Worker)の設定の有無** で押せるか決める。
   //   鍵はブラウザに置かない(2026-07 の漏洩)。ここに VITE_GEMINI_API_KEY を戻さない事。
-  const hasAiKey = !!aiProxyUrlOr(GEMINI_PROXY_URL);
+  const hasAiKey = !!(IS_ONPREM_BUILD ? aiProxyUrlOr(GEMINI_PROXY_URL) : GEMINI_PROXY_URL);
 
   const pickVideo = (e) => {
     const f = e.target.files?.[0]; if (!f) { return; }
@@ -33064,7 +33066,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        );
      }
 
-     setUploadDb(firestore);
+     if (IS_ONPREM_BUILD) setUploadDb(firestore);   // 🧪 R2: いつものビルドでは置き場は必ず Firebase なので要らない(出力を基点と同じに)
      setDb(firestore);
  
      const initAuth = async () => {
@@ -33748,11 +33750,10 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          const merged = capMerge(before, data);
          const bytes = capBytes(merged);
          // 🏢 2026-10-30 社内版は PocketBase の上限(20MB)で測る(決定 D5: 1MB の警告は出さない)。本番は今まで通り 1MB。
-         const capDanger = IS_ONPREM_BUILD ? Math.round(ONPREM_DOC_LIMIT * 0.86) : CAP_DANGER;
-         const capLimit = IS_ONPREM_BUILD ? ONPREM_DOC_LIMIT : CAP_LIMIT;
-         const d = decideCapacity(before, merged, bytes, capDanger);
+         // 🧪 R2: 定数を変数に置かず、使う所で分ける(いつものビルドは基点と同じ CAP_DANGER / CAP_LIMIT だけが残る)
+         const d = decideCapacity(before, merged, bytes, IS_ONPREM_BUILD ? Math.round(ONPREM_DOC_LIMIT * 0.86) : CAP_DANGER);
          if (d.action === 'block') {
-           const res = { reason: capacityBlockMessage(bytes, capLimit), counts: null };
+           const res = { reason: capacityBlockMessage(bytes, IS_ONPREM_BUILD ? ONPREM_DOC_LIMIT : CAP_LIMIT), counts: null };
            note(res);
            const e = new Error(res.reason);
            e.name = 'LotCapacityError';
@@ -33761,7 +33762,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          // 🚨 通したが、危ない事は **黙らない**。記録は守りつつ、写真を減らす必要を人に見せる。
          if (d.action === 'warn') {
            console.warn('📦 上限に迫ったロットの保存を通しました(記録だけ/縮む保存)', id, bytes, d.reason);
-           setCapacityWarn({ at: Date.now(), id, bytes, limit: capLimit });
+           setCapacityWarn({ at: Date.now(), id, bytes, limit: IS_ONPREM_BUILD ? ONPREM_DOC_LIMIT : CAP_LIMIT });
          }
        }
      } catch (e) {

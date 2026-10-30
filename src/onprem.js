@@ -120,7 +120,8 @@ export const loadOnpremConfig = ({ fetchImpl, env = readEnv(), path = ONPREM_CON
         : fail(res ? res.status : '返事なし')))
       .catch((e) => fail((e && e.message) || e));
   const origin = (typeof location !== 'undefined' && location && location.origin) || '';
-  return read.then(({ json, readProblem }) => ({ ...normalizeOnpremConfig(json, env, origin), readProblem }));
+  // 🧪 2026-10-31 R2: { ...x } と書かない(古い Safari 向けの変換が助けの関数を読み込み、その初期化の1文がいつものビルドに残る)。
+  return read.then(({ json, readProblem }) => Object.assign({}, normalizeOnpremConfig(json, env, origin), { readProblem }));
 };
 
 /** 窓口へ渡す PocketBase の接続設定(connectPocketbase.js が受け取る形)。 */

@@ -171,14 +171,19 @@ test('O06 画面の入口の配線: 社内版は Firebase を起こす前に分�
   for (const bad of ['signInAnonymously', 'getAuth(', 'initializeFirestore', 'getStorage(', 'getMessaging']) assert.ok(!branch.includes(bad), `社内版の道で ${bad} を呼ばない`);
   assert.match(branch, /applyOnpremRoute\(cfg/); assert.match(branch, /setDb\(ONPREM_DB\)/); assert.match(branch, /setUser\(ONPREM_USER\)/);
   assert.match(app, /const DATA = \(db\) => dataFor\(db, FS_EST\);/);
-  assert.match(app, /if \(attachmentsOffFirebase\(\)\) return await uploadViaProvider\(base64DataUrl, pathHint, 'jpg'\);/);
+  // 🧪 R2: 写真の上げ先の分かれ道は社内版のビルドだけ(いつものビルドは基点と同じ Storage の道だけが残る)
+  assert.match(app, /if \(IS_ONPREM_BUILD && attachmentsOffFirebase\(\)\) return await uploadViaProvider\(base64DataUrl, pathHint, 'jpg'\);/);
   const main = read('src/main.jsx');
   assert.match(main, /if \('serviceWorker' in navigator && import\.meta\.env\.VITE_ONPREM !== '1'\)/);
   const kit = read('src/contact/ContactKit.jsx');
   // 2026-10-30 決定 D4: 社内版も通知を使う。社内版は onpremPush(相対の SW・通知だけの Firebase)、いつものビルドは push.js のまま。
-  assert.match(kit, /const pushSupportProblem = \(\) => \(IS_ONPREM_BUILD \? onpremPushSupportProblem\(\) : pushSupportProblemFcm\(\)\);/);
-  assert.match(kit, /const enablePush = \(vapidKey\) => \(IS_ONPREM_BUILD \? onpremEnablePush\(vapidKey\) : enablePushFcm\(vapidKey\)\);/);
-  assert.match(kit, /const sendPushViaWorker = sendPushViaWorkerFcm;/, '送る道(外の中継)は本番と同じ');
+  // 🧪 R2: 包む関数を作らず、呼ぶ所で (IS_ONPREM_BUILD ? 社内版の関数 : push.js の関数)(…) と分ける(いつものビルドは基点と同じ呼び方だけが残る)
+  assert.match(kit, /import \{ disablePush, enablePush, listenForegroundPush, pushDeviceId, pushPlatform, pushSupportProblem, sendPushViaWorker \} from '\.\.\/push\.js';/, '送る道(外の中継)は本番と同じ push.js');
+  assert.match(kit, /\(IS_ONPREM_BUILD \? onpremPushSupportProblem : pushSupportProblem\)\(\)/);
+  assert.match(kit, /\(IS_ONPREM_BUILD \? onpremEnablePush : enablePush\)\(cfg\.vapidKey\)/);
+  assert.match(kit, /\(IS_ONPREM_BUILD \? onpremDisablePush : disablePush\)\(\)/);
+  assert.equal(kit.split('(IS_ONPREM_BUILD ? onpremListenForegroundPush : listenForegroundPush)(').length - 1, 2, '受信の2か所');
+  assert.ok(!/[^.\w](enablePush|disablePush|pushSupportProblem)\(/.test(kit.replace(/\(IS_ONPREM_BUILD \? onprem\w+ : \w+\)\(/g, '')), '分けずに push.js を直に呼ぶ所が残っていない');
   assert.ok(!kit.includes('ONPREM_PUSH_OFF'), '「社内版では通知を使いません」は消した');
   assert.match(app, /if \(cfg\.vapidKey && cfg\.workerUrl && targets\.length\)/, '週報の通知も社内版で送る');
   assert.match(branch, /setOnpremPush\(cfg\.pushFirebase\);/); assert.match(branch, /registerOnpremSw\(\)/);
@@ -186,8 +191,8 @@ test('O06 画面の入口の配線: 社内版は Firebase を起こす前に分�
   assert.equal(read('src/push.js').includes('ONPREM'), false, 'push.js は製品と同じ中身のまま(product-pairs)');
   assert.match(kit, /import\.meta\.env\.VITE_ONPREM === '1' \? '' : 'https:\/\/gemini-proxy\.you0925\.workers\.dev'/);
   const rot = read('src/RotaryMeasurements.jsx');
-  assert.match(rot, /const DATA = \(d\) => dataFor\(d, FS_API\);/, '回転計測も同じ行き先(点検 G5)');
-  assert.ok(!rot.includes('const DATA = (d) => providerFor'), '前の2つの引数の呼び方が残っていない');
+  // 🧪 R2: 社内版は dataFor(App と同じ行き先・点検 G5)。いつものビルドは基点と同じ providerFor(d, FS_API)(行き先はいつも Firebase なので同じ答え)
+  assert.match(rot, /const DATA = \(d\) => \(IS_ONPREM_BUILD \? dataFor\(d, FS_API\) : providerFor\(d, FS_API\)\);/, '回転計測も同じ行き先(点検 G5)');
 });
 
 test('O07 .env.onprem: スイッチを入れ、外の Worker を空にする・合言葉を書かない', () => {
@@ -251,7 +256,10 @@ test('O11 D1/D2 下の階層(/parts/)でも動く: 社内版だけ base が相�
   // 通知・ポータルのリンクは入口(appHome)から作る(いつものビルドは location.origin + '/')
   for (const f of ['src/contact/ContactKit.jsx', 'src/contact/ContactHub.jsx']) {
     const t = read(f);
-    assert.ok(!t.includes('${window.location.origin}/'), `${f}: 一番上 '/' 決め打ちのリンクが残っていない`);
+    // 🧪 R2: '/' 決め打ちが残るのは (IS_ONPREM_BUILD ? 社内版の入口 : 基点と同じ origin + '/') の右側(社内版のビルドでは畳まれて消える)だけ
+    const lines = t.split('\n').filter((l) => l.includes('${window.location.origin}/'));
+    assert.ok(lines.length > 0);
+    for (const l of lines) assert.ok(l.includes('IS_ONPREM_BUILD ? `${appHome()}'), `${f}: 社内版のリンクは appHome() から: ${l.trim().slice(0, 80)}`);
   }
   // 設定ファイルの見本: 仮の名前 https://kensa.local・4アプリの置き場
   const ex = JSON.parse(read('docs/onprem-config.example.json'));
@@ -304,8 +312,9 @@ test('O14 D5 社内版(PocketBase・上限 20MB)では 1MB の警告を出さな
   const app = read('src/App.jsx');
   assert.match(app, /if \(!IS_ONPREM_BUILD\) try \{\r?\n\s+const merged = capMerge\(settings \|\| \{\}, withDeletions\(newSettings \|\| \{\}\)\);/, '設定の 1MB の警告');
   assert.match(app, /if \(!IS_ONPREM_BUILD\) try \{\r?\n\s+const approxSize = JSON\.stringify\(\{ steps,/, 'テンプレートの 1MB の警告');
-  assert.match(app, /const capDanger = IS_ONPREM_BUILD \? Math\.round\(ONPREM_DOC_LIMIT \* 0\.86\) : CAP_DANGER;/, 'ロットの見張りは社内版の上限で測る');
-  assert.match(app, /decideCapacity\(before, merged, bytes, capDanger\)/);
+  // 🧪 R2: 定数を変数に置かず使う所で分ける(いつものビルドは基点と同じ CAP_DANGER / CAP_LIMIT だけが残る)
+  assert.match(app, /decideCapacity\(before, merged, bytes, IS_ONPREM_BUILD \? Math\.round\(ONPREM_DOC_LIMIT \* 0\.86\) : CAP_DANGER\)/, 'ロットの見張りは社内版の上限で測る');
+  assert.match(app, /capacityBlockMessage\(bytes, IS_ONPREM_BUILD \? ONPREM_DOC_LIMIT : CAP_LIMIT\)/);
 });
 
 test('O20 設定ファイルの url が空・無し = 画面と同じ口(ビルド時の VITE_PB_URL より先)・ファイルが無い時はしない(2026-10-30)', () => {

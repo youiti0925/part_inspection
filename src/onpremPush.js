@@ -37,7 +37,7 @@ export const pushFirebaseOf = (raw) => {
   if (o && KEYS.every((k) => typeof o[k] === 'string' && o[k].trim())) {
     return Object.fromEntries(KEYS.map((k) => [k, o[k].trim()]));
   }
-  return { ...ONPREM_PUSH_FIREBASE_DEFAULT };
+  return Object.assign({}, ONPREM_PUSH_FIREBASE_DEFAULT);   // 🧪 R2: { ...x } と書かない(onprem.js と同じ理由)
 };
 
 /** Service Worker の URL(相対・index.html の横)。2026-10-30 製品・最終と同じファイル(onprem-public/onprem-sw.js・3アプリで1バイトも違わない)。

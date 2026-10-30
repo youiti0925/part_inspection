@@ -25,7 +25,7 @@ import {
 import { ACTUAL_COL, buildActual, actualIdOf, remindMessage } from '../domain/arrivalActual.js';
 import { settleSaveBriefly, mayCloseAfterSave, SAVE_REFUSED_MESSAGE } from '../domain/settleSave.js';
 import { resolveItemName } from '../domain/itemMaster.js';
-import { appHome } from '../onprem.js';   // 🏢 通知・ポータルのリンクの入口(いつものビルドは今まで通り location.origin + '/')
+import { IS_ONPREM_BUILD, appHome } from '../onprem.js';   // 🏢 通知・ポータルのリンクの入口(いつものビルドは今まで通り location.origin + '/')
 
 const DEFAULT_CONTACT_GROUPS_FALLBACK = ['組立'];
 
@@ -209,7 +209,7 @@ export const useContactHub = ({
        saveSettings({ contactComplete: { ...(settings?.contactComplete || {}), modelGroups: { ...contactCompleteOf(contactSettings).modelGroups, [m]: g } } });
      }
      notifyContactPush({ toGroup: g, toSide: 'portal', toLevel: 'auto', title: `✅ 検査完了: ${lot.orderNo || ''} ${lot.model || ''}`, // ⚠分納: 指図の総数(lot.quantity)ではなく **今回送った台数** を書く(「4台完了」と出て2台しか無い、を防ぐ)
-       body: `${completeMessage({ model: lot.model, qty: n, total, sentBefore })}（${currentUserName || '検査'}）`, link: `${appHome()}?renraku=1`, tag: `done-${lot.id}-${sentBefore + n}` });
+       body: `${completeMessage({ model: lot.model, qty: n, total, sentBefore })}（${currentUserName || '検査'}）`, link: (IS_ONPREM_BUILD ? `${appHome()}?renraku=1` : `${window.location.origin}/?renraku=1`), tag: `done-${lot.id}-${sentBefore + n}` });
      return true;
    };
    // 🚚到着チェック。
@@ -241,7 +241,7 @@ export const useContactHub = ({
          message: remindMessage(row),
          createdAt: Date.now(),
        });
-       notifyContactPush({ toGroup: row.group, toSide: 'portal', toLevel: 'auto', title: `⏰ 到着の確認: ${row.orderNo || ''} ${row.model || ''}`, body: remindMessage(row), link: `${appHome()}?renraku=1`, tag: `remind-${row.lotId}-${row.date}-${row.time}` });
+       notifyContactPush({ toGroup: row.group, toSide: 'portal', toLevel: 'auto', title: `⏰ 到着の確認: ${row.orderNo || ''} ${row.model || ''}`, body: remindMessage(row), link: (IS_ONPREM_BUILD ? `${appHome()}?renraku=1` : `${window.location.origin}/?renraku=1`), tag: `remind-${row.lotId}-${row.date}-${row.time}` });
      } catch (e) { console.error(e); alert('催促を送れませんでした: ' + (e?.message || e)); }
    };
    // 「連絡しない」= 見送りも全端末で共有する。ここを保存しないと、自分の画面から消えるだけで
@@ -335,7 +335,7 @@ export const useContactHub = ({
                toSide: 'portal', toGroup: r.to, toLevel: 'auto',
                title: `🔔 再通知(${sent + 1}/${rm.count}) ${contactKindLabel(r)}`,
                body: `${r.from || '検査'} → ${r.to}${r.toPerson ? ` ${r.toPerson}さん` : ''}: まだ返信がありません`,
-               link: `${appHome()}?renraku=1`, tag: `rem-${r.id}-${sent + 1}`,
+               link: (IS_ONPREM_BUILD ? `${appHome()}?renraku=1` : `${window.location.origin}/?renraku=1`), tag: `rem-${r.id}-${sent + 1}`,
              }, deleteData);
            }
          }
@@ -350,7 +350,7 @@ export const useContactHub = ({
                toSide: 'portal', toGroup: r.to, toLevel: 'boss',
                title: `⏰ ${cfg.escalateMin}分 返信なし: ${contactKindLabel(r)}`,
                body: `${r.from || '検査'} → ${r.to}${r.toPerson ? ` ${r.toPerson}さん` : ''}: ${String(r.message || '').slice(0, 100)}`,
-               link: `${appHome()}?renraku=1`, tag: `esc-${r.id}`,
+               link: (IS_ONPREM_BUILD ? `${appHome()}?renraku=1` : `${window.location.origin}/?renraku=1`), tag: `esc-${r.id}`,
              }, deleteData);
            }
          }
@@ -542,7 +542,7 @@ export const useContactHub = ({
            toGroup: g, toSide: 'portal', toLevel: 'auto',
            title: `🚚 到着予定を教えてください（${list.length}件）`,
            body: `${cfg.time}の定期連絡です。ポータルで時間を入れてください`,
-           link: `${appHome()}?renraku=1`, tag: `arr-auto-${dateKey}-${g}`,
+           link: (IS_ONPREM_BUILD ? `${appHome()}?renraku=1` : `${window.location.origin}/?renraku=1`), tag: `arr-auto-${dateKey}-${g}`,
          });
        });
      };
@@ -718,7 +718,7 @@ export const WorkContactBlock = ({
           const reqId = newContactId();
           saveData('contact_requests', reqId, payload);
           // 宛先グループの携帯へプッシュ通知(設定済みなら)
-          if (notifyPush) { const m = contactPushMessage(payload); notifyPush({ toGroup: payload.to, toSide: 'portal', toLevel: payload.toLevel || 'auto', title: m.title, body: m.body, link: `${appHome()}?renraku=1`, tag: `req-${reqId}` }); }
+          if (notifyPush) { const m = contactPushMessage(payload); notifyPush({ toGroup: payload.to, toSide: 'portal', toLevel: payload.toLevel || 'auto', title: m.title, body: m.body, link: (IS_ONPREM_BUILD ? `${appHome()}?renraku=1` : `${window.location.origin}/?renraku=1`), tag: `req-${reqId}` }); }
           setDraft(null); setSentMsg('📨 連絡を送信しました。返信はこの画面に表示されます');
         }}
       />
