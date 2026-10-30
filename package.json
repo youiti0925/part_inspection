@@ -8,7 +8,7 @@
     "build": "vite build",
     "prebuild": "node scripts/guard-not-onprem.mjs --no-dist",
     "guard:not-onprem": "node scripts/guard-not-onprem.mjs",
-    "build:onprem": "vite build --mode onprem && node scripts/onprem-dist-guard.mjs dist-onprem",
+    "build:onprem": "vite build --mode onprem && node scripts/onprem-dist-guard.mjs dist-onprem --write",
     "deploy:onprem": "node scripts/deploy-onprem.mjs",
     "deploy": "node scripts/deploy.mjs",
     "deploy:dry": "node scripts/deploy.mjs --dry-run",
