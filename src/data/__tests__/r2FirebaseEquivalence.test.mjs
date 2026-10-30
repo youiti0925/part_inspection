@@ -8,7 +8,8 @@
 //   ・返した値・画面へ渡した値
 // が1つも違わない事を確かめる。入力は Firebase の時の物だけ(保存先は全部 Firebase・PocketBase の設定なし)。
 //   ①いつもの入力(基点の画面が使う形): 全部同じでなければならない
-//   ②新しく足した使い方(source:'server' など): 違ってよいのは「基点の画面のコードが1回も使っていない」時だけ
+//   ②新しく足した使い方(source:'server' など): 違ってよいのは「基点の画面のコードが1回も使っていない」か、
+//     「基点の画面は使っていたが、今の画面はもう使っていない」(=今の画面は①の形で呼ぶので①で同じと確かめ済み)時だけ
 // 基点の記録が無い取り出し(浅い clone など)では飛ばす(理由を出す)。
 // ============================================================================
 import { test } from 'node:test';
@@ -190,24 +191,29 @@ const EXTRA = {
   'getPageFields 並び・件数(REST)': { use: near('getPageFields', /orderBy|limit:/), call: ({ p, ns, log }) => withFetch(log, () => p.getPageFields(ns, 'lots', ['name'], { orderBy: [['__name__']], limit: 2, after: 'a', getToken: async () => 'tok' })) },
   'getPageFields 日付の条件(REST)': { use: near('getPageFields', /new Date|Date\(/), call: ({ p, ns, log }) => withFetch(log, () => p.getPageFields(ns, 'lots', ['name'], { where: [['at', '>=', new Date('2026-10-01T00:00:00Z')]], getToken: async () => 'tok' })) },
 };
-// ②のうち「基点の画面が使っていて、動きが変わる」と分かっている物(アプリごと)。ここに無い違いが出たら落ちる。
+// ②のうち「基点の画面も今の画面も使っていて、動きが変わる」と分かっている物(アプリごと)。ここに無い違いが出たら落ちる。
 //   中身と理由は docs/設計書_情報課_2026-10-29/20_セキュリティ評価報告書_社内サーバー版_2026-10-30.md の R2 の節。
 const KNOWN = {
   'factory-overview-app': [],
   'product-inspection-app': [],
   'final-inspection-app': [],
-  // 部品: 運用シミュの共有の計画(plan_control・plan_reviews・route_drafts)を「サーバから」読む所(App.jsx の readHead・readReview・readHeadOf・readRoute)。
-  //   基点の部品の窓口は getOne の source:'server' を見ておらず getDoc で読んでいた(つながっている時はサーバの答え・切れている時は端末の控えの答え)。
-  //   揃えた窓口は FS_API の getDocFromServer で読む(つながっている時は同じ答え・同じ1読み。切れている時は控えを返さず失敗を返す)。
-  //   = 製品・最終が基点の時点で既に持っていた動き(2026-09-19「控えが返るのを見落として3日間書けていなかった」の直し)。
-  'parts-inspection-app': ["getOne source:'server'"],
+  // 部品: 2026-10-31 清水さんの決定(2)「サーバから読めない時は、前と同じく端末の控えを出す」で、
+  //   App.jsx の readHead・readReview・readHeadOf・readRoute は { source: 'server' } を渡すのをやめた(基点の部品の窓口は
+  //   source を見ずに getDoc で読んでいた)。今の画面の呼び方は①の「getOne 在る/無い」と同じ入力 = 控えしか無い時も基点と同じ。
+  //   ⚠ 揃えた窓口の getOne(source:'server') の動き(getDocFromServer)は製品・最終が基点の時点で既に持っていた物のまま。
+  'parts-inspection-app': [],
 };
 
 // 基点の画面のコード(src の下で、src/data と試験を除く)
+const isScreenFile = (f) => /\.(jsx?|mjs)$/.test(f) && !f.startsWith('src/data/') && !f.includes('__tests__') && !/\.test\.m?js$/.test(f);
 const baseScreenCode = () => {
-  const files = git('ls-tree', '-r', '--name-only', BASE, 'src').split('\n')
-    .filter((f) => /\.(jsx?|mjs)$/.test(f) && !f.startsWith('src/data/') && !f.includes('__tests__') && !/\.test\.m?js$/.test(f));
+  const files = git('ls-tree', '-r', '--name-only', BASE, 'src').split('\n').filter(isScreenFile);
   return files.map((f) => git('show', `${BASE}:${f}`)).join('\n');
+};
+// 今の画面のコード(作業中のファイル・同じ決まりで選ぶ)
+const nowScreenCode = () => {
+  const files = git('ls-files', '-co', '--exclude-standard', 'src').split('\n').filter(isScreenFile);
+  return files.map((f) => { try { return readFileSync(join(ROOT, f), 'utf8'); } catch { return ''; } }).join('\n');
 };
 
 test('R2-EQ 基点の src/data と今の src/data は、Firebase の時の入力で同じ動きをする', { skip: !BASE && '基点の記録がこのリポジトリに無い(浅い clone など)' }, async () => {
@@ -254,6 +260,7 @@ test('R2-EQ 基点の src/data と今の src/data は、Firebase の時の入力
     }
     const extra = [];
     const usedAndDiffer = [];
+    const now = nowScreenCode();
     // getPage の答えの fromCache は①と同じ扱い(基点に無ければ外して比べる・読む画面が無い事は上で確かめた)
     const dropAdded = (name, a, b) => {
       if (/^getPage /.test(name) && a.result && typeof a.result === 'object' && b.result && typeof b.result === 'object' && !('fromCache' in a.result) && 'fromCache' in b.result) {
@@ -268,13 +275,14 @@ test('R2-EQ 基点の src/data と今の src/data は、Firebase の時の入力
         const same = JSON.stringify(a) === JSON.stringify(b);
         how.push(`${world.offline ? '控え' : 'つながり'}=${same ? '同じ' : '違う'}`);
         if (!same) {
-          const used = use(screen);
+          // 落とすのは「基点の画面が使っていて、今の画面もまだ使っている」時(今の画面がやめた使い方は、今は呼ばれない)
+          const used = use(screen) && use(now);
           if (used && !usedAndDiffer.includes(name)) usedAndDiffer.push(name);
         }
       }
-      extra.push(`${name}: ${how.join('・')}${use(screen) ? '(基点の画面が使う)' : '(基点の画面は使わない)'}`);
+      extra.push(`${name}: ${how.join('・')}${use(screen) ? '(基点の画面が使う)' : '(基点の画面は使わない)'}${use(screen) && !use(now) ? '(今の画面は使わない)' : ''}`);
     }
-    console.log(`[R2-EQ] ②で基点の画面が使っていて動きが変わる物: [${usedAndDiffer.join(', ')}]`);
+    console.log(`[R2-EQ] ②で基点の画面も今の画面も使っていて動きが変わる物: [${usedAndDiffer.join(', ')}]`);
     assert.deepEqual(usedAndDiffer, KNOWN[APP_OF[BASE]], '②: 基点の画面が使っている使い方で、知らない動きの違いがある');
     console.log(`[R2-EQ] 基点 ${BASE.slice(0, 7)}: ①いつもの入力 ${checked} 通り 全部同じ(Firestore の呼び出し ${calls} 回・失敗で終わる使い方 ${errors} 通り・基点に無い口 [${[...new Set(skipped)].join(', ')}]・外して比べた鍵 [${stripped.join(', ')}]) / ② ${extra.join(' / ')}`);
   } finally { rmSync(tmp, { recursive: true, force: true }); }

@@ -35995,11 +35995,14 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    // 司令塔の工場の図を読むだけ(並列作業の道具が区画の距離に使う)。書かない。
    const readOverviewMap = useCallback(() => (db ? DATA(db).getOne('overview-app-v1', 'config', 'mapConfig') : Promise.resolve(null)), [db]);
    // 📋 2026-09-27 保存計画の共有棚 capacity-shared-v1/plan_control/parts(製品と同じ形)。data/provider.js に commitVersion・createOnce を足してつないだ。
-   //   🚨 head は控えを見ずサーバから読む。端末の中へ逃がさない。
+   //   🔁 2026-10-31 清水さんの決定(2): サーバから読めない時(ネットが切れている等)は、src/data を揃える前と同じく端末の控えを返す。
+   //     そのため readHead・readReview・readHeadOf・readRoute は { source: 'server' } を渡さない(窓口は普通の読み = Firebase は getDoc)。
+   //     ⚠ 揃える前の部品の窓口は source を見ずに getDoc で読んでいたので、これで前と同じ動き(試験: src/domain/__tests__/partsPlanShelfOffline.test.mjs)。
+   //     書く時(commitVersion・createOnce・claimOnce)は取引でサーバの版と比べるので、古い控えで上書きはしない(前と同じ)。
    const planShelf = useMemo(() => {
      if (!db) return null;
      return {
-       readHead: () => DATA(db).getOne(OPSIM_SHELF_NS, 'plan_control', 'parts', { source: 'server' }),
+       readHead: () => DATA(db).getOne(OPSIM_SHELF_NS, 'plan_control', 'parts'),
        readVersion: (id) => DATA(db).getOne(OPSIM_SHELF_NS, 'plan_versions', id),
        listVersions: async () => {
          const r = await DATA(db).getPageFields(OPSIM_SHELF_NS, 'plan_versions',
@@ -36011,12 +36014,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        },
        commitVersion: (args) => DATA(db).commitVersion(OPSIM_SHELF_NS, { headCol: 'plan_control', headId: 'parts', versionCol: 'plan_versions', ...args }),
        watchHead: (cb, onError) => DATA(db).watchDoc(OPSIM_SHELF_NS, 'plan_control', 'parts', cb, { onError: (e) => { console.warn('[plan_control 購読] 読めていません(部品)', e); if (typeof onError === 'function') onError(e); } }),
-       readReview: (id) => DATA(db).getOne(OPSIM_SHELF_NS, 'plan_reviews', id, { source: 'server' }),
+       readReview: (id) => DATA(db).getOne(OPSIM_SHELF_NS, 'plan_reviews', id),
        appendReview: (id, record, fallback, opts) => DATA(db).appendCapped(OPSIM_SHELF_NS, 'plan_reviews', id, 'history', record, { fallback, ...(opts || {}) }),
        actor: currentUserName || '',
        isApprover: currentUserName === '管理者',
-       readHeadOf: (area) => DATA(db).getOne(OPSIM_SHELF_NS, 'plan_control', area, { source: 'server' }),
-       readRoute: (id) => DATA(db).getOne(OPSIM_SHELF_NS, 'route_drafts', id, { source: 'server' }),
+       readHeadOf: (area) => DATA(db).getOne(OPSIM_SHELF_NS, 'plan_control', area),
+       readRoute: (id) => DATA(db).getOne(OPSIM_SHELF_NS, 'route_drafts', id),
        saveRoute: async (id, doc, expectRevision) => {
          if (!expectRevision) {
            const c = await DATA(db).createOnce(OPSIM_SHELF_NS, 'route_drafts', id, doc);
