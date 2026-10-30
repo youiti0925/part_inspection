@@ -1,8 +1,6 @@
 {
-  "_説明": "社内サーバ版(npm run build:onprem)の設定の見本。dist-onprem の index.html と同じ場所に onprem-config.json という名前で置く(ビルドし直さずに変えられる)。url は空 = 画面と同じ口(入口が各アプリの口の /api/ を PocketBase へ渡す)、appUrls は4アプリの住所(鍵は APP_DATA_ID・既定はアプリごとに口を分ける :8441〜:8444)。今の値 https://kensa.local は仮の名前なので、社内サーバの名前に書き換える。⚠合言葉を書くので git に入れない・社内サーバの外へ出さない。",
+  "_説明": "社内サーバ版(npm run build:onprem)の設定の見本。dist-onprem の index.html と同じ場所に onprem-config.json という名前で置く(ビルドし直さずに変えられる)。url は空 = 画面と同じ口(入口が各アプリの口の /api/ を PocketBase へ渡す)、appUrls は4アプリの住所(鍵は APP_DATA_ID・既定はアプリごとに口を分ける :8441〜:8444)。今の値 https://kensa.local は仮の名前なので、社内サーバの名前に書き換える。🔒 2026-10-30 端末用アカウントの email / password はここに書かない(入口がいつも外す)。PC ごとのアカウントで、各 PC の画面のログイン(最初の1回だけ・または「ファイルから読む」で device-login.json)で入れる(CONTRACT_device_login.md)。",
   "url": "",
-  "email": "parts-device@example.local",
-  "password": "ここに端末用アカウントの合言葉",
   "authCollection": "device_users",
   "appUrls": {
     "product-inspection-v1": "https://kensa.local:8441/",

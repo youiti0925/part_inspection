@@ -74,8 +74,9 @@ import { sendPushViaWorker } from './push.js';
 import './data/connectPocketbase.js';
 // 🏢 2026-10-29 社内サーバ版(VITE_ONPREM=1 のビルドだけ)。スイッチの無いビルドでは何もしない。
 import { dataFor, applyOnpremRoute, currentProviders } from './dataRoute.js';
-import { IS_ONPREM_BUILD, ONPREM_DB, ONPREM_USER, ONPREM_RUNTIME, ONPREM_DOC_LIMIT, aiProxyUrlOr, loadOnpremConfig } from './onprem.js';
+import { IS_ONPREM_BUILD, ONPREM_DB, ONPREM_USER, ONPREM_RUNTIME, ONPREM_DOC_LIMIT, aiProxyUrlOr, loadOnpremConfig, ONPREM_CONFIG_FILE } from './onprem.js';
 import { setOnpremPush, registerOnpremSw } from './onpremPush.js';
+import { bootDeviceSession, attachSessionToPbClient } from './onpremDevice.js';   // 🔒 2026-10-30 社内版だけ: 端末ごとのログイン(最初の1回・札だけ覚える)と守った写真の札(約束 CONTRACT_device_login.md)
 // 🏭 2026-09-27 製品→部品 移植: 操業シミュレーションの画面と共有棚の書類を作る純関数(製品と同じ)
 import { OperationsSimulationPanel } from './OperationsSimulationPanel.jsx';
 import { StackBar as VizStackBar } from './opsim/vizKit.jsx';
@@ -958,7 +959,7 @@ const FIREBASE_CONFIG = (USER_DEFINED_CONFIG.apiKey && USER_DEFINED_CONFIG.apiKe
 
 
 // 🏢 社内版でログインできない時に出す案内(onprem-config.json の置き場所)。
-const ONPREM_CONFIG_HINT = 'index.html と同じ場所の onprem-config.json の email / password(端末用アカウント)を確かめてください。';
+const ONPREM_CONFIG_HINT = 'この端末の社内サーバーのログイン(端末用アカウント)を確かめてください。止められた端末は管理者に頼んでください。';
 
 const COLORS = {
   primary: '#2563eb',
@@ -32953,9 +32954,18 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          ONPREM_RUNTIME.aiProxyUrl = cfg.aiProxyUrl || '';
          setOnpremPush(cfg.pushFirebase);
          registerOnpremSw().catch((e) => console.warn('[社内版] Service Worker を登録できません(通知・アプリとして入れる が使えないだけ)', e));
+         // 🔒 2026-10-30 端末ごとのログイン(約束 CONTRACT_device_login.md)。保管庫を開く前に:
+         //   覚えた札を延ばす(だめならログインの画面を重ねて待つ)・写真の札を取る・fetch の入口で札を付ける(src/onpremDevice.js)。
+         //   窓口(PocketBase)には email / password を渡さない(前の形の設定ファイルの合言葉は bootDeviceSession が1回だけ使った)。
+         //   使っている間に札が使えなくなったら、この画面は閉じずにログインの画面を上に重ねる(保存待ちは残る)。
+         const boot = await bootDeviceSession({ cfg, appName: '部品検査アプリ', configFile: ONPREM_CONFIG_FILE });
+         if (!alive) return;
+         cfg.email = ''; cfg.password = '';
          applyOnpremRoute(cfg, {
            onAuthError: (e) => setErrorMsg(`社内サーバにログインできませんでした: ${(e && e.message) || e}\n${ONPREM_CONFIG_HINT}`),
          });
+         // 窓口(pbClient)に端末の札を入れる(窓口は札が入っているかを見てから読む)。延ばした札も入れ直す。
+         attachSessionToPbClient(boot.session, DATA(ONPREM_DB)?.backends?.pocketbase?.raw);
          console.info(`[社内版] 保管庫は全部 PocketBase(${cfg.url}・設定の出どころ=${cfg.source})。Firebase は使いません。`);
          setUploadDb(ONPREM_DB);
          setDb(ONPREM_DB);

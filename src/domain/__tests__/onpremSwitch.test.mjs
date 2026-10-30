@@ -126,7 +126,8 @@ test('O05 設定ファイル: 優先・無ければ VITE_PB_URL・合言葉は�
   const envOnly = normalizeOnpremConfig(null, { VITE_PB_URL: 'http://env:8090', VITE_PB_EMAIL: 'x', VITE_PB_PASSWORD: 'y' });
   assert.equal(envOnly.url, 'http://env:8090'); assert.equal(envOnly.source, 'env');
   assert.equal(envOnly.email, '', 'ビルドの時の値から合言葉を読まない(VITE_ は JS に焼き込まれる)');
-  assert.equal(envOnly.ok, false);
+  // 🔒 2026-10-30 合言葉は設定ファイルに来ない(入口が外す)。行き先があれば ok(ログインは画面で最初の1回だけ・CONTRACT_device_login.md)
+  assert.equal(envOnly.ok, true); assert.equal(envOnly.problems.length, 0);
   const none = normalizeOnpremConfig(null, {});
   assert.equal(none.ok, false); assert.equal(none.url, ''); assert.ok(none.problems.length >= 1);
   assert.equal(normalizeOnpremConfig({ url: 'pb:8090', email: 'e', password: 'p' }).ok, false, 'http(s):// が無ければ駄目');
@@ -141,7 +142,9 @@ test('O05 設定ファイル: 優先・無ければ VITE_PB_URL・合言葉は�
   const both = normalizeOnpremConfig({ url: 'http://top', pocketbase: { url: 'http://nested', email: 'ne', password: 'np' } });
   assert.equal(both.url, 'http://top', '一番上が優先'); assert.equal(both.email, 'ne', '一番上に無い鍵は前の形から拾う');
   const example = JSON.parse(read('docs/onprem-config.example.json'));
-  for (const k of ['url', 'email', 'password', 'authCollection']) assert.equal(typeof example[k], 'string', `見本は一番上に ${k}`);
+  for (const k of ['url', 'authCollection']) assert.equal(typeof example[k], 'string', `見本は一番上に ${k}`);
+  // 🔒 2026-10-30 見本に端末用アカウントの email / password を書かない(PC ごとのアカウント・画面で1回だけ入れる・CONTRACT_device_login.md)
+  for (const k of ['email', 'password']) assert.equal(example[k], undefined, `見本に ${k} を書かない`);
   assert.equal(example.pocketbase, undefined, '見本は前の形を使わない');
 
   const fetch404 = async () => ({ ok: false, status: 404 });

@@ -9,7 +9,9 @@
 //   ・Firebase を1つも起こさない(initializeApp・匿名ログイン・Firestore・Storage・FCM を呼ばない)
 //   ・保管庫は全部の領域(検査・写真・分析・年間目標・連絡・通知の宛先)を PocketBase へ
 //   ・PocketBase の行き先は、index.html の横に置いた onprem-config.json を最初に読んで決める
-//     (url が無ければビルドの時の VITE_PB_URL。端末用アカウントは設定ファイルにだけ書く)
+//     (url が無ければビルドの時の VITE_PB_URL)
+//   ・🔒 2026-10-30 端末用アカウントは PC ごと。合言葉は設定ファイルにも端末にも置かず、最初の1回だけ画面で入れて
+//     札(token)だけを覚える(src/onpremDevice.js・src/onprem/OnpremGate.jsx・約束 CONTRACT_device_login.md)
 //   ・プッシュ通知は使う(2026-10-30 決定 D4)。Firebase は通知の為だけに起こす(src/onpremPush.js)。
 //   ・アプリは / でも /parts/ のような下の階層でも動く(相対で読む・2026-10-30 決定 D1/D2)。
 //
@@ -91,7 +93,8 @@ export const normalizeOnpremConfig = (json, env = {}, origin = '') => {
   const problems = [];
   if (!url) problems.push(`PocketBase の行き先がありません(${ONPREM_CONFIG_FILE} の url か、ビルドの時の VITE_PB_URL を入れてください)`);
   else if (!/^https?:\/\//i.test(url)) problems.push(`PocketBase の行き先が http(s):// で始まっていません: ${url}`);
-  if (!email || !password) problems.push(`端末用アカウント(email と password)がありません(${ONPREM_CONFIG_FILE} の email と password に書いてください)。ログインできないので読み書きできません`);
+  // 🔒 2026-10-30 端末用アカウントの合言葉は設定ファイルに書かない(入口がいつも外す・約束 CONTRACT_device_login.md)。
+  //   ログインは画面(src/onprem/OnpremGate.jsx)で最初の1回だけ。email / password が書いてあれば前の形として1回だけ使う。
   const source = trimUrl(pb.url) ? 'config' : (sameOrigin ? 'same-origin' : (env.VITE_PB_URL ? 'env' : 'none'));
   // 2026-10-30 外の中継(AI)の行き先も設定ファイルで変えられる(ビルドし直さない)。無ければビルドの時の値。
   const aiProxyUrl = trimUrl(typeof j.aiProxyUrl === 'string' ? j.aiProxyUrl : '');
