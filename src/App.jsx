@@ -5774,7 +5774,12 @@ const WorkStandardsLibraryModal = ({ standards, onClose, onEdit, allowManage = f
                 </div>
                 <div className="flex-1 bg-slate-700 p-2 overflow-hidden">
                   {selected.pdfData ? (
+                    IS_ONPREM_BUILD ? (
+                    // 🔒 2026-10-31 V5-04 社内版だけ <iframe src="data:…">(CSP object-src 'none'・frame-src の data: で開く)。いつものビルドは前と同じ <embed>。
+                    <iframe src={selected.pdfData} title="作業標準の PDF" className="w-full h-full bg-white rounded" style={{ border: 0 }}/>
+                  ) : (
                     <embed src={selected.pdfData} type="application/pdf" className="w-full h-full bg-white rounded"/>
+                  )
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-slate-300">PDF データがありません</div>
                   )}
@@ -5871,7 +5876,11 @@ const WorkStandardEditModal = ({ editingItem, onClose, onSave, onDelete, current
             </label>
             {pdfData && (
               <div className="mt-2 h-48 bg-slate-700 rounded overflow-hidden">
-                <embed src={pdfData} type="application/pdf" className="w-full h-full bg-white"/>
+                {IS_ONPREM_BUILD ? (
+                  <iframe src={pdfData} title="PDF の見本" className="w-full h-full bg-white" style={{ border: 0 }}/>
+                ) : (
+                  <embed src={pdfData} type="application/pdf" className="w-full h-full bg-white"/>
+                )}
               </div>
             )}
           </div>
@@ -14845,7 +14854,11 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
         <div className="fixed inset-0 z-[310] bg-black/95 flex flex-col p-4">
           <div className="flex justify-between items-center text-white mb-2"><span className="font-bold">参考資料</span><button onClick={()=>setShowPdf(false)}><X className="w-8 h-8"/></button></div>
           {/* embed: タブレットでネイティブ PDF ビューアー利用、iframe より触りやすい */}
-          <embed src={currentStep.pdfData} type="application/pdf" className="flex-1 bg-white rounded-lg w-full"/>
+          {IS_ONPREM_BUILD ? (
+            <iframe src={currentStep.pdfData} title="作業の手順の PDF" className="flex-1 bg-white rounded-lg w-full" style={{ border: 0 }}/>
+          ) : (
+            <embed src={currentStep.pdfData} type="application/pdf" className="flex-1 bg-white rounded-lg w-full"/>
+          )}
         </div>
       ) : null}
 

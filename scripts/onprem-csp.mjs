@@ -66,7 +66,8 @@ const result = {
     'connect-src': ["'self'", 'data:', 'blob:'],
     'worker-src': ["'self'"],
     'manifest-src': ["'self'"],
-    'frame-src': ["'self'", 'blob:'],
+    // 🔒 2026-10-31 V5-04: 作業の手順の PDF は社内版だけ <iframe src="data:application/pdf…">(object-src は 'none' のまま)。その為の data:
+    'frame-src': ["'self'", 'blob:', 'data:'],
     'object-src': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],

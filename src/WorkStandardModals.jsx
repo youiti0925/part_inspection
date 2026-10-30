@@ -7,6 +7,8 @@ import { BookOpen, Download, FileText, Pencil, Plus, Search, Trash2, X } from 'l
 import { isVideoStandard, approvalState, approvalLabel, approveEntry, unapproveEntry, entryToDoc, entryTooBig, entryBytes } from './domain/workStandardLibrary.js';
 import { printSavedWorkStandard, exportSavedWorkStandardXlsx, savedStandardNote } from './workStandardExport.js';
 import { driveFileUrl } from './driveClient.js';
+// 🔒 2026-10-31 V5-04: 社内版(VITE_ONPREM=1 のビルド)だけ PDF を <iframe src="data:…"> で見せる(CSP object-src 'none'・frame-src の data:)。いつものビルドは定数 false で前と同じ <embed>。
+import { IS_ONPREM_BUILD } from './onprem.js';
 
 let _ExcelJS = null;
 const loadExcelJS = async () => {
@@ -238,7 +240,11 @@ const WorkStandardsLibraryModal = ({ standards, onClose, onEdit, allowManage = f
                 ) : (
                   <div className="flex-1 bg-slate-700 p-2 overflow-hidden">
                     {selected.pdfData ? (
-                      <embed src={selected.pdfData} type="application/pdf" className="w-full h-full bg-white rounded"/>
+                      IS_ONPREM_BUILD ? (
+                        <iframe src={selected.pdfData} title="作業標準の PDF" className="w-full h-full bg-white rounded" style={{ border: 0 }}/>
+                      ) : (
+                        <embed src={selected.pdfData} type="application/pdf" className="w-full h-full bg-white rounded"/>
+                      )
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-slate-300">PDF データがありません</div>
                     )}
@@ -348,7 +354,11 @@ const WorkStandardEditModal = ({ editingItem, onClose, onSave, onDelete, current
             </label>
             {pdfData && (
               <div className="mt-2 h-48 bg-slate-700 rounded overflow-hidden">
-                <embed src={pdfData} type="application/pdf" className="w-full h-full bg-white"/>
+                {IS_ONPREM_BUILD ? (
+                  <iframe src={pdfData} title="PDF の見本" className="w-full h-full bg-white" style={{ border: 0 }}/>
+                ) : (
+                  <embed src={pdfData} type="application/pdf" className="w-full h-full bg-white"/>
+                )}
               </div>
             )}
           </div>
