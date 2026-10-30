@@ -27,7 +27,12 @@ import { fileURLToPath } from 'node:url';
 /** 配る物の一覧のファイル名(入口はこれ自体を配らない)。 */
 export const DIST_MANIFEST = 'onprem-files.json';
 /** 配ってよいファイルの形(出力の中の相対パス・/ 区切り・大文字小文字そのまま)。入口の ALLOWED_DIST_PATH と同じ。 */
-export const ALLOWED_DIST_PATH = /^(?:index\.html|parallel-lab-sample\.html|assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,200}\.(?:js|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|wasm)|notice-assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,200}\.(?:png|jpe?g|gif|webp|svg)|(?:onprem-)?sw\.js|boot-inline-[0-9a-f]{6,64}\.js|manifest(?:-[a-z0-9]{1,32})?\.json|icon-\d{2,4}\.png|favicon\.(?:svg|ico|png)|icons\.svg|vite\.svg|version\.json|onprem-build\.json|onprem-config\.(?:sample|example)\.json)$/;
+// 🔒 2026-10-31 R30: 見本・試しのファイル(parallel-lab-sample.html・onprem-config.sample/example.json)は配る形から外した。
+//   作る時(--write)に出力から消す(DROP_FROM_DIST)。見本はリポジトリの中の物(docs/・onprem/)を見る。
+//   vite.svg は最終の index.html が使う(<link rel="icon">)ので残す。
+export const ALLOWED_DIST_PATH = /^(?:index\.html|assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,200}\.(?:js|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|wasm)|notice-assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,200}\.(?:png|jpe?g|gif|webp|svg)|(?:onprem-)?sw\.js|boot-inline-[0-9a-f]{6,64}\.js|manifest(?:-[a-z0-9]{1,32})?\.json|icon-\d{2,4}\.png|favicon\.(?:svg|ico|png)|icons\.svg|vite\.svg|version\.json|onprem-build\.json)$/;
+/** 作る時に出力から消す見本・試しのファイル(出力の一番上の名前)。 */
+export const DROP_FROM_DIST = Object.freeze(['parallel-lab-sample.html', 'onprem-config.sample.json', 'onprem-config.example.json']);
 
 const CREDENTIAL_KEY = /^(email|e[-_]?mail|mail|identity|username|user|login|pwd|pin|auth)$|pass(word)?|secret|token|credential|api[-_]?key|private/i;
 const SAMPLE_CONFIG = /^onprem-config\.(sample|example)\.json$/;
@@ -117,6 +122,11 @@ export const checkOnpremDist = (dir, { requireManifest = false } = {}) => {
 export const writeOnpremManifest = (dir) => {
   if (!fs.existsSync(dir)) return [`出力先がありません: ${dir}`];
   try { fs.rmSync(path.join(dir, DIST_MANIFEST), { force: true }); } catch { /* 無ければよい */ }
+  // R30: 見本・試しのファイルは配らない(出力から消す)
+  for (const n of DROP_FROM_DIST) {
+    const p = path.join(dir, n);
+    try { if (fs.lstatSync(p).isFile()) { fs.rmSync(p); console.log(`🔒 [onprem-dist-guard] 見本・試しのファイル ${n} は配らないので出力から外しました(R30)`); } } catch { /* 無ければよい */ }
+  }
   const { problems, files } = scan(dir);
   if (problems.length) return problems;
   if (!files['index.html']) return ['index.html がありません'];

@@ -47,6 +47,31 @@ export const STALE_GATE_MS = 60 * 1000;
 export const docKey = (ns, col, docId) => `${ns}/${col}/${docId}`;
 
 /**
+ * 🔒 2026-10-31 R28: 書く時に、書類の場所(ns・col・docId)に NUL(\u0000)を入れさせない。
+ *   NUL 入りの docId は、PocketBase には入る(文字として保存される)が、道具・記録・ファイル名・比べる所で途中で切れたり
+ *   別の書類と同じに見えたりする(入口のパスの検査も NUL 入りを断っている)。書く時に断り、送信待ちの箱にも入れない。
+ *   空・文字でない物も断る。読む・消すは断らない(前に入ってしまった物を消せる様に)。
+ */
+export class PbBadDocIdError extends Error {
+  constructor(what, value) {
+    super(`書類の場所(${what})が使えない値です: ${JSON.stringify(String(value)).replace(/\\u0000/g, '\\0').slice(0, 120)}(NUL・空・文字でない物は書けません)`);
+    this.name = 'PbBadDocIdError';
+    this.what = what;
+  }
+}
+/** 書類の場所の1つの値が書けるか(数は文字にして見る = 今までの呼び方を変えない)。 */
+export const isWritableKeyPart = (v) => {
+  const s = typeof v === 'number' && Number.isFinite(v) ? String(v) : v;
+  return typeof s === 'string' && s.length > 0 && !s.includes('\0');
+};
+/** 書く前に確かめる(だめなら PbBadDocIdError を投げる)。 */
+export const assertWritableDocKey = (ns, col, docId) => {
+  for (const [what, v] of [['ns', ns], ['col', col], ['docId', docId]]) {
+    if (!isWritableKeyPart(v)) throw new PbBadDocIdError(what, v);
+  }
+};
+
+/**
  * 同じ命令IDなのに中身が違う。**捨てずに止める**ための知らせ。
  * ⚠ここを「もう効いた」と扱うと、中身の違う保存が黙って消える。
  */
@@ -146,6 +171,7 @@ export const createDocStore = (client, {
    * @returns {rev, rebased, created, alreadyApplied}
    */
   const write = async (ns, col, docId, patch, opts = {}) => {
+    assertWritableDocKey(ns, col, docId);   // R28
     const merge = opts.merge !== false;
     const key = docKey(ns, col, docId);
     const cmdId = opts.cmdId || null;
@@ -233,6 +259,7 @@ export const createDocStore = (client, {
 
     /** 指定した項目だけを丸ごと差し替える(Firestore の updateDoc と同じ)。 */
     setFields: async (ns, col, docId, fields, opts = {}) => {
+      assertWritableDocKey(ns, col, docId);   // R28
       const key = docKey(ns, col, docId);
       const cmdId = opts.cmdId || null;
       const cmdHash = cmdId ? commandHash({ op: 'setFields', ns, col, docId, patch: fields }) : null;
@@ -282,6 +309,7 @@ export const createDocStore = (client, {
      *   後から書いた側が相手の1件を消す。門を通ってから書く。
      */
     appendCapped: async (ns, col, docId, field, item, { maxBytes = 900 * 1024, fallback = {}, cmdId = null } = {}) => {
+      assertWritableDocKey(ns, col, docId);   // R28
       const key = docKey(ns, col, docId);
       const cmdHash = cmdId ? commandHash({ op: 'appendCapped', ns, col, docId, field, item }) : null;
       const stamp = cmdId ? { lastCmd: cmdId, lastCmdHash: cmdHash, lastCmdAt: new Date(now()).toISOString() } : {};
@@ -338,6 +366,7 @@ export const createDocStore = (client, {
      */
     createOnce: async (ns, col, docId, doc) => {
       try {
+        assertWritableDocKey(ns, col, docId);   // R28(断った時は reason 'error')
         const cur = await findRecord(ns, col, docId);
         if (cur) return { acquired: false, reason: 'taken' };
         await client.create(docsCol, { ns, col, docId, data: overwriteDoc(withDeletions(doc || {})), rev: 1, sourceUpdatedAt: null });
@@ -366,6 +395,10 @@ export const createDocStore = (client, {
      * @returns {ok, reason?, headRevision}
      */
     commitVersion: async (ns, { headCol, headId, versionCol, versionId, expectRevision, versionDoc, headDoc, preserveOld = null, chunks = [] }) => {
+      // R28: 書く全部の書類の場所を先に確かめる(1つでもだめなら何も書かない)
+      assertWritableDocKey(ns, headCol, headId);
+      assertWritableDocKey(ns, versionCol, versionId);
+      for (const c of (chunks || [])) assertWritableDocKey(ns, versionCol, c && c.id);
       const want = Number(expectRevision) || 0;
       const prep = (d) => overwriteDoc(withDeletions(d || {}));
       const revisionNow = async (fallback) => {
@@ -468,6 +501,7 @@ export const createDocStore = (client, {
      */
     claimOnce: async (ns, col, docId, expect, patch) => {
       try {
+        assertWritableDocKey(ns, col, docId);   // R28(断った時は reason 'error')
         const cur = await findRecord(ns, col, docId);
         if (!cur) return { acquired: false, reason: 'missing' };
         const data = cur.data || {};

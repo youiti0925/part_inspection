@@ -16,7 +16,7 @@
 //   ④ 「読んで→書く」は UNIQUE の門で1台だけに渡す(pbDocStore.js)。
 // ============================================================================
 
-import { createDocStore, PbConflictError, PbCommandMismatchError, DOCS_COL } from './pbDocStore.js';
+import { createDocStore, PbConflictError, PbCommandMismatchError, DOCS_COL, assertWritableDocKey, PbBadDocIdError } from './pbDocStore.js';
 import { createOutbox, createIdbStore, createMemoryStore, STATUS } from './outbox.js';
 import { mergeDoc, overwriteDoc, setFieldsDoc } from './docMerge.js';
 import { withDeletions, DATA_SERVER_NOW } from './sentinels.js';
@@ -228,7 +228,8 @@ export const createPocketbaseBackend = (client, {
         // ⚠⚠「同じ命令IDで中身が違う」は **人が見るまで捨てない**。
         //   通信の失敗として送り直すと、いつまでも通らずやがて FAILED になり、
         //   何が食い違ったのか分からなくなる。衝突と同じ扱いで箱に残す。
-        if (e instanceof PbConflictError || e instanceof PbCommandMismatchError) {
+        // R28: 前の版で箱に入った NUL 入りの書類の場所も、送り直さずに人が見るまで残す(何度送っても通らない)
+        if (e instanceof PbConflictError || e instanceof PbCommandMismatchError || e instanceof PbBadDocIdError) {
           onConflict && onConflict({ cmd, error: e });
           return { conflict: true, detail: e.message };
         }
@@ -417,6 +418,8 @@ export const createPocketbaseBackend = (client, {
 
     // --- 書く ---------------------------------------------------------------
     save: async (ns, col, id, data, opts = {}) => {
+      // 🔒 R28: NUL 入り・空の書類の場所は、手元にも送信待ちの箱にも入れずに断る(箱に残って何度も失敗し続けない)
+      assertWritableDocKey(ns, col, id);
       const patch = withDeletions(data);
       const merge = opts.merge !== false;
       // 全上書きは「見ていた版」を覚えておく。復帰時に相手の変更を黙って消さないため。
@@ -439,6 +442,7 @@ export const createPocketbaseBackend = (client, {
     },
 
     setFields: async (ns, col, id, fields) => {
+      assertWritableDocKey(ns, col, id);   // R28
       const patch = withDeletions(fields);
       applyLocally(ns, col, id, (cur) => setFieldsDoc(cur, patch));
       return outbox.enqueue({ op: 'setFields', ns, col, docId: id, patch });
@@ -449,8 +453,10 @@ export const createPocketbaseBackend = (client, {
     //   復帰後に他の端末と二重に通知を送る。つながっていない時は取れない、が正しい。
     claimOnce: (ns, col, id, expect, patch) => store.claimOnce(ns, col, id, expect, patch),
 
-    appendCapped: async (ns, col, id, field, item, opts = {}) =>
-      outbox.enqueue({ op: 'appendCapped', ns, col, docId: id, field, item, opts }),
+    appendCapped: async (ns, col, id, field, item, opts = {}) => {
+      assertWritableDocKey(ns, col, id);   // R28
+      return outbox.enqueue({ op: 'appendCapped', ns, col, docId: id, field, item, opts });
+    },
 
     // ========================================================================
     // 2026-10-29 社内サーバ移行の準備: Firebase 版にあって、こちらに無かった操作。
