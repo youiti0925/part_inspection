@@ -94,18 +94,23 @@ export const installReadRetry = (backend, {
     timer = T.setTimeout(() => { timer = null; attempt('backoff'); }, ms);
   };
 
-  /** 読めなかった一覧を登録する(通信の失敗だけ)。 */
-  const note = (ns, col, error) => {
+  /** 読めなかった一覧を登録する(通信の失敗だけ)。
+   *  viaRefresh = サーバからの読み直し(refresh)が届かなかった。その一覧は手元に前の控えがあり、getAll や購読の最初の知らせは
+   *  その控えを「サーバから読めた物(fromCache:false)」として返すので、それでは下ろさない(読み直しが通った時だけ下ろす)。 */
+  const note = (ns, col, error, viaRefresh) => {
     if (disposed || !isRetryableReadError(error)) return;
     const k = keyOf(ns, col);
     const had = failed.get(k);
-    failed.set(k, { ns, col, error, since: had ? had.since : Date.now(), tries: had ? had.tries : 0 });
+    failed.set(k, { ns, col, error, since: had ? had.since : Date.now(), tries: had ? had.tries : 0, needsRefresh: !!viaRefresh || !!(had && had.needsRefresh) });
     if (!had) { tell(); if (timer == null && !busy) schedule(delay); }
   };
-  /** サーバから読めた(他の道で読めた時も)。 */
-  const ok = (ns, col) => {
+  /** サーバから読めた(他の道で読めた時も)。viaRefresh = サーバからの読み直し(refresh)が通った。 */
+  const ok = (ns, col, viaRefresh) => {
     const k = keyOf(ns, col);
-    if (!failed.has(k)) return;
+    const f = failed.get(k);
+    if (!f) return;
+    // ⚠読み直しが届かなかった一覧は、手元の控えを返しただけの読み(getAll・購読の最初の知らせ)では下ろさない
+    if (f.needsRefresh && !viaRefresh) return;
     failed.delete(k);
     tell();
     tellRecovered([k]);
@@ -202,8 +207,10 @@ export const installReadRetry = (backend, {
   wrap('countQuery', (ns, col, ...rest) => Promise.resolve().then(() => orig.countQuery(ns, col, ...rest))
     .then((n) => { ok(ns, col); return n; }, (e) => { note(ns, col, e); throw e; }));
   // 🔁 2026-10-31 読み直し(refresh)も包む: 購読を張り直した後の読み直しが届かずに失敗した一覧も「読み直す物」に入る(読めたら下ろす)。
+  //   🔁 2026-10-31 verify14: ③の「更新」は購読中の一覧を refresh で読み直す。届かなかった時に登録しても、続く getAll が
+  //   手元の控えを返して ok() で下ろしてしまい、帯が一瞬も残らなかった → refresh の失敗は refresh が通るまで下ろさない。
   wrap('refresh', (ns, col, ...rest) => Promise.resolve().then(() => orig.refresh(ns, col, ...rest))
-    .then((n) => { ok(ns, col); return n; }, (e) => { note(ns, col, e); throw e; }));
+    .then((n) => { ok(ns, col, true); return n; }, (e) => { note(ns, col, e, true); throw e; }));
   // 🔁 2026-10-31 購読が開いた(張り直せた) = サーバへ届いた。読めていない物があれば、すぐ読み直す。
   const offOpen = resync ? resync.onOpen(() => reached('realtime')) : null;
 
