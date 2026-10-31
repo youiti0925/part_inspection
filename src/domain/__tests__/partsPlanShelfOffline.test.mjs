@@ -30,7 +30,6 @@ const shelfFrom = (DATA, db) => {
   for (const name of NAMES) {
     const m = new RegExp(`^\\s*${name}: (\\([^)]*\\) => DATA\\(db\\)\\.getOne\\([^\\n]*\\)),\\s*$`, 'm').exec(APP);
     assert.ok(m, `App.jsx に ${name} の読み方が見つからない`);
-    // eslint-disable-next-line no-new-func
     out[name] = new Function('DATA', 'db', 'OPSIM_SHELF_NS', `return ${m[1]};`)(DATA, db, NS);
     out[`${name}Src`] = m[1];
   }
