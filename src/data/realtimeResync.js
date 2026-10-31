@@ -55,6 +55,18 @@ export const RESYNC_RETRY_MAX_MS = 10000;
 export const REALTIME_PING_MS = 20000;
 export const REALTIME_PING_TIMEOUT_MS = 5000;
 export const REALTIME_IDLE_MS = 330000;
+// 🔁 2026-10-31 追記(verify14: 製品・最終・部品で、起動して最初の流れに見張りが付いていなかった):
+//   ⑥ 原因: 端末の札で入る形(製品・部品の connectPocketbase の札の道/最終の onpremPbFactory)は pbClient に
+//      「ログインを待つ約束(setReady)」が無い。保管庫を作ると(autoRealtime)pbClient の openRealtime が
+//      **その場で** GET /api/realtime を送る。この係は DATA(db) が保管庫を作り終えた後に付くので、
+//      最初の GET は包む前の fetch を通り、流れは streams に入らず、見張り(心拍)も動かなかった
+//      (③は deviceSession の whenReady を待つので、GET は係を付けた後 = 見えていた)。
+//      部品は最初の GET に札が無く(owns が断る)、同じく見えなかった。
+//      → 申し込み(POST)はこの係を通るので、そこで「見ていない流れ」と分かる。申し込みを「届かない」にして
+//        pbClient に開き直させる(その GET は係を通る)。pbClient.js / pocketbaseBackend.js は触らない。
+//      ⚠前の流れは、サーバが黙った流れを閉じる(約5分)まで1本残る(申し込みが無いので知らせは来ない)。
+/** ⑥ 見ていない流れの申し込みを、続けて断る回数の上限。 */
+export const ADOPT_MAX = 3;
 /** 全部読む時に同時に読むページの数。 */
 export const LIST_PARALLEL_PAGES = 4;
 /** ⑤ 並びが決まっている(sort あり)一覧を全部読む時の1ページの件数(呼び手の件数より小さくはしない)。 */
@@ -304,6 +316,8 @@ export const installRealtimeResync = (backend, {
   let pingFails = 0;       // ④ そのうち届かなかった回数
   let live = false;
   let resyncs = 0;         // 張り直せた後に読み直した回数(試験・画面の材料)
+  let adopts = 0;          // ⑥ 見ていない流れの申し込みを断って開き直させた回数
+  let adoptTries = 0;      // ⑥ そのうち、係を通る流れが開くまでに続けて断った回数
   const subs = new Map();  // "ns/col" -> 購読の数
   const seen = new Set();  // 読んだ事のある一覧(購読・1回だけ)
   const stale = new Set(); // 張り直した後、まだサーバから読み直していない一覧(購読していない物)
@@ -462,6 +476,14 @@ export const installRealtimeResync = (backend, {
     const method = String((init && init.method) || 'GET').toUpperCase();
     if (disposed) return call(input, init);
     if (method === 'POST') {
+      // ⑥ 見ていない流れの申し込み: 流れ(GET)がこの係を通らずに開いた(係を付ける前に開いた・札が無いまま開いた)。
+      //   その流れは見張れない(切れない)ので、申し込みを「届かない」にして pbClient に流れを開き直させる
+      //   (約0.5秒後の GET はこの係を通る)。開き直した時は「張り直せた」と同じに読み直す(その間の変更を落とさない)。
+      //   ⚠続けて断るのは ADOPT_MAX 回まで(係を通らない GET が続く時に、購読そのものを止めない)。
+      if (!streams.size && adoptTries < ADOPT_MAX) {
+        adoptTries += 1; adopts += 1; dropped();
+        return Promise.reject(new TypeError('購読の流れを見張れるように開き直します'));
+      }
       return call(input, init).then((res) => { if (res && res.ok && !disposed) opened(); return res; });
     }
     if (method !== 'GET') return call(input, init);
@@ -480,7 +502,7 @@ export const installRealtimeResync = (backend, {
         return sleep(ms, outer).then(tryOnce);
       };
       return call(input, myInit).then((res) => {
-        if (res && res.ok && res.body) return pipe(res, () => { if (ac) ac.abort(); });
+        if (res && res.ok && res.body) { adoptTries = 0; return pipe(res, () => { if (ac) ac.abort(); }); }
         // ② 入口の 502/503/504 など(PocketBase が落ちている間)は、届かない時と同じにここで試し直す
         if (res && isRetryableRealtimeStatus(res.status) && !disposed && !(outer && outer.aborted)) {
           if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuter);
@@ -558,7 +580,7 @@ export const installRealtimeResync = (backend, {
     isLive: () => live,
     /** 張り直した後、その一覧をサーバから読み直せていない理由(読めていれば null)。 */
     errorOf: (ns, col) => staleErr.get(keyOf(ns, col)) || null,
-    stats: () => ({ opens: opens, drops: drops, resyncs: resyncs, kicks: kicks, pings: pings, pingFails: pingFails, stale: [...stale], subscribed: [...subs.keys()], lists: lister ? lister.stats() : null }),
+    stats: () => ({ opens: opens, drops: drops, resyncs: resyncs, adopts: adopts, kicks: kicks, pings: pings, pingFails: pingFails, stale: [...stale], subscribed: [...subs.keys()], lists: lister ? lister.stats() : null }),
     /** ④ 見張りを今すぐ1回動かす(試験・画面の「今すぐ確かめる」)。 */
     checkNow: () => { stopWatch(); return check('manual'); },
     /** 購読が開いた(張り直せた)合図: cb({ reconnect, opens })。戻り値は外す関数。 */
