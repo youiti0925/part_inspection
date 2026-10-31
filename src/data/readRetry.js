@@ -64,7 +64,8 @@ const serverSnap = (snap) => !!(snap && snap.metadata && snap.metadata.fromCache
 export const installReadRetry = (backend, {
   win = (typeof window !== 'undefined' ? window : null), timers = null,
   firstMs = READ_RETRY_FIRST_MS, maxMs = READ_RETRY_MAX_MS,
-  fetchHost = (typeof globalThis !== 'undefined' ? globalThis : null), resyncTimers = null,
+  // ⚠fetchHost の既定は null(購読の係が 窓口の fetchHost → globalThis の順に選ぶ。最終は札の係を通る入れ物)
+  fetchHost = null, resyncTimers = null,
 } = {}) => {
   if (!backend || typeof backend !== 'object') return null;
   if (backend[MARK]) return backend[MARK];

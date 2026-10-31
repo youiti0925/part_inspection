@@ -25,9 +25,32 @@
 //   (ビルドの対象 es2015 では補助の部品の呼び出しが、いつものビルドの出力にも残るため)。最上段で関数を呼ばない。
 // ============================================================================
 
+// 🔁 2026-10-31 追記(verify10 の本当の切断の試験で見つかった3つ):
+//   ① 最終は pbClient が「端末の札の係(session.pbFetch)」を通して送る。その係は起動の時に包む前の fetch を握るので、
+//      ブラウザの fetch を包んでも購読の要求が係を通らず、張り直しても読み直さなかった(製品・部品は通っていた)。
+//      → 窓口(pbClient)に fetchHost(呼ぶ時に .fetch を引く入れ物)があれば、ブラウザの fetch ではなくそこを包む。
+//   ② 入口(HTTPS の前段)は PocketBase が落ちている間 502 を返す。502 は「届いた答え」なので pbClient へそのまま渡り、
+//      pbClient の待ちが倍々に延びた(最大30秒)。→ 5xx・408・429 は届かない時と同じに、ここで速く試し直す。
+//   ③ 大きな一覧(最終の lot_images は 5千件・1ページ 8MB・26ページ)を読み直すたびに全部を順に読み、
+//      同じ一覧を2つの係が同時に読んで(同じページを2回ずつ)、帯が消えるまで約31秒かかった。
+//      → 一覧の読み(listAll)を包む: 同じ読みが同時に来たら1回にまとめる・前に全部読めた一覧は
+//        「番号と更新時刻だけ」を読んで、変わった物だけを読む(消えた物は落とす)・全部読む時もページを並べて読む。
+//        答えの中身と並びは、全部を順に読んだ時と同じ。
 /** 流れを開けない間の、ここでの試し直しの間隔(ミリ秒)。 */
 export const RESYNC_RETRY_FIRST_MS = 500;
 export const RESYNC_RETRY_MAX_MS = 10000;
+/** 全部読む時に同時に読むページの数。 */
+export const LIST_PARALLEL_PAGES = 4;
+/** 番号と更新時刻だけを読む時の1ページの件数(PocketBase の上限は 1000)。 */
+export const LIST_IDS_PER_PAGE = 1000;
+/** 変わった物だけを読む時、1回の要求で読む件数。 */
+export const LIST_CHANGED_CHUNK = 40;
+
+/** /api/realtime の答えのうち「届かない」と同じに扱う物(入口の 502/503/504・時間切れ・混雑)。 */
+export const isRetryableRealtimeStatus = (status) => {
+  const s = Number(status) || 0;
+  return s === 0 || s >= 500 || s === 408 || s === 429;
+};
 
 const MARK = '__inspectionRealtimeResync';
 const FETCH_MARK = '__inspectionRealtimeFetch';
@@ -77,25 +100,161 @@ const hookFetch = (host, url, handler) => {
   };
 };
 
+const LIST_MARK = '__inspectionListAll';
+/** 一覧まるごとの読み(保管庫が組む ns="…" && col="…")だけ、前の答えを覚えて差分で読み直す。 */
+const WHOLE_COLLECTION_RE = /^ns="(?:[^"\\]|\\.)*" && col="(?:[^"\\]|\\.)*"$/;
+const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/;
+const LIST_REMEMBER_MAX = 128;
+
+/**
+ * ③ 窓口(pbClient)の listAll を包む。答えの中身と並びは「1ページ目から順に全部読む」(元の listAll)と同じ。
+ *   ・同じ読み(同じコレクション・同じ絞り込み)が同時に来たら、1回にまとめて同じ答えを返す。
+ *   ・全部読む時は、1ページ目で総ページ数を知り、残りを LIST_PARALLEL_PAGES ずつ並べて読む。
+ *   ・前に全部読めた一覧まるごと(ns && col)は、「番号と更新時刻」だけを読み、変わった・増えた物だけを読む。
+ *     消えた物は落ちる。答えに更新時刻が無い・番号が変な形・変わった物が多い時は、全部読む(ごまかさない)。
+ * ⚠要求はすべて client.listPage を呼ぶ時に引く(読み直しの係の「要求が通った」の合図もそのまま働く)。
+ * @returns { undo(), stats() }
+ */
+const wrapListAll = (client) => {
+  const none = { undo: () => {}, stats: () => null };
+  if (!client || typeof client.listAll !== 'function' || typeof client.listPage !== 'function') return none;
+  if (client[LIST_MARK]) return none;
+  const origListAll = client.listAll;
+  const inflight = new Map();   // 読みの鍵 -> Promise(同時に来た同じ読みを1回にまとめる)
+  const last = new Map();       // 一覧まるごとの鍵 -> 前に読めた答え(レコードの並び)
+  const st = { calls: 0, shared: 0, full: 0, delta: 0, deltaFallback: 0, pages: 0, changed: 0 };
+
+  const pageOf = (col, opts, n, extra) => {
+    st.pages += 1;
+    return client.listPage(col, Object.assign({}, opts, extra || {}, { page: n }));
+  };
+  /** 全ページを読む(1ページ目 → 残りを並べて)。空のページが来たらそこで止める(元の listAll と同じ)。 */
+  const allPages = (col, opts, extra) => pageOf(col, opts, 1, extra).then((r1) => {
+    const first = (r1 && r1.items) || [];
+    const total = Number(r1 && r1.totalPages) || 1;
+    if (!first.length || total <= 1) return first.slice();
+    const got = []; got[1] = first;
+    const todo = [];
+    for (let n = 2; n <= total; n++) todo.push(n);
+    let at = 0;
+    let bad = false;
+    const worker = () => {
+      if (bad || at >= todo.length) return Promise.resolve();
+      const n = todo[at]; at += 1;
+      return pageOf(col, opts, n, extra).then((r) => { got[n] = (r && r.items) || []; return worker(); }, (e) => { bad = true; throw e; });
+    };
+    const ws = [];
+    for (let i = 0; i < Math.min(LIST_PARALLEL_PAGES, todo.length); i++) ws.push(worker());
+    return Promise.all(ws).then(() => {
+      const out = [];
+      for (let n = 1; n <= total; n++) {
+        const items = got[n] || [];
+        if (!items.length) break;
+        for (let i = 0; i < items.length; i++) out.push(items[i]);
+      }
+      return out;
+    });
+  });
+  const hasStamp = (r) => !!r && typeof r.id === 'string' && typeof r.updated === 'string' && r.updated !== '';
+  /** 前の答え(prev)から、変わった物だけを読んで今の答えを作る。作れない時は null(全部読む)。 */
+  const delta = (col, opts, prev) => allPages(col, opts, { fields: 'id,updated', perPage: LIST_IDS_PER_PAGE }).then((ids) => {
+    if (!ids.every(hasStamp)) return null;
+    const before = new Map();
+    prev.forEach((r) => { before.set(r.id, r); });
+    const changed = ids.filter((x) => { const p = before.get(x.id); return !p || p.updated !== x.updated; }).map((x) => x.id);
+    if (changed.some((id) => !SAFE_ID_RE.test(id))) return null;
+    if (changed.length > Math.max(200, Math.floor(ids.length / 4))) return null;
+    const chunks = [];
+    for (let i = 0; i < changed.length; i += LIST_CHANGED_CHUNK) chunks.push(changed.slice(i, i + LIST_CHANGED_CHUNK));
+    const fresh = new Map();
+    let at = 0;
+    const worker = () => {
+      if (at >= chunks.length) return Promise.resolve();
+      const ch = chunks[at]; at += 1;
+      const idPart = ch.map((id) => `id="${id}"`).join(' || ');
+      const filter = opts.filter ? `(${opts.filter}) && (${idPart})` : idPart;
+      return allPages(col, Object.assign({}, opts, { filter: filter }), { perPage: LIST_CHANGED_CHUNK })
+        .then((recs) => { recs.forEach((r) => { if (r && typeof r.id === 'string') fresh.set(r.id, r); }); return worker(); });
+    };
+    const ws = [];
+    for (let i = 0; i < Math.min(LIST_PARALLEL_PAGES, chunks.length); i++) ws.push(worker());
+    return Promise.all(ws).then(() => {
+      const out = [];
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i].id;
+        const now = fresh.get(id);
+        if (now) { out.push(now); continue; }
+        const p = before.get(id);
+        if (p && p.updated === ids[i].updated) out.push(p);
+        // 変わったのに読めなかった = その間に消えた(落とす)
+      }
+      st.changed += changed.length;
+      return out;
+    });
+  });
+
+  const wrapped = function listAllShared(col, opts) {
+    const o = opts || {};
+    if (o.fields || o.page != null) return origListAll.apply(client, arguments);   // 項目を選ぶ・ページ指定の読みは今までどおり
+    st.calls += 1;
+    const k = `${col}\n${JSON.stringify(o)}`;
+    const hit = inflight.get(k);
+    if (hit) { st.shared += 1; return hit; }
+    const whole = WHOLE_COLLECTION_RE.test(String(o.filter || ''));
+    const prev = whole ? last.get(k) : null;
+    const p = Promise.resolve()
+      .then(() => (prev && prev.every(hasStamp) ? delta(col, o, prev) : null))
+      .then((r) => {
+        if (r) { st.delta += 1; return r; }
+        if (prev) st.deltaFallback += 1;
+        st.full += 1;
+        return allPages(col, o);
+      })
+      .then((recs) => {
+        if (whole) {
+          last.delete(k); last.set(k, recs);
+          if (last.size > LIST_REMEMBER_MAX) last.delete(last.keys().next().value);
+        }
+        return recs;
+      });
+    inflight.set(k, p);
+    const done = () => { if (inflight.get(k) === p) inflight.delete(k); };
+    p.then(done, done);
+    return p;
+  };
+  client.listAll = wrapped;
+  client[LIST_MARK] = true;
+  return {
+    undo: () => { if (client.listAll === wrapped) client.listAll = origListAll; delete client[LIST_MARK]; inflight.clear(); last.clear(); },
+    stats: () => Object.assign({}, st),
+  };
+};
+
 /**
  * 保管庫(PocketBase 版)に「購読が切れたら張り直しを助け、張り直せたら取りこぼしを読み直す」係を取り付ける。
  * ⚠同じ保管庫に2回取り付けない(2回目は1回目の係を返す)。
  * @param backend  createPocketbaseBackend の戻り(raw = pbClient・refresh・watch*・get* を持つ物)
  * @param opts.win     online の合図を出す物(window)
- * @param opts.host    fetch を持つ物(既定は globalThis。pbClient は呼ぶ時にこれの fetch を引く)
+ * @param opts.host    fetch を持つ物(既定は 窓口の fetchHost → globalThis。pbClient は呼ぶ時にこれの fetch を引く)
+ * @param opts.listAll 窓口の listAll を包む(③。既定 true)
  * @param opts.timers  { setTimeout, clearTimeout }(試験で差し替える)
  * @returns 係 { isLive(), stats(), onOpen(cb), dispose() }
  */
 export const installRealtimeResync = (backend, {
   win = (typeof window !== 'undefined' ? window : null),
-  host = (typeof globalThis !== 'undefined' ? globalThis : null),
+  host = null,
   timers = null, firstMs = RESYNC_RETRY_FIRST_MS, maxMs = RESYNC_RETRY_MAX_MS,
+  listAll = true,
 } = {}) => {
   if (!backend || typeof backend !== 'object') return null;
   if (backend[MARK]) return backend[MARK];
   const T = timers || { setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h) };
   const client = backend.raw || null;
   const base = client && typeof client.url === 'string' ? client.url : '';
+  // ① 包む入れ物: 指定 → 窓口の fetchHost(最終: 札の係を通る道) → ブラウザ(globalThis)
+  const fetchHost = host
+    || (client && client.fetchHost && typeof client.fetchHost.fetch === 'function' ? client.fetchHost : null)
+    || (typeof globalThis !== 'undefined' ? globalThis : null);
   let disposed = false;
 
   // --- 状態 ---------------------------------------------------------------------
@@ -223,16 +382,25 @@ export const installRealtimeResync = (backend, {
       const onOuter = () => { if (ac) ac.abort(); };
       if (outer && ac) outer.addEventListener('abort', onOuter);
       const myInit = Object.assign({}, init || {}, ac ? { signal: ac.signal } : {});
-      return call(input, myInit).then((res) => {
-        if (!res || !res.ok || !res.body) { dropped(); return res; }   // 断られた(401 など)は pbClient へそのまま
-        return pipe(res, () => { if (ac) ac.abort(); });
-      }, (e) => {
-        if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuter);
-        if (disposed || (outer && outer.aborted)) throw e;
+      const retry = () => {
         dropped();
         // 届かない: ここで待って試し直す(pbClient の待ちを延ばさない・online ならすぐ)
         const ms = delay; delay = Math.min(maxMs, delay * 2);
         return sleep(ms, outer).then(tryOnce);
+      };
+      return call(input, myInit).then((res) => {
+        if (res && res.ok && res.body) return pipe(res, () => { if (ac) ac.abort(); });
+        // ② 入口の 502/503/504 など(PocketBase が落ちている間)は、届かない時と同じにここで試し直す
+        if (res && isRetryableRealtimeStatus(res.status) && !disposed && !(outer && outer.aborted)) {
+          if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuter);
+          try { if (res.body && typeof res.body.cancel === 'function') res.body.cancel().catch(() => {}); } catch (e) { /* 読み捨て */ }
+          return retry();
+        }
+        dropped(); return res;   // 断られた(401・403 など)は pbClient へそのまま
+      }, (e) => {
+        if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuter);
+        if (disposed || (outer && outer.aborted)) throw e;
+        return retry();
       });
     };
     return tryOnce();
@@ -246,7 +414,10 @@ export const installRealtimeResync = (backend, {
     const sent = headerOf(init, 'Authorization');
     return !!sent && tokens.indexOf(sent) >= 0;
   };
-  const unhook = base ? hookFetch(host, `${base}/api/realtime`, { owns: owns, run: onRealtime }) : () => {};
+  const unhook = base ? hookFetch(fetchHost, `${base}/api/realtime`, { owns: owns, run: onRealtime }) : () => {};
+  // ③ 一覧の読み(listAll)を包む
+  const lister = listAll ? wrapListAll(client) : null;
+  const unList = lister ? lister.undo : () => {};
 
   const onOnline = () => {
     if (disposed) return;
@@ -295,12 +466,13 @@ export const installRealtimeResync = (backend, {
     isLive: () => live,
     /** 張り直した後、その一覧をサーバから読み直せていない理由(読めていれば null)。 */
     errorOf: (ns, col) => staleErr.get(keyOf(ns, col)) || null,
-    stats: () => ({ opens: opens, drops: drops, resyncs: resyncs, stale: [...stale], subscribed: [...subs.keys()] }),
+    stats: () => ({ opens: opens, drops: drops, resyncs: resyncs, stale: [...stale], subscribed: [...subs.keys()], lists: lister ? lister.stats() : null }),
     /** 購読が開いた(張り直せた)合図: cb({ reconnect, opens })。戻り値は外す関数。 */
     onOpen: (cb) => { openSubs.add(cb); return () => { openSubs.delete(cb); }; },
     dispose: () => {
       disposed = true;
       unhook();
+      unList();
       if (win && typeof win.removeEventListener === 'function') win.removeEventListener('online', onOnline);
       [...waiters].forEach((w) => w.wake());
       Object.keys(orig).forEach((m) => { backend[m] = orig[m]; });
