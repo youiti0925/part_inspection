@@ -35,7 +35,7 @@ import { disablePush, enablePush, listenForegroundPush, pushDeviceId, pushPlatfo
 //   ⚠ push.js は製品と1バイト同じに保つ決まり(product-pairs.test.mjs)なので、社内版の違い(SW の場所が相対・通知だけの Firebase)は
 //     src/onpremPush.js に置き、ここ(呼ぶ側)で分ける。スイッチの無いビルドでは push.js をそのまま呼ぶ。
 import { IS_ONPREM_BUILD, appHome } from '../onprem.js';
-import { pushSupportProblem as onpremPushSupportProblem, enablePush as onpremEnablePush, disablePush as onpremDisablePush, listenForegroundPush as onpremListenForegroundPush } from '../onpremPush.js';
+import { pushSupportProblem as onpremPushSupportProblem, enablePush as onpremEnablePush, disablePush as onpremDisablePush, listenForegroundPush as onpremListenForegroundPush, sendPush as onpremSendPush, pushReady as onpremPushReady } from '../onpremPush.js';
 // 🧪 2026-10-31 R2: 呼ぶ所で `(IS_ONPREM_BUILD ? 社内版の関数 : push.js の関数)(…)` と分ける(包む関数を作らない)。
 //   いつものビルドでは右側だけが残り、出力が基点(fff526a)と1バイトも変わらない。
 import { explainMissingOrder } from '../domain/progressSheet.js';
@@ -1074,7 +1074,8 @@ const contactPushMessage = (payload) => {
 const firePushNotify = (settings, pushTokens, { toGroup, toSide, title, body, link, tag, toLevel, internal }, deleteData) => {
   try {
     const cfg = pushCfgOf(settings);
-    if (!cfg.vapidKey || !cfg.workerUrl) return;
+    // 🔔 2026-10-31 社内版: 中継の設定が無くても進む(signal は要らない・relay でも Teams 用の種類の行は入れる。送れるかは onpremSendPush が決める)
+    if (!IS_ONPREM_BUILD && (!cfg.vapidKey || !cfg.workerUrl)) return;
     const osOpts = contactOsNotifyOpts(settings); // 触るまで消さない/バイブ(閉じている時のOS通知)
     const alive = (pushTokens || []).filter(t => t && t.token && t.enabled !== false);
     const cleanup = (targets) => (res) => {
@@ -1098,14 +1099,14 @@ const firePushNotify = (settings, pushTokens, { toGroup, toSide, title, body, li
     // あっち側宛ては役職ルーティング(職長/上司/全員…)で絞る。検査側宛て(返信・到着回答)は従来どおり全端末。
     if (toSide === 'portal' && toGroup) targets = contactFilterByLevel(targets, settings, toGroup, toLevel);
     else if (internal && toSide === 'app') targets = contactInternalTargets(targets); // 社内連絡=検査の職長/工長へ
-    if (targets.length) {
-      sendPushViaWorker(cfg.workerUrl, { tokens: [...new Set(targets.map(t => t.token))], title, body, link, tag, ...osOpts }).then(cleanup(targets));
+    if (IS_ONPREM_BUILD || targets.length) {
+      (IS_ONPREM_BUILD ? onpremSendPush : sendPushViaWorker)(cfg.workerUrl, { tokens: [...new Set(targets.map(t => t.token))], title, body, link, tag, ...osOpts }).then(cleanup(targets));
     }
     if (toSide === 'portal') {
       const sent = new Set(targets.map(t => t.token));
       const ccTargets = alive.filter(t => t.admin === true && !sent.has(t.token));
       if (ccTargets.length) {
-        sendPushViaWorker(cfg.workerUrl, {
+        (IS_ONPREM_BUILD ? onpremSendPush : sendPushViaWorker)(cfg.workerUrl, {
           tokens: [...new Set(ccTargets.map(t => t.token))],
           title: `📋 CC(${toGroup || 'あっち'}宛): ${title}`, body,
           link: (typeof window !== 'undefined' ? (IS_ONPREM_BUILD ? `${appHome()}` : `${window.location.origin}/`) : link), tag: `${tag || 'cc'}-cc`, ...osOpts,
@@ -1466,7 +1467,7 @@ const PushSettingsPanel = ({ settings, saveSettings, saveShared = null, saveData
   const deviceId = pushDeviceId();
   const mine = (pushTokens || []).find(t => t && t.id === deviceId);
   const prob = (IS_ONPREM_BUILD ? onpremPushSupportProblem : pushSupportProblem)();
-  const ready = !!(cfg.vapidKey && cfg.workerUrl);
+  const ready = IS_ONPREM_BUILD ? onpremPushReady(cfg) : !!(cfg.vapidKey && cfg.workerUrl);
   const plat = pushPlatform();
   // 役職(あっち側のみ): 職長=既定の宛先 / 工長・グループ長=上司(職長不在時・重い内容・エスカレーション先)
   const [role, setRole] = useState(() => { try { return localStorage.getItem('renrakuRole') || ''; } catch (e) { return ''; } });
@@ -1499,9 +1500,9 @@ const PushSettingsPanel = ({ settings, saveSettings, saveShared = null, saveData
     setBusy(false);
   };
   const sendTest = async () => {
-    if (!mine || !cfg.workerUrl) return;
+    if (!mine || (IS_ONPREM_BUILD ? !onpremPushReady(cfg) : !cfg.workerUrl)) return;
     setBusy(true); setErr(''); setInfo('');
-    const res = await sendPushViaWorker(cfg.workerUrl, {
+    const res = await (IS_ONPREM_BUILD ? onpremSendPush : sendPushViaWorker)(cfg.workerUrl, {
       tokens: [mine.token], title: '✅ テスト通知', body: 'この端末に工程連絡の通知が届きます',
       // tagは毎回ユニークに(同じtagだと前の通知が残っている時に音なしで置き換わり「届かない」ように見える)
       link: (typeof window !== 'undefined' ? (IS_ONPREM_BUILD ? `${appHome()}${side === 'portal' ? '?renraku=1' : ''}` : `${window.location.origin}${side === 'portal' ? '/?renraku=1' : '/'}`) : ''), tag: `push-test-${Date.now()}`,

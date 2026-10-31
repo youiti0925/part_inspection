@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { join, delimiter } from 'node:path';
 
 // md5 of onprem-public/onprem-sw.js with line endings normalized to LF. Change it in all three apps at once.
-const SHARED_ONPREM_SW_MD5 = '53e025282b5e4fefe2e5cba529fd2664';
+const SHARED_ONPREM_SW_MD5 = '9511e5a374fb2dccb54129d9f2dc5325';
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const swText = (root) => readFileSync(join(root, 'onprem-public', 'onprem-sw.js'), 'utf8').replace(/\r\n/g, '\n');
 const md5 = (s) => createHash('md5').update(s, 'utf8').digest('hex');

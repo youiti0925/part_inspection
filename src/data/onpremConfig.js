@@ -65,7 +65,9 @@ export const parseOnpremConfig = (raw, build = {}, device = null) => {
   // 送信待ちの箱の持ち主(端末ごとに分ける)。⚠空でも動く(既定の箱)。
   const owner = str(cfg.owner) || str(dev.owner) || '';
   const ok = errors.length === 0;
-  return { ok, url, authCollection, email, password, owner, errors, needsLogin: ok && !(email && password), source,
+  // 🔔 2026-10-31 通知の方式: "relay"(既定・書かない時も = 今の中継) | "signal"(社内の Web Push)。webPushClient.js の pushModeOf と同じ決め方。
+  const pushMode = String(cfg.pushMode == null ? '' : cfg.pushMode).trim().toLowerCase() === 'signal' ? 'signal' : 'relay';
+  return { ok, url, authCollection, email, password, owner, pushMode, errors, needsLogin: ok && !(email && password), source,
     credentialsFrom: fromFile ? 'file' : (email && password ? 'device' : '') };
 };
 

@@ -13,7 +13,10 @@
 // ============================================================================
 import { initializeApp, getApps } from 'firebase/app';
 import { getMessaging, getToken, onMessage, isSupported, deleteToken } from 'firebase/messaging';
-import { pushSupportProblem as pushSupportProblemBase } from './push.js';
+import { pushSupportProblem as pushSupportProblemBase, sendPushViaWorker } from './push.js';
+// 🔔 2026-10-31 通知の方式の切替(onprem-config.json の pushMode・既定 relay = 今の中継のまま)。中身は src/data/webPushClient.js(4アプリ同じ)。
+import { createOnpremPush, pushModeOf } from './data/webPushClient.js';
+import { getDeviceSession } from './onpremDevice.js';
 
 /** 社内版の Service Worker のファイル名(index.html と同じ階層・相対で登録する)。 */
 export const ONPREM_SW_FILE = 'onprem-sw.js';
@@ -62,7 +65,7 @@ const messagingApp = () => {
   return getApps().find((a) => a.name === APP_NAME) || initializeApp(_fb, APP_NAME);
 };
 
-export const pushSupportProblem = () => {
+export const relayPushSupportProblem = () => {
   if (typeof window !== 'undefined' && window.isSecureContext === false) {
     return 'https でないため通知を使えません(社内サーバの https の入口から開いてください)';
   }
@@ -72,8 +75,8 @@ export const pushSupportProblem = () => {
 
 // 通知の許可 → FCM の端末の印(トークン)。中身は push.js の enablePush と同じ順番(SW の場所と app だけが違う)。
 // ⚠ async を書かずに Promise で書く(古い Safari 向けの変換で async は「すぐ呼ぶ包み」になり、いつものビルドの出力に残る・onprem.js と同じ理由)。
-export const enablePush = (vapidKey) => Promise.resolve().then(() => {
-  const prob = pushSupportProblem();
+export const relayEnablePush = (vapidKey) => Promise.resolve().then(() => {
+  const prob = relayPushSupportProblem();
   if (prob) throw new Error(prob);
   return isSupported();
 }).then((ok) => {
@@ -92,13 +95,13 @@ export const enablePush = (vapidKey) => Promise.resolve().then(() => {
   return token;
 });
 
-export const disablePush = () => Promise.resolve()
+export const relayDisablePush = () => Promise.resolve()
   .then(() => (_fb ? isSupported() : false))
   .then((ok) => (ok ? deleteToken(getMessaging(messagingApp())) : null))
   .then(() => undefined, () => undefined);   // 宛先の行を消す方が本体(ここは失敗しても黙って続ける)
 
-export const listenForegroundPush = (handler) => Promise.resolve()
-  .then(() => (pushSupportProblem() ? false : isSupported()))
+export const relayListenForegroundPush = (handler) => Promise.resolve()
+  .then(() => (relayPushSupportProblem() ? false : isSupported()))
   .then((ok) => {
     if (!ok || Notification.permission !== 'granted') return () => {};
     return onMessage(getMessaging(messagingApp()), (payload) => {
@@ -108,3 +111,38 @@ export const listenForegroundPush = (handler) => Promise.resolve()
     });
   })
   .catch(() => () => {});
+
+// ============================================================================
+// 🔔 2026-10-31 通知の方式の切替: relay(既定 = 上の今の道・中継 /fcm/send) | signal(社内の Web Push・Firebase も Cloudflare も呼ばない)
+//   ContactKit・App の呼ぶ所は今まで通り `(IS_ONPREM_BUILD ? 社内版の関数 : push.js の関数)(…)`。社内版の関数がここで方式を見て分ける。
+//   relay の時も notify_queue へ「種類とアプリだけ」の行を1件入れる(サーバーが緊急の種類だけ Teams へ。入れられなくても止めない)。
+// ============================================================================
+/** 部品の名前空間(App.jsx の APP_DATA_ID と同じ。サーバーの Teams の表のアプリ名に使う)。 */
+export const ONPREM_PUSH_NS = 'parts-inspection-v1';
+let _mode = 'relay';
+let _p = null;
+/** 起動の所が onprem-config.json の pushMode を入れる(無ければ relay)。 */
+export const setOnpremPushMode = (v) => { _mode = pushModeOf(v); return _mode; };
+export const onpremPushMode = () => _mode;
+const onpremPush = () => _p || (_p = createOnpremPush({
+  ns: ONPREM_PUSH_NS,
+  getMode: () => _mode,
+  getPb: () => { const s = getDeviceSession(); return { baseUrl: (s && s.baseUrl) || '', getAuth: () => (s && s.token) || '' }; },
+  getOrigin: () => window.location.origin,
+  getScope: () => new URL('./', window.location.href).href,
+  registerSw: registerOnpremSw,
+  requestPermission: () => Notification.requestPermission(),
+  relaySend: sendPushViaWorker,
+  relayEnable: relayEnablePush,
+  relayDisable: relayDisablePush,
+  relayListen: relayListenForegroundPush,
+  relayProblem: relayPushSupportProblem,
+}));
+export const pushSupportProblem = () => onpremPush().supportProblem();
+export const enablePush = (vapidKey) => onpremPush().enable(vapidKey);
+export const disablePush = () => onpremPush().disable();
+export const listenForegroundPush = (handler) => onpremPush().listenForeground(handler);
+/** 送る(sendPushViaWorker と同じ形の返事)。 */
+export const sendPush = (workerUrl, args) => onpremPush().send(workerUrl, args);
+/** 通知を送れる設定か(relay = VAPID 鍵と中継の住所 / signal = いつも)。 */
+export const pushReady = (cfg) => onpremPush().ready(cfg);

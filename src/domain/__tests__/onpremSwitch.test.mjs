@@ -186,7 +186,8 @@ test('O06 画面の入口の配線: 社内版は Firebase を起こす前に分�
   assert.equal(kit.split('(IS_ONPREM_BUILD ? onpremListenForegroundPush : listenForegroundPush)(').length - 1, 2, '受信の2か所');
   assert.ok(!/[^.\w](enablePush|disablePush|pushSupportProblem)\(/.test(kit.replace(/\(IS_ONPREM_BUILD \? onprem\w+ : \w+\)\(/g, '')), '分けずに push.js を直に呼ぶ所が残っていない');
   assert.ok(!kit.includes('ONPREM_PUSH_OFF'), '「社内版では通知を使いません」は消した');
-  assert.match(app, /if \(cfg\.vapidKey && cfg\.workerUrl && targets\.length\)/, '週報の通知も社内版で送る');
+  // 2026-10-31 通知の方式(pushMode)で分ける: いつものビルドは畳まれて (cfg.vapidKey && cfg.workerUrl) && targets.length のまま
+  assert.match(app, /if \(\(IS_ONPREM_BUILD \? onpremPushReady\(cfg\) : \(cfg\.vapidKey && cfg\.workerUrl\)\) && targets\.length\)/, '週報の通知も社内版で送る');
   assert.match(branch, /setOnpremPush\(cfg\.pushFirebase\);/); assert.match(branch, /registerOnpremSw\(\)/);
   assert.match(branch, /ONPREM_RUNTIME\.aiProxyUrl = cfg\.aiProxyUrl/);
   assert.equal(read('src/push.js').includes('ONPREM'), false, 'push.js は製品と同じ中身のまま(product-pairs)');

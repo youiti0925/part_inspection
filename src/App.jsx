@@ -79,7 +79,7 @@ import { readBandKind, startReadRecovery, probeServerRead, readTargetOf, isLocal
 // 🔁 R39 の残り 社内版だけ: 届かない間に読めなかった一覧(購読・1回だけの読み)を、保管庫の層でつながったら全部読み直す(src/data/readRetry.js・4アプリ同じ中身)
 import { readRetryOfProvider, unreadLabel } from './data/readRetry.js';
 import { IS_ONPREM_BUILD, ONPREM_DB, ONPREM_USER, ONPREM_RUNTIME, ONPREM_DOC_LIMIT, aiProxyUrlOr, loadOnpremConfig, ONPREM_CONFIG_FILE } from './onprem.js';
-import { setOnpremPush, registerOnpremSw } from './onpremPush.js';
+import { setOnpremPush, registerOnpremSw, setOnpremPushMode, sendPush as onpremSendPush, pushReady as onpremPushReady } from './onpremPush.js';
 import { bootDeviceSession, attachSessionToPbClient } from './onpremDevice.js';   // 🔒 2026-10-30 社内版だけ: 端末ごとのログイン(最初の1回・札だけ覚える)と守った写真の札(約束 CONTRACT_device_login.md)
 // 🏭 2026-09-27 製品→部品 移植: 操業シミュレーションの画面と共有棚の書類を作る純関数(製品と同じ)
 import { OperationsSimulationPanel } from './OperationsSimulationPanel.jsx';
@@ -2014,9 +2014,9 @@ const generateWeeklyBrief = async (db, { lots, settings: partsSettings, contactS
     try {
       const cfg = WEEKLY_BRIEF_PUSH_OF(contactSettings);
       const targets = (pushTokens || []).filter(t => t && t.token && t.enabled !== false && t.admin === true);
-      if (cfg.vapidKey && cfg.workerUrl && targets.length) {   // 🏢 2026-10-30 社内版も通知を送る(決定 D4・送り先は設定の Worker URL)
+      if ((IS_ONPREM_BUILD ? onpremPushReady(cfg) : (cfg.vapidKey && cfg.workerUrl)) && targets.length) {   // 🏢 2026-10-30 社内版も通知を送る(決定 D4・送り先は設定の Worker URL)・2026-10-31 方式(pushMode)で分ける
         const man = (n) => `${Math.round(n / 10000)}万`;
-        await sendPushViaWorker(cfg.workerUrl, {
+        await (IS_ONPREM_BUILD ? onpremSendPush : sendPushViaWorker)(cfg.workerUrl, {
           tokens: [...new Set(targets.map(t => t.token))],
           title: `🎯 今週の工場: 目標まであと ¥${man(brief.goal.remainYen)}`,
           body: `発見 ${brief.counts.total}件(うち催促 ${brief.counts.stall}件)。製品検査の 分析 → 🎯年間目標 で確認`,
@@ -33037,6 +33037,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          // 2026-10-30 決定 D4: 社内版も通知を使う(SW は index.html の横・相対で登録)。AI の中継の行き先も設定ファイルから。
          ONPREM_RUNTIME.aiProxyUrl = cfg.aiProxyUrl || '';
          setOnpremPush(cfg.pushFirebase);
+         setOnpremPushMode(cfg.pushMode);   // 🔔 2026-10-31 通知の方式(無ければ relay = 今の中継)
          registerOnpremSw().catch((e) => console.warn('[社内版] Service Worker を登録できません(通知・アプリとして入れる が使えないだけ)', e));
          // 🔒 2026-10-30 端末ごとのログイン(約束 CONTRACT_device_login.md)。保管庫を開く前に:
          //   覚えた札を延ばす(だめならログインの画面を重ねて待つ)・写真の札を取る・fetch の入口で札を付ける(src/onpremDevice.js)。
