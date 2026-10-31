@@ -23,8 +23,17 @@ test('RW2 部品: 控えだけの答え(fromCache)では帯を下ろさず、ロ
 });
 
 test('RW3 部品: つながらないだけなら穏やかな帯(控えを表示中)・それ以外は今までの赤い帯', () => {
-  assert.match(src, /IS_ONPREM_BUILD && readBandKind\(readErrors, \{ online: onpremOnline \}\) === 'offline' \? \(/);
+  // 🔁 R39 の残り: 名札が無く、保管庫の係だけが「読めていない」と言う時(readBandKind = none)も穏やかな帯
+  assert.match(src, /IS_ONPREM_BUILD && readBandKind\(readErrors, \{ online: onpremOnline \}\) !== 'error' \? \(/);
   assert.match(src, /data-read-band="offline"/);
   assert.match(src, /offlineBandDetail\(\{ saveStopped: !lotsLoaded \}\)/);
   assert.match(src, /🚨 データが読めていません（画面の件数は当てになりません）/, '赤い帯はそのまま残る');
+});
+
+test('RW4 部品(R39 の残り): 保管庫の層で読めなかった一覧(logs・plan_control など)も、つながったら読み直し、読めていない間は穏やかな帯に名前を出す(社内版だけ)', () => {
+  assert.match(src, /import \{ readRetryOfProvider, unreadLabel \} from '\.\/data\/readRetry\.js';/);
+  assert.match(src, /const DATA = \(db\) => \(IS_ONPREM_BUILD \? onpremWithReadRetry\(dataFor\(db, FS_EST\)\) : dataFor\(db, FS_EST\)\);/, '窓口を使う全部の読みが係を通る');
+  assert.match(src, /const onpremUnread = IS_ONPREM_BUILD \? useOnpremUnreadLists\(db\) : null;/);
+  assert.match(src, /\{\(IS_ONPREM_BUILD \? \(Object\.keys\(readErrors\)\.length > 0 \|\| onpremUnread\.length > 0\) : Object\.keys\(readErrors\)\.length > 0\) && !quotaBlock && /, '名札が無くても帯を出す(黙らない)');
+  assert.match(src, /onpremUnread\.map\(u => unreadLabel\(u, APP_DATA_ID\)\)/, '帯に読めていない一覧の名前');
 });

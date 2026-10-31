@@ -76,6 +76,8 @@ import './data/connectPocketbase.js';
 import { dataFor, applyOnpremRoute, currentProviders } from './dataRoute.js';
 // 🔁 R39 社内版だけ: 「読めていません」の帯を、つながったら自動で読み直して消す(いつものビルドでは使う所が畳まれ、出力に入らない)
 import { readBandKind, startReadRecovery, probeServerRead, readTargetOf, isLocalOnlySnap, OFFLINE_BAND_TITLE, offlineBandDetail } from './domain/readRecovery.js';
+// 🔁 R39 の残り 社内版だけ: 届かない間に読めなかった一覧(購読・1回だけの読み)を、保管庫の層でつながったら全部読み直す(src/data/readRetry.js・4アプリ同じ中身)
+import { readRetryOfProvider, unreadLabel } from './data/readRetry.js';
 import { IS_ONPREM_BUILD, ONPREM_DB, ONPREM_USER, ONPREM_RUNTIME, ONPREM_DOC_LIMIT, aiProxyUrlOr, loadOnpremConfig, ONPREM_CONFIG_FILE } from './onprem.js';
 import { setOnpremPush, registerOnpremSw } from './onpremPush.js';
 import { bootDeviceSession, attachSessionToPbClient } from './onpremDevice.js';   // 🔒 2026-10-30 社内版だけ: 端末ごとのログイン(最初の1回・札だけ覚える)と守った写真の札(約束 CONTRACT_device_login.md)
@@ -470,7 +472,10 @@ const FS_EST = estMeter(FS_API);
 // ---- どの保管庫へ書くか(切替の入口) ----
 // ⚠ 2026-10-29 中身は src/dataRoute.js へ移した(回転計測からも同じ行き先を引く為・点検 G5)。
 // 🚨 2026-10-30 いつものビルド(本番)は必ず全部 Firebase(共有の設定・端末の記憶では切り替わらない)。PocketBase は社内サーバ版のビルド(VITE_ONPREM=1)だけ。
-const DATA = (db) => dataFor(db, FS_EST);   // 🧮 P-L1: 数えるだけの覆い(FS_EST)
+// 🔁 R39 の残り 社内版だけ: 保管庫に「読めなかった一覧を、つながったら読み直す」係を付けてから渡す(付けるのは1回だけ・窓口はそのまま)。
+//   🧪 いつものビルドは : の後(前と同じ字面)だけが残る。
+const onpremWithReadRetry = (p) => { if (p) readRetryOfProvider(p); return p; };
+const DATA = (db) => (IS_ONPREM_BUILD ? onpremWithReadRetry(dataFor(db, FS_EST)) : dataFor(db, FS_EST));   // 🧮 P-L1: 数えるだけの覆い(FS_EST)
 import {
   getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject
 } from "firebase/storage";
@@ -32158,6 +32163,19 @@ const useOnpremReadRecovery = ({ errors, blocked, retry }) => {
   return online;
 };
 
+// --- 🔁 R39 の残り 社内版だけ: まだ読めていない一覧(保管庫の読み直しの係が持つ)を画面へ ------------------
+// ⚠いつものビルドでは呼ぶ所が `IS_ONPREM_BUILD ? … : null` で畳まれ、この関数ごと出力から消える。
+// 戻り値: [{ key, ns, col, error }](読めたら係が外す → 帯も消える)
+const useOnpremUnreadLists = (db) => {
+  const [list, setList] = useState([]);
+  useEffect(() => {
+    if (!db) return undefined;
+    const ctl = readRetryOfProvider(DATA(db));
+    return ctl ? ctl.subscribe(setList) : undefined;
+  }, [db]);
+  return list;
+};
+
 // 端末に残っている「今日の読み取り件数」を1回だけ拾う。
 // ⚠通信は1件も使わない(localStorage だけ)。⚠描画の中で時刻を読まないよう、ここ(読み込み時)で1回だけ。
 const INITIAL_READ_TALLY = (() => {
@@ -32403,6 +32421,9 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
       }));
     },
   }) : true;
+  // 🔁 R39 の残り 社内版だけ: 画面の帯の名札に無い一覧(logs・plan_control など)も、読めていない間は穏やかな帯に名前を出す(黙らない)。
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- 条件はビルドの時の定数(1つのビルドの中では必ず同じ側)
+  const onpremUnread = IS_ONPREM_BUILD ? useOnpremUnreadLists(db) : null;
   // 「あと何分」を動かすための時計(30秒ごと)。⚠通信は1つも増やさない(描き直すだけ)。
    const [, setClockTick] = useState(0);
    useEffect(() => {
@@ -36846,13 +36867,13 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        {/* 🚨 読めていない事を黙って通さない。名指しで出す(0件に見えているのは「無い」ではなく「読めていない」)。 */}
        {/* 🔁 R39 社内版だけ: 読めない理由が「サーバにつながらない」だけなら、赤ではなく穏やかな帯(控えを表示中・つながったら自動で読み直して消える)。
               🧪 いつものビルドは下の : の後(前と同じ字面)だけが残る。 */}
-       {Object.keys(readErrors).length > 0 && !quotaBlock && (IS_ONPREM_BUILD && readBandKind(readErrors, { online: onpremOnline }) === 'offline' ? (
+       {(IS_ONPREM_BUILD ? (Object.keys(readErrors).length > 0 || onpremUnread.length > 0) : Object.keys(readErrors).length > 0) && !quotaBlock && (IS_ONPREM_BUILD && readBandKind(readErrors, { online: onpremOnline }) !== 'error' ? (
          <div data-read-band="offline" className="fixed top-0 left-0 right-0 z-[520] bg-amber-100 text-amber-900 border-b-2 border-amber-400 px-4 py-2 flex items-start gap-3 shadow">
            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5"/>
            <div className="flex-1 text-sm">
              <div className="font-black">{OFFLINE_BAND_TITLE}</div>
              <div className="text-xs mt-0.5">{offlineBandDetail({ saveStopped: !lotsLoaded })}</div>
-             <div className="text-xs opacity-80 mt-0.5">まだ読めていない物: {Object.keys(readErrors).join(' / ')}</div>
+             <div className="text-xs opacity-80 mt-0.5">まだ読めていない物: {[...new Set([...Object.keys(readErrors), ...onpremUnread.map(u => unreadLabel(u, APP_DATA_ID))])].join(' / ')}</div>
            </div>
          </div>
        ) : (

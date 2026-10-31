@@ -170,7 +170,8 @@ test('O06 画面の入口の配線: 社内版は Firebase を起こす前に分�
   assert.match(branch, /return \(\) => \{ alive = false; \};\s*\}\s*if \(!FIREBASE_CONFIG\.apiKey\) return;/, '社内版の道は return で抜け、Firebase の道へ落ちない');
   for (const bad of ['signInAnonymously', 'getAuth(', 'initializeFirestore', 'getStorage(', 'getMessaging']) assert.ok(!branch.includes(bad), `社内版の道で ${bad} を呼ばない`);
   assert.match(branch, /applyOnpremRoute\(cfg/); assert.match(branch, /setDb\(ONPREM_DB\)/); assert.match(branch, /setUser\(ONPREM_USER\)/);
-  assert.match(app, /const DATA = \(db\) => dataFor\(db, FS_EST\);/);
+  // 🔁 R39 の残り: 社内版だけ保管庫に読み直しの係を付ける(いつものビルドは : の後 = 前と同じ字面だけが残る)
+  assert.match(app, /const DATA = \(db\) => \(IS_ONPREM_BUILD \? onpremWithReadRetry\(dataFor\(db, FS_EST\)\) : dataFor\(db, FS_EST\)\);/);
   // 🧪 R2: 写真の上げ先の分かれ道は社内版のビルドだけ(いつものビルドは基点と同じ Storage の道だけが残る)
   assert.match(app, /if \(IS_ONPREM_BUILD && attachmentsOffFirebase\(\)\) return await uploadViaProvider\(base64DataUrl, pathHint, 'jpg'\);/);
   const main = read('src/main.jsx');
