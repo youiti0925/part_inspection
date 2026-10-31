@@ -74,6 +74,8 @@ import { sendPushViaWorker } from './push.js';
 import './data/connectPocketbase.js';
 // 🏢 2026-10-29 社内サーバ版(VITE_ONPREM=1 のビルドだけ)。スイッチの無いビルドでは何もしない。
 import { dataFor, applyOnpremRoute, currentProviders } from './dataRoute.js';
+// 🔁 R39 社内版だけ: 「読めていません」の帯を、つながったら自動で読み直して消す(いつものビルドでは使う所が畳まれ、出力に入らない)
+import { readBandKind, startReadRecovery, probeServerRead, readTargetOf, isLocalOnlySnap, OFFLINE_BAND_TITLE, offlineBandDetail } from './domain/readRecovery.js';
 import { IS_ONPREM_BUILD, ONPREM_DB, ONPREM_USER, ONPREM_RUNTIME, ONPREM_DOC_LIMIT, aiProxyUrlOr, loadOnpremConfig, ONPREM_CONFIG_FILE } from './onprem.js';
 import { setOnpremPush, registerOnpremSw } from './onpremPush.js';
 import { bootDeviceSession, attachSessionToPbClient } from './onpremDevice.js';   // 🔒 2026-10-30 社内版だけ: 端末ごとのログイン(最初の1回・札だけ覚える)と守った写真の札(約束 CONTRACT_device_login.md)
@@ -32129,6 +32131,33 @@ const useLazyCollection = (ctx, colName, wanted, sortFn) => {
   return [rows || [], rows !== null];
 };
 
+// --- 🔁 R39 社内版だけ: 読めていない物を、つながったら自動で読み直す ------------------------
+// ⚠いつものビルドでは呼ぶ所が `IS_ONPREM_BUILD ? … : true` で畳まれ、この関数ごと出力から消える。
+// ⚠中身の決まり(間隔・重ねない・枠切れの間は動かない)は domain/readRecovery.js(試験 readRecovery.test.mjs)。
+// 戻り値: ブラウザが「つながっている」と言っているか(帯の種類を決める材料)。
+const useOnpremReadRecovery = ({ errors, blocked, retry }) => {
+  const ref = useRef({ errors, blocked, retry });
+  useEffect(() => { ref.current = { errors, blocked, retry }; });   // 描くたびに最新を渡す(描く途中では ref に書かない)
+  const [online, setOnline] = useState(() => { try { return navigator.onLine !== false; } catch { return true; } });
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
+  const needed = Object.keys(errors || {}).length > 0 && !blocked;
+  useEffect(() => {
+    if (!needed) return undefined;
+    return startReadRecovery({
+      win: window,
+      onRetry: () => ref.current.retry(ref.current.errors),
+      isActive: () => Object.keys(ref.current.errors || {}).length > 0 && !ref.current.blocked,
+    });
+  }, [needed]);
+  return online;
+};
+
 // 端末に残っている「今日の読み取り件数」を1回だけ拾う。
 // ⚠通信は1件も使わない(localStorage だけ)。⚠描画の中で時刻を読まないよう、ここ(読み込み時)で1回だけ。
 const INITIAL_READ_TALLY = (() => {
@@ -32355,7 +32384,26 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        setQuotaBlock(prev => (prev ? { ...prev, cols: [...new Set([...prev.cols, colName])] } : rec));
      }
    }, []);
-   // 「あと何分」を動かすための時計(30秒ごと)。⚠通信は1つも増やさない(描き直すだけ)。
+   // 🔁 R39 社内版だけ: サーバに届かずに読めなかった物を、つながったら(online の合図・15秒ごと)自動で読み直す。
+  //   読み直しは「その置き場所をサーバから読めるか」を確かめる1本だけ(画面の購読は張り直さない)。
+  //   サーバの答えが届いた名札だけ帯から下ろす。⚠読めなかった時は下ろさない(出して消してを繰り返さない)。
+  //   ロットが読めれば、ロットの購読の受け口がサーバの答えを受けて保存の門を開ける(控えだけの答えでは開けない)。
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- 条件はビルドの時の定数(1つのビルドの中では必ず同じ側)
+  const onpremOnline = IS_ONPREM_BUILD ? useOnpremReadRecovery({
+    errors: readErrors,
+    blocked: !!quotaBlock,
+    retry: (errs) => {
+      if (!db) return null;
+      const P = DATA(db);
+      const aliases = { 'contact_shared/settings': [CONTACT_SHARED_NS, 'settings'], [FEEDBACK_COL]: [CONTACT_SHARED_NS, FEEDBACK_COL], [NOTICE_COL]: [CONTACT_SHARED_NS, NOTICE_COL] };
+      return Promise.all(Object.keys(errs || {}).map(async (key) => {
+        const [ns, col] = readTargetOf(key, APP_DATA_ID, aliases);
+        const r = await probeServerRead(P, ns, col);
+        if (r.ok) setReadErrors(prev => (prev[key] ? (() => { const n = { ...prev }; delete n[key]; return n; })() : prev));
+      }));
+    },
+  }) : true;
+  // 「あと何分」を動かすための時計(30秒ごと)。⚠通信は1つも増やさない(描き直すだけ)。
    const [, setClockTick] = useState(0);
    useEffect(() => {
      if (!quotaBlock) return;
@@ -33160,12 +33208,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        try { changes = snap && snap.docChanges ? snap.docChanges().length : 0; } catch { changes = 0; }
        countReads(colName, snapshotReads(first, changes, cached));
      };
-     const watch = (colName, cb) => P.watchCollection(APP_DATA_ID, colName, (rows, snap) => { meter(colName, snap); readOk(colName); cb(rows, snap); }, { onError: readFailed(colName) });
+     const watch = (colName, cb) => P.watchCollection(APP_DATA_ID, colName, (rows, snap) => { meter(colName, snap); if (!IS_ONPREM_BUILD || !isLocalOnlySnap(snap)) readOk(colName); cb(rows, snap); }, { onError: readFailed(colName) });
 
      unsubs = [
        watch('video_recipes', (rows) => setVideoRecipes(rows)), // 🎬 E42
-       P.watchCollection(APP_DATA_ID, 'templates', (rows, snap) => { meter('templates', snap); readOk('templates'); refreshStepMasterIndex(rows); setTemplates(rows); }, { includeMetadataChanges: true, onError: readFailed('templates') }),
-       P.watchCollection(APP_DATA_ID, 'workers', (rows, snap) => { meter('workers', snap); readOk('workers'); setWorkers(rows); }, { includeMetadataChanges: true, onError: readFailed('workers') }),
+       P.watchCollection(APP_DATA_ID, 'templates', (rows, snap) => { meter('templates', snap); if (!IS_ONPREM_BUILD || !isLocalOnlySnap(snap)) readOk('templates'); refreshStepMasterIndex(rows); setTemplates(rows); }, { includeMetadataChanges: true, onError: readFailed('templates') }),
+       P.watchCollection(APP_DATA_ID, 'workers', (rows, snap) => { meter('workers', snap); if (!IS_ONPREM_BUILD || !isLocalOnlySnap(snap)) readOk('workers'); setWorkers(rows); }, { includeMetadataChanges: true, onError: readFailed('workers') }),
        // ⚠notes / announcements はヘッダーのバッジ(未読件数)で **常に** 使う。外すと数字が黙って0になる。
        watch('notes', (rows) => setNotes(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
        watch('announcements', (rows) => setAnnouncements(rows.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))),
@@ -33372,9 +33420,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        recomputeRawLots(); // 🚨見張り用の姿は同期で更新(描き直しを待たない)
        setLiveLots(rows);
        setLotsWindowWhole(windowWholeRef.current);
+       // 🔁 R39 社内版: 端末の控えだけの答え(まだサーバから読めていない)では「読めた」にしない(帯を消さない・保存の門を開けない)。
+       if (!IS_ONPREM_BUILD || !cached) {
        setReadErrors(prev => (prev.lots ? (() => { const n = { ...prev }; delete n.lots; return n; })() : prev));
        // 🚨 読めた印。ここが立つまでロットの保存は通さない(空で上書きを防ぐ)。
        if (!lotsLoadedRef.current) { lotsLoadedRef.current = true; setLotsLoaded(true); }
+       }
        // 🚨 まだサーバへ届いていない書き込みが在るか。Firestore 自身の申告をそのまま人へ渡す。
        const pend = !!(snap && snap.metadata && snap.metadata.hasPendingWrites);
        if (pendingWritesRef.current !== pend) { pendingWritesRef.current = pend; setPendingWrites(pend); }
@@ -33434,8 +33485,11 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        // 🚨 これが届いた後は「普段の窓」を止めるので、**窓が持っていた役目をここが引き継ぐ**。
        //   ① 読めた印(これが立つまでロットの保存は通さない)
        //   ② まだサーバへ届いていない書き込みが在るか(Firestore 自身の申告)
+       // 🔁 R39 社内版: 端末の控えだけの答えでは「読めた」にしない(上の普段の窓と同じ)。
+       if (!IS_ONPREM_BUILD || !cached) {
        setReadErrors(prev => (prev.lots ? (() => { const n = { ...prev }; delete n.lots; return n; })() : prev));
        if (!lotsLoadedRef.current) { lotsLoadedRef.current = true; setLotsLoaded(true); }
+       }
        const pend = !!(snap && snap.metadata && snap.metadata.hasPendingWrites);
        if (pendingWritesRef.current !== pend) { pendingWritesRef.current = pend; setPendingWrites(pend); }
        // 📉 前回の続きだけ読む係へ(③はいつもサーバ。①を外している間も、③の答えで控え帳を書ける)
@@ -36790,7 +36844,18 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          </div>
        )}
        {/* 🚨 読めていない事を黙って通さない。名指しで出す(0件に見えているのは「無い」ではなく「読めていない」)。 */}
-       {Object.keys(readErrors).length > 0 && !quotaBlock && (
+       {/* 🔁 R39 社内版だけ: 読めない理由が「サーバにつながらない」だけなら、赤ではなく穏やかな帯(控えを表示中・つながったら自動で読み直して消える)。
+              🧪 いつものビルドは下の : の後(前と同じ字面)だけが残る。 */}
+       {Object.keys(readErrors).length > 0 && !quotaBlock && (IS_ONPREM_BUILD && readBandKind(readErrors, { online: onpremOnline }) === 'offline' ? (
+         <div data-read-band="offline" className="fixed top-0 left-0 right-0 z-[520] bg-amber-100 text-amber-900 border-b-2 border-amber-400 px-4 py-2 flex items-start gap-3 shadow">
+           <AlertCircle className="w-5 h-5 shrink-0 mt-0.5"/>
+           <div className="flex-1 text-sm">
+             <div className="font-black">{OFFLINE_BAND_TITLE}</div>
+             <div className="text-xs mt-0.5">{offlineBandDetail({ saveStopped: !lotsLoaded })}</div>
+             <div className="text-xs opacity-80 mt-0.5">まだ読めていない物: {Object.keys(readErrors).join(' / ')}</div>
+           </div>
+         </div>
+       ) : (
          <div className="fixed top-0 left-0 right-0 z-[520] bg-rose-700 text-white px-4 py-3 flex items-start gap-3 shadow-lg">
            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5"/>
            <div className="flex-1 text-sm">
@@ -36800,7 +36865,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
            </div>
            <button onClick={() => window.location.reload()} className="bg-white text-rose-700 px-3 py-1 rounded font-bold text-xs hover:bg-rose-50 flex items-center gap-1 shrink-0"><RefreshCw className="w-3 h-3"/> 再読み込み</button>
          </div>
-       )}
+       ))}
        {/* 🚨 関所が止めた保存。何を止めたか(件数)まで出す。「止めました」だけでは現場が判断できない。 */}
        {saveBlocked && (
          <div className="fixed inset-x-4 top-4 z-[530] bg-rose-800 text-white px-4 py-3 rounded-xl shadow-2xl border-2 border-rose-300 flex items-start gap-3">
