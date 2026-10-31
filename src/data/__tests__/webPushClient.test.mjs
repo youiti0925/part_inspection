@@ -8,9 +8,10 @@
 //   W05 鍵の形・push の口の名前・同じ口のリンク・/__push/v1/ の名前
 //   W06 IndexedDB の鍵 = registration.scope(SW と同じ名前)
 //   W07 relay: 中継(relaySend)を今と同じ形で呼び、横で notify_queue に種類だけの行(mode relay)を1件。行が書けなくても止めない
-//   W08 signal: 中継を呼ばない・宛先 sids と文面の行(mode signal)・同じ口の外へは1回も出ない(登録→送る→解除の全部)
+//   W08 signal: 中継を呼ばない・宛先 to(push_subs の id)と文面の行(mode signal)・同じ口の外へは1回も出ない(登録→送る→解除の全部)
 //   W09 signal の登録: 古い鍵の購読は外す・同じ endpoint は作り直さない・許していない口は断る・秘密は hash だけ送る
 //   W10 準備の判定・画面を開いている時の受信(signal は Firebase を使わない)
+//   W11 サーバーの決まりに合わせる: owner(札の id)を付ける・title 80字・宛先なしの signal は全端末へ広げず種類だけの行
 // 通信はしない(fetch・IndexedDB・pushManager は偽物)。
 // ============================================================================
 import { test } from 'node:test';
@@ -19,13 +20,13 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  pushModeOf, noticeCategoryOf, splitPushTokens, isWpToken, sidOfToken, isVapidPublicKey, isAllowedPushEndpoint,
+  pushModeOf, pbOwnerOf, noticeCategoryOf, splitPushTokens, isWpToken, sidOfToken, isVapidPublicKey, isAllowedPushEndpoint,
   safeNoticeLink, isSameOriginUrl, pushApiUrl, idbGetSub, idbPutSub, idbDeleteSub, PUSH_IDB_NAME, PUSH_IDB_STORE,
   sendOnpremPush, buildQueueRow, enableSignalPush, disableSignalPush, createOnpremPush, onpremPushReady, bytesToB64u, b64uToBytes,
 } from '../webPushClient.js';
 
 // md5 of src/data/webPushClient.js (LF). Change it in all four apps at once.
-const SHARED_WEBPUSH_MD5 = '5eb10c8b7bf84ac2c314b7d0a241102b';
+const SHARED_WEBPUSH_MD5 = '6f5006da63c0f4eb64fb4c9f6fe2c458';
 const SRC = readFileSync(fileURLToPath(new URL('../webPushClient.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
 
 const ORIGIN = 'https://kensa.local';
@@ -245,7 +246,7 @@ test('W08 signal: no Worker, a signal row with sids + text, and nothing leaves t
   const res = await p.send('https://gemini-proxy.example.workers.dev', { tokens: [token, 'fcmOld'], title: '📞 呼出・連絡', body: 'b', link: 'https://evil.com/x', tag: 'req-1', requireInteraction: true });
   assert.deepEqual(res, { ok: true, sent: 1, queued: true, mode: 'signal', results: [] });
   const q = fetchImpl.calls.find((c) => c.url.endsWith('/notify_queue/records'));
-  assert.deepEqual(JSON.parse(q.init.body), { mode: 'signal', state: 'new', ns: 'product-inspection-v1', category: 'call', sids: ['sub0000000001'], title: '📞 呼出・連絡', body: 'b', link: SCOPE, tag: 'req-1', requireInteraction: true });
+  assert.deepEqual(JSON.parse(q.init.body), { mode: 'signal', state: 'new', ns: 'product-inspection-v1', category: 'call', to: ['sub0000000001'], title: '📞 呼出・連絡', body: 'b', link: SCOPE });
   await p.disable();
   const unsub = await p.listenForeground(() => {});
   assert.equal(typeof unsub, 'function');
@@ -272,7 +273,7 @@ test('W09 signal enable: old-key subscription replaced, same endpoint reused, ba
   assert.equal(reg.subscribed[0].userVisibleOnly, true);
   assert.deepEqual([...reg.subscribed[0].applicationServerKey], [...b64uToBytes(KEY)]);
   const body = JSON.parse(fetchImpl.calls.find((c) => c.url.endsWith('/push_subs/records')).init.body);
-  assert.deepEqual(Object.keys(body).sort(), ['auth', 'endpoint', 'ns', 'p256dh', 'secretHash']);
+  assert.deepEqual(Object.keys(body).sort(), ['endpoint', 'ns', 'secretHash']);
   assert.match(body.secretHash, /^[0-9a-f]{64}$/);
   const saved = await idbGetSub(SCOPE, idb);
   assert.equal(saved.sid, 'sidA');
@@ -312,4 +313,47 @@ test('W10 ready / support / foreground switch by mode', async () => {
   const sig2 = createOnpremPush({ getMode: () => 'signal', env: { window: { isSecureContext: true }, navigator: { serviceWorker: {} } } });
   assert.match(sig2.supportProblem(), /Web Push/);
   assert.deepEqual(buildQueueRow({ mode: 'relay', ns: 'x', category: 'cc', sids: ['a'], title: 't' }), { mode: 'relay', state: 'new', ns: 'x', category: 'cc' });
+});
+
+// 札(PocketBase の JWT の形)。中身の id が owner になる。
+const jwtOf = (payload) => ['eyJhbGciOiJIUzI1NiJ9', Buffer.from(JSON.stringify(payload)).toString('base64url'), 'sig'].join('.');
+
+test('W11 server contract: owner from the token, title 80 chars, no-target signal never broadcasts', async () => {
+  const OWNER = 'abcdefghij12345';
+  assert.equal(pbOwnerOf({ getAuth: () => jwtOf({ id: OWNER, type: 'auth' }) }), OWNER);
+  assert.equal(pbOwnerOf({ getAuth: () => 'not-a-jwt' }), '');
+  assert.equal(pbOwnerOf({ getAuth: () => jwtOf({ id: 'a b' }) }), '');
+  assert.equal(pbOwnerOf({ getOwner: () => 'ownerX', getAuth: () => jwtOf({ id: OWNER }) }), 'ownerX');
+  assert.equal(pbOwnerOf(null), '');
+  // relay の行・signal の行・購読の全部に owner
+  const f = makeFetch({ 'GET /__push/v1/config': jsonRes(200, { vapidPublicKey: KEY }), 'POST /api/collections/push_subs/records': jsonRes(200, { id: 'sidOwner1' }) });
+  const pb = { baseUrl: ORIGIN, getAuth: () => jwtOf({ id: OWNER }), fetchImpl: f };
+  await sendOnpremPush({ ns: 'product-inspection-v1', pb, origin: ORIGIN, relaySend: async () => ({ ok: true }) }, 'https://w.example', { tokens: ['f1'], tag: 'req-1', title: '🔧 修正依頼' });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(JSON.parse(f.calls[0].init.body), { owner: OWNER, mode: 'relay', state: 'new', ns: 'product-inspection-v1', category: 'repair' });
+  const reg = makeReg();
+  await enableSignalPush({ pb, ns: 'product-inspection-v1', origin: ORIGIN, fetchImpl: f, registerSw: async () => reg, requestPermission: async () => 'granted', idbFactory: makeFakeIdb() });
+  assert.equal(JSON.parse(f.calls.find((c) => c.url.endsWith('/push_subs/records')).init.body).owner, OWNER);
+  const long = '工'.repeat(79) + '😀' + 'xyz';
+  const n0 = f.calls.length;
+  const ok = await sendOnpremPush({ mode: 'signal', ns: 'product-inspection-v1', pb, origin: ORIGIN, scope: SCOPE }, '', { tokens: ['wp:sidOwner1'], title: long, body: 'b', tag: 'int-1' });
+  assert.equal(ok.ok, true);
+  const row = JSON.parse(f.calls[n0].init.body);
+  assert.equal(row.owner, OWNER);
+  assert.deepEqual(row.to, ['sidOwner1']);
+  assert.equal(Array.from(row.title).length, 80, 'PocketBase の title は 80 字まで');
+  assert.equal(Array.from(row.title)[79], '😀', 'サロゲートを割らない');
+  assert.ok(!('sids' in row) && !('tag' in row) && !('requireInteraction' in row), 'サーバーの欄に無い物は載せない');
+  // 宛先なし(FCM の古い token だけ・空): signal の行は作らない(to が空 = 全端末)。Teams の為の種類だけの行・ok:false と登録し直しの文
+  for (const tokens of [['fcmOld'], []]) {
+    const n1 = f.calls.length;
+    const r = await sendOnpremPush({ mode: 'signal', ns: 'product-inspection-v1', pb, origin: ORIGIN, scope: SCOPE }, '', { tokens, title: '🔧 修正依頼', tag: 'req-2' });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /もう一度登録/);
+    const rows = f.calls.slice(n1).map((c) => JSON.parse(c.init.body));
+    assert.deepEqual(rows, [{ owner: OWNER, mode: 'relay', state: 'new', ns: 'product-inspection-v1', category: 'repair' }]);
+  }
+  // 種類だけの行が書けなくても投げない
+  const r2 = await sendOnpremPush({ mode: 'signal', ns: 'n', pb: { baseUrl: ORIGIN, fetchImpl: async () => { throw new Error('down'); } }, origin: ORIGIN }, '', { tokens: [] });
+  assert.equal(r2.ok, false);
 });

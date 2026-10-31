@@ -188,7 +188,35 @@ export const idbPutSub = (scope, value, factory) => idbRun(factory, 'readwrite',
 export const idbDeleteSub = (scope, factory) => idbRun(factory, 'readwrite', (s) => s.delete(String(scope)));
 
 // --- PocketBase(端末の札で records を作る・消す) -----------------------------
-/** pb = { baseUrl, getAuth(), fetchImpl? } */
+/** 文字数(1字ずつ)で切る(PocketBase の max は字の数。サロゲートの片割れを残さない)。 */
+const cutChars = (v, n) => Array.from(String(v == null ? '' : v)).slice(0, n).join('');
+const OWNER_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/**
+ * 依頼・購読の持ち主(owner = ログインした端末の device_users の id)。サーバーのルールが
+ * `@request.body.owner = @request.auth.id` を求める(tools/migration/pbAccess.mjs)。
+ * pb.getOwner() があればそれ、無ければ札(PocketBase の JWT)の中の id。分からなければ ''。
+ */
+export const pbOwnerOf = (pb) => {
+  try {
+    const g = pb && typeof pb.getOwner === 'function' ? String(pb.getOwner() || '') : '';
+    if (g) return OWNER_RE.test(g) ? g : '';
+    const tok = String((pb && typeof pb.getAuth === 'function' ? pb.getAuth() : '') || '').replace(/^Bearer\s+/i, '');
+    const part = tok.split('.')[1];
+    if (!part) return '';
+    const j = JSON.parse(new TextDecoder().decode(b64uToBytes(part)));
+    const id = j && typeof j.id === 'string' ? j.id : '';
+    return OWNER_RE.test(id) ? id : '';
+  } catch { return ''; }
+};
+/** owner を付けた写し(分からない時は付けない)。 */
+const withOwner = (pb, row) => {
+  const o = pbOwnerOf(pb);
+  const out = {};
+  if (o) out.owner = o;
+  for (const k in row) if (Object.prototype.hasOwnProperty.call(row, k)) out[k] = row[k];
+  return out;
+};
+/** pb = { baseUrl, getAuth(), getOwner()?, fetchImpl? } */
 const pbUrl = (pb, col, id) => String((pb && pb.baseUrl) || '').replace(/\/+$/, '') + '/api/collections/' + col + '/records' + (id ? '/' + encodeURIComponent(id) : '');
 const pbSend = (pb, method, col, id, body) => {
   if (!pb || !pb.baseUrl) return Promise.reject(new Error('社内サーバー(PocketBase)の接続先がありません'));
@@ -204,23 +232,24 @@ const pbSend = (pb, method, col, id, body) => {
 };
 
 /**
- * 送信の依頼を notify_queue へ1件。
- *  relay  … { mode, state:'new', ns, category } だけ(本文・宛先・リンクは載せない)
- *  signal … それに sids・title・body・link(同じ口のパスだけ)・tag・requireInteraction
+ * 送信の依頼を notify_queue へ1件(欄の名前と長さは tools/migration/pbSchema.mjs の NOTIFY_QUEUE に合わせる)。
+ *  relay  … { mode, state:'new', ns, category } だけ(本文・宛先・リンクは載せない。サーバーは Teams だけ)
+ *  signal … それに to(宛先の購読 = push_subs の id の並び)・title(80字)・body(300字)・link(同じ口のパスだけ・300字)
+ *  ⚠signal で宛先が1つも無い時は signal の行を作らない(サーバーは to が空だと同じアプリの全端末へ送る)。
+ *    呼ぶ側(sendOnpremPush)が種類だけの行(mode relay = Teams だけ・push なし)に替える。
+ *  ⚠owner は enqueueNotify が付ける(札の id)。tag・requireInteraction はサーバーの欄に無いので載せない。
  */
-export const buildQueueRow = ({ mode, ns, category, sids, title, body, link, tag, requireInteraction, origin, scope }) => {
+export const buildQueueRow = ({ mode, ns, category, sids, title, body, link, origin, scope }) => {
   const row = { mode: pushModeOf(mode), state: 'new', ns: String(ns || ''), category: String(category || 'info') };
   if (row.mode === PUSH_MODE_SIGNAL) {
-    row.sids = (Array.isArray(sids) ? sids : []).filter((s) => SID_RE.test(String(s))).slice(0, 500);
-    row.title = String(title || '').slice(0, 120);
-    row.body = String(body || '').slice(0, 300);
-    row.link = safeNoticeLink(link, origin, scope || '/').slice(0, 300);
-    row.tag = String(tag || '').slice(0, 100);
-    row.requireInteraction = requireInteraction === true || requireInteraction === '1';
+    row.to = (Array.isArray(sids) ? sids : []).filter((s) => SID_RE.test(String(s))).slice(0, 200);
+    row.title = cutChars(title, 80);
+    row.body = cutChars(body, 300);
+    row.link = cutChars(safeNoticeLink(link, origin, scope || '/'), 300);
   }
   return row;
 };
-export const enqueueNotify = (pb, row) => pbSend(pb, 'POST', 'notify_queue', '', row);
+export const enqueueNotify = (pb, row) => pbSend(pb, 'POST', 'notify_queue', '', withOwner(pb, row));
 
 /**
  * 社内版の送る口。中継の sendPushViaWorker と同じ形の返事({ ok, sent, results, error })。⚠投げない。
@@ -233,10 +262,17 @@ export const sendOnpremPush = (deps, workerUrl, args) => {
   const split = splitPushTokens(a.tokens);
   const origin = d.origin || '';
   if (mode === PUSH_MODE_SIGNAL) {
-    const row = buildQueueRow({ mode: mode, ns: d.ns, category: category, sids: split.sids, title: a.title, body: a.body, link: a.link, tag: a.tag, requireInteraction: a.requireInteraction, origin: origin, scope: d.scope });
+    if (!split.sids.length) {
+      // 宛先なし: 全端末へ広がらないよう signal の行は作らず、Teams の為の種類だけの行(push なし)にする。⚠投げない。
+      return Promise.resolve()
+        .then(() => enqueueNotify(d.pb, buildQueueRow({ mode: PUSH_MODE_RELAY, ns: d.ns, category: category })))
+        .catch(() => null)
+        .then(() => ({ ok: false, sent: 0, mode: mode, results: [], error: 'この宛先は社内の通知(signal)で送れる端末ではありません(通知の方式を切り替えた後は、端末でもう一度登録してください)' }));
+    }
+    const row = buildQueueRow({ mode: mode, ns: d.ns, category: category, sids: split.sids, title: a.title, body: a.body, link: a.link, origin: origin, scope: d.scope });
     return Promise.resolve()
       .then(() => enqueueNotify(d.pb, row))
-      .then(() => ({ ok: true, sent: row.sids.length, queued: true, mode: mode, results: [] }),
+      .then(() => ({ ok: true, sent: row.to.length, queued: true, mode: mode, results: [] }),
         (e) => ({ ok: false, sent: 0, mode: mode, results: [], error: (e && e.message) || String(e) }));
   }
   // relay: 今の中継はそのまま(宛先は FCM の token だけ)。種類だけの行は横で入れる(失敗しても待たない・止めない)。
@@ -315,7 +351,7 @@ export const enableSignalPush = (deps) => {
       if (saved && saved.sid && saved.secret && saved.endpoint === j.endpoint && saved.ns === String(d.ns || '')) return saved.sid;
       secret = randomSecret(d.cryptoImpl);
       return sha256Hex(secret, d.cryptoImpl)
-        .then((hash) => pbSend(d.pb, 'POST', 'push_subs', '', { ns: String(d.ns || ''), endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, secretHash: hash }))
+        .then((hash) => pbSend(d.pb, 'POST', 'push_subs', '', withOwner(d.pb, { ns: String(d.ns || ''), endpoint: j.endpoint, secretHash: hash })))
         .then((rec) => {
           const sid = rec && rec.id;
           if (!sid || !SID_RE.test(String(sid))) throw new Error('社内サーバーの返事に宛先の番号がありません');
