@@ -26,6 +26,9 @@
 //   **いつものビルドの出力にも残る**(このファイル自体は畳まれて消えても)。2026-10-31 実測(部品の dist の md5 が変わった)。
 // ============================================================================
 
+// 🔁 2026-10-31 購読(SSE)が切れた後の張り直しの手伝いと、切れていた間の取りこぼしの読み直し(同じく社内版だけ・4アプリ同じ中身)
+import { installRealtimeResync } from './realtimeResync.js';
+
 /** 読み直しの間隔(ミリ秒): 最初 → 倍々 → 上限。 */
 export const READ_RETRY_FIRST_MS = 2000;
 export const READ_RETRY_MAX_MS = 30000;
@@ -61,9 +64,12 @@ const serverSnap = (snap) => !!(snap && snap.metadata && snap.metadata.fromCache
 export const installReadRetry = (backend, {
   win = (typeof window !== 'undefined' ? window : null), timers = null,
   firstMs = READ_RETRY_FIRST_MS, maxMs = READ_RETRY_MAX_MS,
+  fetchHost = (typeof globalThis !== 'undefined' ? globalThis : null), resyncTimers = null,
 } = {}) => {
   if (!backend || typeof backend !== 'object') return null;
   if (backend[MARK]) return backend[MARK];
+  // 🔁 購読の張り直しの係を先に付ける(この係の包みが内側。読み直し refresh はこの係の包みも通る)
+  const resync = installRealtimeResync(backend, { win, host: fetchHost, timers: resyncTimers });
   const T = timers || { setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h) };
   const client = backend.raw || null;
 
@@ -180,7 +186,8 @@ export const installReadRetry = (backend, {
   });
   const wrapCb = (ns, col, cb) => (a, snap) => { if (serverSnap(snap)) ok(ns, col); return cb(a, snap); };
   const afterOnce = (ns, col) => {
-    const e = typeof backend.loadErrorOf === 'function' ? backend.loadErrorOf(ns, col) : null;
+    // ⚠張り直した後の読み直しが届かずに失敗した一覧は、手元に古い控えがあっても「読めた」にしない
+    const e = (typeof backend.loadErrorOf === 'function' ? backend.loadErrorOf(ns, col) : null) || (resync ? resync.errorOf(ns, col) : null);
     if (e) note(ns, col, e); else ok(ns, col);
   };
   const wrap = (name, fn) => { if (typeof backend[name] === 'function') { orig[name] = backend[name]; backend[name] = fn; } };
@@ -193,6 +200,11 @@ export const installReadRetry = (backend, {
   }
   wrap('countQuery', (ns, col, ...rest) => Promise.resolve().then(() => orig.countQuery(ns, col, ...rest))
     .then((n) => { ok(ns, col); return n; }, (e) => { note(ns, col, e); throw e; }));
+  // 🔁 2026-10-31 読み直し(refresh)も包む: 購読を張り直した後の読み直しが届かずに失敗した一覧も「読み直す物」に入る(読めたら下ろす)。
+  wrap('refresh', (ns, col, ...rest) => Promise.resolve().then(() => orig.refresh(ns, col, ...rest))
+    .then((n) => { ok(ns, col); return n; }, (e) => { note(ns, col, e); throw e; }));
+  // 🔁 2026-10-31 購読が開いた(張り直せた) = サーバへ届いた。読めていない物があれば、すぐ読み直す。
+  const offOpen = resync ? resync.onOpen(() => reached('realtime')) : null;
 
   const ctl = {
     unread,
@@ -201,11 +213,15 @@ export const installReadRetry = (backend, {
     /** 読み直せたら cb(keys)。戻り値は外す関数。 */
     onRecovered: (cb) => { recoveredSubs.add(cb); return () => { recoveredSubs.delete(cb); }; },
     retryNow: (why = 'manual') => reached(why),
+    /** 購読(SSE)の張り直しの係(isLive・stats)。 */
+    resync,
     dispose: () => {
       disposed = true; clearTimer();
       if (win && typeof win.removeEventListener === 'function') win.removeEventListener('online', onOnline);
       for (const [m, f] of tapped) client[m] = f;
       for (const [m, f] of Object.entries(orig)) backend[m] = f;
+      if (offOpen) offOpen();
+      if (resync) resync.dispose();
       delete backend[MARK];
     },
   };
