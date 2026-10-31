@@ -35,8 +35,19 @@ const keyOf = (ns, col) => `${ns}/${col}`;
 const splitKey = (k) => { const i = k.indexOf('/'); return [k.slice(0, i), k.slice(i + 1)]; };
 const abortError = () => { const e = new Error('The operation was aborted.'); e.name = 'AbortError'; return e; };
 
+/** 要求の見出し(Authorization など)を読む(素の物・Headers のどちらでも)。 */
+const headerOf = (init, name) => {
+  const h = init && init.headers;
+  if (!h) return null;
+  if (typeof h.get === 'function') return h.get(name);
+  const want = name.toLowerCase();
+  const k = Object.keys(h).find((x) => x.toLowerCase() === want);
+  return k ? h[k] : null;
+};
+
 /**
- * ブラウザの fetch を1回だけ包み、住所ごとの受け手へ回す(受け手が無い要求は素通し)。
+ * ブラウザの fetch を1回だけ包み、住所ごとの受け手へ回す(受け手が無い・受け手の物でない要求は素通し)。
+ * ⚠同じ住所へ別の窓口(別のログイン)からも要求が来る事がある。受け手は owns(init) で自分の物かを見分ける。
  * @returns 外す関数
  */
 const hookFetch = (host, url, handler) => {
@@ -47,16 +58,21 @@ const hookFetch = (host, url, handler) => {
     reg = { orig, handlers: new Map() };
     const wrapped = function inspectionFetch(input, init) {
       const u = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : String(input));
-      const h = reg.handlers.get(u);
-      if (h) return h(input, init, (a, b) => reg.orig.call(host, a, b));
+      const hs = reg.handlers.get(u);
+      const h = hs ? hs.find((x) => x.owns(init)) : null;
+      if (h) return h.run(input, init, (a, b) => reg.orig.call(host, a, b));
       return reg.orig.apply(host, arguments);
     };
     wrapped[FETCH_MARK] = reg;
     host.fetch = wrapped;
   }
-  reg.handlers.set(url, handler);
+  if (!reg.handlers.has(url)) reg.handlers.set(url, []);
+  reg.handlers.get(url).push(handler);
   return () => {
-    if (reg.handlers.get(url) === handler) reg.handlers.delete(url);
+    const hs = reg.handlers.get(url) || [];
+    const i = hs.indexOf(handler);
+    if (i >= 0) hs.splice(i, 1);
+    if (!hs.length) reg.handlers.delete(url);
     if (!reg.handlers.size && host.fetch && host.fetch[FETCH_MARK] === reg) host.fetch = reg.orig;
   };
 };
@@ -221,7 +237,16 @@ export const installRealtimeResync = (backend, {
     };
     return tryOnce();
   };
-  const unhook = base ? hookFetch(host, `${base}/api/realtime`, onRealtime) : () => {};
+  // この窓口の要求か: 送る札(Authorization)が、この窓口の今の札と同じ時だけ(別の窓口・別のログインの購読は見ない)
+  //   ⚠札は延ばすと変わる(延ばす直前に組んだ要求は前の札)。この窓口が持った事のある札を少しだけ覚える。
+  const tokens = [];
+  const owns = (init) => {
+    const tok = client && client.token;
+    if (tok && tokens.indexOf(tok) < 0) { tokens.push(tok); if (tokens.length > 4) tokens.shift(); }
+    const sent = headerOf(init, 'Authorization');
+    return !!sent && tokens.indexOf(sent) >= 0;
+  };
+  const unhook = base ? hookFetch(host, `${base}/api/realtime`, { owns: owns, run: onRealtime }) : () => {};
 
   const onOnline = () => {
     if (disposed) return;

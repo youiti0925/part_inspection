@@ -11,6 +11,7 @@
 //     RC5 … 読み直しの最中にその一覧の知らせが届いたら、もう1回だけ読み直す(古い答えで新しい変更を消さない)
 //     RC6 … 張り直した後の読み直しが失敗したら、読み直しの係の「読み直す物」に入り、読めたら下りる
 //     RC7 … 起動して1回目に素直につながった時は読み直さない・外すと fetch が元に戻る・ほかの要求は素通し
+//     RC8 … 同じサーバへ別の窓口(別のログイン)の購読があっても、自分の札の要求だけを見る
 // ⚠pbClient.js / pocketbaseBackend.js は触っていない(いつものビルドの出力に入っているため)。係は社内版だけが付ける。
 // ⚠このファイルは4アプリで同じ中身。
 // ============================================================================
@@ -318,4 +319,27 @@ test('RC7 起動して1回目に素直につながった時は読み直さない
   assert.equal(installRealtimeResync(be2, { win: null, host }), rs2, '2回付けない');
   rs2.dispose();
   assert.equal(host.fetch, srv2.fetchImpl);
+});
+
+test('RC8 同じサーバへ別の窓口(別のログイン)の購読があっても、その窓口の開く・切れるは数えない(自分の札の要求だけを見る)', async () => {
+  const srv = mkServer();
+  srv.put('lots', 'L1', { name: 'one' });
+  await mk(srv, async ({ be, rs }) => {
+    let rows = null;
+    be.watchCollection(NS, 'lots', (r) => { rows = r; });
+    await until(() => rows && srv.st.subscribePosts === 1, 2000, '最初');
+    // 別の窓口(係なし・別の札)が同じサーバへ購読を張る
+    const other = createPbClient({ url: BASE });
+    other.setToken('other-token');
+    const close = other.openRealtime({ collections: ['docs'], onEvent: () => {}, onError: () => {} });
+    try {
+      await until(() => srv.st.subscribePosts === 2, 2000, '別の窓口の申し込み');
+      await sleep(50);
+      assert.deepEqual([rs.stats().opens, rs.stats().drops, rs.stats().resyncs], [1, 0, 0], '別の窓口の申し込みは「張り直せた」にしない');
+      assert.equal(rs.isLive(), true);
+    } finally { close(); }
+    await sleep(50);
+    assert.equal(rs.isLive(), true, '別の窓口が閉じても「切れた」にしない');
+    assert.equal(rs.stats().drops, 0);
+  });
 });
