@@ -11,7 +11,10 @@
 //     F4 … 前に全部読めた一覧は、番号と更新時刻だけを読み、変わった物だけを読む(足した・直した・消したが正しく揃う・
 //          答えは全部を順に読んだ時と同じ)
 //     F5 … 全部読む時はページを並べて読み、答えの並びは順に読んだ時と同じ
-//     F6 … 全部読む途中で届かなくなっても、読めたページの分は控えに残り、次は足りない物だけを読む(答えはサーバの今の姿)
+//     F6 … 全部読む途中で届かなくなった一覧は、戻ったらすぐ全部をページで並べて読み直す(番号の一覧を作らない・答えはサーバの今の姿)
+//     F7 … 見張り: 流れが黙って死んだ(閉じた知らせが来ない・何も届かない)のを見つけて切り、張り直して読み直す
+//     F8 … 見張り: サーバの /api/health へ届かない時も流れを切り、張り直して読み直す
+//     F9 … 見張り: 生きている流れ(届いている・health も届く)は切らない(空振りしない)
 // ⚠pbClient.js / pocketbaseBackend.js は触っていない。このファイルは4アプリで同じ中身。
 // ============================================================================
 import { test } from 'node:test';
@@ -20,7 +23,7 @@ import { createPbClient } from '../pbClient.js';
 import { createPocketbaseBackend } from '../pocketbaseBackend.js';
 import { createMemoryStore } from '../outbox.js';
 import { installReadRetry } from '../readRetry.js';
-import { isRetryableRealtimeStatus } from '../realtimeResync.js';
+import { isRetryableRealtimeStatus, installRealtimeResync, LIST_FULL_PER_PAGE, REALTIME_IDLE_MS } from '../realtimeResync.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn, ms = 4000, what = '') => {
@@ -41,7 +44,7 @@ const mkServer = () => {
   const rows = new Map();   // id -> rec
   let seq = 0; let clock = Date.parse('2026-10-31T00:00:00Z');
   const st = {
-    down: false, realtimeStatus: 0,   // realtimeStatus>0 の間、GET /api/realtime はその番号で答える(入口の 502 など)
+    down: false, realtimeStatus: 0, healthDown: false, healthGets: 0,   // realtimeStatus>0 の間、GET /api/realtime はその番号で答える(入口の 502 など)
     lists: [], realtimeGets: [], subscribePosts: 0, streams: [], inflightLists: 0, maxInflightLists: 0, listDelayMs: 0, okListsLeft: -1,
   };
   const recId = (docId) => `r${docId.toLowerCase().replace(/[^a-z0-9]/g, '')}`.padEnd(15, '0').slice(0, 15);
@@ -59,6 +62,8 @@ const mkServer = () => {
     st.streams.forEach((c) => { try { c.enqueue(enc.encode(line)); } catch { /* 閉じている */ } });
   };
   const restart = () => { const xs = st.streams.splice(0); xs.forEach((c) => { try { c.close(); } catch { /* */ } }); };
+  /** 黙った死: サーバは購読を忘れたが、流れは閉じない(閉じた知らせが端末へ届かない・TCP の片側だけ残る)。 */
+  const forget = () => { st.streams.splice(0); };
   const json = (body, status = 200) => new Response(body == null ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   const match = (filter, r) => {
     const f = String(filter || '');
@@ -81,6 +86,7 @@ const mkServer = () => {
       ctl.enqueue(enc.encode(`id:${++seq}\nevent:PB_CONNECT\ndata:${JSON.stringify({ clientId: `c${st.realtimeGets.length}` })}\n\n`));
       return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
     }
+    if (u.pathname === '/api/health') { st.healthGets += 1; if (st.healthDown) throw new TypeError('fetch failed'); return json({ code: 200, message: 'API is healthy.' }); }
     if (u.pathname === '/api/realtime' && method === 'POST') { st.subscribePosts += 1; return new Response(null, { status: 204 }); }
     if (u.pathname === '/api/collections/docs/records' && method === 'GET') {
       const filter = u.searchParams.get('filter');
@@ -103,7 +109,7 @@ const mkServer = () => {
     }
     return json({ message: 'not found' }, 404);
   };
-  return { st, rows, put, del, push, restart, fetchImpl };
+  return { st, rows, put, del, push, restart, forget, fetchImpl };
 };
 
 const fakeWin = () => {
@@ -226,12 +232,12 @@ test('F2 入口が 502 を返す間は、届かない時と同じにここで速
 
 test('F3 同じ一覧の読みが同時に2つ来ても(張り直しの読み直し + 読み直しの係)、ページは1回ずつしか読まない', async () => {
   const srv = mkServer();
-  for (let i = 0; i < 450; i++) srv.put('lot_images', `I${String(i).padStart(4, '0')}`, { n: i });
+  for (let i = 0; i < 1200; i++) srv.put('lot_images', `I${String(i).padStart(4, '0')}`, { n: i });
   await mk(srv, async ({ be, c }) => {
     srv.st.listDelayMs = 20;
     const n0 = srv.st.lists.length;
     const [a, b] = await Promise.all([be.refresh(NS, 'lot_images'), be.refresh(NS, 'lot_images')]);
-    assert.equal(a, 450); assert.equal(b, 450);
+    assert.equal(a, 1200); assert.equal(b, 1200);
     const pages = srv.st.lists.slice(n0).map((x) => x.page);
     assert.deepEqual(pages.slice().sort((x, y) => x - y), [1, 2, 3], `同じページを2回読まない(${pages.join(',')})`);
     assert.equal(typeof c.listAll, 'function');
@@ -246,7 +252,7 @@ test('F4 前に全部読めた一覧は、番号と更新時刻だけを読み�
     be.watchQuery(NS, 'lot_images', {}, (r) => { rows = r; });
     await until(() => rows && rows.length === 450 && srv.st.subscribePosts === 1, 3000, '最初(全部)');
     const full0 = srv.st.lists.filter((x) => !x.fields).length;
-    assert.equal(full0, 3, '最初は全部(3ページ)');
+    assert.equal(full0, 1, `最初は全部(${LIST_FULL_PER_PAGE}件ずつ = 1ページ)`);
     // 切れている間に: 2件直す・1件消す・1件足す
     srv.st.down = true; srv.restart();
     await until(() => rs.isLive() === false, 2000, '切れた');
@@ -291,25 +297,115 @@ test('F5 全部読む時はページを並べて読み、答えの並びは順�
   });
 });
 
-test('F6 全部読む途中で届かなくなっても、読めたページの分は控えに残り、次は足りない物だけを読む(答えはサーバの今の姿)', async () => {
+test('F6 全部読む途中で届かなくなった一覧は、戻ったらすぐ全部をページで並べて読み直す(番号の一覧を作らない・答えはサーバの今の姿)', async () => {
   const srv = mkServer();
-  for (let i = 0; i < 1000; i++) srv.put('lot_images', `I${String(i).padStart(4, '0')}`, { n: i });
+  for (let i = 0; i < 2500; i++) srv.put('lot_images', `I${String(i).padStart(4, '0')}`, { n: i });
   await mk(srv, async ({ c, rs }) => {
     const opts = { filter: `ns="${NS}" && col="lot_images"`, sort: 'docId' };
     srv.st.okListsLeft = 3;   // 5ページのうち3ページだけ読めて、そこで落ちる
     await assert.rejects(c.listAll('docs', opts));
-    assert.equal(rs.stats().lists.partialKept, 600, '読めた3ページ分を控えに残す');
     srv.st.okListsLeft = -1;
-    srv.put('lot_images', 'I0001', { n: 1, changed: true });   // 控えにある物も、変われば読み直す
+    srv.put('lot_images', 'I0001', { n: 1, changed: true });
     srv.del('lot_images', 'I0002');
     const n0 = srv.st.lists.length;
     const got = await c.listAll('docs', opts);
     const after = srv.st.lists.slice(n0);
-    assert.equal(after.filter((x) => !x.fields && !/id="/.test(x.filter)).length, 0, '全部は読み直さない');
-    const read = after.filter((x) => /id="/.test(x.filter)).reduce((a, x) => a + x.n, 0);
-    assert.equal(read, 401, '足りない400件と変わった1件だけ');
-    assert.equal(got.length, 999);
-    assert.deepEqual(got.map((x) => x.data.n), Array.from({ length: 1000 }, (_, i) => i).filter((i) => i !== 2), '並びも中身もサーバの今の姿');
+    assert.equal(after.filter((x) => x.fields || /id="/.test(x.filter)).length, 0, '番号の一覧・番号での読みはしない');
+    assert.deepEqual(after.map((x) => x.page).sort((a, b) => a - b), [1, 2, 3, 4, 5], '全部を1回ずつ');
+    assert.ok(after.every((x) => x.perPage === LIST_FULL_PER_PAGE), `1ページ ${LIST_FULL_PER_PAGE} 件`);
+    assert.equal(got.length, 2499);
+    assert.deepEqual(got.map((x) => x.data.n), Array.from({ length: 2500 }, (_, i) => i).filter((i) => i !== 2), '並びも中身もサーバの今の姿');
     assert.equal(got.find((x) => x.data.n === 1).data.changed, true);
+    assert.equal(rs.stats().lists.delta, 0, '途中で切れた物は控えにしない');
+  });
+});
+
+/** 見張りの試験の組み立て: 本物の pbClient・保管庫に、購読の係を時計と時間を差し替えて付ける。 */
+const mkWatch = async (srv, fn) => {
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = srv.fetchImpl;
+  const W = fakeWin(); const RT = fakeTimers();
+  const docLs = new Set();
+  const D = {
+    visibilityState: 'visible',
+    addEventListener: (t, f) => { if (t === 'visibilitychange') docLs.add(f); },
+    removeEventListener: (t, f) => { docLs.delete(f); },
+    fire: () => { [...docLs].forEach((f) => f()); },
+  };
+  let clock = 1000000;
+  const c = createPbClient({ url: BASE });
+  c.setToken('test-token');
+  c.setReady(Promise.resolve());
+  const be = createPocketbaseBackend(c, { outboxStore: createMemoryStore() });
+  const rs = installRealtimeResync(be, { win: W, doc: D, timers: RT, now: () => clock });
+  try {
+    await quiet(() => fn({ be, rs, RT, D, tick: (ms) => { clock += ms; } }));
+  } finally {
+    rs.dispose();
+    be.close();
+    globalThis.fetch = prevFetch;
+  }
+};
+
+test('F7 見張り: 流れが黙って死んだ(閉じた知らせが来ない)時は、何も届かない時間で見つけて切り、張り直して読み直す', async () => {
+  const srv = mkServer();
+  srv.put('lots', 'L1', { name: 'one' });
+  await mkWatch(srv, async ({ be, rs, tick }) => {
+    let rows = null;
+    be.watchCollection(NS, 'lots', (r) => { rows = r; });
+    await until(() => rows && rows.length === 1 && srv.st.subscribePosts === 1, 2000, '最初');
+    srv.forget();                                   // サーバは忘れた・流れは閉じない
+    srv.put('lots', 'L2', { name: 'two' });         // 知らせは届かない
+    tick(REALTIME_IDLE_MS - 1000);
+    await rs.checkNow();
+    assert.equal(rs.stats().kicks, 0, 'まだ切らない(5分は普通に黙る事がある)');
+    assert.equal(rs.isLive(), true);
+    tick(2000);
+    await rs.checkNow();
+    assert.equal(rs.stats().kicks, 1, '何も届かない時間が過ぎたら切る');
+    await until(() => srv.st.subscribePosts === 2, 4000, '張り直し');
+    await until(() => rows.length === 2, 3000, '切れていた間の変更が画面へ');
+    assert.equal(rs.stats().resyncs, 1);
+  });
+});
+
+test('F8 見張り: サーバの /api/health へ届かない時は流れを切り、届くようになったら張り直して読み直す', async () => {
+  const srv = mkServer();
+  srv.put('lots', 'L1', { name: 'one' });
+  await mkWatch(srv, async ({ be, rs, RT }) => {
+    let rows = null;
+    be.watchCollection(NS, 'lots', (r) => { rows = r; });
+    await until(() => rows && rows.length === 1 && srv.st.subscribePosts === 1, 2000, '最初');
+    srv.forget();
+    srv.put('lots', 'L2', { name: 'two' });
+    srv.st.healthDown = true;
+    RT.fire();   // 間隔の見張り(時計は進めない = 何も届かない時間では切らない)
+    await until(() => rs.stats().pingFails === 1, 2000, '届かなかった');
+    assert.equal(rs.stats().kicks, 1, '流れを切った');
+    srv.st.healthDown = false;
+    await until(() => srv.st.subscribePosts === 2, 4000, '張り直し');
+    await until(() => rows.length === 2, 3000, '読み直し');
+  });
+});
+
+test('F9 見張り: 生きている流れ(届いている・health も届く)は切らない。前に出た時はすぐ1回確かめる', async () => {
+  const srv = mkServer();
+  srv.put('lots', 'L1', { name: 'one' });
+  await mkWatch(srv, async ({ be, rs, D, tick }) => {
+    let rows = null;
+    be.watchCollection(NS, 'lots', (r) => { rows = r; });
+    await until(() => rows && srv.st.subscribePosts === 1, 2000, '最初');
+    for (let i = 0; i < 5; i++) {
+      tick(REALTIME_IDLE_MS - 1000);   // 毎回、切る手前まで黙る → 知らせが届く
+      srv.push('update', srv.put('lots', 'L1', { name: `n${i}` }));
+      await until(() => rows[0].name === `n${i}`, 2000, '知らせ');
+      await rs.checkNow();
+    }
+    assert.equal(rs.stats().kicks, 0, '空振りしない');
+    assert.equal(rs.stats().pings, 5);
+    const h0 = srv.st.healthGets;
+    D.fire();
+    await until(() => srv.st.healthGets === h0 + 1, 2000, '前に出た時に1回');
+    assert.equal(srv.st.subscribePosts, 1, '張り直していない');
   });
 });
