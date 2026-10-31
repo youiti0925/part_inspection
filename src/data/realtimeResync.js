@@ -102,7 +102,8 @@ const hookFetch = (host, url, handler) => {
 
 const LIST_MARK = '__inspectionListAll';
 /** 一覧まるごとの読み(保管庫が組む ns="…" && col="…")だけ、前の答えを覚えて差分で読み直す。 */
-const WHOLE_COLLECTION_RE = /^ns="(?:[^"\\]|\\.)*" && col="(?:[^"\\]|\\.)*"$/;
+const WHOLE_COLLECTION_RE = /^ns="((?:[^"\\]|\\.)*)" && col="((?:[^"\\]|\\.)*)"$/;
+const unq = (x) => String(x).replace(/\\(.)/g, '$1');
 const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/;
 const LIST_REMEMBER_MAX = 128;
 
@@ -169,7 +170,12 @@ const wrapListAll = (client) => {
   });
   const hasStamp = (r) => !!r && typeof r.id === 'string' && typeof r.updated === 'string' && r.updated !== '';
   /** 前の答え(prev)から、変わった物だけを読んで今の答えを作る。作れない時は null(全部読む)。 */
-  const delta = (col, opts, prev, complete) => allPages(col, opts, { fields: 'id,updated', perPage: LIST_IDS_PER_PAGE }).then((ids) => {
+  const delta = (col, opts, prev, complete) => {
+    const m = WHOLE_COLLECTION_RE.exec(String(opts.filter || ''));
+    const sameNsCol = (r) => !m || ((r.ns == null || r.ns === unq(m[1])) && (r.col == null || r.col === unq(m[2])));
+    return deltaWith(col, opts, prev, complete, sameNsCol);
+  };
+  const deltaWith = (col, opts, prev, complete, sameNsCol) => allPages(col, opts, { fields: 'id,updated', perPage: LIST_IDS_PER_PAGE }).then((ids) => {
     if (!ids.every(hasStamp)) return null;
     const before = new Map();
     prev.forEach((r) => { before.set(r.id, r); });
@@ -185,10 +191,11 @@ const wrapListAll = (client) => {
     const worker = () => {
       if (at >= chunks.length) return Promise.resolve();
       const ch = chunks[at]; at += 1;
-      const idPart = ch.map((id) => `id="${id}"`).join(' || ');
-      const filter = opts.filter ? `(${opts.filter}) && (${idPart})` : idPart;
+      // ⚠番号だけで絞る(番号は上の一覧 = 同じ ns/col から来た物。ns/col も足すと PocketBase が全件を見直し約3倍遅い・実測)。
+      //   読めた物の ns/col はここで確かめ、違えば使わない。
+      const filter = ch.map((id) => `id="${id}"`).join(' || ');
       return allPages(col, Object.assign({}, opts, { filter: filter }), { perPage: LIST_CHANGED_CHUNK })
-        .then((recs) => { recs.forEach((r) => { if (r && typeof r.id === 'string') fresh.set(r.id, r); }); return worker(); });
+        .then((recs) => { recs.forEach((r) => { if (r && typeof r.id === 'string' && sameNsCol(r)) fresh.set(r.id, r); }); return worker(); });
     };
     const ws = [];
     for (let i = 0; i < Math.min(LIST_PARALLEL_PAGES, chunks.length); i++) ws.push(worker());
