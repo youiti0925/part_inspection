@@ -55,6 +55,15 @@ export const RESYNC_RETRY_MAX_MS = 10000;
 export const REALTIME_PING_MS = 20000;
 export const REALTIME_PING_TIMEOUT_MS = 5000;
 export const REALTIME_IDLE_MS = 330000;
+// 🔁 2026-10-31 追記(verify16: 製品で GET /api/realtime が54秒、返事の頭(ヘッダ)を待ったまま誰にも切られなかった):
+//   ⑦ 原因: 流れは返事の頭が届いてから(pipe)でしか見張りに入らない。送った GET が黙って死んだ回線に乗ると、
+//      心拍(armWatch)・黙った流れの確認(check)・前に出た合図(onVisible)・online が全部「流れが在る時だけ」だったので、
+//      何も動かず、ブラウザが自分で気づくまで(長さの上限なし)待った。
+//      → 返事の頭を待っている GET(pending)も見張りの対象にする: ① REALTIME_OPEN_TIMEOUT_MS 待っても頭が来なければ切って試し直す
+//        ② 待っている間も心拍が動き、サーバへ届かなければ切る ③ online・前に出た合図でも切る。
+//        切って新しい GET を出すと、ブラウザは黙った回線を確かめて新しい回線へ移る(約10秒)。
+/** ⑦ 流れを開く GET が、返事の頭を待っていられる時間(ミリ秒。0 で待ち切り)。 */
+export const REALTIME_OPEN_TIMEOUT_MS = 10000;
 // 🔁 2026-10-31 追記(verify14: 製品・最終・部品で、起動して最初の流れに見張りが付いていなかった):
 //   ⑥ 原因: 端末の札で入る形(製品・部品の connectPocketbase の札の道/最終の onpremPbFactory)は pbClient に
 //      「ログインを待つ約束(setReady)」が無い。保管庫を作ると(autoRealtime)pbClient の openRealtime が
@@ -293,7 +302,7 @@ export const installRealtimeResync = (backend, {
   doc = (typeof document !== 'undefined' ? document : null),
   host = null,
   timers = null, firstMs = RESYNC_RETRY_FIRST_MS, maxMs = RESYNC_RETRY_MAX_MS,
-  pingMs = REALTIME_PING_MS, pingTimeoutMs = REALTIME_PING_TIMEOUT_MS, idleMs = REALTIME_IDLE_MS,
+  pingMs = REALTIME_PING_MS, pingTimeoutMs = REALTIME_PING_TIMEOUT_MS, idleMs = REALTIME_IDLE_MS, openMs = REALTIME_OPEN_TIMEOUT_MS,
   now = () => Date.now(),
   listAll = true,
 } = {}) => {
@@ -325,6 +334,7 @@ export const installRealtimeResync = (backend, {
   const staleErr = new Map();   // "ns/col" -> 張り直した後の読み直しが失敗した理由(読めたら消す)
   const openSubs = new Set();
   const streams = new Set();    // 今の流れ(online で切る)
+  const pending = new Set();    // ⑦ 送ったが返事の頭がまだ来ない GET(時間切れ・心拍・online で切る)
   const waiters = new Set();    // 届かない間の待ち(online で起こす)
 
   const tellOpen = (info) => { openSubs.forEach((cb) => { try { cb(info); } catch (e) { console.error('[購読] 受け手で例外', e); } }); };
@@ -388,13 +398,13 @@ export const installRealtimeResync = (backend, {
   let pinging = false;
   const watchOn = () => !disposed && !!base && pingMs > 0;
   const armWatch = () => {
-    if (!watchOn() || watchTimer != null || !streams.size) return;
+    if (!watchOn() || watchTimer != null || !(streams.size || pending.size)) return;
     watchTimer = T.setTimeout(() => { watchTimer = null; check('timer'); }, pingMs);
     // Node(試験)で、見張りだけが残って終われなくならないように(ブラウザの番号には無い)
     if (watchTimer && typeof watchTimer.unref === 'function') watchTimer.unref();
   };
   const stopWatch = () => { if (watchTimer != null) { T.clearTimeout(watchTimer); watchTimer = null; } };
-  const kickAll = (why) => { kicks += 1; [...streams].forEach((s) => s.kick(why)); };
+  const kickAll = (why) => { kicks += 1; [...streams].forEach((s) => s.kick(why)); [...pending].forEach((p) => p.kick(why)); };
   const ping = () => {
     const f = fetchHost && typeof fetchHost.fetch === 'function' ? fetchHost.fetch : null;
     if (!f) return Promise.resolve(true);
@@ -416,16 +426,16 @@ export const installRealtimeResync = (backend, {
     const t = now();
     const idle = [...streams].filter((s) => idleMs > 0 && t - s.lastAt > idleMs);
     if (idle.length) { kicks += 1; idle.forEach((s) => s.kick('購読の流れが黙ったままなので張り直します')); }
-    if (!streams.size || pinging) { armWatch(); return Promise.resolve(); }
+    if (!(streams.size || pending.size) || pinging) { armWatch(); return Promise.resolve(); }
     pinging = true; pings += 1;
     return ping().then((ok) => {
       pinging = false;
       if (disposed) return;
-      if (!ok) { pingFails += 1; if (streams.size) kickAll('サーバへ届かないので購読を張り直します'); }
+      if (!ok) { pingFails += 1; if (streams.size || pending.size) kickAll('サーバへ届かないので購読を張り直します'); }
       armWatch();
     });
   };
-  const onVisible = () => { if (doc && doc.visibilityState === 'visible' && streams.size) { stopWatch(); check('visible'); } };
+  const onVisible = () => { if (doc && doc.visibilityState === 'visible' && (streams.size || pending.size)) { stopWatch(); check('visible'); } };
 
   const pipe = (res, realAbort) => {
     const reader = res.body.getReader();
@@ -501,19 +511,51 @@ export const installRealtimeResync = (backend, {
         const ms = delay; delay = Math.min(maxMs, delay * 2);
         return sleep(ms, outer).then(tryOnce);
       };
-      return call(input, myInit).then((res) => {
-        if (res && res.ok && res.body) { adoptTries = 0; return pipe(res, () => { if (ac) ac.abort(); }); }
-        // ② 入口の 502/503/504 など(PocketBase が落ちている間)は、届かない時と同じにここで試し直す
-        if (res && isRetryableRealtimeStatus(res.status) && !disposed && !(outer && outer.aborted)) {
-          if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuter);
-          try { if (res.body && typeof res.body.cancel === 'function') res.body.cancel().catch(() => {}); } catch { /* 読み捨て */ }
-          return retry();
+      // ⑦ 返事の頭を待っている間も見張る(時間切れ・心拍・online で切って試し直す)
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        let openT = null;
+        const clear = () => { if (openT != null) { T.clearTimeout(openT); openT = null; } };
+        const settle = () => { settled = true; clear(); pending.delete(entry); };
+        const entry = {
+          clear: clear,
+          kick: () => {
+            if (settled || disposed) return;
+            settle();
+            if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuter);
+            if (ac) { try { ac.abort(); } catch { /* もう閉じている */ } }
+            if (outer && outer.aborted) { reject(abortError()); return; }
+            resolve(retry());
+          },
+        };
+        pending.add(entry);
+        if (openMs > 0) {
+          openT = T.setTimeout(() => { openT = null; entry.kick('購読の流れの返事が来ないので開き直します'); }, openMs);
+          if (openT && typeof openT.unref === 'function') openT.unref();
         }
-        dropped(); return res;   // 断られた(401・403 など)は pbClient へそのまま
-      }, (e) => {
-        if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuter);
-        if (disposed || (outer && outer.aborted)) throw e;
-        return retry();
+        armWatch();
+        call(input, myInit).then((res) => {
+          if (settled) {   // もう切って試し直している: 遅れて届いた返事は捨てる
+            try { if (res && res.body && typeof res.body.cancel === 'function') res.body.cancel().catch(() => {}); } catch { /* 読み捨て */ }
+            return;
+          }
+          settle();
+          if (res && res.ok && res.body) { adoptTries = 0; resolve(pipe(res, () => { if (ac) ac.abort(); })); return; }
+          // ② 入口の 502/503/504 など(PocketBase が落ちている間)は、届かない時と同じにここで試し直す
+          if (res && isRetryableRealtimeStatus(res.status) && !disposed && !(outer && outer.aborted)) {
+            if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuter);
+            try { if (res.body && typeof res.body.cancel === 'function') res.body.cancel().catch(() => {}); } catch { /* 読み捨て */ }
+            resolve(retry());
+            return;
+          }
+          dropped(); resolve(res);   // 断られた(401・403 など)は pbClient へそのまま
+        }, (e) => {
+          if (settled) return;
+          settle();
+          if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuter);
+          if (disposed || (outer && outer.aborted)) { reject(e); return; }
+          resolve(retry());
+        });
       });
     };
     return tryOnce();
@@ -536,6 +578,7 @@ export const installRealtimeResync = (backend, {
     if (disposed) return;
     [...waiters].forEach((w) => w.wake());
     [...streams].forEach((s) => s.kick());
+    [...pending].forEach((p) => p.kick());
   };
   // ⚠流れを見ていない(住所の無い保管庫)時は online を聞かない(切る物も起こす物も無い)
   if (base && win && typeof win.addEventListener === 'function') win.addEventListener('online', onOnline);
@@ -592,6 +635,7 @@ export const installRealtimeResync = (backend, {
       if (win && typeof win.removeEventListener === 'function') win.removeEventListener('online', onOnline);
       if (doc && typeof doc.removeEventListener === 'function') doc.removeEventListener('visibilitychange', onVisible);
       stopWatch();
+      [...pending].forEach((p) => p.clear());
       [...waiters].forEach((w) => w.wake());
       Object.keys(orig).forEach((m) => { backend[m] = orig[m]; });
       delete backend[MARK];
