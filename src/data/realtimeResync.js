@@ -44,7 +44,7 @@ export const LIST_PARALLEL_PAGES = 4;
 /** 番号と更新時刻だけを読む時の1ページの件数(PocketBase の上限は 1000)。 */
 export const LIST_IDS_PER_PAGE = 1000;
 /** 変わった物だけを読む時、1回の要求で読む件数。 */
-export const LIST_CHANGED_CHUNK = 40;
+export const LIST_CHANGED_CHUNK = 100;
 
 /** /api/realtime の答えのうち「届かない」と同じに扱う物(入口の 502/503/504・時間切れ・混雑)。 */
 export const isRetryableRealtimeStatus = (status) => {
@@ -112,6 +112,9 @@ const LIST_REMEMBER_MAX = 128;
  *   ・全部読む時は、1ページ目で総ページ数を知り、残りを LIST_PARALLEL_PAGES ずつ並べて読む。
  *   ・前に全部読めた一覧まるごと(ns && col)は、「番号と更新時刻」だけを読み、変わった・増えた物だけを読む。
  *     消えた物は落ちる。答えに更新時刻が無い・番号が変な形・変わった物が多い時は、全部読む(ごまかさない)。
+ *   ・全部読む途中で届かなくなった時は、読めたページの分を「手元の控え」として覚え、次は足りない物だけを読む
+ *     (最終の lot_images は 26ページ・約23秒。起動の読みの途中でサーバが落ちても、戻った後に全部を読み直さない)。
+ *     ⚠控えは答えの材料に使うだけ。答え(何が在るか・並び)は毎回サーバの「番号と更新時刻」の一覧で決める。
  * ⚠要求はすべて client.listPage を呼ぶ時に引く(読み直しの係の「要求が通った」の合図もそのまま働く)。
  * @returns { undo(), stats() }
  */
@@ -121,8 +124,10 @@ const wrapListAll = (client) => {
   if (client[LIST_MARK]) return none;
   const origListAll = client.listAll;
   const inflight = new Map();   // 読みの鍵 -> Promise(同時に来た同じ読みを1回にまとめる)
-  const last = new Map();       // 一覧まるごとの鍵 -> 前に読めた答え(レコードの並び)
-  const st = { calls: 0, shared: 0, full: 0, delta: 0, deltaFallback: 0, pages: 0, changed: 0 };
+  const last = new Map();       // 一覧まるごとの鍵 -> { recs: 手元の控え(レコード), complete: 全部読めた答えか }
+  const st = { calls: 0, shared: 0, full: 0, delta: 0, deltaFallback: 0, pages: 0, changed: 0, partialKept: 0 };
+  /** 失敗に「途中まで読めた物」を付ける(覚えて次に使う)。 */
+  const withPartial = (e, recs) => { if (e && typeof e === 'object' && recs.length) { try { e.partialRecords = recs; } catch (x) { /* 付けられない */ } } return e; };
 
   const pageOf = (col, opts, n, extra) => {
     st.pages += 1;
@@ -145,7 +150,14 @@ const wrapListAll = (client) => {
     };
     const ws = [];
     for (let i = 0; i < Math.min(LIST_PARALLEL_PAGES, todo.length); i++) ws.push(worker());
-    return Promise.all(ws).then(() => {
+    const settled = (w) => w.then(() => null, (e) => ({ e: e }));
+    return Promise.all(ws.map(settled)).then((rs) => {
+      const failed = rs.find((x) => x);
+      if (failed) {
+        const part = [];
+        got.forEach((items) => { if (items) for (let i = 0; i < items.length; i++) part.push(items[i]); });
+        throw withPartial(failed.e, part);
+      }
       const out = [];
       for (let n = 1; n <= total; n++) {
         const items = got[n] || [];
@@ -157,13 +169,15 @@ const wrapListAll = (client) => {
   });
   const hasStamp = (r) => !!r && typeof r.id === 'string' && typeof r.updated === 'string' && r.updated !== '';
   /** 前の答え(prev)から、変わった物だけを読んで今の答えを作る。作れない時は null(全部読む)。 */
-  const delta = (col, opts, prev) => allPages(col, opts, { fields: 'id,updated', perPage: LIST_IDS_PER_PAGE }).then((ids) => {
+  const delta = (col, opts, prev, complete) => allPages(col, opts, { fields: 'id,updated', perPage: LIST_IDS_PER_PAGE }).then((ids) => {
     if (!ids.every(hasStamp)) return null;
     const before = new Map();
     prev.forEach((r) => { before.set(r.id, r); });
     const changed = ids.filter((x) => { const p = before.get(x.id); return !p || p.updated !== x.updated; }).map((x) => x.id);
     if (changed.some((id) => !SAFE_ID_RE.test(id))) return null;
-    if (changed.length > Math.max(200, Math.floor(ids.length / 4))) return null;
+    if (!changed.length && !ids.length) return [];
+    if (complete && changed.length > Math.max(200, Math.floor(ids.length / 4))) return null;   // 変わった物が多い: 全部読む
+    if (!complete && changed.length >= ids.length) return null;                                // 控えが役に立たない: 全部読む
     const chunks = [];
     for (let i = 0; i < changed.length; i += LIST_CHANGED_CHUNK) chunks.push(changed.slice(i, i + LIST_CHANGED_CHUNK));
     const fresh = new Map();
@@ -190,8 +204,13 @@ const wrapListAll = (client) => {
       }
       st.changed += changed.length;
       return out;
-    });
+    }, (e) => { const part = []; fresh.forEach((r) => part.push(r)); throw withPartial(e, part); });
   });
+  /** 控えを覚える(古い物は押し出す)。 */
+  const remember = (k, recs, complete) => {
+    last.delete(k); last.set(k, { recs: recs, complete: complete });
+    if (last.size > LIST_REMEMBER_MAX) last.delete(last.keys().next().value);
+  };
 
   const wrapped = function listAllShared(col, opts) {
     const o = opts || {};
@@ -203,7 +222,7 @@ const wrapListAll = (client) => {
     const whole = WHOLE_COLLECTION_RE.test(String(o.filter || ''));
     const prev = whole ? last.get(k) : null;
     const p = Promise.resolve()
-      .then(() => (prev && prev.every(hasStamp) ? delta(col, o, prev) : null))
+      .then(() => (prev && prev.recs.length && prev.recs.every(hasStamp) ? delta(col, o, prev.recs, prev.complete) : null))
       .then((r) => {
         if (r) { st.delta += 1; return r; }
         if (prev) st.deltaFallback += 1;
@@ -211,11 +230,20 @@ const wrapListAll = (client) => {
         return allPages(col, o);
       })
       .then((recs) => {
-        if (whole) {
-          last.delete(k); last.set(k, recs);
-          if (last.size > LIST_REMEMBER_MAX) last.delete(last.keys().next().value);
-        }
+        if (whole) remember(k, recs, true);
         return recs;
+      }, (e) => {
+        // 途中まで読めた物を控えに足す(前の控えと合わせる。答えにはしない)
+        const part = e && typeof e === 'object' && Array.isArray(e.partialRecords) ? e.partialRecords.filter(hasStamp) : [];
+        if (whole && part.length) {
+          const pool = new Map();
+          if (prev) prev.recs.forEach((r) => { if (r && r.id) pool.set(r.id, r); });
+          part.forEach((r) => { pool.set(r.id, r); });
+          const recs = []; pool.forEach((r) => recs.push(r));
+          remember(k, recs, false);
+          st.partialKept += part.length;
+        }
+        throw e;
       });
     inflight.set(k, p);
     const done = () => { if (inflight.get(k) === p) inflight.delete(k); };

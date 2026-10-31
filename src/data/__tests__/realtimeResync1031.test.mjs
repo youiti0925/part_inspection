@@ -11,6 +11,7 @@
 //     F4 … 前に全部読めた一覧は、番号と更新時刻だけを読み、変わった物だけを読む(足した・直した・消したが正しく揃う・
 //          答えは全部を順に読んだ時と同じ)
 //     F5 … 全部読む時はページを並べて読み、答えの並びは順に読んだ時と同じ
+//     F6 … 全部読む途中で届かなくなっても、読めたページの分は控えに残り、次は足りない物だけを読む(答えはサーバの今の姿)
 // ⚠pbClient.js / pocketbaseBackend.js は触っていない。このファイルは4アプリで同じ中身。
 // ============================================================================
 import { test } from 'node:test';
@@ -41,7 +42,7 @@ const mkServer = () => {
   let seq = 0; let clock = Date.parse('2026-10-31T00:00:00Z');
   const st = {
     down: false, realtimeStatus: 0,   // realtimeStatus>0 の間、GET /api/realtime はその番号で答える(入口の 502 など)
-    lists: [], realtimeGets: [], subscribePosts: 0, streams: [], inflightLists: 0, maxInflightLists: 0, listDelayMs: 0,
+    lists: [], realtimeGets: [], subscribePosts: 0, streams: [], inflightLists: 0, maxInflightLists: 0, listDelayMs: 0, okListsLeft: -1,
   };
   const recId = (docId) => `r${docId.toLowerCase().replace(/[^a-z0-9]/g, '')}`.padEnd(15, '0').slice(0, 15);
   const put = (col, docId, data, ns = NS) => {
@@ -91,6 +92,8 @@ const mkServer = () => {
         const all = [...rows.values()].filter((r) => match(filter, r)).sort((a, b) => String(a.docId).localeCompare(String(b.docId)));
         if (st.listDelayMs) await sleep(st.listDelayMs);
         if (st.down) throw new TypeError('fetch failed');
+        if (st.okListsLeft === 0) throw new TypeError('fetch failed');
+        if (st.okListsLeft > 0) st.okListsLeft -= 1;
         const totalPages = Math.max(1, Math.ceil(all.length / perPage));
         const items = all.slice((page - 1) * perPage, page * perPage)
           .map((r) => (fields ? Object.fromEntries(fields.split(',').map((k) => [k, r[k]])) : JSON.parse(JSON.stringify(r))));
@@ -285,5 +288,28 @@ test('F5 全部読む時はページを並べて読み、答えの並びは順�
     const sel = await c.listAll('docs', { filter: `ns="${NS}" && col="lots"`, sort: 'docId', fields: 'id' });
     assert.equal(sel.length, 1300);
     assert.ok(srv.st.lists.slice(n0).every((x) => x.fields === 'id'), '項目を選ぶ読みは元の listAll');
+  });
+});
+
+test('F6 全部読む途中で届かなくなっても、読めたページの分は控えに残り、次は足りない物だけを読む(答えはサーバの今の姿)', async () => {
+  const srv = mkServer();
+  for (let i = 0; i < 1000; i++) srv.put('lot_images', `I${String(i).padStart(4, '0')}`, { n: i });
+  await mk(srv, async ({ c, rs }) => {
+    const opts = { filter: `ns="${NS}" && col="lot_images"`, sort: 'docId' };
+    srv.st.okListsLeft = 3;   // 5ページのうち3ページだけ読めて、そこで落ちる
+    await assert.rejects(c.listAll('docs', opts));
+    assert.equal(rs.stats().lists.partialKept, 600, '読めた3ページ分を控えに残す');
+    srv.st.okListsLeft = -1;
+    srv.put('lot_images', 'I0001', { n: 1, changed: true });   // 控えにある物も、変われば読み直す
+    srv.del('lot_images', 'I0002');
+    const n0 = srv.st.lists.length;
+    const got = await c.listAll('docs', opts);
+    const after = srv.st.lists.slice(n0);
+    assert.equal(after.filter((x) => !x.fields && !/id="/.test(x.filter)).length, 0, '全部は読み直さない');
+    const read = after.filter((x) => /id="/.test(x.filter)).reduce((a, x) => a + x.n, 0);
+    assert.equal(read, 401, '足りない400件と変わった1件だけ');
+    assert.equal(got.length, 999);
+    assert.deepEqual(got.map((x) => x.data.n), Array.from({ length: 1000 }, (_, i) => i).filter((i) => i !== 2), '並びも中身もサーバの今の姿');
+    assert.equal(got.find((x) => x.data.n === 1).data.changed, true);
   });
 });
