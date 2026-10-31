@@ -149,7 +149,7 @@ test('W03 category table (tag / title → category)', () => {
   for (const [a, want] of cases) assert.equal(noticeCategoryOf(a), want, JSON.stringify(a));
 });
 
-test('W04 "wp:" tokens are never handed to the relay; duplicates collapse', () => {
+test('W04 "wp:" tokens are never handed to the relay; duplicates are merged into one', () => {
   assert.ok(isWpToken('wp:abc123DEF456ghi'));
   assert.ok(!isWpToken('wp:'));
   assert.ok(!isWpToken('wp:a b'));
