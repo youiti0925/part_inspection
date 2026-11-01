@@ -68,6 +68,9 @@ import { ROW_DATA_WINS } from './data/provider.js';
 // P153: 名前空間と保管庫の行き先を routes.js の1か所から引く(製品 App.jsx:49・52 と同じ)。
 //   PocketBase は読み込んでも切り替わらない。切り替わるのは保存された行き先が enabled:true の時だけ。
 import { NS as DATA_NS, DEFAULT_PROVIDERS } from './data/routes.js';
+// 🏯 2026-11-01 最上位の司令塔 段2: 新しいグループの口(入口が onprem-config.json に group を足した口)では、名前空間と共有の棚(capacity)をグループ自身の物にする。
+//   group が無い口(今の4つ)は今の名前のまま。形の悪い group は画面を止める(今の棚へ落とさない)。⚠今の本番ビルドでは社内版の判定が false で畳まれ、出力に入らない。
+import { resolveAppNs, withGroupCapacity } from './onprem/groupNs.js';
 import { fetchAllPaged } from './domain/goal/pager.js';
 import { goalGapOf, candidateOf, planPortfolio } from './domain/goal/portfolioPlanner.js';
 import { sendPushViaWorker } from './push.js';
@@ -937,7 +940,7 @@ const gridToWsShim_pl = (grid) => ({
 
 // --- Global Constants & Config ---
 // 修正: IDを固定化して、どの端末からでも同じデータを参照できるようにする
-const APP_DATA_ID = "parts-inspection-v1"; // 部品検査アプリ専用の名前空間 (製品/最終とは別)
+const APP_DATA_ID = IS_ONPREM_BUILD ? resolveAppNs("parts-inspection-v1", "parts") : "parts-inspection-v1"; // 部品検査アプリ専用の名前空間 (製品/最終とは別)
 // 検査アプリ共通の棚。工場の暦(祝日表)はここに1つだけ置く = どのアプリで登録しても全部に効く。
 //   🚨 このアプリは **読むだけ**。登録する画面は製品検査/最終検査にある(1つの物を2か所で直させない)。
 //   ⚠ 新しいコレクションも名前空間も作らない(firestore.rules の knownApp に既に載っている)。
@@ -36016,7 +36019,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    /* 🏭 2026-09-27 製品→部品 移植: 操業シミュレーション(製品の OperationsSimulationPanel をそのまま)の入口。
       共有棚 capacity-shared-v1 は 4アプリ共通の区画。部品は daily_load/parts・placement_rules・plan_control/parts を使う。
       🚨 部品に無い土台(到着予定・工程連絡・相手工場の名簿/負荷)は渡さない(null)= 画面は「分からない/まだ届いていません」と出す。0 で埋めない。 */
-   const OPSIM_SHELF_NS = 'capacity-shared-v1';
+   const OPSIM_SHELF_NS = IS_ONPREM_BUILD ? withGroupCapacity({ capacity: 'capacity-shared-v1' }, 'parts').capacity : 'capacity-shared-v1';
    // 休止中を外した名簿(毎描画で新しい配列を作ると計算がやり直しになるので1回だけ)
    const opsimWorkers = useMemo(() => activeWorkersOf(workers || []), [workers]);
    const [ownDailyLoad, setOwnDailyLoad] = useState(null);

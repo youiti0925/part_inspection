@@ -44,4 +44,13 @@ window.addEventListener('appinstalled', () => {
 
 installReloadGate()
 watchGlobalErrors()
-createRoot(document.getElementById('root')).render(<ErrorBoundary where="app"><App /></ErrorBoundary>)
+// 🏯 2026-11-01 最上位の司令塔 段2: 社内版だけ、描く前に「この口のグループ」が起動の最初に決めた名前空間と同じか確かめる。
+//   違う/形が悪い時は画面を止める(今の棚へ落とさない)。いつものビルドは else の1文だけが残る。
+if (import.meta.env.VITE_ONPREM === '1') {
+  import('./onprem/groupNs.js').then((g) => g.verifyGroupAsync('parts').then((v) => {
+    if (!v.ok) { g.stopWith(v.reason); return }
+    const a = g.archivedGroupOf('parts'); if (a) g.showArchivedBand(document, a)
+    createRoot(document.getElementById('root')).render(<ErrorBoundary where="app"><App /></ErrorBoundary>)
+  })).catch((e) => { console.error('[onprem] グループの確かめに失敗しました', e); createRoot(document.getElementById('root')).render(<ErrorBoundary where="app"><App /></ErrorBoundary>) })
+}
+else createRoot(document.getElementById('root')).render(<ErrorBoundary where="app"><App /></ErrorBoundary>)
