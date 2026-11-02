@@ -7,6 +7,9 @@ import { ErrorBoundary, watchGlobalErrors } from './ErrorBoundary.jsx'
 // 🚨 「まだ送れていない保存がある間は読み直させない」関所(2026-08-30)。
 //   ⚠版の見張りとは切り離して**必ず**置く。index.html の「切り替える」はこれを見る。
 import { installReloadGate } from './reloadGate.js'
+// 📴 2026-11-02 Wi-Fi/LAN が切れても使える: 「オフライン中・未送信 N 件」の札(React の外・どの画面でも出る)
+import { installOfflineBadge } from './offline/offlineBadge.js'
+import { countFirestorePending } from './offline/firestorePending.js'
 
 // P140: 製品 src/main.jsx の SW 登録と「アプリとして入れる」合図の捕まえを写した
 // Service Worker を起動時に必ず登録する。
@@ -42,4 +45,24 @@ window.addEventListener('appinstalled', () => {
 
 installReloadGate()
 watchGlobalErrors()
+// ============================================================================
+// 📴 オフラインの札(2026-11-02・最終/製品/部品/③で同じ形)
+// ・未送信の数 = Firestore の端末の待ち行列(persistentLocalCache)の件数。再読込の後に復活した保存も数える。
+//   数えられない端末は、画面の保存の札(window.__appSaveStatus)が在ればその「まだ」を使う(0 と言わない)。
+// ・切れているかは同じ口の precache.json に HEAD で聞く(Firestore の読み取りは使わない)。
+// ============================================================================
+window.addEventListener('load', () => {
+  try {
+    installOfflineBadge({
+      probeUrl: '/precache.json',
+      getPending: async () => {
+        const n = await countFirestorePending('inspection-time-c4fd3')
+        if (n !== null) return { count: n }
+        const st = window.__appSaveStatus || {}
+        return { count: null, has: !!(st.unknown || st.unsent > 0 || st.fsPending || st.lotsPending) }
+      },
+    })
+  } catch (e) { console.warn('オフラインの札を出せませんでした', e) }
+})
+
 createRoot(document.getElementById('root')).render(<ErrorBoundary where="app"><App /></ErrorBoundary>)

@@ -5,6 +5,8 @@
 //   🚨 no-undef は「白画面を見つける唯一の網」なので基準値で緩められない(verify-lint-baseline.mjs の HARD_ZERO)。
 //   4件の嘘の赤を溜めると、本物の no-undef が来た時に見分けが付かなくなる。
 //   → 最終検査(golden)の src/App.firebase.jsx:1 と同じ書き方で、この2つだけを名指しで宣言する。
+// 📴 2026-11-02 通信が要る機能(AI)は切れている時に先に断る
+import { isAppOffline, offlineFeatureMessage, settleOrQueued } from './offline/offlineBadge.js';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { 
@@ -4390,6 +4392,8 @@ const GEMINI_PROXY_URL = String(import.meta.env.VITE_GEMINI_PROXY_URL || '').rep
  * @param {string} modelName
  */
 const callGeminiViaProxy = async (payload, modelName = 'gemini-2.5-flash') => {
+  // 📴 2026-11-02 切れている時は先に断る(記録の入力は止めない)
+  if (isAppOffline()) throw new Error(offlineFeatureMessage('AI'));
   if (!GEMINI_PROXY_URL) {
     throw new Error('AIサーバーが未設定です。\n管理者: .env の VITE_GEMINI_PROXY_URL に Worker の URL を設定して、ビルドし直してください。');
   }
@@ -11297,7 +11301,7 @@ const WorkExecutionModal = ({ lot: _lotProp, itemMaster = null, onSwitchLot = nu
     const mine = workers.find(w => w && w.name === String(currentUserName || '').trim());
     if (target && !target.workerId && mine && mine.id && saveData) {
       // 担当なしのロットへ移る時は自分を担当にする。⚠投げっぱなしにしない(失敗は saveData が画面へ出す)
-      try { await saveData('lots', targetId, { workerId: mine.id }); } catch { /* saveData が画面へ出す */ }
+      try { await settleOrQueued(saveData('lots', targetId, { workerId: mine.id })); } catch { /* saveData が画面へ出す */ }
     }
     // 🚶 2026-09-27 離れるロットが担当なしなら、自分を担当にしてから移る(自動測定を置いていくのは自分)。
     //   これが無いと、移った先の「測定中の元のロット ↩ 戻る」の帯が「自分の物」と分からず出なかった(部品の写しで実測)。
@@ -26787,7 +26791,7 @@ const LotAssignmentModal = ({ lot, workers, mapZones, currentUserName, onClose, 
     if (busy) return false;
     setBusy(true);
     try {
-      await saveData('lots', lot.id, updateData);
+      await settleOrQueued(saveData('lots', lot.id, updateData));   // 📴 切れている間は待ち行列に入れば先へ(担当・場所の窓を固めない)
       return true;
     } catch (e) {
       alert('保存失敗: ' + (e.message || e));
@@ -34726,7 +34730,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
           alert('⚠ 作業着手後のロットでテンプレートを変更しました。\n進捗データは保持されますが、新工程は次回作業から反映されます。');
         }
 
-        await saveData('lots', editingLot.id, updates);
+        await settleOrQueued(saveData('lots', editingLot.id, updates));
         setEditingLot(null);
      } else {
         // Single document for the batch, with quantity field
@@ -34756,17 +34760,17 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
             interruptions: [],
             appliedStandard, // 適用された品質規格のスナップショット (null 可)
         };
-        await saveData('lots', id, lot);
-        await saveData('logs', generateId(), { timestamp, type: 'CREATE', batchId, count: qty, model, ...(appliedStandard?.standardNo ? { standardNo: appliedStandard.standardNo } : {}) });
+        await settleOrQueued(saveData('lots', id, lot));
+        await settleOrQueued(saveData('logs', generateId(), { timestamp, type: 'CREATE', batchId, count: qty, model, ...(appliedStandard?.standardNo ? { standardNo: appliedStandard.standardNo } : {}) }));
         // 🆕 P164 連絡から登録した時の後始末(製品と同じ)。⚠lotId と status:'done' は必ず両方書く。
         if (lotPrefill && lotPrefill.reqId) {
-          await saveData('contact_requests', lotPrefill.reqId, { lotId: id, status: 'done' });
+          await settleOrQueued(saveData('contact_requests', lotPrefill.reqId, { lotId: id, status: 'done' }));
           if (lotPrefill.arrivalDate && lotPrefill.arrivalTime) {
-            await saveData('arrival_times', id, buildArrivalDoc({
+            await settleOrQueued(saveData('arrival_times', id, buildArrivalDoc({
               lot: { id, orderNo, model, quantity: qty, dueDate: parsedDueDate || '' },
               splits: [{ date: lotPrefill.arrivalDate, time: lotPrefill.arrivalTime, qty }],
               by: currentUserName, group: lotPrefill.group || '', viaReq: lotPrefill.reqId, now: timestamp,
-            }));
+            })));
           }
         }
      }
@@ -36582,9 +36586,12 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
            <button onClick={() => setAnnounceBanner(null)} className="bg-white/20 hover:bg-white/30 rounded-full p-2 shrink-0"><X className="w-6 h-6" /></button>
          </div>
        )}
-       {/* オフラインバナー (倉庫の電波弱でも作業継続可能・復旧時に自動同期) */}
+       {/* オフラインバナー (倉庫の電波弱でも作業継続可能・復旧時に自動同期)
+           📴 2026-11-02 製品の直し(2026-08-09)を移した: もとは `fixed top-0 z-[450]` で浮かせていて、
+             **帯がヘッダーの上に乗り、タブ(登録・検査リスト)と使用者選択が押せなかった**(オフラインの試験で実測)。
+             列の先頭に流し込む(ヘッダーを押し下げるだけ)。固定の値で下げない(ヘッダー高は文字サイズで変わる)。 */}
        {!isOnline && (
-         <div className="fixed top-0 left-0 right-0 z-[450] bg-amber-500 text-white px-4 py-2 flex items-center justify-center gap-2 text-sm font-bold shadow-lg">
+         <div className="shrink-0 bg-amber-500 text-white px-4 py-2 flex items-center justify-center gap-2 text-sm font-bold shadow-md">
            <WifiOff className="w-4 h-4"/> オフライン中 — 作業は続けられます。電波が戻ると自動で同期されます。
          </div>
        )}
