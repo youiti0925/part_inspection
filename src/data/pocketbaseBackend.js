@@ -17,7 +17,9 @@
 // ============================================================================
 
 import { createDocStore, PbConflictError, PbCommandMismatchError, DOCS_COL, assertWritableDocKey, PbBadDocIdError } from './pbDocStore.js';
-import { createOutbox, createIdbStore, createMemoryStore, STATUS } from './outbox.js';
+import { createOutbox, createIdbStore, createMemoryStore, STATUS, isNetworkFailure } from './outbox.js';
+// 📴 2026-11-02 読んだ一覧の端末の控え(サーバーに届かない間に開き直しても、前の中身を出す)
+import { createIdbReadCache } from './readCache.js';
 import { mergeDoc, overwriteDoc, setFieldsDoc } from './docMerge.js';
 import { withDeletions, DATA_SERVER_NOW } from './sentinels.js';
 import { POCKETBASE_CAPABILITIES } from './capabilities.js';
@@ -32,8 +34,11 @@ const keyOf = (ns, col) => `${ns}/${col}`;
  */
 export const createPocketbaseBackend = (client, {
   outboxStore, docsCol = DOCS_COL, owner = '', onPendingChange, onConflict, autoRealtime = true,
+  readCache,
 } = {}) => {
   const store = createDocStore(client, { docsCol, owner });
+  // 📴 2026-11-02 端末の控え(readCache.js)。省略時は IndexedDB(使えなければ無し)。false で使わない(試験)。
+  const rc = readCache === undefined ? (typeof indexedDB !== 'undefined' ? createIdbReadCache() : null) : (readCache || null);
 
   // --- 手元の一覧(コレクション単位) -----------------------------------------
   // ⚠2つの層に分ける。
@@ -58,6 +63,9 @@ export const createPocketbaseBackend = (client, {
   const loading = new Map();   // "ns/col" -> Promise
   const loadError = new Map(); // "ns/col" -> Error(読めなかった理由)
   const docListeners = new Map(); // "ns/col/docId" -> Set(cb)
+  // 📴 2026-11-02 端末の控えから出した一覧(サーバーからはまだ読めていない = fromCache:true のまま)
+  const restored = new Set();
+  const restoring = new Map();     // "ns/col" -> Promise<boolean>(控えを出せたか)
 
   /** cache ⊕ pending。画面から見える中身。 */
   const viewOf = (k) => {
@@ -166,6 +174,8 @@ export const createPocketbaseBackend = (client, {
         cache.set(k, m); revs.set(k, rv);
         loaded.add(k);
         loadError.delete(k);
+        restored.delete(k);
+        saveAllToDevice(k);   // 📴 端末の控えを最新に
       } catch (e) {
         loadError.set(k, e);
         if (!cache.has(k)) cache.set(k, new Map()); // 空でも「見えている」状態にする(見込み値は残る)
@@ -176,8 +186,53 @@ export const createPocketbaseBackend = (client, {
     loading.set(k, p);
     return p;
   };
-  /** 例外にしないで読む(画面用)。 */
-  const softLoad = async (ns, col) => { try { await ensureLoaded(ns, col); } catch { /* loadError に残っている */ } };
+  // --- 📴 端末の控え(2026-11-02) ---------------------------------------------
+  /** サーバーから読めた一覧を、まるごと控えに書く(読めた時・読み直せた時)。 */
+  const saveAllToDevice = (k) => {
+    if (!rc || !loaded.has(k)) return;
+    const m = cache.get(k) || new Map(); const rv = revs.get(k) || new Map();
+    try { rc.replaceAll(k, [...m.entries()].map(([id, d]) => [id, d, rv.get(id) || 0])); } catch (e) { console.warn('[pb] 控えに書けません', e); }
+  };
+  /** 1件だけ控えに書く/消す(購読の知らせ・送った後の読み直し)。⚠サーバーから読めた一覧だけ。 */
+  const saveDocToDevice = (k, id) => {
+    if (!rc || !loaded.has(k)) return;
+    const m = cache.get(k);
+    try { if (m && m.has(id)) rc.putDoc(k, id, m.get(id), (revs.get(k) || new Map()).get(id) || 0); else rc.delDoc(k, id); } catch (e) { console.warn('[pb] 控えに書けません', e); }
+  };
+  /**
+   * 控えから一覧を出す(1つの一覧につき1回)。⚠サーバーから既に読めた一覧・中身が既に在る一覧には出さない。
+   * 出した中身は fromCache:true(読めた印 loaded は付けない = 読み直しの係がサーバーから読むまで「読めていない」のまま)。
+   * @returns Promise<boolean> 控えを出せたか(出している最中・前に出した時も true)
+   */
+  const restoreFromDevice = (k) => {
+    if (!rc) return Promise.resolve(false);
+    if (restoring.has(k)) return restoring.get(k);
+    const p = Promise.resolve().then(() => rc.getAll(k)).then((rows) => {
+      if (loaded.has(k) || !rows || !rows.length) return restored.has(k);
+      const cur = cache.get(k);
+      if (cur && cur.size) return restored.has(k);
+      const m = new Map(); const rv = new Map();
+      rows.forEach(([id, d, r]) => { m.set(id, d || {}); rv.set(id, Number(r) || 0); });
+      cache.set(k, m); revs.set(k, rv); restored.add(k);
+      emit(k);
+      return true;
+    }, () => false);
+    restoring.set(k, p);
+    return p;
+  };
+  /**
+   * 読めなかった時の知らせ方。⚠控えを出せていて、理由が「サーバーに届かない」だけなら、画面の onError は呼ばない
+   * (Firestore の端末の控えと同じ: 切れていても前の中身で動く。onError を呼ぶと最終は「読めていない」で保存の門を閉じる)。
+   * 代わりに opts.onOfflineCache(読み直しの係 readRetry.js が付ける)へ渡し、つながったら読み直してもらう。
+   * onOfflineCache が無い時(係を付けていない)は今までどおり onError。
+   */
+  const routeLoadError = (k, opts, e) => restoreFromDevice(k).then((has) => {
+    if (has && isNetworkFailure(e) && opts && typeof opts.onOfflineCache === 'function') { opts.onOfflineCache(e); return; }
+    if (opts && opts.onError) opts.onError(e); else console.error(`[pb] ${k} を読めませんでした`, e);
+  });
+
+  /** 例外にしないで読む(画面用)。📴 読めなかった時は端末の控えを出す(2026-11-02)。 */
+  const softLoad = async (ns, col) => { try { await ensureLoaded(ns, col); } catch { /* loadError に残っている */ await restoreFromDevice(keyOf(ns, col)); } };
 
   // --- 購読(全体で1本) ------------------------------------------------------
   let closeRealtime = null;
@@ -194,6 +249,7 @@ export const createPocketbaseBackend = (client, {
         const rv = revs.get(k);
         if (action === 'delete') { m.delete(record.docId); rv.delete(record.docId); }
         else { m.set(record.docId, record.data || {}); rv.set(record.docId, Number(record.rev) || 0); }
+        saveDocToDevice(k, record.docId);   // 📴
         emit(k);
       },
       onError: (e) => console.warn('[pb] 購読が切れました(自動で張り直します)', e?.message || e),
@@ -284,6 +340,7 @@ export const createPocketbaseBackend = (client, {
       const rv = revs.get(k);
       if (rec) { m.set(docId, rec.data || {}); rv.set(docId, Number(rec.rev) || 0); }
       else { m.delete(docId); rv.delete(docId); }
+      saveDocToDevice(k, docId);   // 📴
       emit(k);
     } catch { /* 読めなくても購読の知らせで揃う */ }
   };
@@ -299,6 +356,7 @@ export const createPocketbaseBackend = (client, {
         const rv = revs.get(k);
         if (rec) { m.set(docId, rec.data || {}); rv.set(docId, Number(rec.rev) || 0); }
         else { m.delete(docId); rv.delete(docId); }
+        saveDocToDevice(k, docId);   // 📴
       }
     } catch { /* 読めなくても見込みを下ろす。購読の知らせで揃う。 */ }
     const p = pending.get(k);
@@ -331,6 +389,8 @@ export const createPocketbaseBackend = (client, {
       cache.set(k, m); revs.set(k, rv);
       loaded.add(k);
       loadError.delete(k);
+      restored.delete(k);
+      saveAllToDevice(k);   // 📴 端末の控えを最新に
       emit(k);
       return m.size;
     },
@@ -344,9 +404,10 @@ export const createPocketbaseBackend = (client, {
       if (!listeners.has(k)) listeners.set(k, new Map());
       listeners.get(k).set(cb, opts);
       startRealtime();
+      restoreFromDevice(k);   // 📴 サーバーより先に端末の控えを出す(Firestore と同じ順)
       ensureLoaded(ns, col).catch((e) => {
-        // ⚠黙って空にしない。読めていないことを呼び出し側へ伝える。
-        if (opts.onError) opts.onError(e); else console.error(`[pb] ${k} を読めませんでした`, e);
+        // ⚠黙って空にしない。読めていないことを呼び出し側へ伝える(📴 控えを出せた「届かない」は onOfflineCache へ)。
+        routeLoadError(k, opts, e);
       });
       // ⚠最初の通知は **必ず非同期** にする。Firestore の onSnapshot と同じにするため。
       //   同期で呼ぶと、呼び出し側の典型的な書き方
@@ -362,7 +423,8 @@ export const createPocketbaseBackend = (client, {
       if (!docListeners.has(dk)) docListeners.set(dk, new Set());
       docListeners.get(dk).add(cb);
       startRealtime();
-      ensureLoaded(ns, col).catch((e) => { if (opts.onError) opts.onError(e); else console.error(`[pb] ${k} を読めませんでした`, e); });
+      restoreFromDevice(k);   // 📴
+      ensureLoaded(ns, col).catch((e) => { routeLoadError(k, opts, e); });
       // ⚠1件購読も最初の通知は非同期(上と同じ理由)。
       if (cache.has(k) || pending.has(k)) queueMicrotask(() => { const m = viewOf(k); try { cb(m.has(id) ? m.get(id) : null, docSnapOf(k, id)); } catch (e) { console.error(e); } });
       return () => { docListeners.get(dk)?.delete(cb); };
@@ -386,9 +448,8 @@ export const createPocketbaseBackend = (client, {
       if (!listeners.has(k)) listeners.set(k, new Map());
       listeners.get(k).set(cb, merged);
       startRealtime();
-      ensureLoaded(ns, col).catch((e) => {
-        if (opts.onError) opts.onError(e); else console.error(`[pb] ${k} を読めませんでした`, e);
-      });
+      restoreFromDevice(k);   // 📴
+      ensureLoaded(ns, col).catch((e) => { routeLoadError(k, opts, e); });
       if (cache.has(k) || pending.has(k)) {
         queueMicrotask(() => { try { cb(rowsOf(k, opts.map, spec), querySnapOf(k, spec)); } catch (e) { console.error(e); } });
       }
@@ -412,6 +473,9 @@ export const createPocketbaseBackend = (client, {
       const m = viewOf(keyOf(ns, col));
       return m.has(id) ? m.get(id) : null;
     },
+
+    /** 📴 端末の控えから出している(サーバーからはまだ読めていない)一覧か。 */
+    restoredFromDevice: (ns, col) => restored.has(keyOf(ns, col)),
 
     /** そのコレクションをサーバから読めなかった理由(読めていれば null)。 */
     loadErrorOf: (ns, col) => loadError.get(keyOf(ns, col)) || null,

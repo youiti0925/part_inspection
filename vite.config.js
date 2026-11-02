@@ -56,6 +56,47 @@ const onpremDropPlugin = (outDir) => ({
 //   ⚠ 開発サーバ(vite dev)は止めない。止めない時の設定・出力は今までと同じ(関門の部品は いつものビルドでは何も出さない)。
 
 // https://vite.dev/config/
+// ============================================================================
+// 📴 繋がらなくても開ける(2026-11-02): この版の画面部品の一覧(precache.json)を出す
+// ----------------------------------------------------------------------------
+// 何のため: LAN/Wi-Fi が落ちても、一度開いた端末ではアプリが開くようにする。
+//   端末の Service Worker(社内版の Service Worker(onprem-sw.js / ③は sw.js)の「Offline shell」)が、この一覧の物を裏で端末に保存しておく。
+// ⚠名前は index.html からの相対(assets/…)。社内版(base ./・/final/ の様な下の階層)でも同じ一覧が使える。
+// ⚠一覧は「この版のビルドで出来た物」だけ。js/css/字体/wasm は 20MB まで、画像は 1MB まで
+//   (端末の容量と通信を食わない為)。外した物は skippedBig に名前を残す(黙って外さない)。外した部品の画面だけは繋がるまで開けない。
+// ⚠社内版のビルド(VITE_ONPREM=1 / mode onprem)だけで出す。いつものビルド(Firebase 版)の出力は今までと同じ。
+// ⚠precache.json は入口(https-front)と関門(scripts/onprem-dist-guard.mjs)の「配ってよい形」に足してある。
+// ⚠これは保存の一覧を出すだけ。配信の設定(index.html は no-store)は変えない。
+// ============================================================================
+function offlinePrecache() {
+  const CODE_LIMIT = 20 * 1024 * 1024
+  const IMAGE_LIMIT = 1024 * 1024
+  return {
+    name: 'offline-precache',
+    generateBundle(_o, bundle) {
+      const files = []
+      const skippedBig = []
+      let bytes = 0
+      for (const [name, item] of Object.entries(bundle)) {
+        if (!name.startsWith('assets/')) continue
+        const size = item.type === 'chunk' ? Buffer.byteLength(item.code) : Buffer.byteLength(item.source)
+        const isCode = /\.(js|css|woff2?|ttf|wasm)$/.test(name)
+        const isImage = /\.(png|jpe?g|gif|svg|webp|ico)$/.test(name)
+        if (!isCode && !isImage) continue
+        if (size > (isCode ? CODE_LIMIT : IMAGE_LIMIT)) { skippedBig.push(name); continue }
+        files.push(name)
+        bytes += size
+      }
+      files.sort()
+      this.emitFile({
+        type: 'asset',
+        fileName: 'precache.json',
+        source: `${JSON.stringify({ files, bytes, skippedBig }, null, 1)}\n`,
+      })
+    },
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const onprem = mode === 'onprem'
   // loadEnv は .env* と環境変数(process.env)の両方を見る。
@@ -63,7 +104,7 @@ export default defineConfig(({ mode }) => {
   return {
     // 社内版だけ相対(下の階層 /parts/ でも動く)。いつものビルドは base を書かない(= '/' のまま・前と同じ)。
     ...(onprem ? { base: './' } : {}),
-    plugins: [onpremGuardPlugin(), react(), ...(onprem ? [onpremDropPlugin('dist-onprem')] : [])],
+    plugins: [onpremGuardPlugin(), react(), ...(onprem ? [onpremDropPlugin('dist-onprem'), offlinePrecache()] : [])],
     // 社内版かどうかをビルドの時の定数にする(いつものビルドでは false → 社内版だけの道は出力から消える)。
     define: { __ONPREM__: JSON.stringify(onprem && flag === '1') },
     server: {

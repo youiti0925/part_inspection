@@ -30,7 +30,8 @@ export const DIST_MANIFEST = 'onprem-files.json';
 // 🔒 2026-10-31 R30: 見本・試しのファイル(parallel-lab-sample.html・onprem-config.sample/example.json)は配る形から外した。
 //   作る時(--write)に出力から消す(DROP_FROM_DIST)。見本はリポジトリの中の物(docs/・onprem/)を見る。
 //   vite.svg は最終の index.html が使う(<link rel="icon">)ので残す。
-export const ALLOWED_DIST_PATH = /^(?:index\.html|assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,200}\.(?:js|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|wasm)|notice-assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,200}\.(?:png|jpe?g|gif|webp|svg)|(?:onprem-)?sw\.js|boot-inline-[0-9a-f]{6,64}\.js|manifest(?:-[a-z0-9]{1,32})?\.json|icon-\d{2,4}\.png|favicon\.(?:svg|ico|png)|icons\.svg|vite\.svg|version\.json|onprem-build\.json)$/;
+// 📴 2026-11-02 precache.json を足した: この版の画面部品の名前の一覧(端末の Service Worker が「繋がらなくても開ける」為に先に保存する)。中身は assets/… の名前だけ(合言葉・設定は入らない)。
+export const ALLOWED_DIST_PATH = /^(?:index\.html|assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,200}\.(?:js|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|wasm)|notice-assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,200}\.(?:png|jpe?g|gif|webp|svg)|(?:onprem-)?sw\.js|boot-inline-[0-9a-f]{6,64}\.js|manifest(?:-[a-z0-9]{1,32})?\.json|icon-\d{2,4}\.png|favicon\.(?:svg|ico|png)|icons\.svg|vite\.svg|version\.json|precache\.json|onprem-build\.json)$/;
 /** 作る時に出力から消す見本・試しのファイル(出力の一番上の名前)。 */
 export const DROP_FROM_DIST = Object.freeze(['parallel-lab-sample.html', 'onprem-config.sample.json', 'onprem-config.example.json']);
 

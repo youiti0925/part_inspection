@@ -3,7 +3,7 @@
 // This test file is byte-identical in all three apps (src/<dir>/__tests__/onpremSharedSw.test.mjs).
 //   S01 onprem-public/onprem-sw.js has the shared md5 (same constant in all three apps = same file).
 //   S02 it loads nothing from outside (no importScripts, no gstatic, no http(s) URL) and is ASCII only.
-//   S03 it handles push / notificationclick and has a no-op fetch handler (no caching).
+//   S03 it handles push / notificationclick; S05 its fetch handler is the offline shell (2026-11-02).
 //   S04 optional cross-check: ONPREM_SW_SIBLINGS=<app root>;<app root> compares the sibling apps' files directly.
 // No network.
 // ============================================================================
@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 import { join, delimiter } from 'node:path';
 
 // md5 of onprem-public/onprem-sw.js with line endings normalized to LF. Change it in all three apps at once.
-const SHARED_ONPREM_SW_MD5 = '9511e5a374fb2dccb54129d9f2dc5325';
+// 2026-11-02: + the offline shell block (same block as the cloud SWs).
+const SHARED_ONPREM_SW_MD5 = '201d633cc0ca404d104ec95279929cfc';
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const swText = (root) => readFileSync(join(root, 'onprem-public', 'onprem-sw.js'), 'utf8').replace(/\r\n/g, '\n');
 const md5 = (s) => createHash('md5').update(s, 'utf8').digest('hex');
@@ -33,7 +34,7 @@ test('S02 onprem-sw.js loads nothing from outside and is ASCII only', () => {
   assert.ok(/^[\x00-\x7f]*$/.test(sw), 'ASCII only');
 });
 
-test('S03 onprem-sw.js shows push notifications itself, focuses/opens on click, never caches', () => {
+test('S03 onprem-sw.js shows push notifications itself, focuses/opens on click', () => {
   const sw = swText(ROOT);
   assert.match(sw, /addEventListener\('push'/);
   assert.match(sw, /event\.data\.json\(\)/);
@@ -43,8 +44,19 @@ test('S03 onprem-sw.js shows push notifications itself, focuses/opens on click, 
   assert.match(sw, /addEventListener\('notificationclick'/);
   assert.match(sw, /\.focus\(\)/);
   assert.match(sw, /openWindow\(link\)/);
-  assert.match(sw, /addEventListener\('fetch', \(\) => \{\}\)/, 'fetch handler exists (installable) and does nothing');
-  assert.ok(!/respondWith|caches\./.test(sw), 'no caching');
+  assert.match(sw, /addEventListener\('fetch'/, 'fetch handler exists (installable)');
+});
+
+test('S05 offline shell: network-first page, cache-first assets/, never touches api/ _/ __* / other hosts / non-GET', () => {
+  const sw = swText(ROOT);
+  assert.match(sw, /const OFF_CACHE = 'offline-shell-v1'/);
+  assert.match(sw, /if \(req\.method !== 'GET'\) return;/, 'non-GET untouched');
+  assert.match(sw, /if \(rest === null\) return;/, 'other hosts / outside the scope untouched');
+  assert.match(sw, /\/\^\(api\\\/\|_\\\/\|__\)\/\.test\(rest\)\) return;/, 'PocketBase api/, admin _/, front __* untouched');
+  assert.match(sw, /req\.mode === 'navigate'[\s\S]*offNetworkFirst\(event, offShellKey\(\), offIsHtml\)/, 'page is network first');
+  assert.match(sw, /OFF_ASSET_NAME\.test\(rest\)\) \{ event\.respondWith\(offCacheFirst\(event\)\)/, 'assets cache first');
+  assert.match(sw, /rest === 'onprem-config\.json'\) \{ event\.respondWith\(offNetworkFirst\(event, offUrl\('\.\/onprem-config\.json'\), offIsJson\)\)/, 'config falls back to the stored copy');
+  assert.match(sw, /version\\\.json\|precache\\\.json\|onprem-files\\\.json/, 'version/precache lists never from the cache');
 });
 
 test('S04 sibling apps (ONPREM_SW_SIBLINGS) have the byte-identical onprem-sw.js', (t) => {

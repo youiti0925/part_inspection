@@ -47,6 +47,8 @@ watchGlobalErrors()
 // 🏯 2026-11-01 最上位の司令塔 段2: 社内版だけ、描く前に「この口のグループ」が起動の最初に決めた名前空間と同じか確かめる。
 //   違う/形が悪い時は画面を止める(今の棚へ落とさない)。いつものビルドは else の1文だけが残る。
 if (import.meta.env.VITE_ONPREM === '1') {
+  // 📴 2026-11-02 繋がらなくても開ける: 札「オフライン中・未送信 N 件」+ SW を早めに登録(社内版だけ・いつものビルドの出力には入らない)
+  import('./offline/onpremOffline.js').then((m) => m.startOnpremOffline({ swFile: 'onprem-sw.js' })).catch((e) => console.warn('[offline] 札を出せませんでした', e))
   import('./onprem/groupNs.js').then((g) => g.verifyGroupAsync('parts').then((v) => {
     if (!v.ok) { g.stopWith(v.reason); return }
     const a = g.archivedGroupOf('parts'); if (a) g.showArchivedBand(document, a)

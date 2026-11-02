@@ -44,6 +44,31 @@ test('N02 group の形が悪い時は bad(今の名前へ落とさない)', () =
   assert.equal(parseGroup(okRaw({ state: 'archived' }), TYPE).group.state, 'archived');
 });
 
+test('N09 📴 届かない時: グループの無い口だけ今の名前で開く・グループの口は今まで通り止める(2026-11-02)', () => {
+  const mem = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), m }; };
+  const down = xhr(0, '', { throws: true });
+  // 一度も届いていない端末 → 止める(今まで通り)
+  const s0 = mem();
+  assert.equal(readGroupSync(TYPE, { xhrFactory: down, baseUrl: BASE, storage: s0 }).state, 'bad');
+  // 届いて group が無かった口 → 印 → 届かない時は今の名前で開く
+  const s1 = mem();
+  assert.equal(readGroupSync(TYPE, { xhrFactory: xhr(200, { url: '' }), baseUrl: BASE, storage: s1 }).state, 'none');
+  assert.equal(s1.getItem('onprem.portHasNoGroup.v1'), '1');
+  const off = readGroupSync(TYPE, { xhrFactory: down, baseUrl: BASE, storage: s1 });
+  assert.equal(off.state, 'none'); assert.equal(off.offline, true);
+  assert.equal(readGroupSync(TYPE, { xhrFactory: xhr(0, ''), baseUrl: BASE, storage: s1 }).state, 'none', 'status 0 も届かない扱い');
+  // グループの口(届いて group が有った) → 印は消える → 届かない時は止める(名前空間を覚えて落ちる道は無い)
+  assert.equal(readGroupSync(TYPE, { xhrFactory: xhr(200, okRaw()), baseUrl: BASE, storage: s1 }).state, 'ok');
+  assert.equal(s1.getItem('onprem.portHasNoGroup.v1'), null);
+  assert.equal(readGroupSync(TYPE, { xhrFactory: down, baseUrl: BASE, storage: s1 }).state, 'bad');
+  // 形の悪い group の口も印を消す
+  const s2 = mem(); s2.setItem('onprem.portHasNoGroup.v1', '1');
+  assert.equal(readGroupSync(TYPE, { xhrFactory: xhr(200, { group: { invalid: true } }), baseUrl: BASE, storage: s2 }).state, 'bad');
+  assert.equal(s2.getItem('onprem.portHasNoGroup.v1'), null);
+  // サーバーが返事をした(503 等)は届いている = 今まで通り止める
+  assert.equal(readGroupSync(TYPE, { xhrFactory: xhr(503, ''), baseUrl: BASE, storage: s1 }).state, 'bad');
+});
+
 test('N03 同期の読み', () => {
   assert.equal(readGroupSync(TYPE, { xhrFactory: xhr(200, okRaw()), baseUrl: BASE }).state, 'ok');
   assert.equal(readGroupSync(TYPE, { xhrFactory: xhr(200, { url: '' }), baseUrl: BASE }).state, 'none');
@@ -147,7 +172,10 @@ test('N08 配線(ソースを読む)', () => {
   // 今の名前への「落とし先」を作っていない: resolveAppNs 以外で APP_DATA_ID に名前を入れる行が無い
   assert.equal((app.match(/const APP_DATA_ID =/g) || []).length, 1);
   const gs = fs.readFileSync(path.join(SRC, 'onprem', 'groupNs.js'), 'utf8');
-  assert.ok(!/localStorage|sessionStorage|indexedDB/.test(gs.replace(/\/\/.*$/gm, '')), '前に覚えた名前空間へ落ちる道が無い(毎回、口の設定から決める)');
+  // 📴 2026-11-02: 端末に覚えるのは「この口にはグループが無い」の1ビット(NO_GROUP_KEY)だけ。名前空間・group は覚えない。
+  const code = gs.replace(/\/\/.*$/gm, '');
+  assert.ok(!/sessionStorage|indexedDB/.test(code), '前に覚えた名前空間へ落ちる道が無い');
+  assert.deepEqual([...code.matchAll(/setItem\(([^,]+),\s*([^)]+)\)/g)].map((m) => [m[1].trim(), m[2].trim()]), [['NO_GROUP_KEY', "'1'"]], '覚えるのは印の 1 だけ(ns や group を書かない)');
   // 起動の突き合わせ
   const bootFile = IS_FINAL ? path.join(SRC, 'onprem', 'boot.jsx') : path.join(SRC, 'main.jsx');
   const boot = fs.readFileSync(bootFile, 'utf8');

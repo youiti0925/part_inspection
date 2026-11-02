@@ -44,6 +44,24 @@ export const parseGroup = (raw, appType) => {
   return { state: 'ok', group: { key, type, ns, commander: commander || '', state: st } };
 };
 
+// 📴 2026-11-02 社内 LAN・サーバーに届かない時の起動(⚠清水さんの確認待ちの直し・本番へ出す前に決める)
+// ----------------------------------------------------------------------------
+// 同期の XHR は Service Worker の控えを通らない(Chrome で実測)ので、届かない時は今まで **全部の口で画面を止めていた**
+// = 一度開いた端末でも、LAN が落ちると製品・最終・部品が開けなかった(2026-11-02 の出来事の原因の1つ)。
+// 守り「前に覚えた名前空間へ落ちる道を作らない」は崩さない: **グループの名前空間は覚えない**。
+// 覚えるのは「この口にはグループが無い(今の決まった名前で動く口)」の1ビットだけ(NO_GROUP_KEY)。
+//   ・届いて group が無かった → 印を付ける / group が有った・形が悪かった → 印を消す
+//   ・届かない(例外・status 0)時: 印が有れば group 無し(今の決まった名前)で開く。印が無ければ今まで通り止める
+//     (= グループの口は、届かない時は今まで通り止まる。別のグループの棚に書く道は無い)
+export const NO_GROUP_KEY = 'onprem.portHasNoGroup.v1';
+const portStore = () => { try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch { return null; } };
+const notePortGroup = (parsed, storage) => {
+  const st = storage || portStore();
+  if (!st) return;
+  try { if (parsed && parsed.state === 'none') st.setItem(NO_GROUP_KEY, '1'); else st.removeItem(NO_GROUP_KEY); } catch { /* 覚えられないだけ */ }
+};
+const portHadNoGroup = (storage) => { const st = storage || portStore(); try { return !!st && st.getItem(NO_GROUP_KEY) === '1'; } catch { return false; } };
+
 /** 画面を止める時の文(日本語)。 */
 export const stopMessage = (reason) => `この口のグループの設定が正しくないため、画面を止めました。データには何も書いていません。\n理由: ${reason}\n管理者に連絡してください(最上位の司令塔の台帳と、入口の設定を確かめます)。`;
 
@@ -53,7 +71,7 @@ export const stopMessage = (reason) => `この口のグループの設定が正�
  * @param opts.baseUrl    既定は今の画面の場所(document.baseURI)
  * @returns { state, group?, reason? } + 読めなかった時 { state: 'bad', reason }
  */
-export const readGroupSync = (appType, { xhrFactory = null, baseUrl = null } = {}) => {
+export const readGroupSync = (appType, { xhrFactory = null, baseUrl = null, storage = null } = {}) => {
   let mk = xhrFactory;
   if (!mk && typeof XMLHttpRequest !== 'undefined') mk = () => new XMLHttpRequest();
   if (!mk) return { state: 'none' };   // node の試験・XHR が無い所
@@ -67,12 +85,16 @@ export const readGroupSync = (appType, { xhrFactory = null, baseUrl = null } = {
     const x = mk();
     x.open('GET', url, false);
     x.send(null);
+    if (x.status === 0 && portHadNoGroup(storage)) return { state: 'none', offline: true };   // 📴 届かない・グループの無い口
     if (x.status === 404) return { state: 'none' };   // 設定ファイルが無い(開発用)。group は無い
     if (x.status !== 200) return { state: 'bad', reason: `onprem-config.json を読めません(${x.status})` };
     let raw;
     try { raw = JSON.parse(String(x.responseText || '').replace(/^\uFEFF/, '')); } catch { return { state: 'bad', reason: 'onprem-config.json が JSON として読めません' }; }
-    return parseGroup(raw, appType);
+    const parsed = parseGroup(raw, appType);
+    notePortGroup(parsed, storage);   // 📴 「グループの無い口」の印だけ
+    return parsed;
   } catch (e) {
+    if (portHadNoGroup(storage)) return { state: 'none', offline: true };   // 📴 届かない・グループの無い口(名前空間は今の決まった名前)
     return { state: 'bad', reason: `onprem-config.json を読めません(${(e && e.message) || e})` };
   }
 };

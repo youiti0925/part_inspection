@@ -184,6 +184,8 @@ export const installReadRetry = (backend, {
   // --- 読みの口を包む ----------------------------------------------------------------
   const orig = {};
   const wrapErr = (ns, col, opts) => Object.assign({}, opts || {}, {
+    // 📴 2026-11-02 保管庫が端末の控えを出せた「届かない」は、画面には知らせず(前の中身で動く)読み直しにだけ登録する
+    onOfflineCache: (e) => { note(ns, col, e); },
     onError: (e) => {
       note(ns, col, e);
       if (opts && typeof opts.onError === 'function') opts.onError(e);
