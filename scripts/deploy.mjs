@@ -13,6 +13,11 @@
 //     人が思い出す必要が無い形にする（忘れるから）。
 //
 // 通る順番:
+//   ⓪ 🧱 本番の変更を消さないか  scripts/verify-no-regress.mjs
+//        （2026-11-03 の事故: 別の枝から本番に出ていた直しが、master から出して黙って消えた。
+//          作業ツリーが汚れていたら止める / 本番の版の印(version.json)の commit が
+//          出す物(HEAD)の祖先でなければ止める / 前回 master 以外から出した版が
+//          まだ master に戻っていなければ止める。**--skip-check では飛ばせない**。）
 //   ① 📋 約束の見張り        npm run check
 //   ② 🛡 出す前の見張り      verify-deploy-safety --pre
 //   ③ 🚀 出す               firebase deploy
@@ -28,7 +33,12 @@
 //   node scripts/deploy.mjs --bootstrap-ledger
 //                               … いま本番に在る玉を実測して台帳を作る（初回だけ）
 //   node scripts/deploy.mjs --skip-check
-//                               … ①を飛ばす。⚠**理由を清水さんに言ってから**使う事
+//                               … ①を飛ばす。⚠**理由を清水さんに言ってから**使う事（⓪は飛ばない）
+//   node scripts/deploy.mjs --allow-regress "<理由 20文字以上>"
+//                               … ⓪の「本番の変更が消える」止めを通す。台帳に理由が残る。
+//                                 ⚠⚠ **清水さんが了承した後にだけ**使う事（作業ツリーの汚れは通せない）
+//   node scripts/deploy.mjs --bootstrap-regress-check --allow-regress "<理由>"
+//                               … 本番に版の印が無い最初の1回だけ。いま本番の部品を「commit 不明」と控えて進む
 // ============================================================================
 
 import { spawnSync } from 'node:child_process';
@@ -38,6 +48,7 @@ import { fileURLToPath } from 'node:url';
 import {
   appConfig, ask, assetsInHtml, distAssets, readLedger, writeLedger, ledgerAlive,
 } from './verify-deploy-safety.mjs';
+import { runStage0, realDeps, ledgerFields, mergeReminderLines } from './verify-no-regress.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.DEPLOY_SAFETY_ROOT || join(HERE, '..');
@@ -120,6 +131,11 @@ const main = async () => {
   console.log(`   ${DRY ? '⚠ 出しません（--dry-run）。手前まで全部確かめます。' : '通したら本番に出ます。'}`);
   console.log(line);
 
+  // ⓪ 本番に出ている変更を消さないか（**--skip-check では飛ばせない**。--dry-run でも走らせて見せる）
+  const s0 = await runStage0({ root: ROOT, baseUrl: cfgs[0]?.baseUrl || '', argv: ARGS });
+  if (!s0.ok) process.exit(1);
+  const ledgerNote0 = s0.ledgerNote;
+
   // ① 約束の見張り
   if (has('--skip-check')) {
     console.log('⚠ ①約束の見張りを飛ばしています（--skip-check）。理由を清水さんに言う事。');
@@ -196,8 +212,18 @@ const main = async () => {
     at: new Date().toISOString(),
     by: 'npm run deploy',
     assets: (distAssets(cfgs[0]?.publicDir || 'dist') || []).filter((a) => a.startsWith('assets/')),
+    // ⓪用: 何の commit をどの枝から出したか（次の出荷の ⓪ がここを読む）
+    ...ledgerFields({ head: realDeps(ROOT).head(), branch: realDeps(ROOT).branch() }),
+    ...(ledgerNote0 || {}),
   });
   writeLedger(l);
+  const lastB = l.builds[l.builds.length - 1];
+  if (lastB.pendingMerge) {
+    console.log('');
+    console.log(line);
+    for (const m of mergeReminderLines(lastB.branch)) console.log(m);
+    console.log(line);
+  }
   console.log('');
   console.log(`📒 台帳に控えました（生きている部品 ${ledgerAlive().length}個）`);
 

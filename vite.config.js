@@ -1,7 +1,44 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { collectBuildStamp } from './scripts/verify-no-regress.mjs'
 
 // https://vite.dev/config/
+// ============================================================================
+// 🆕 版の印(build id)をビルドに焼き込む(2026-11-03・最終検査と同じ物)
+// ----------------------------------------------------------------------------
+// 何のため: 出す前の ⓪(scripts/verify-no-regress.mjs)が「いま本番に出ている版が、これから出す物の
+//   祖先か」を調べる為。2026-11-03 に、別の枝から本番へ出していた直しを master から出して黙って消した。
+// 焼き込む先は同じ1つの値:
+//   ① index.html の <meta name="app-build" content="YYYYMMDD-HHMMSS-<短いハッシュ>">
+//   ② dist/version.json  {"build":"…","commit":"<40桁>","dirty":false,"builtAt":"…"}
+//      dirty = 追跡中のファイルが変わったまま焼いた(.claude/ は数えない)。
+// ⚠静的ファイルだけ(Firestore を使わない＝読み書きの枠を食わない)。firebase.json で version.json は no-store。
+// ⚠作る処理は scripts/verify-no-regress.mjs の collectBuildStamp(4アプリ共通)。
+// ============================================================================
+function buildStamp() {
+  const STAMP = collectBuildStamp()
+  return {
+    name: 'app-build-stamp',
+    transformIndexHtml() {
+      return [
+        { tag: 'meta', attrs: { name: 'app-build', content: STAMP.build }, injectTo: 'head' },
+        { tag: 'meta', attrs: { name: 'app-built-at', content: STAMP.builtAt }, injectTo: 'head' },
+      ]
+    },
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'version.json',
+        source: `${JSON.stringify({ build: STAMP.build, commit: STAMP.commit, dirty: STAMP.dirty, builtAt: STAMP.builtAt }, null, 2)}
+`,
+      })
+    },
+    closeBundle() {
+      console.log(`  app-build-stamp: 版の印 = ${STAMP.build}${STAMP.dirty ? '  ⚠dirty' : ''}`)
+    },
+  }
+}
+
 // ============================================================================
 // 📴 繋がらなくても開ける(2026-11-02): この版の画面部品の一覧(precache.json)を出す
 // ----------------------------------------------------------------------------
@@ -42,7 +79,7 @@ function offlinePrecache() {
 }
 
 export default defineConfig({
-  plugins: [react(), offlinePrecache()],
+  plugins: [react(), buildStamp(), offlinePrecache()],
   server: {
     port: 5174,
   },
