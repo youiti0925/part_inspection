@@ -203,6 +203,9 @@ import { shipYMDOfLot } from './domain/operationsSimulation/shipDeadline.js';
 // 🚗 2026-09-12 その 品目コード×テンプレ に「この品目コードだけの工程編集」が在るか。
 //   🚨 探し方は domain/modelMaster.js が持つ物ただ1本。画面で当て直さない。
 import { findModelTemplate } from './domain/modelMaster.js';
+// 📦⏱ 2026-10-03 B3 共有棚 daily_load の書き直しは 5分に1回まで(最後の1回は必ず書く)・「今すぐ反映」(製品・最終と同じ)
+import { useDailyLoadPublisher } from './opsim/dailyLoadRefresh.js';
+import { DailyLoadSendNowButton } from './opsim/DailyLoadRefreshButton.jsx';
 import { workerSpeedRows, clampLabel } from './domain/operationsSimulation/workerSpeed.js';
 // 🎛 設定の読み方(既定は全部 OFF)と、scenario への渡し方。🚨 持ち主はこのファイルただ1つ。
 //   📊 実績の表(buildXxx)も **realism.js の buildRealismTable ただ1か所** で作る(2026-09-10 ChatGPT の②)。
@@ -3131,32 +3134,14 @@ function OperationsSimulationBody({ planShelf = null, publishOnly = false, isAdm
     if (!decidedPlacement) return withDue;
     return { ...withDue, placement: decidedPlacement, fingerprint: `${withDue.fingerprint}|${placementKey(decidedPlacement)}` };
   }, [normalized, result, workerList, otherAppWorkerNames, baseNowMs, decidedPlacement, hereDueRows]);
-  // 📦 共有棚へ書く(2026-09-06 清水さん承認)。**計算1回につき最大1件**。指紋が前と同じなら 0件。
-  //   失敗したら指紋を戻して次の計算で書き直す。🚨 setInterval では書かない(枠の見張り verify-write-budget の形)。
-  const publishedFpRef = useRef(null);
-  useEffect(() => {
-    if (typeof publishDailyLoad !== 'function') return;
-    // 🚨 2026-09-17 清水さんの言葉「配置ボタンしたら、次開いたら忘れてることある」
-    //   棚を **読み終えるまで書かない**。読む前に書くと、前に決めた配置(placement)の入っていない
-    //   書類で棚を丸ごと置き換え(merge:false)、決めた配置がその場で消える。
-    //   ⚠ 書く回数は増えない(指紋が同じなら書かないのはそのまま)。書き始めが少し遅れるだけ。
-    if (!capacityShelfLoaded) return;
-    if (!hereDailyLoad || !hereDailyLoad.ok) return;
-    if (publishedFpRef.current === hereDailyLoad.fingerprint) return;
-    publishedFpRef.current = hereDailyLoad.fingerprint;
-    // 🚨 2026-09-19: 窓口は 書けた時 true / 書かなかった時 false を返し分ける(最終検査と同じ形)。
-    //   返事を捨てると「書いたつもり」で指紋を覚えたまま二度と書き直さない。失敗は黙って捨てず、必ず声に出す。
-    Promise.resolve(publishDailyLoad(hereDailyLoad))
-      .then((wrote) => {
-        if (wrote) return;
-        publishedFpRef.current = null;
-        console.warn('[共有棚] 日ごとの負荷を書きませんでした(窓口が false を返しました)');
-      })
-      .catch((e) => {
-        publishedFpRef.current = null;
-        console.error('[共有棚] 日ごとの負荷の書き込みに失敗しました', e);
-      });
-  }, [capacityShelfLoaded, hereDailyLoad, publishDailyLoad]);
+  // 📦 共有棚へ書く(2026-09-06 清水さん承認)。指紋が前と同じなら 0件。🚨 setInterval では書かない(枠の見張り verify-write-budget の形)。
+  // ⏱ 2026-10-03 B3(製品・最終と同じ): ロットが書かれるたびに丸ごと書き直していたのを **5分に1回まで** にする。
+  //   🚨 最後の1回は必ず書く(画面を閉じる・ページを隠す/閉じる時)。決めた配置が変わった時は待たない。
+  //   🚨 計算の中身・画面の数字は1つも変えない。決まりは domain/operationsSimulation/dailyLoadThrottle.js、配線は opsim/dailyLoadRefresh.js。
+  //   🚨 棚を **読み終えるまで書かない**(清水さん「配置ボタンしたら、次開いたら忘れてることある」2026-09-17)。
+  //   🚨 2026-09-19: 窓口は 書けた時 true / 書かなかった時 false を返し分ける。書かなかった・落ちた時は指紋の門を開き直し、声に出す。
+  //   ⚠ 部品の daily_load/parts を読む他のアプリは今は無い(③・製品・最終は product|final だけ)ので、「最新にする」の印は部品には置かない。
+  const dailyLoadPub = useDailyLoadPublisher({ doc: hereDailyLoad, shelfLoaded: capacityShelfLoaded, publish: publishDailyLoad, publishOnly });
   // 決め方(平均で決める／どちらを優先／最低◯日は同じ工場)。🚨 書く時は **生の入れ物** を広げる(派生物を広げると他の鍵が消える・2026-08-17 の形)。
   //   🚨 SETTINGS_KEYS(指紋)へ sharedWorkerPlan を **足さない**: 割付の入力を変えない(効くのは純関数だけ)。足すと つまみの度に盤ぜんぶが引き直る。
   const curShared = useMemo(() => ((settings && settings.sharedWorkerPlan) || {}), [settings]);
@@ -3646,6 +3631,8 @@ function OperationsSimulationBody({ planShelf = null, publishOnly = false, isAdm
                 🚨 中身は今まで画面に居た **同じ部品**。コピーを作っていない・1つも消していない。
                 🚨 押しても盤の場所を1pxも取らない(fixed の引き出し)・1回も計算しない。 */}
             <span className="ml-auto inline-flex flex-wrap items-center gap-1.5">
+              {/* ⏱ 2026-10-03 B3 共有棚へは5分に1回まで。待たずに書きたい時の「今すぐ反映」(押すと いまの計算を1件書く) */}
+              <DailyLoadSendNowButton info={dailyLoadPub.info} onPress={typeof publishDailyLoad === 'function' && capacityShelfLoaded ? dailyLoadPub.publishNow : null} />
               <ToolboxButton open={toolboxOpen} onToggle={() => setToolboxOpen((v) => !v)} />
             </span>
 

@@ -70,6 +70,8 @@ import { providerFor, ROW_DATA_WINS } from './data/provider.js';
 // P153: 名前空間と保管庫の行き先を routes.js の1か所から引く(製品 App.jsx:49・52 と同じ)。
 //   PocketBase は読み込んでも切り替わらない。切り替わるのは保存された行き先が enabled:true の時だけ。
 import { NS as DATA_NS, DEFAULT_PROVIDERS, providersFromSettings } from './data/routes.js';
+// 📊 2026-10-04 生産達成率を ③ へ渡す共有棚(capacity-shared-v1/achieve_rate/parts)。4アプリで同じ物(md5)。
+import { ACHIEVE_NS, ACHIEVE_COL, makeAchievePublisher, countCalibrated } from './domain/achieveShelf.js';
 import { fetchAllPaged } from './domain/goal/pager.js';
 import { goalGapOf, candidateOf, planPortfolio } from './domain/goal/portfolioPlanner.js';
 import { sendPushViaWorker } from './push.js';
@@ -79,6 +81,9 @@ import { OperationsSimulationPanel } from './OperationsSimulationPanel.jsx';
 import { StackBar as VizStackBar } from './opsim/vizKit.jsx';
 import { useOperationsSimulation as useOpsimForOverview, makeScopeFilter as makeOpsimScopeFilter } from './useOperationsSimulation.js';
 import { buildWeeklyRule as opsimBuildWeeklyRule, weeklyRuleDocId as opsimWeeklyRuleDocId, shouldRefreshDailyLoad as opsimShouldRefreshDailyLoad } from './domain/operationsSimulation/sharedWorkerPlan.js';
+// ⏱ 2026-10-03 B3 共有棚 daily_load の「5分に1回まで」と「最新にする」(③が部品の要約を頼む印 daily_load_requests/parts に応える)。配線は opsim/dailyLoadRefresh.js
+import { DAILY_LOAD_REQUEST_COL } from './domain/operationsSimulation/dailyLoadThrottle.js';
+import { useDailyLoadRefreshHub, DailyLoadForceContext } from './opsim/dailyLoadRefresh.js';
 import { DATA_DELETE, DATA_SERVER_NOW, withDeletions } from './data/sentinels.js';
 // 🚨🚨 作業時間が「保存で消える」のを止める見張り(2026-08-17 最終検査の事故と同じ形を部品でも塞ぐ)。
 //   ⚠このファイルは最終検査/製品検査と **1バイトも同じ**。片方だけ直すと静かに巻き戻る。
@@ -18682,55 +18687,63 @@ const ManagerDashboard = ({ lots = [], settings = {}, minorReports = [] }) => {
   );
 };
 
+// 📊 2026-10-04 達成率の行を作る係(画面と ③ へ渡す集計で **同じ1つ** を使う。数える作業の決まりを2か所に書かない)。
+//   行に足した物: worker(担当)・cal(較正済みの標準秒。customTargetTimes(+型式グループ)に無ければ 0 = 標準時間が未設定)。
+//   ⚠ tgt(画面の達成率の目標)は今までどおり getEffectiveTargetTime(較正値 → 無ければテンプレ既定)。ここは1文字も変えていない。
+// 全完了タスクを {完了時刻, 品目コード, テンプレ, 工程名, 目標秒, 実績秒} に展開 (抜取スキップ/目標未設定/0秒は除外)
+const achieveRowsOf = (lots, customTargetTimes, settings, templates) => {
+  const toMs = (raw) => { if (raw == null) return null; if (typeof raw === 'number') return raw; if (raw.seconds) return raw.seconds * 1000; const t = new Date(raw).getTime(); return isNaN(t) ? null : t; };
+  const groups = modelGroupsOf(settings);
+  const out = [];
+  (lots || []).forEach(l => {
+    const steps = l.steps || []; const qty = l.quantity || 1; const tasks = l.tasks || {};
+    const lotMs = toMs(l.completedAt) || toMs(l.updatedAt);
+    const tpl = (templates || []).find(tp => tp.id === l.templateId)?.name || '(テンプレなし)';
+    steps.forEach((st, si) => {
+      const tgt = getEffectiveTargetTime(st, l.model, customTargetTimes, groups);
+      if (!(tgt > 0)) return;
+      const cal = getCalibratedTargetTime(st, l.model, customTargetTimes, groups); // 📊 較正済みだけ(無ければ 0 = 標準時間が未設定)
+      // ロット1回工程: 回数キー(lot-k)の実績を1回=1行で収集 (目標は1回あたり)
+      if (st.lotOnce) {
+        lotOnceKeysOf(tasks, st).forEach(k => {
+          const t = tasks[k];
+          if (!t || (t.status !== 'completed' && t.status !== 'ng')) return;
+          if (!isStatTask(t)) return; // 抜取スキップ(0秒扱い)・教育中はロット1回工程でも入れない(製品と同じ)
+          const d = t.duration || 0; if (d <= 0) return;
+          const ms = toMs(t.endTime) || lotMs; if (!ms) return;
+          out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt, worker: t.workerName || '', cal });
+        });
+        return;
+      }
+      for (let u = 0; u < qty; u++) {
+        const t = tasks[st.id ? `${st.id}-${u}` : `${si}-${u}`] || tasks[`${si}-${u}`];
+        if (!t || (t.status !== 'completed' && t.status !== 'ng')) continue;
+        if (!isStatTask(t)) continue; // 抜取スキップ/教育中は除外
+        const d = t.duration || 0; if (d <= 0) continue;
+        const ms = toMs(t.endTime) || lotMs; if (!ms) continue;
+        out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt, worker: t.workerName || '', cal });
+      }
+    });
+  });
+  return out;
+};
+
 // =============================================================================
 //  達成率分析 — 標準時間(目標)に対する実績の達成率(能率)
 //  達成率 = 目標時間合計 ÷ 実績時間合計 ×100 (100%超 = 目標より速い)
 //  ①品目別×期間指定 ②品目コード関係なく週毎/月毎の全体推移。読み取り集計のみ。
 // =============================================================================
 const AchievementRateView = ({ lots = [], customTargetTimes = {}, settings = {}, templates = [] }) => {
-  const toMs = (raw) => { if (raw == null) return null; if (typeof raw === 'number') return raw; if (raw.seconds) return raw.seconds * 1000; const t = new Date(raw).getTime(); return isNaN(t) ? null : t; };
   const [mode, setMode] = useState('model');      // 'model' | 'trend'
   const [groupBy, setGroupBy] = useState('model'); // 'model' | 'modelTpl' (品目コード / 品目×テンプレ)
   const [expanded, setExpanded] = useState(null);  // クリックで工程別詳細を開いている行のkey
   const [from, setFrom] = useState('');           // YYYY-MM-DD ('' = 制限なし)
   const [to, setTo] = useState('');
   const [bucket, setBucket] = useState('month');  // 'month' | 'week'
-  const groups = modelGroupsOf(settings);
 
   // 全完了タスクを {完了時刻, 品目コード, テンプレ, 工程名, 目標秒, 実績秒} に展開 (抜取スキップ/目標未設定/0秒は除外)
-  const rows = useMemo(() => {
-    const out = [];
-    (lots || []).forEach(l => {
-      const steps = l.steps || []; const qty = l.quantity || 1; const tasks = l.tasks || {};
-      const lotMs = toMs(l.completedAt) || toMs(l.updatedAt);
-      const tpl = (templates || []).find(tp => tp.id === l.templateId)?.name || '(テンプレなし)';
-      steps.forEach((st, si) => {
-        const tgt = getEffectiveTargetTime(st, l.model, customTargetTimes, groups);
-        if (!(tgt > 0)) return;
-        // ロット1回工程: 回数キー(lot-k)の実績を1回=1行で収集 (目標は1回あたり)
-        if (st.lotOnce) {
-          lotOnceKeysOf(tasks, st).forEach(k => {
-            const t = tasks[k];
-            if (!t || (t.status !== 'completed' && t.status !== 'ng')) return;
-            if (!isStatTask(t)) return; // 抜取スキップ(0秒扱い)・教育中はロット1回工程でも入れない(製品と同じ)
-            const d = t.duration || 0; if (d <= 0) return;
-            const ms = toMs(t.endTime) || lotMs; if (!ms) return;
-            out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt });
-          });
-          return;
-        }
-        for (let u = 0; u < qty; u++) {
-          const t = tasks[st.id ? `${st.id}-${u}` : `${si}-${u}`] || tasks[`${si}-${u}`];
-          if (!t || (t.status !== 'completed' && t.status !== 'ng')) continue;
-          if (!isStatTask(t)) continue; // 抜取スキップ/教育中は除外
-          const d = t.duration || 0; if (d <= 0) continue;
-          const ms = toMs(t.endTime) || lotMs; if (!ms) continue;
-          out.push({ ms, model: l.model || '不明', tpl, step: st.title || '(工程名なし)', tgt, act: d, within: d <= tgt });
-        }
-      });
-    });
-    return out;
-  }, [lots, customTargetTimes, settings, templates]);
+  // 📊 行は achieveRowsOf(③ へ渡す集計と同じ係)。中身は 2026-10-04 より前のここの useMemo と同じ(担当と較正の印を足しただけ)。
+  const rows = useMemo(() => achieveRowsOf(lots, customTargetTimes, settings, templates), [lots, customTargetTimes, settings, templates]);
 
   const pctColor = (p) => p >= 100 ? 'text-emerald-600' : p >= 80 ? 'text-amber-600' : 'text-rose-600';
   const barColor = (p) => p >= 100 ? 'bg-emerald-500' : p >= 80 ? 'bg-amber-500' : 'bg-rose-500';
@@ -32654,6 +32667,47 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    // State: UI
    const [viewMode, setViewMode] = useState(EMBED_MAP ? 'map-only' : 'dashboard'); // 埋め込みは「マップだけ」画面(現場マップの地図そのもの)
    const [activeTab, setActiveTab] = useState('main');
+   // ═══════════════════════════════════════════════════════════════════════
+   // 📊 2026-10-04 生産達成率を ③ へ(共有棚 capacity-shared-v1/achieve_rate/parts・1件を丸ごと置き換え)
+   //   清水さん「こっちが押したらすぐそっちも出せる用意しておいて」(目標時間の較正 = 最適化提案のボタン)
+   //   ・書くのは ① 分析を開いて過去のロットがそろった時(開くたびに1回) ② 目標時間を較正して保存した直後 だけ。
+   //   ・🚨 読みは増やさない(分析が使う lots をそのまま数えるだけ)。
+   //   ・過去の取り寄せが上限で頭打ちの時は complete:false と理由を一緒に置く(③ が「古い分は入っていません」と出す)。
+   //   ・中身(月×人の 標準秒・実績秒・未設定の実績秒)が前と同じなら書かない(domain/achieveShelf.js)。
+   //   ・行は達成率の画面と同じ係(achieveRowsOf)。
+   // ═══════════════════════════════════════════════════════════════════════
+   const achievePublisher = useMemo(() => ((!db || EMBED_MAP || LIVE_CODE) ? null : makeAchievePublisher({
+     app: 'parts',
+     save: (doc) => DATA(db).save(ACHIEVE_NS, ACHIEVE_COL, 'parts', doc, { merge: false }),
+     storage: { get: (k) => localStorage.getItem(k), set: (k, v) => localStorage.setItem(k, v) },
+   })), [db]);
+   const achieveInRef = useRef(null);
+   achieveInRef.current = { lots, settings, templates, history: skillGridHistory };
+   const achieveCalibRef = useRef(false); // 目標時間(customTargetTimes)を保存した印。届いた後に1回だけ書く
+   const publishAchieve = useCallback((reason) => {
+     if (!achievePublisher) return;
+     const cur = achieveInRef.current || {};
+     const st = cur.settings || {};
+     const hist = cur.history || { complete: false, note: '' };
+     let rows;
+     try {
+       rows = achieveRowsOf(cur.lots, st.customTargetTimes || {}, st, cur.templates || [])
+         .map(r => ({ ms: r.ms, worker: r.worker, act: r.act, cal: r.cal }));
+     } catch (e) { console.error('📊 達成率の集計に失敗(③へは書きません)', e); return; }
+     achievePublisher.publish({ rows, calibrated: countCalibrated(st.customTargetTimes), complete: !!hist.complete, note: hist.complete ? '' : hist.note, reason })
+       .then((r) => { if (r.written) console.info(`📊 達成率を共有棚へ書きました(${reason}・${r.doc.cells.length}行)`); })
+       .catch((e) => console.warn('📊 達成率を共有棚へ書けませんでした(次に分析を開いた時にもう一度)', e));
+   }, [achievePublisher]);
+   const analysisOpenForAchieve = activeTab === 'analysis';
+   useEffect(() => {
+     if (analysisOpenForAchieve && lotsHistoryReady) publishAchieve('open');
+   }, [analysisOpenForAchieve, lotsHistoryReady, publishAchieve]);
+   const achieveCtt = settings ? settings.customTargetTimes : null;
+   useEffect(() => {
+     if (!achieveCalibRef.current || !lotsHistoryReady) return;
+     achieveCalibRef.current = false;
+     publishAchieve('calibrate');
+   }, [achieveCtt, lotsHistoryReady, publishAchieve]);
    // ⤢ 広く使う(製品と同じ・端末ごと localStorage 'pi-analysis-wide')。効かせるのは分析タブの間だけ(⤢ボタンが分析の画面の中に在る = 戻る道が消えない)。
    const [wideMode, setWideMode] = useState(() => { try { return localStorage.getItem('pi-analysis-wide') === '1'; } catch { return false; } });
    const toggleWideMode = () => setWideMode(v => { const n = !v; try { localStorage.setItem('pi-analysis-wide', n ? '1' : '0'); } catch { /* 端末が拒否しても畳めること自体は動く */ } return n; });
@@ -33166,7 +33220,13 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
          setContactShared(data || {}); // P026: 班・メンバーも同じ書類から受け取る(読むだけ)
        }, { onError: readFailed('contact_shared/settings') }),
        // P028/P099: 要望箱とお知らせ(検査アプリ共通の箱)。全件を読む(未対応の数・未読の判定が全件で行うため)。
+       // 📉 2026-10-03 A15(最終 2026-09-27 G5 と同じ): ③の埋め込み(?embed=map)では要望箱を張らない。
+       //   使うのは マスタ設定の「アプリへの要望」タブ・要望の窓(押して開く)・札の数・連絡ポータルだけで、どれも埋め込みでは出ない
+       //   (埋め込みは地図だけ・操作バーも出さず、押す所は全部ふさいでいる)。
+       //   ⚠ お知らせ(app_notices)は外さない: 「アプリを更新しました」の窓(NoticePopup)は埋め込みの中でも出る(最終も外していない)。
+       ...(EMBED_MAP ? [] : [
        P.watchCollection(CONTACT_SHARED_NS, FEEDBACK_COL, (rows) => setAppFeedback(rows || []), { onError: readFailed(FEEDBACK_COL) }),
+       ]),
        P.watchCollection(CONTACT_SHARED_NS, NOTICE_COL, (rows) => setAppNotices(rows || []), { onError: readFailed(NOTICE_COL) })
      ];
      // 張った事は0件でも残す(「読んでいない」と「そもそも購読していない」を人が見分けられるように)。
@@ -33944,6 +34004,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    };
 
    const saveSettings = async (newSettings) => {
+     // 📊 目標時間(較正値)の保存 = ③ の生産達成率を書き直す合図(届いた customTargetTimes で1回だけ・achieveCalibRef)
+     if (newSettings && newSettings.customTargetTimes !== undefined) achieveCalibRef.current = true;
      // 🚨🚨🚨 2026-08-23: サインインが終わっていない間の設定の保存を **黙って捨てない**。
      //   前はここで無言 return していたので `await` した側には正常に返り、
      //   画面だけ先へ進んで Firestore には何も行かなかった(2026-08-17 の事故と同じ形)。
@@ -35922,6 +35984,13 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      if (!db || !doc) return Promise.resolve(false);
      return DATA(db).save(OPSIM_SHELF_NS, 'daily_load', 'parts', doc, { merge: false }).then(() => true);
    }, [db]);
+   // ⏱ 2026-10-03 B3 「最新にする」の印(capacity-shared-v1/daily_load_requests/parts)の口。③の「納期・人手」が部品の要約を頼む。
+   //   聞く: 1件だけ購読 / 受ける: 取引で1台だけ(2台が同時に応えても書くのは1回)。部品から相手へ頼む口は無い(部品は相手の要約を表示しない)。
+   const dailyLoadReqApi = useMemo(() => (!db ? null : {
+     writeRequest: () => Promise.resolve(false),
+     watchRequest: (app, cb, onError) => DATA(db).watchDoc(OPSIM_SHELF_NS, DAILY_LOAD_REQUEST_COL, app, cb, { onError: (e) => { console.warn('[共有棚] 最新にするの印が読めていません', e); if (typeof onError === 'function') onError(e); } }),
+     claim: (app, reqId, by) => DATA(db).claimOnce(OPSIM_SHELF_NS, DAILY_LOAD_REQUEST_COL, app, { reqId, claimedBy: null }, { claimedBy: by, claimedAt: Date.now() }),
+   }), [db]);
    const savePlacementRule = useCallback((rule) => {
      if (!db) return Promise.resolve(false);
      const doc = opsimBuildWeeklyRule({ name: rule && rule.name, weekly: rule && rule.weekly, days: rule && rule.days, updatedBy: 'parts', nowMs: Date.now() });
@@ -35979,6 +36048,9 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      const t = setTimeout(() => setBgLoadArmed(true), 3000 + Math.floor(Math.random() * 60000));
      return () => clearTimeout(t);
    }, [wantDailyLoadRefresh]);
+   /* ⏱ 2026-10-03 B3 ③の「最新にする」を受ける側(製品・最終と同じ)。画面を開いている端末は画面が、開いていない端末は下の書き直し役が書く。
+      🚨 画面を開いている間の書き直しは5分に1回まで(画面の部品の中)。 */
+   const dlRefresh = useDailyLoadRefreshHub({ api: dailyLoadReqApi, hereApp: 'parts', screenOpen: opsimScreenOpen, active: capacityShelfLoaded, docsByApp: null });
    const [analysisCombo, setAnalysisCombo] = useState(null); // 実データ分析モーダルの対象コンボ {model, templateId, templateName}
    const [strictModeHistory, setStrictModeHistory] = useState([]);
    const strictPanelActive = showStrictManager || (activeTab === 'optimize' && optimizeView === 'strict');
@@ -36544,6 +36616,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      );
    }
    return (
+     <DailyLoadForceContext.Provider value={dlRefresh.forceValue}>
      <WorkScheduleContext.Provider value={workScheduleWithCalendar}>
      <LotCardDisplayContext.Provider value={settings.lotCardDisplay || DEFAULT_LOT_CARD_DISPLAY}>
      <ItemMasterContext.Provider value={settings.itemMaster || null}>
@@ -37229,8 +37302,13 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
        {showAnnouncementModal && <AnnouncementModal announcements={announcements} workers={workers} saveData={saveData} deleteData={deleteData} loadImage={loadNoteImage} onClose={() => setShowAnnouncementModal(false)} currentUserName={currentUserName} />}
 
        {/* 📦🔄 共有棚 daily_load/parts の書き直し(画面は出ない)。古い時だけ・1回だけ・操業シミュを開いている時は出さない(製品と同じ) */}
-      {bgLoadArmed && wantDailyLoadRefresh && (
-        <OperationsSimulationPanel publishOnly planShelf={planShelf} isAdmin={currentUserName === '管理者'} readOverviewMap={readOverviewMap}
+      {/* 📉 2026-10-03 A6: 裏の書き直しには保存計画の棚(planShelf)を渡さない(null)。
+            publishOnly は画面を1つも描かず、採った計画(useAdoptedPlan)は描く所でしか使わない = daily_load の中身(指紋)は同じ。
+            渡すと head の購読・readHead・版の本体を、書き直しのたびにサーバから読んでいた(plan_control/plan_versions)。
+            写しで指紋が直す前と同じ事を確かめた。見張り: src/domain/__tests__/bgPublishNoPlanShelf.test.mjs */}
+      {/* ⏱ 2026-10-03 B3 ③の「最新にする」をこの端末が受けた時も出す(画面を開いていない時だけ。書いたら消える) */}
+      {((bgLoadArmed && wantDailyLoadRefresh) || dlRefresh.bgForce) && (
+        <OperationsSimulationPanel publishOnly planShelf={null} isAdmin={currentUserName === '管理者'} readOverviewMap={readOverviewMap}
           lots={lots} templates={templates} workers={opsimWorkers} settings={settings}
           canEdit={false} saveSettings={null} savePlacementRule={null} factoryCalendar={factoryCalendar}
           ownDailyLoad={ownDailyLoad} publishDailyLoad={publishDailyLoad} capacityShelfLoaded={capacityShelfLoaded} placementRules={placementRules}
@@ -37784,5 +37862,6 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
      </ItemMasterContext.Provider>
      </LotCardDisplayContext.Provider>
      </WorkScheduleContext.Provider>
+     </DailyLoadForceContext.Provider>
    );
  }
