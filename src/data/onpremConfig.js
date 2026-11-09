@@ -65,8 +65,10 @@ export const parseOnpremConfig = (raw, build = {}, device = null) => {
   // 送信待ちの箱の持ち主(端末ごとに分ける)。⚠空でも動く(既定の箱)。
   const owner = str(cfg.owner) || str(dev.owner) || '';
   const ok = errors.length === 0;
-  // 🔔 2026-10-31 通知の方式: "relay"(既定・書かない時も = 今の中継) | "signal"(社内の Web Push)。webPushClient.js の pushModeOf と同じ決め方。
-  const pushMode = String(cfg.pushMode == null ? '' : cfg.pushMode).trim().toLowerCase() === 'signal' ? 'signal' : 'relay';
+  // 🔔 2026-10-31 通知の方式: "relay"(書かない時 = 今の中継) | "signal"(社内の Web Push) | "lan"(2026-11-09 案A・PC の受け取り係・社内版の一式の既定)。
+  //   webPushClient.js の pushModeOf と同じ決め方。
+  const pushModeRaw = String(cfg.pushMode == null ? '' : cfg.pushMode).trim().toLowerCase();
+  const pushMode = pushModeRaw === 'signal' || pushModeRaw === 'lan' ? pushModeRaw : 'relay';
   return { ok, url, authCollection, email, password, owner, pushMode, errors, needsLogin: ok && !(email && password), source,
     credentialsFrom: fromFile ? 'file' : (email && password ? 'device' : '') };
 };

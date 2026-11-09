@@ -15,12 +15,20 @@
 //            送る = notify_queue に行(mode "signal"・宛先 sids・文面)を入れるだけ。送信係が本文 0B の push を出し、
 //            SW(onprem-sw.js)が /__push/v1/inbox から自分の分を取って出す。
 //   秘密(secret)は端末の IndexedDB(鍵 = registration.scope)にだけ置く。push_subs には sha256 の16進(secretHash)だけ。
+//   lan    … 2026-11-09 案A(社内版の一式の既定)。会社の外へは何も出さない。各 PC の「受け取り係」(notify-receiver.ps1)が
+//            社内サーバーに繋ぎっぱなしで待ち、Windows の通知を出す。端末の宛先は push_tokens の token "lan:"+rid(受け取り係の id)。
+//            rid は受け取り係を入れた時に開く画面の #lanrid=<rid> から覚える(localStorage onpremLanRid・# は住所から消す)。
+//            送る = notify_queue に行(mode "lan"・宛先 rids・文面)を入れるだけ。🔔 の登録の画面(side・group・role・admin)は今のまま。
 // ============================================================================
 
 export const PUSH_MODE_RELAY = 'relay';
 export const PUSH_MODE_SIGNAL = 'signal';
-/** 設定の pushMode をそろえる。"signal" と書いた時だけ signal。それ以外(無い・空・違う字)は relay(既定)。 */
-export const pushModeOf = (v) => (String(v == null ? '' : v).trim().toLowerCase() === PUSH_MODE_SIGNAL ? PUSH_MODE_SIGNAL : PUSH_MODE_RELAY);
+export const PUSH_MODE_LAN = 'lan';
+/** 設定の pushMode をそろえる。"signal" / "lan" と書いた時だけその方式。それ以外(無い・空・違う字)は relay。 */
+export const pushModeOf = (v) => {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  return s === PUSH_MODE_SIGNAL ? PUSH_MODE_SIGNAL : (s === PUSH_MODE_LAN ? PUSH_MODE_LAN : PUSH_MODE_RELAY);
+};
 
 /** push_tokens の token の頭。signal で作った宛先はこれ + push_subs の id。 */
 export const WP_TOKEN_PREFIX = 'wp:';
@@ -255,10 +263,13 @@ const pbSend = (pb, method, col, id, body) => {
  *    呼ぶ側(sendOnpremPush)が種類だけの行(mode relay = Teams だけ・push なし)に替える。
  *  ⚠owner は enqueueNotify が付ける(札の id)。tag・requireInteraction はサーバーの欄に無いので載せない。
  */
-export const buildQueueRow = ({ mode, ns, category, sids, title, body, link, origin, scope }) => {
+export const buildQueueRow = ({ mode, ns, category, sids, rids, title, body, link, origin, scope }) => {
   const row = { mode: pushModeOf(mode), state: 'new', ns: String(ns || ''), category: String(category || 'info') };
-  if (row.mode === PUSH_MODE_SIGNAL) {
-    row.to = (Array.isArray(sids) ? sids : []).filter((s) => SID_RE.test(String(s))).slice(0, 200);
+  if (row.mode === PUSH_MODE_SIGNAL || row.mode === PUSH_MODE_LAN) {
+    // lan … 宛先は受け取り係の id(rid・小文字と数字の15字)。形はサーバーのフック notifyQueue.pb.js も確かめる
+    row.to = row.mode === PUSH_MODE_LAN
+      ? (Array.isArray(rids) ? rids : []).filter((s) => RID_RE.test(String(s))).slice(0, 200)
+      : (Array.isArray(sids) ? sids : []).filter((s) => SID_RE.test(String(s))).slice(0, 200);
     row.title = cutChars(title, 80);
     row.body = cutChars(body, 300);
     row.link = cutChars(safeNoticeLink(link, origin, scope || '/'), 300);
@@ -277,6 +288,20 @@ export const sendOnpremPush = (deps, workerUrl, args) => {
   const category = noticeCategoryOf(a);
   const split = splitPushTokens(a.tokens);
   const origin = d.origin || '';
+  if (mode === PUSH_MODE_LAN) {
+    // 🔔 案A: 中継(社外)を呼ばない。宛先 = 受け取り係(lan:<rid>)だけ。⚠FCM・wp: の宛先はここでは使わない(外へ出さない)
+    if (!split.rids.length) {
+      return Promise.resolve()
+        .then(() => enqueueNotify(d.pb, buildQueueRow({ mode: PUSH_MODE_RELAY, ns: d.ns, category: category })))
+        .catch(() => null)
+        .then(() => ({ ok: false, sent: 0, mode: mode, results: [], error: 'この宛先は社内の受け取り係(PC)で送れる端末ではありません(通知の方式を切り替えた後は、その PC でもう一度登録してください)' }));
+    }
+    const lrow = buildQueueRow({ mode: mode, ns: d.ns, category: category, rids: split.rids, title: a.title, body: a.body, link: a.link, origin: origin, scope: d.scope });
+    return Promise.resolve()
+      .then(() => enqueueNotify(d.pb, lrow))
+      .then(() => ({ ok: true, sent: lrow.to.length, queued: true, mode: mode, results: [] }),
+        (e) => ({ ok: false, sent: 0, mode: mode, results: [], error: (e && e.message) || String(e) }));
+  }
   if (mode === PUSH_MODE_SIGNAL) {
     if (!split.sids.length) {
       // 宛先なし: 全端末へ広がらないよう signal の行は作らず、Teams の為の種類だけの行(push なし)にする。⚠投げない。
@@ -302,8 +327,50 @@ export const sendOnpremPush = (deps, workerUrl, args) => {
   return Promise.resolve().then(() => d.relaySend(workerUrl, out)).catch((e) => ({ ok: false, error: (e && e.message) || String(e) }));
 };
 
-/** 通知を送れる設定か(画面の「準備できているか」)。relay = VAPID 鍵と中継の住所 / signal = いつも(鍵はサーバーが持つ)。 */
-export const onpremPushReady = (mode, cfg) => (pushModeOf(mode) === PUSH_MODE_SIGNAL ? true : !!(cfg && cfg.vapidKey && cfg.workerUrl));
+/** 通知を送れる設定か(画面の「準備できているか」)。relay = VAPID 鍵と中継の住所 / signal・lan = いつも(送るのは社内サーバー)。 */
+export const onpremPushReady = (mode, cfg) => (pushModeOf(mode) !== PUSH_MODE_RELAY ? true : !!(cfg && cfg.vapidKey && cfg.workerUrl));
+
+// --- 🔔 案A: PC の受け取り係(lan) ------------------------------------------------
+/** 受け取り係の rid を覚える場所(localStorage・この PC のこのブラウザ)。rid は秘密ではない(宛先の名前)。 */
+export const LAN_RID_KEY = 'onpremLanRid';
+export const LAN_NO_RECEIVER = 'この PC に受け取り係が入っていません(5_端末を足す のフォルダの『受け取り係を入れる.bat』)';
+const storageOf = (s) => {
+  if (s) return s;
+  try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch { return null; }
+};
+/** 覚えた rid(形が違えば '')。 */
+export const getLanRid = (storage) => {
+  try {
+    const s = storageOf(storage);
+    const v = s ? String(s.getItem(LAN_RID_KEY) || '') : '';
+    return RID_RE.test(v) ? v : '';
+  } catch { return ''; }
+};
+/**
+ * 画面の住所の #lanrid=<rid> を覚えて、住所の # から消す(受け取り係を入れた時に開く画面・設計 §2.2)。
+ *   env = { location, history, storage }(無ければ画面の物)。@returns 覚えた rid か ''(形の違う rid は覚えないが # からは消す)
+ */
+export const captureLanRid = (env) => {
+  const e = env || {};
+  const loc = e.location || (typeof location !== 'undefined' ? location : null);
+  const hist = e.history || (typeof history !== 'undefined' ? history : null);
+  const hash = loc ? String(loc.hash || '') : '';
+  if (hash.indexOf('lanrid=') < 0) return '';
+  const rest = []; let rid = '';
+  const parts = hash.replace(/^#/, '').split('&');
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i].indexOf('lanrid=') === 0) { const v = parts[i].slice(7); if (RID_RE.test(v)) rid = v; } else if (parts[i]) rest.push(parts[i]);
+  }
+  if (rid) {
+    try { const s = storageOf(e.storage); if (s) s.setItem(LAN_RID_KEY, rid); else rid = ''; } catch { rid = ''; }
+  }
+  try {
+    if (hist && typeof hist.replaceState === 'function') hist.replaceState(hist.state, '', String(loc.pathname || '') + String(loc.search || '') + (rest.length ? '#' + rest.join('&') : ''));
+  } catch { /* 消せなくても覚えた rid は使える */ }
+  return rid;
+};
+/** lan の登録: 覚えた rid があれば token "lan:"+rid。無ければ Error(画面に出す文)。 */
+export const enableLanPush = (rid) => (RID_RE.test(String(rid || '')) ? Promise.resolve(LAN_TOKEN_PREFIX + rid) : Promise.reject(new Error(LAN_NO_RECEIVER)));
 
 /** この端末で signal の通知を使えない理由(空 = 使える見込み)。 */
 export const signalSupportProblem = (env) => {
@@ -404,17 +471,22 @@ export const createOnpremPush = (deps) => {
     pb: typeof d.getPb === 'function' ? d.getPb() : d.pb, ns: d.ns, origin: origin(), fetchImpl: d.fetchImpl,
     registerSw: d.registerSw, requestPermission: d.requestPermission, idbFactory: d.idbFactory, cryptoImpl: d.cryptoImpl,
   });
+  const lanRid = () => (typeof d.getLanRid === 'function' ? d.getLanRid() : getLanRid(d.storage));
   return {
     mode: mode,
     ready: (cfg) => onpremPushReady(mode(), cfg),
-    supportProblem: () => (mode() === PUSH_MODE_SIGNAL ? signalSupportProblem(d.env) : (typeof d.relayProblem === 'function' ? d.relayProblem() : '')),
+    supportProblem: () => (mode() === PUSH_MODE_LAN ? (lanRid() ? '' : LAN_NO_RECEIVER)
+      : (mode() === PUSH_MODE_SIGNAL ? signalSupportProblem(d.env) : (typeof d.relayProblem === 'function' ? d.relayProblem() : ''))),
     send: (workerUrl, args) => sendOnpremPush({
       mode: mode(), ns: d.ns, pb: typeof d.getPb === 'function' ? d.getPb() : d.pb, origin: origin(),
       scope: typeof d.getScope === 'function' ? d.getScope() : '', relaySend: d.relaySend,
     }, workerUrl, args),
-    enable: (vapidKey) => (mode() === PUSH_MODE_SIGNAL ? enableSignalPush(sigDeps()) : d.relayEnable(vapidKey)),
-    disable: () => (mode() === PUSH_MODE_SIGNAL ? disableSignalPush(sigDeps()) : d.relayDisable()),
-    // signal の時は画面を開いていても SW が通知を出す(Firebase の onMessage は使わない)
-    listenForeground: (handler) => (mode() === PUSH_MODE_SIGNAL ? Promise.resolve(() => {}) : d.relayListen(handler)),
+    enable: (vapidKey) => (mode() === PUSH_MODE_LAN ? enableLanPush(lanRid())
+      : (mode() === PUSH_MODE_SIGNAL ? enableSignalPush(sigDeps()) : d.relayEnable(vapidKey))),
+    // lan の解除は push_tokens の行を消すだけ(呼ぶ側の 🔔 の画面が消す)。受け取り係はその PC に残る
+    disable: () => (mode() === PUSH_MODE_LAN ? Promise.resolve()
+      : (mode() === PUSH_MODE_SIGNAL ? disableSignalPush(sigDeps()) : d.relayDisable())),
+    // signal の時は画面を開いていても SW が通知を出す(Firebase の onMessage は使わない)・lan は PC の受け取り係が出す
+    listenForeground: (handler) => (mode() !== PUSH_MODE_RELAY ? Promise.resolve(() => {}) : d.relayListen(handler)),
   };
 };

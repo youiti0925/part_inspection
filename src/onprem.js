@@ -100,8 +100,10 @@ export const normalizeOnpremConfig = (json, env = {}, origin = '') => {
   const aiProxyUrl = trimUrl(typeof j.aiProxyUrl === 'string' ? j.aiProxyUrl : '');
   // 通知の公開設定(書かなければ既定・false なら通知を使わない)。形の確かめは onpremPush.js の pushFirebaseOf。
   const pushFirebase = j.pushFirebase === undefined ? null : j.pushFirebase;
-  // 🔔 2026-10-31 通知の方式: "relay"(既定・書かない時も = 今の中継) | "signal"(社内の Web Push)。webPushClient.js の pushModeOf と同じ決め方。
-  const pushMode = String(j.pushMode == null ? '' : j.pushMode).trim().toLowerCase() === 'signal' ? 'signal' : 'relay';
+  // 🔔 2026-10-31 通知の方式: "relay"(書かない時 = 今の中継) | "signal"(社内の Web Push) | "lan"(2026-11-09 案A・PC の受け取り係)。
+  //   webPushClient.js の pushModeOf と同じ決め方。
+  const pushModeRaw = String(j.pushMode == null ? '' : j.pushMode).trim().toLowerCase();
+  const pushMode = pushModeRaw === 'signal' || pushModeRaw === 'lan' ? pushModeRaw : 'relay';
   return { ok: problems.length === 0, url, email, password, authCollection, appUrls, aiProxyUrl, pushFirebase, pushMode, source, problems };
 };
 

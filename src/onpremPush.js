@@ -15,7 +15,7 @@ import { initializeApp, getApps } from 'firebase/app';
 import { getMessaging, getToken, onMessage, isSupported, deleteToken } from 'firebase/messaging';
 import { pushSupportProblem as pushSupportProblemBase, sendPushViaWorker } from './push.js';
 // 🔔 2026-10-31 通知の方式の切替(onprem-config.json の pushMode・既定 relay = 今の中継のまま)。中身は src/data/webPushClient.js(4アプリ同じ)。
-import { createOnpremPush, pushModeOf } from './data/webPushClient.js';
+import { createOnpremPush, pushModeOf, captureLanRid } from './data/webPushClient.js';
 import { getDeviceSession } from './onpremDevice.js';
 
 /** 社内版の Service Worker のファイル名(index.html と同じ階層・相対で登録する)。 */
@@ -121,8 +121,15 @@ export const relayListenForegroundPush = (handler) => Promise.resolve()
 export const ONPREM_PUSH_NS = 'parts-inspection-v1';
 let _mode = 'relay';
 let _p = null;
-/** 起動の所が onprem-config.json の pushMode を入れる(無ければ relay)。 */
-export const setOnpremPushMode = (v) => { _mode = pushModeOf(v); return _mode; };
+/**
+ * 起動の所が onprem-config.json の pushMode を入れる(無ければ relay)。
+ * 🔔 2026-11-09 案A: lan の時は、受け取り係を入れた時に開いた画面の #lanrid=<rid> を覚えて住所から消す(🔔 の登録で使う)。
+ */
+export const setOnpremPushMode = (v) => {
+  _mode = pushModeOf(v);
+  if (_mode === 'lan') { try { captureLanRid(); } catch { /* 覚えられなくても画面は動く */ } }
+  return _mode;
+};
 export const onpremPushMode = () => _mode;
 const onpremPush = () => _p || (_p = createOnpremPush({
   ns: ONPREM_PUSH_NS,

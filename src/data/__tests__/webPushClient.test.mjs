@@ -13,6 +13,7 @@
 //   W09 signal の登録: 古い鍵の購読は外す・同じ endpoint は作り直さない・許していない口は断る・秘密は hash だけ送る
 //   W10 準備の判定・画面を開いている時の受信(signal は Firebase を使わない)
 //   W11 サーバーの決まりに合わせる: owner(札の id)を付ける・title 80字・宛先なしの signal は全端末へ広げず種類だけの行
+//   W12〜W15 2026-11-09 案A lan(PC の受け取り係): 方式・行の形・中継を呼ばない・relay でも lan: を中継へ渡さない・#lanrid= の結び方
 // 通信はしない(fetch・IndexedDB・pushManager は偽物)。
 // ============================================================================
 import { test } from 'node:test';
@@ -24,10 +25,11 @@ import {
   pushModeOf, pbOwnerOf, noticeCategoryOf, splitPushTokens, isWpToken, sidOfToken, isVapidPublicKey, isAllowedPushEndpoint, isFcmToken, isLanToken, ridOfToken,
   safeNoticeLink, isSameOriginUrl, pushApiUrl, idbGetSub, idbPutSub, idbDeleteSub, PUSH_IDB_NAME, PUSH_IDB_STORE,
   sendOnpremPush, buildQueueRow, enableSignalPush, disableSignalPush, createOnpremPush, onpremPushReady, bytesToB64u, b64uToBytes,
+  captureLanRid, getLanRid,
 } from '../webPushClient.js';
 
 // md5 of src/data/webPushClient.js (LF). Change it in all four apps at once.
-const SHARED_WEBPUSH_MD5 = '6b28f5d0b4066fa76fd37a1dfaa5edaf';
+const SHARED_WEBPUSH_MD5 = 'b52375cd1ee0b64e99bf7d5f54dc8721';
 const SRC = readFileSync(fileURLToPath(new URL('../webPushClient.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
 
 const ORIGIN = 'https://kensa.local';
@@ -373,4 +375,82 @@ test('W11 server contract: owner from the token, title 80 chars, no-target signa
   // 種類だけの行が書けなくても投げない
   const r2 = await sendOnpremPush({ mode: 'signal', ns: 'n', pb: { baseUrl: ORIGIN, fetchImpl: async () => { throw new Error('down'); } }, origin: ORIGIN }, '', { tokens: [] });
   assert.equal(r2.ok, false);
+});
+
+// ============================================================================
+// 🔔 2026-11-09 案A: lan(PC の受け取り係)
+// ============================================================================
+const RID = 'abcdefghij12345';
+const RID2 = 'zyxwvutsrq98765';
+const memStorage = (init = {}) => { const m = new Map(Object.entries(init)); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: (k) => { m.delete(k); }, _m: m }; };
+
+test('W12 pushMode "lan" is its own mode; ready without relay settings', () => {
+  for (const v of ['lan', ' LAN ', 'Lan']) assert.equal(pushModeOf(v), 'lan');
+  for (const v of ['lan2', 'l a n', 'wan']) assert.equal(pushModeOf(v), 'relay');
+  assert.equal(onpremPushReady('lan', {}), true);
+  assert.deepEqual(buildQueueRow({ mode: 'lan', ns: 'final-inspection-v1', category: 'repair', rids: [RID, 'BAD', 'wp:x', RID2], sids: ['sidX'], title: 't', body: 'b', link: `${ORIGIN}/?renraku=1`, origin: ORIGIN, scope: SCOPE }),
+    { mode: 'lan', state: 'new', ns: 'final-inspection-v1', category: 'repair', to: [RID, RID2], title: 't', body: 'b', link: '/?renraku=1' });
+});
+
+test('W13 lan send: a lan row with receiver ids + text, the relay is never called, and nothing leaves the page origin', async () => {
+  const fetchImpl = makeFetch();
+  let relayCalled = 0;
+  const p = createOnpremPush({
+    getMode: () => 'lan', ns: 'final-inspection-v1', getPb: () => ({ baseUrl: ORIGIN, getAuth: () => 'TOK', fetchImpl }),
+    getOrigin: () => ORIGIN, getScope: () => SCOPE, storage: memStorage({ onpremLanRid: RID }),
+    relaySend: () => { relayCalled++; }, relayEnable: () => { relayCalled++; }, relayDisable: () => { relayCalled++; }, relayListen: () => { relayCalled++; },
+  });
+  const res = await p.send('https://gemini-proxy.example.workers.dev', { tokens: [`lan:${RID}`, F1, 'wp:sid1', `lan:${RID}`, `lan:${RID2}`, 'lan:BAD'], title: '🔧 修正依頼 → 田中さん', body: '指図 123', link: 'https://evil.com/x', tag: 'req-1', requireInteraction: true });
+  assert.deepEqual(res, { ok: true, sent: 2, queued: true, mode: 'lan', results: [] });
+  assert.equal(fetchImpl.calls.length, 1);
+  assert.equal(fetchImpl.calls[0].url, `${ORIGIN}/api/collections/notify_queue/records`);
+  assert.deepEqual(JSON.parse(fetchImpl.calls[0].init.body), { mode: 'lan', state: 'new', ns: 'final-inspection-v1', category: 'repair', to: [RID, RID2], title: '🔧 修正依頼 → 田中さん', body: '指図 123', link: SCOPE });
+  // 宛先に lan が1つも無い: lan の行は作らない(全 PC へ広げない)・種類だけの行・登録し直しの文
+  const f2 = makeFetch();
+  const r2 = await sendOnpremPush({ mode: 'lan', ns: 'final-inspection-v1', pb: { baseUrl: ORIGIN, fetchImpl: f2 }, origin: ORIGIN, relaySend: () => { relayCalled++; } }, 'https://w.example', { tokens: [F1, 'wp:sid1'], tag: 'int-1', title: '社内' });
+  assert.equal(r2.ok, false); assert.match(r2.error, /もう一度登録/);
+  assert.deepEqual(f2.calls.map((c) => JSON.parse(c.init.body)), [{ mode: 'relay', state: 'new', ns: 'final-inspection-v1', category: 'internal' }]);
+  // 行が書けない時は ok:false(投げない)
+  const r3 = await sendOnpremPush({ mode: 'lan', ns: 'n', pb: { baseUrl: ORIGIN, fetchImpl: async () => jsonRes(403, {}) }, origin: ORIGIN }, '', { tokens: [`lan:${RID}`] });
+  assert.equal(r3.ok, false);
+  assert.equal(relayCalled, 0, '中継・Firebase の口は1回も呼ばない');
+  for (const c of [...fetchImpl.calls, ...f2.calls]) assert.equal(new URL(c.url).origin, ORIGIN);
+});
+
+test('W14 relay mode never hands "lan:" receiver tokens to the relay (only FCM-shaped tokens)', async () => {
+  const relayCalls = [];
+  const relaySend = async (url, args) => { relayCalls.push(args); return { ok: true, sent: args.tokens.length }; };
+  const r = await sendOnpremPush({ mode: 'relay', ns: 'final-inspection-v1', pb: { baseUrl: ORIGIN, fetchImpl: makeFetch() }, origin: ORIGIN, relaySend }, 'https://w.example', { tokens: [`lan:${RID}`, `lan:${RID2}`, 'garbage'] });
+  assert.equal(relayCalls.length, 0, '中継へ1件も渡さない');
+  assert.equal(r.ok, false);
+  await sendOnpremPush({ mode: 'relay', ns: 'final-inspection-v1', pb: null, origin: ORIGIN, relaySend }, 'https://w.example', { tokens: [`lan:${RID}`, F1] });
+  assert.deepEqual(relayCalls.map((a) => a.tokens), [[F1]]);
+  assert.ok(!JSON.stringify(relayCalls).includes('lan:'));
+});
+
+test('W15 lan enable/disable/support/foreground; #lanrid= pairing is stored and removed from the address', async () => {
+  const st = memStorage();
+  const p = createOnpremPush({ getMode: () => 'lan', storage: st, relayEnable: () => { throw new Error('x'); }, relayDisable: () => { throw new Error('x'); }, relayListen: () => { throw new Error('x'); } });
+  assert.match(p.supportProblem(), /受け取り係が入っていません/);
+  await assert.rejects(p.enable('vapid'), /受け取り係を入れる\.bat/);
+  // 入れた時に開く画面: #lanrid=<rid>
+  const replaced = [];
+  const env = (hash) => ({ location: { hash, pathname: '/final/', search: '?renraku=1' }, history: { state: { a: 1 }, replaceState: (s, t, u) => replaced.push(u) }, storage: st });
+  assert.equal(captureLanRid(env(`#lanrid=${RID}`)), RID);
+  assert.equal(replaced.at(-1), '/final/?renraku=1', '# は住所から消す(サーバーの記録にも残らない)');
+  assert.equal(getLanRid(st), RID);
+  assert.equal(p.supportProblem(), '');
+  assert.equal(await p.enable('vapid'), `lan:${RID}`, '🔔 の登録で push_tokens に入る token');
+  assert.equal(await p.disable(), undefined);
+  assert.equal(getLanRid(st), RID, '解除しても受け取り係の rid は残る(push_tokens の行を消すだけ)');
+  assert.equal(typeof (await p.listenForeground(() => {})), 'function');
+  // 他の # の続きは残す・形の違う rid は覚えないが # からは消す・# が無ければ何もしない
+  assert.equal(captureLanRid(env(`#x=1&lanrid=${RID2}&y=2`)), RID2);
+  assert.equal(replaced.at(-1), '/final/?renraku=1#x=1&y=2');
+  const n = replaced.length;
+  assert.equal(captureLanRid(env('#lanrid=BAD<script>')), '');
+  assert.equal(replaced.length, n + 1); assert.equal(getLanRid(st), RID2, '前の正しい rid は消さない');
+  assert.equal(captureLanRid(env('#other')), ''); assert.equal(replaced.length, n + 1);
+  assert.equal(captureLanRid({ location: null }), '');
+  assert.equal(getLanRid(memStorage({ onpremLanRid: 'BAD' })), '');
 });

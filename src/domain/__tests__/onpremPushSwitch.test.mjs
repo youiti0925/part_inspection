@@ -22,6 +22,9 @@ test('P01 pushMode: default relay, only "signal" switches; boot hands it to onpr
   assert.equal(m({ pushMode: 'bogus' }), 'relay');
   assert.equal(m({ pushMode: 'signal' }), 'signal');
   assert.equal(m({ pushMode: ' Signal ' }), 'signal');
+  // 🔔 2026-11-09 案A: lan(PC の受け取り係)
+  assert.equal(m({ pushMode: 'lan' }), 'lan');
+  assert.equal(m({ pushMode: 'LAN' }), 'lan');
   assert.match(read('src/App.jsx'), /setOnpremPush\(cfg\.pushFirebase\);\n\s+setOnpremPushMode\(cfg\.pushMode\);/);
 });
 
@@ -40,7 +43,8 @@ test('P02 every push call site switches on IS_ONPREM_BUILD, and the else side is
 
 test('P03 onpremPush.js: relay = today\'s functions, parts namespace, the same SW', () => {
   const g = read('src/onpremPush.js');
-  assert.match(g, /import \{ createOnpremPush, pushModeOf \} from '\.\/data\/webPushClient\.js';/);
+  // 2026-11-09 案A: lan の時に #lanrid= を覚える captureLanRid も読む
+  assert.match(g, /import \{ createOnpremPush, pushModeOf, captureLanRid \} from '\.\/data\/webPushClient\.js';/);
   for (const [k, v] of [['relaySend', 'sendPushViaWorker'], ['relayEnable', 'relayEnablePush'], ['relayDisable', 'relayDisablePush'], ['relayListen', 'relayListenForegroundPush'], ['relayProblem', 'relayPushSupportProblem']]) {
     assert.match(g, new RegExp(`${k}: ${v},`), k);
   }
