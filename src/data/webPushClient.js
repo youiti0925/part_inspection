@@ -27,12 +27,25 @@ export const WP_TOKEN_PREFIX = 'wp:';
 const SID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 export const isWpToken = (t) => typeof t === 'string' && t.indexOf(WP_TOKEN_PREFIX) === 0 && SID_RE.test(t.slice(WP_TOKEN_PREFIX.length));
 export const sidOfToken = (t) => (isWpToken(t) ? t.slice(WP_TOKEN_PREFIX.length) : '');
+/** push_tokens の token の頭。社内の受け取り係(PC の notify-receiver)の宛先はこれ + notify_receivers の id(rid)。 */
+export const LAN_TOKEN_PREFIX = 'lan:';
+/** rid の形(PocketBase の自動の id = 小文字と数字の15字)。サーバーの送信係・フックと同じ。 */
+const RID_RE = /^[a-z0-9]{15}$/;
+export const isLanToken = (t) => typeof t === 'string' && t.indexOf(LAN_TOKEN_PREFIX) === 0 && RID_RE.test(t.slice(LAN_TOKEN_PREFIX.length));
+export const ridOfToken = (t) => (isLanToken(t) ? t.slice(LAN_TOKEN_PREFIX.length) : '');
 /**
- * 宛先の token を分ける。fcm = 中継(relay)へ渡す物 / sids = signal の宛先。
- * ⚠"wp:" で始まる物は形が正しくても違っても中継へ渡さない(FCM の token ではない)。重なりは1つに。
+ * 中継(relay)へ渡してよい token の形 = ブラウザの FCM の登録 token("<端末の番号>:APA91…")だけ。
+ * 2026-11-09 案A: 前は「wp: 以外は全部 FCM」としていたので、知らない形(lan: など)の宛先まで中継(社外)へ渡っていた。
+ */
+const FCM_TOKEN_RE = /^[A-Za-z0-9_-]{8,64}:APA91[A-Za-z0-9_-]{20,4000}$/;
+export const isFcmToken = (t) => typeof t === 'string' && FCM_TOKEN_RE.test(t);
+/**
+ * 宛先の token を分ける。fcm = 中継(relay)へ渡す物 / sids = signal の宛先 / rids = 受け取り係(lan)の宛先。
+ * ⚠"wp:"・"lan:" で始まる物は形が正しくても違っても中継へ渡さない。
+ * ⚠FCM の形でない物(知らない頭・ただの字)はどこへも渡さない(捨てる)。重なりは1つに。
  */
 export const splitPushTokens = (tokens) => {
-  const fcm = []; const sids = []; const seenF = {}; const seenS = {};
+  const fcm = []; const sids = []; const rids = []; const seenF = {}; const seenS = {}; const seenR = {};
   const list = Array.isArray(tokens) ? tokens : [];
   for (let i = 0; i < list.length; i++) {
     const t = list[i];
@@ -40,9 +53,12 @@ export const splitPushTokens = (tokens) => {
     if (t.indexOf(WP_TOKEN_PREFIX) === 0) {
       const sid = sidOfToken(t);
       if (sid && !seenS[sid]) { seenS[sid] = 1; sids.push(sid); }
-    } else if (!seenF[t]) { seenF[t] = 1; fcm.push(t); }
+    } else if (t.indexOf(LAN_TOKEN_PREFIX) === 0) {
+      const rid = ridOfToken(t);
+      if (rid && !seenR[rid]) { seenR[rid] = 1; rids.push(rid); }
+    } else if (isFcmToken(t) && !seenF[t]) { seenF[t] = 1; fcm.push(t); }
   }
-  return { fcm: fcm, sids: sids };
+  return { fcm: fcm, sids: sids, rids: rids };
 };
 
 /**

@@ -5,6 +5,7 @@
 //   W02 切替の既定は relay(無い・空・違う字)。"signal" だけ signal
 //   W03 種類の表(tag / title → category)
 //   W04 "wp:" の宛先は中継へ渡さない・重なりは1つ
+//   W04b 2026-11-09 漏れ止め: 中継へ渡すのは FCM の形の token だけ("lan:"・知らない形は渡さない)
 //   W05 鍵の形・push の口の名前・同じ口のリンク・/__push/v1/ の名前
 //   W06 IndexedDB の鍵 = registration.scope(SW と同じ名前)
 //   W07 relay: 中継(relaySend)を今と同じ形で呼び、横で notify_queue に種類だけの行(mode relay)を1件。行が書けなくても止めない
@@ -20,18 +21,22 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  pushModeOf, pbOwnerOf, noticeCategoryOf, splitPushTokens, isWpToken, sidOfToken, isVapidPublicKey, isAllowedPushEndpoint,
+  pushModeOf, pbOwnerOf, noticeCategoryOf, splitPushTokens, isWpToken, sidOfToken, isVapidPublicKey, isAllowedPushEndpoint, isFcmToken, isLanToken, ridOfToken,
   safeNoticeLink, isSameOriginUrl, pushApiUrl, idbGetSub, idbPutSub, idbDeleteSub, PUSH_IDB_NAME, PUSH_IDB_STORE,
   sendOnpremPush, buildQueueRow, enableSignalPush, disableSignalPush, createOnpremPush, onpremPushReady, bytesToB64u, b64uToBytes,
 } from '../webPushClient.js';
 
 // md5 of src/data/webPushClient.js (LF). Change it in all four apps at once.
-const SHARED_WEBPUSH_MD5 = '6f5006da63c0f4eb64fb4c9f6fe2c458';
+const SHARED_WEBPUSH_MD5 = '6b28f5d0b4066fa76fd37a1dfaa5edaf';
 const SRC = readFileSync(fileURLToPath(new URL('../webPushClient.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
 
 const ORIGIN = 'https://kensa.local';
 const SCOPE = 'https://kensa.local/product/';
 const KEY = 'B' + 'A'.repeat(86);   // 87 字の公開鍵の形
+// ブラウザの FCM の登録 token の形("<端末の番号>:APA91…")。2026-11-09 から中継へ渡すのはこの形だけ
+const F1 = 'dQw4w9WgXcQ1abcdEFGH_-:APA91bH' + 'x'.repeat(140);
+const F2 = 'eRt5y6UiOp2abcdEFGH_-:APA91bH' + 'y'.repeat(140);
+const F9 = 'zZz9y8XwVu7abcdEFGH_-:APA91bH' + 'z'.repeat(140);
 
 // --- 偽の IndexedDB(open / transaction / get / put / delete だけ) -----------------
 const makeFakeIdb = () => {
@@ -156,9 +161,21 @@ test('W04 "wp:" tokens are never handed to the relay; duplicates are merged into
   assert.ok(!isWpToken('fcmTokenXYZ'));
   assert.equal(sidOfToken('wp:r1'), 'r1');
   assert.equal(sidOfToken('xx'), '');
-  const s = splitPushTokens(['f1', 'wp:s1', 'f1', 'wp:s1', 'wp:bad id', 'wp:', '', null, 7, 'f2', 'wp:s2']);
-  assert.deepEqual(s, { fcm: ['f1', 'f2'], sids: ['s1', 's2'] });
-  assert.deepEqual(splitPushTokens(undefined), { fcm: [], sids: [] });
+  const s = splitPushTokens([F1, 'wp:s1', F1, 'wp:s1', 'wp:bad id', 'wp:', '', null, 7, F2, 'wp:s2']);
+  assert.deepEqual(s, { fcm: [F1, F2], sids: ['s1', 's2'], rids: [] });
+  assert.deepEqual(splitPushTokens(undefined), { fcm: [], sids: [], rids: [] });
+});
+
+test('W04b 2026-11-09 leak stop: only real FCM-shaped tokens go to the relay; "lan:" and unknown shapes never do', () => {
+  assert.ok(isFcmToken(F1));
+  for (const bad of ['f1', 'fcmOld', 'APA91b' + 'x'.repeat(140), 'lan:abcdefghij12345', 'lan:' + F1, 'wp:' + F1, 'x:APA91bshort', F1 + ' ', F1 + '/x', 'abc:' + F1, 'mail:me@example.com', 'https://evil.example/' + F1, null, 7])
+    assert.ok(!isFcmToken(bad), String(bad));
+  assert.ok(isLanToken('lan:abcdefghij12345'));
+  for (const bad of ['lan:', 'lan:ABCDEFGHIJ12345', 'lan:abcdefghij1234', 'lan:abcdefghij123456', 'lan:abcdefghij1234_', 'LAN:abcdefghij12345']) assert.ok(!isLanToken(bad), bad);
+  assert.equal(ridOfToken('lan:abcdefghij12345'), 'abcdefghij12345');
+  assert.equal(ridOfToken(F1), '');
+  const s = splitPushTokens(['lan:abcdefghij12345', F1, 'lan:abcdefghij12345', 'lan:bad', 'lan:' + F1, 'something-else', 'teams:x', 'wp:s1', 'LAN:abcdefghij12345', F1]);
+  assert.deepEqual(s, { fcm: [F1], sids: ['s1'], rids: ['abcdefghij12345'] });
 });
 
 test('W05 key / host / link / api checks', () => {
@@ -201,13 +218,13 @@ test('W07 relay (default): the Worker is called as today (FCM tokens only) and a
   const relayCalls = [];
   const relaySend = async (url, args) => { relayCalls.push({ url, args }); return { ok: true, sent: args.tokens.length, results: [] }; };
   const pb = { baseUrl: ORIGIN, getAuth: () => 'TOK', fetchImpl };
-  const args = { tokens: ['f1', 'wp:s1', 'f2'], title: '🔧 修正依頼 → 田中さん', body: '指図 123: 傷', link: `${SCOPE}?renraku=1`, tag: 'req-9', requireInteraction: true, vibrate: [1] };
+  const args = { tokens: [F1, 'wp:s1', 'lan:abcdefghij12345', 'unknown-shape', F2], title: '🔧 修正依頼 → 田中さん', body: '指図 123: 傷', link: `${SCOPE}?renraku=1`, tag: 'req-9', requireInteraction: true, vibrate: [1] };
   const res = await sendOnpremPush({ mode: undefined, ns: 'product-inspection-v1', pb, origin: ORIGIN, scope: SCOPE, relaySend }, 'https://w.example', args);
   await new Promise((r) => setTimeout(r, 5));
   assert.deepEqual(res, { ok: true, sent: 2, results: [] });
   assert.equal(relayCalls.length, 1);
   assert.equal(relayCalls[0].url, 'https://w.example');
-  assert.deepEqual(relayCalls[0].args, { ...args, tokens: ['f1', 'f2'] }, '中継へは今と同じ項目(token だけ FCM の物)');
+  assert.deepEqual(relayCalls[0].args, { ...args, tokens: [F1, F2] }, '中継へは今と同じ項目(token だけ FCM の物・lan: と知らない形は渡さない)');
   assert.equal(fetchImpl.calls.length, 1);
   assert.equal(fetchImpl.calls[0].url, `${ORIGIN}/api/collections/notify_queue/records`);
   assert.equal(fetchImpl.calls[0].init.method, 'POST');
@@ -215,11 +232,11 @@ test('W07 relay (default): the Worker is called as today (FCM tokens only) and a
   assert.deepEqual(JSON.parse(fetchImpl.calls[0].init.body), { mode: 'relay', state: 'new', ns: 'product-inspection-v1', category: 'repair' }, '本文・宛先・リンクは載せない');
   // 行を書けなくても(500・通信の失敗)中継の返事はそのまま・投げない
   for (const bad of [async () => jsonRes(500, {}), async () => { throw new Error('down'); }]) {
-    const r2 = await sendOnpremPush({ ns: 'n', pb: { baseUrl: ORIGIN, fetchImpl: bad }, origin: ORIGIN, relaySend }, 'https://w.example', { tokens: ['f1'], tag: 'int-1' });
+    const r2 = await sendOnpremPush({ ns: 'n', pb: { baseUrl: ORIGIN, fetchImpl: bad }, origin: ORIGIN, relaySend }, 'https://w.example', { tokens: [F1], tag: 'int-1' });
     assert.equal(r2.ok, true);
   }
   // pb が無くても中継は呼ぶ
-  const r3 = await sendOnpremPush({ ns: 'n', pb: null, origin: ORIGIN, relaySend }, 'https://w.example', { tokens: ['f9'] });
+  const r3 = await sendOnpremPush({ ns: 'n', pb: null, origin: ORIGIN, relaySend }, 'https://w.example', { tokens: [F9] });
   assert.equal(r3.ok, true);
   // 宛先が 0(Teams のためだけ)でも行は入れる・中継は呼ばない
   const f4 = makeFetch(); const before = relayCalls.length;
@@ -328,7 +345,7 @@ test('W11 server contract: owner from the token, title 80 chars, no-target signa
   // relay の行・signal の行・購読の全部に owner
   const f = makeFetch({ 'GET /__push/v1/config': jsonRes(200, { vapidPublicKey: KEY }), 'POST /api/collections/push_subs/records': jsonRes(200, { id: 'sidOwner1' }) });
   const pb = { baseUrl: ORIGIN, getAuth: () => jwtOf({ id: OWNER }), fetchImpl: f };
-  await sendOnpremPush({ ns: 'product-inspection-v1', pb, origin: ORIGIN, relaySend: async () => ({ ok: true }) }, 'https://w.example', { tokens: ['f1'], tag: 'req-1', title: '🔧 修正依頼' });
+  await sendOnpremPush({ ns: 'product-inspection-v1', pb, origin: ORIGIN, relaySend: async () => ({ ok: true }) }, 'https://w.example', { tokens: [F1], tag: 'req-1', title: '🔧 修正依頼' });
   await new Promise((r) => setTimeout(r, 5));
   assert.deepEqual(JSON.parse(f.calls[0].init.body), { owner: OWNER, mode: 'relay', state: 'new', ns: 'product-inspection-v1', category: 'repair' });
   const reg = makeReg();
