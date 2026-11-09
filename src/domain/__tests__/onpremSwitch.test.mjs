@@ -197,11 +197,12 @@ test('O06 画面の入口の配線: 社内版は Firebase を起こす前に分�
   assert.match(rot, /const DATA = \(d\) => \(IS_ONPREM_BUILD \? dataFor\(d, FS_API\) : providerFor\(d, FS_API\)\);/, '回転計測も同じ行き先(点検 G5)');
 });
 
-test('O07 .env.onprem: スイッチを入れ、外の Worker を空にする・合言葉を書かない', () => {
+test('O07 .env.onprem: スイッチを入れ、外の Worker は書かない(社内の窓口 /__ai/v1 だけ)・合言葉を書かない', () => {
   const env = Object.fromEntries(read('.env.onprem').split(/\r?\n/).filter((l) => /^[A-Z_]+=/.test(l)).map((l) => l.split(/=(.*)/s).slice(0, 2)));
   assert.equal(env.VITE_ONPREM, '1');
-  assert.equal(env.VITE_DRIVE_PROXY_URL, '');
-  assert.equal(env.VITE_GEMINI_PROXY_URL, '');
+  // 11-09: 外の Worker は焼き込まない = 同じ口の /__ai/v1(社内の窓口)だけ。http(s):// の外の住所は書かない
+  assert.equal(env.VITE_DRIVE_PROXY_URL, '/__ai/v1');
+  assert.equal(env.VITE_GEMINI_PROXY_URL, '/__ai/v1');
   assert.ok(!Object.keys(env).some((k) => /PASSWORD|SECRET|TOKEN|API_?KEY/.test(k)));
 });
 
