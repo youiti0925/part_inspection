@@ -17544,8 +17544,9 @@ const ProcessInsightsTab = ({ lots, workers, customTargetTimes, onSaveSettings, 
         let start = 0;
         let end = Infinity;
         if (period === 'custom') {
-            if (customStartDate) start = new Date(customStartDate).getTime();
-            if (customEndDate) { const ed = new Date(customEndDate); ed.setHours(23, 59, 59, 999); end = ed.getTime(); }
+            // 📅 2026-11-10: 'YYYY-MM-DD' だけだと UTC の0時(日本の9:00)になり、始まりの日の 0:00〜8:59 が落ちていた。端末の日付の0時で数える
+            if (customStartDate) start = new Date(customStartDate + 'T00:00:00').getTime();
+            if (customEndDate) { const ed = new Date(customEndDate + 'T00:00:00'); ed.setHours(23, 59, 59, 999); end = ed.getTime(); }
         } else {
             const d = new Date();
             if (period === '1m') d.setMonth(d.getMonth() - 1);
@@ -31792,8 +31793,9 @@ const HistoryView = ({ lots, workers, templates, settings = null, saveData, onEd
 
   const filteredCompletedLots = useMemo(() => {
     let start = 0, end = Infinity;
-    if (filterStartDate) start = new Date(filterStartDate).getTime();
-    if (filterEndDate) { const endDate = new Date(filterEndDate); endDate.setHours(23, 59, 59, 999); end = endDate.getTime(); }
+    // 📅 2026-11-10: 'YYYY-MM-DD' だけだと UTC の0時(日本の9:00)になり、始まりの日の朝 9 時前の完了が履歴に出なかった。端末の日付の0時から数える
+    if (filterStartDate) start = new Date(filterStartDate + 'T00:00:00').getTime();
+    if (filterEndDate) { const endDate = new Date(filterEndDate + 'T00:00:00'); endDate.setHours(23, 59, 59, 999); end = endDate.getTime(); }
     const lowerQuery = searchQuery.toLowerCase();
     return completedLots.filter(lot => {
       const ts = compMs(lot);

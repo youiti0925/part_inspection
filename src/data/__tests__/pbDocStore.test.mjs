@@ -228,3 +228,18 @@ test('G08 掃除は古い門だけを外す(書いている最中の門を外さ
   assert.equal(srv.gates.size, 1);
   assert.equal([...srv.gates.values()][0].claimId, 'rev:2');
 });
+
+// 2026-11-10 社内版: 作業画面の保存(setFields = Firestore の updateDoc)で、点区切りの鍵が
+//   PocketBase の data に平たい名前('tasks.a-0.status')のまま書かれ、読み直すと押した記録が無かった。
+//   書く所(サーバへ送る本文)で入れ子に直っていることを、偽サーバに実際に残った中身で見る。
+test('G20 setFields の点区切りの鍵は、サーバの data に入れ子で書かれる(平たい鍵を作らない)', async () => {
+  const srv = makeServer();
+  const store = createDocStore(srv, { owner: 'tabletA' });
+  await store.save(NS, 'lots', 'L1', { orderNo: 'H-1', tasks: { 'b-0': { status: 'completed' } } }, { merge: false });
+  await store.setFields(NS, 'lots', 'L1', { 'tasks.a-0.status': 'completed', 'tasks.a-0.duration': 60, 'completeNotified.at': 5 });
+  const saved = [...srv.docs.values()].find((r) => r.docId === 'L1').data;
+  assert.deepEqual(Object.keys(saved).filter((k) => k.includes('.')), []);
+  assert.deepEqual(saved.tasks, { 'a-0': { status: 'completed', duration: 60 }, 'b-0': { status: 'completed' } });
+  assert.deepEqual(saved.completeNotified, { at: 5 });
+  assert.deepEqual((await store.getOne(NS, 'lots', 'L1')).tasks['a-0'].status, 'completed');
+});

@@ -34,7 +34,14 @@ export const mergeDoc = (current, patch) => {
       else out[k] = v;                                        // サーバ時刻の印はそのまま残す(サーバ側で埋める)
       continue;
     }
-    if (isPlainMap(v)) out[k] = mergeDoc(out[k], v);          // ① 入れ子は再帰
+    // ⚠⚠ 2026-10-03 **空のマップ {} は「丸ごと {} に置き換える」**(Firestore の merge:true と同じ)。
+    //   Firestore は merge の項目一覧(field mask)に「空のマップの場所」をそのまま入れるので、
+    //   { tasks: {} } を merge で送ると tasks が空になる(domain/workTimeGuard.js EMPTY_MAP_REPLACES_ON_MERGE・
+    //   domain/lotPatchScope.js narrowLotSave が当てにしている決まり)。前はここで再帰して何も消えず、
+    //   Firebase と PocketBase で同じ保存の結果が違っていた。
+    //   (2026-11-10 社内版へ移植: 最終の作業画面の保存が PocketBase で消えていた件と同じ「Firestore と違う重ね方」)
+    if (isPlainMap(v) && Object.keys(v).length === 0) out[k] = {};
+    else if (isPlainMap(v)) out[k] = mergeDoc(out[k], v);     // ① 入れ子は再帰
     else out[k] = v;                                          // ②③ 配列とそれ以外は差し替え
   }
   return out;
@@ -57,12 +64,39 @@ export const overwriteDoc = (patch) => {
 /**
  * Firestore の updateDoc と同じ「指定した項目を丸ごと差し替える」。
  * ⚠入れ子の合体をしない。ここが merge との違い。
+ *
+ * ⚠⚠ 2026-10-03 **鍵の「.」は道の区切り**(Firestore の updateDoc と同じ)。
+ *   ロットの保存は「押した所だけ」を { 'tasks.a-0.status': 値 } の形で送る(domain/lotPatchScope.js toUpdateFields)。
+ *   前はこの鍵をそのまま1つの名前として書いていたので、PocketBase では
+ *     ・本当の tasks['a-0'] は変わらない(押した記録が入らない)
+ *     ・'tasks.a-0.status' という名前のゴミの項目が増える
+ *   になっていた。Firestore と同じく、道をたどって **その末端だけ** を差し替える(他の台は触らない)。
+ *   ・途中の段が無い/マップでない時は、空のマップを作って降りる(Firestore と同じ)
+ *   ・消す印は、その末端の鍵だけを消す。途中の段が無ければ何もしない(作らない)
+ *   ・元のオブジェクトは書き換えない(降りる段ごとに写す)
+ * ⚠「.」を名前に含む鍵(型式名「MB-200.5」など)は、呼び出し側が点区切りにしない
+ *   (toUpdateFields は断る・設定の削除は配列の道で save へ回す)。ここも Firestore と同じ前提。
+ * (2026-11-10 社内版へ移植: 最終・製品の作業画面で押した工程が PocketBase に 'tasks.x-0.status' の平たい鍵で書かれ、
+ *  読み直すと進捗 0% に戻っていた。golden-pb の同じ直しを持ってきた)
  */
 export const setFieldsDoc = (current, fields) => {
   const out = isPlainMap(current) ? { ...current } : {};
-  for (const [k, v] of Object.entries(fields || {})) {
-    if (isSentinel(v) && sentinelKind(v) === 'delete') { delete out[k]; continue; }
-    out[k] = v;
+  for (const [rawKey, v] of Object.entries(fields || {})) {
+    const path = String(rawKey).split('.');
+    const del = isSentinel(v) && sentinelKind(v) === 'delete';
+    let node = out;
+    let ok = true;
+    for (let i = 0; i < path.length - 1; i++) {
+      const k = path[i];
+      if (isPlainMap(node[k])) node[k] = { ...node[k] };   // 段ごとに写す(元を書き換えない)
+      else if (del) { ok = false; break; }                  // 消す先が無い → 何もしない
+      else node[k] = {};                                    // 無い/マップでない段は作る
+      node = node[k];
+    }
+    if (!ok) continue;
+    const leaf = path[path.length - 1];
+    if (del) { delete node[leaf]; continue; }
+    node[leaf] = v;
   }
   return out;
 };
