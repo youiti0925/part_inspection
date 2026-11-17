@@ -32,6 +32,7 @@ import TemplateSkipPanel from './TemplateSkipPanel.jsx';
 import ProgressImportExtras from './ProgressImportExtras.jsx';
 import PendingImportPanel from './PendingImportPanel.jsx';
 import ProgressSheetMapPanel from './ProgressSheetMapPanel.jsx';
+import SapProgressPanel from './SapProgressPanel.jsx'; // 🏭 SAP 工程の進み(旗 feature:sapProgress=1 の時だけ出る・既定 OFF)
 import MapViewLanes from './mapviews/MapViewLanes.jsx';
 import MapViewTimeline from './mapviews/MapViewTimeline.jsx';
 import { fmtWorkSec } from './domain/incomingWork.js';
@@ -26169,6 +26170,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          <LotDuplicatesPanel lots={lots} templates={templates} deleteData={deleteData} />
          {/* 📊 P053 進捗管理表の読み方(表ごと・シート名・開始行・列の字・Z列の意味・出荷日の日数) */}
          <ProgressSheetMapPanel settings={settings} saveSettings={saveSettings} openBook={openProgressBook_pi} />
+
+         <SapProgressPanel />
 
          {/* 🗂 P057 未登録リスト(進捗管理表の取込で品質規格マスタに紐付けが無く落ちた行。無ければ何も出さない) */}
          <PendingImportPanel settings={settings} onRegisterPending={onRegisterPending} onRemovePending={onRemovePending} />
