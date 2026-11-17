@@ -6,6 +6,7 @@ import SapProgressPanel from './SapProgressPanel.jsx';
 
 const auto = new URLSearchParams(location.search).get('auto');
 const autoUrl = auto && /^http:\/\/127\.0\.0\.1:\d+\//.test(auto) ? auto : null;
+const autoStage = new URLSearchParams(location.search).get('stage');
 createRoot(document.getElementById('root')).render(
-    <div className="max-w-5xl mx-auto p-3"><SapProgressPanel force autoUrl={autoUrl} /></div>
+    <div className="max-w-5xl mx-auto p-3"><SapProgressPanel force autoUrl={autoUrl} autoStage={autoStage} /></div>
 );

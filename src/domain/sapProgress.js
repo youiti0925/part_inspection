@@ -10,7 +10,7 @@ export const DAY_MS = 86400000;
 /** Excel シリアル → 'YYYY-MM-DD'(空・不正は null) */
 export function serialToIso(n) {
     if (typeof n !== 'number' || !isFinite(n) || n < 1) return null;
-    return new Date(Date.UTC(1899, 11, 30) + Math.round(n) * DAY_MS).toISOString().slice(0, 10);
+    return new Date(Date.UTC(1899, 11, 30) + Math.floor(n + 1e-9) * DAY_MS).toISOString().slice(0, 10);
 }
 export function isoToDayNo(iso) { return Math.floor(Date.parse(iso + 'T00:00:00Z') / DAY_MS); }
 
@@ -64,6 +64,7 @@ export function toStage(r) {
         status: end ? 'done' : start ? 'working' : 'todo',
         actualStart: start, actualEnd: end,
         planStart: serialToIso(r.R), planEnd: serialToIso(r.S),
+        actualStartTime: serialToTime(r.H), actualEndTime: serialToTime(r.I), planStartTime: serialToTime(r.R), planEndTime: serialToTime(r.S),
         stdHours: Math.round((num(r.J) + num(r.L) + num(r.N)) * 1000) / 1000,
         item: String(r.U ?? ''), itemText: String(r.V ?? ''),
     };
@@ -233,4 +234,55 @@ export function dailyLoad(orders, todayIso, { days = 14, by = 'group' } = {}) {
     const rows = [...m.values()].map((e) => ({ ...e, late: r1(e.late), perDay: e.perDay.map(r1), total: r1(e.total), noDate: r1(e.noDate) }))
         .sort((a, b) => b.total - a.total);
     return { days: Array.from({ length: days }, (_, i) => dayIso(today + i)), rows };
+}
+
+// ───── 追加2(清水さん 11-17): 1指図=1本のゲージ・工程中心の見方 ─────
+
+/** Excel シリアルの小数部 → 'HH:MM'(時刻が無い=小数部 0 は null。時刻をでっち上げない) */
+export function serialToTime(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return null;
+    const frac = n - Math.floor(n);
+    if (frac < 1 / 2880) return null;
+    const m = Math.round(frac * 1440);
+    return `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+const labelOf = (iso, time) => (iso ? (time ? `${iso.slice(5)} ${time}` : iso.slice(5)) : '');
+
+/** 1指図の横1本ゲージ: 工程(付帯作業は除く)を活動順に隙間なく。status = done/working/todo/late(予定終了日を過ぎて未完了) */
+export function gaugeOf(o, todayIso) {
+    const segs = chainOf(o).map((s) => {
+        const late = s.status !== 'done' && s.planEnd && s.planEnd < todayIso;
+        const a = s.actualStart || s.planStart, b = s.actualEnd || s.planEnd;
+        return {
+            act: s.act, name: s.name, wc: s.wc, status: late ? 'late' : s.status,
+            startLabel: labelOf(a, s.actualStart ? s.actualStartTime : s.planStartTime),
+            endLabel: labelOf(b, s.actualEnd ? s.actualEndTime : s.planEndTime),
+        };
+    });
+    return { order: o.order, item: o.item, itemText: o.itemText, segs, hasTime: segs.some((g) => /\d\d:\d\d/.test(g.startLabel + g.endLabel)) };
+}
+
+/** 工程中心の見方。key = 機械グループ名(by='group')または作業区(by='wc')
+ *  working = 今その工程にいる(作業中) / next = 前の工程が済(または最初の工程)でこの工程が未(来る見込み日順) / done = 済(新しい順) */
+export function stageView(orders, key, todayIso, { by = 'group', recent = 30 } = {}) {
+    const hit = (s) => (by === 'wc' ? s.wc === key : s.name === key);
+    const working = [], next = [], done = [];
+    for (const o of orders) {
+        const c = chainOf(o);
+        c.forEach((s, i) => {
+            if (!hit(s)) return;
+            const prev = i > 0 ? c[i - 1] : null;
+            const base = { order: o.order, item: o.item, itemText: o.itemText, act: s.act, name: s.name, wc: s.wc, stdHours: s.stdHours, o };
+            if (s.status === 'working') working.push({ ...base, date: s.actualStart });
+            else if (s.status === 'todo' && (!prev || prev.status === 'done')) {
+                const date = s.planStart || (prev && prev.actualEnd) || s.planEnd || null;
+                next.push({ ...base, date, prevLabel: prev ? `${prev.act} ${prev.name}(${prev.wc})` : '(最初の工程)', prevEnd: prev ? prev.actualEnd : null,
+                    daysFromToday: date ? isoToDayNo(date) - isoToDayNo(todayIso) : null });
+            } else if (s.status === 'done') done.push({ ...base, date: s.actualEnd });
+        });
+    }
+    const byDate = (a, b) => (a.date === b.date ? 0 : !a.date ? 1 : !b.date ? -1 : a.date < b.date ? -1 : 1);
+    next.sort(byDate); working.sort(byDate);
+    done.sort((a, b) => -byDate(a, b));
+    return { working, next, done: done.slice(0, recent), doneTotal: done.length };
 }

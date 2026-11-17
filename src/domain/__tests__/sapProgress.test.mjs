@@ -130,3 +130,46 @@ test('SP14 作業区の日別の負荷: 標準Hを 最早開始〜終了に等�
     assert.equal(g['フライス'].late, 1.3);         // 11-10〜20(11日)のうち過去 7 日分 = 2×7/11
     assert.equal(g['円筒研削'], undefined);        // 済だけの作業区は出ない
 });
+
+import { gaugeOf, stageView, serialToTime } from '../sapProgress.js';
+
+test('SP15 時刻: 小数部が無ければ null(でっち上げない)・あれば HH:MM', () => {
+    assert.equal(serialToTime(46402), null);
+    assert.equal(serialToTime(46402.5), '12:00');
+    assert.equal(serialToTime(46402.75), '18:00');
+});
+
+test('SP16 ゲージ: 付帯作業を除き活動順・色の状態は 済/作業中/未/遅れ・日付だけ(時刻なし)', () => {
+    const o = buildOrders(ROWS).find((x) => x.order === '1001');
+    const g = gaugeOf(o, '2026-11-22');
+    assert.deepEqual(g.segs.map((s) => s.act), ['0010', '0020', '0030', '0040']);
+    assert.deepEqual(g.segs.map((s) => s.status), ['done', 'late', 'todo', 'todo']);   // 0020 は予定終了 11-20 を過ぎて未完了
+    assert.equal(g.segs[0].startLabel, '11-01'); assert.equal(g.segs[0].endLabel, '11-03');
+    assert.equal(g.hasTime, false);
+    assert.equal(gaugeOf(o, '2026-11-17').segs[1].status, 'working');
+});
+
+test('SP17 ゲージの時刻: SAP に時刻がある時だけ出す', () => {
+    const rows = [{ A: '9', B: '0010', C: '2385', D: '平面研削：x', H: D('2026-11-01') + 0.375, I: D('2026-11-01') + 0.5, J: 1 }];
+    const g = gaugeOf(buildOrders(rows)[0], '2026-11-17');
+    assert.equal(g.segs[0].startLabel, '11-01 09:00'); assert.equal(g.segs[0].endLabel, '11-01 12:00'); assert.equal(g.hasTime, true);
+});
+
+test('SP18 工程中心: 今いる・次に来る(前が済・来る見込み日順)・済(新しい順)', () => {
+    const rows = [
+        ...ROWS,
+        { A: '2001', B: '0010', C: '2385', D: '平面研削：a', U: 'Y', V: 'y', H: D('2026-11-05'), I: D('2026-11-06'), J: 1 },
+        { A: '2001', B: '0020', C: '2325', D: 'ﾌﾗｲｽ:a', U: 'Y', V: 'y', R: D('2026-11-12'), S: D('2026-11-13'), J: 1 },
+        { A: '2002', B: '0010', C: '2325', D: 'ﾌﾗｲｽ:b', U: 'Z', V: 'z', R: D('2026-11-11'), S: D('2026-11-12'), J: 1 },   // 最初の工程が未
+        { A: '2003', B: '0010', C: '2371', D: '円筒研削：c', U: 'Z', V: 'z', J: 1 },
+        { A: '2003', B: '0020', C: '2325', D: 'ﾌﾗｲｽ:c', U: 'Z', V: 'z', R: D('2026-11-08'), S: D('2026-11-09'), J: 1 },      // 前が未 → 次ではない
+    ];
+    const v = stageView(buildOrders(rows), 'フライス', '2026-11-17');
+    assert.deepEqual(v.working.map((x) => x.order), ['1001']);
+    assert.deepEqual(v.next.map((x) => x.order), ['2002', '2001']);          // 11-11 < 11-12
+    assert.equal(v.next[1].prevLabel, '0010 平面研削(2385)');
+    assert.equal(v.done.length, 0);
+    const h = stageView(buildOrders(rows), '平面研削', '2026-11-17');
+    assert.deepEqual(h.done.map((x) => x.order), ['2001', '1001', '1003'].filter((x) => x !== '1003'));  // 平面研削の済: 2001(11-06)・1001(11-03)
+    assert.equal(stageView(buildOrders(rows), '2325', '2026-11-17', { by: 'wc' }).next.length, 2);
+});

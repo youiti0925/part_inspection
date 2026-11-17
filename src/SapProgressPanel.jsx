@@ -4,9 +4,9 @@
 // 入力: ブラウザで選んだ xlsx(送信しない・保存しない・Firebase に触れない)
 // 呼ぶ人: App.jsx の設定画面(旗が ON の時だけ) / sap-demo.html(見本の入口・force)
 // 確かめ方: sap-demo.html で実データを選ぶ
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { readSapXlsx } from './domain/sapXlsx.js';
-import { buildOrders, reachList, loadByGroup, loadByWorkCenter, itemSummary, orderChart, handoffList, dailyLoad, STATUS_LABEL } from './domain/sapProgress.js';
+import { buildOrders, reachList, loadByGroup, loadByWorkCenter, itemSummary, gaugeOf, stageView, handoffList, dailyLoad, STATUS_LABEL } from './domain/sapProgress.js';
 
 const FLAG_KEY = 'feature:sapProgress';
 /** 旗: localStorage の feature:sapProgress が '1' の時だけ ON(既定 OFF) */
@@ -21,39 +21,39 @@ const REACH_NOTE = {
 const BAR_COLOR = { done: '#10b981', working: '#f59e0b', todo: '#94a3b8' };
 const MACHINE_GROUPS = ['平面研削', '円筒研削', '歯切り', 'フライス', '門M/C', '横M/C', '立旋盤', '旋盤', '仕様変更'];
 
-/** 1指図=1本のチャート(横=日付・工程を活動順に矢印でつなぐ・色=済/作業中/未・赤線=今日) */
-function OrderChart({ order, today }) {
-    const c = orderChart(order, today);
-    const W = 760, L = 170, rowH = 26, H = c.bars.length * rowH + 28, span = Math.max(1, c.maxDay - c.minDay);
-    const x = (d) => L + ((d - c.minDay) / span) * (W - L - 20);
-    const md = (d) => new Date(d * 86400000).toISOString().slice(0, 10);
-    let prev = null;
+const G_COLOR = { done: '#10b981', working: '#f59e0b', todo: '#cbd5e1', late: '#ef4444' };
+const G_LABEL = { done: '済', working: '作業中', todo: '未', late: '遅れ' };
+
+/** 1指図=横1本のゲージ。工程を活動順に隙間なく等幅で繋ぎ(区切り線つき)・上に工程名(作業区)・下に始め/終わりの日付(時刻は SAP にあれば)。
+ *  等幅にした理由: 工程の長さは1日〜数十日でばらつき、日付に比例させると短い工程の名前が読めず、隙間や重なりも出るため。日付は各工程の下に書く。 */
+function Gauge({ order, today, mark = null }) {
+    const g = gaugeOf(order, today);
+    if (!g.segs.length) return null;
     return (
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full border rounded bg-white" data-testid="sap-chart">
-            <defs><marker id="sapArrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#475569" /></marker></defs>
-            <text x={L} y={12} fontSize="10" fill="#64748b">{md(c.minDay)}</text>
-            <text x={W - 20} y={12} fontSize="10" fill="#64748b" textAnchor="end">{md(c.maxDay)}</text>
-            {c.bars.map((b, i) => {
-                const y = 20 + i * rowH;
-                const has = b.startDay != null;
-                const x0 = has ? x(b.startDay) : 0, x1 = has ? Math.max(x(b.endDay), x0 + 6) : 0;
-                const arrow = has && prev ? <path d={`M${prev.x},${prev.y + 8} L${x0},${y + 8}`} stroke="#475569" strokeWidth="1" fill="none" markerEnd="url(#sapArrow)" /> : null;
-                if (has) prev = { x: x1, y };
-                return (
-                    <g key={b.act + i}>
-                        <text x={4} y={y + 12} fontSize="11" fill="#0f172a">{b.act} {b.name}({STATUS_LABEL[b.status]})</text>
-                        {arrow}
-                        {has ? <rect x={x0} y={y} width={x1 - x0} height={16} rx="3" fill={BAR_COLOR[b.status]} /> : <text x={L} y={y + 12} fontSize="10" fill="#94a3b8">日付なし</text>}
-                    </g>
-                );
-            })}
-            <line x1={x(c.todayDay)} x2={x(c.todayDay)} y1={14} y2={H} stroke="#dc2626" strokeWidth="1.5" strokeDasharray="3 2" />
-            <text x={x(c.todayDay) + 3} y={H - 3} fontSize="10" fill="#dc2626">今日</text>
-        </svg>
+        <div className="mb-2" data-testid="sap-gauge">
+            <div className="text-xs mb-0.5"><b>{g.item}</b> <span className="text-slate-500">{g.itemText}</span> / 指図 {g.order}</div>
+            <div className="flex w-full border border-slate-400 rounded overflow-hidden">
+                {g.segs.map((s, i) => (
+                    <div key={s.act + i} className={'flex-1 min-w-0 ' + (i ? 'border-l border-slate-600' : '') + (mark === s.act ? ' ring-2 ring-inset ring-blue-700' : '')}>
+                        <div className="text-[10px] leading-tight px-0.5 pt-0.5 truncate bg-white" title={`${s.act} ${s.name}(${s.wc})`}>{s.name}({s.wc})</div>
+                        <div className="h-3 text-[9px] leading-3 text-center text-white" style={{ background: G_COLOR[s.status], color: s.status === 'todo' ? '#334155' : '#fff' }}>{G_LABEL[s.status]}</div>
+                        <div className="flex justify-between text-[9px] leading-tight px-0.5 pb-0.5 bg-white text-slate-600"><span>{s.startLabel}</span><span>{s.endLabel}</span></div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+function GaugeLegend({ hasTime }) {
+    return (
+        <p className="text-[11px] text-slate-600 mb-1">
+            {Object.keys(G_COLOR).map((k) => <span key={k} className="mr-2"><span className="inline-block w-3 h-3 align-middle mr-0.5 rounded-sm" style={{ background: G_COLOR[k] }} />{G_LABEL[k]}{k === 'late' ? '(予定終了日を過ぎて未完了)' : ''}</span>)}
+            {hasTime ? '' : ' / SAP に時刻が無いので日付のみ'}
+        </p>
     );
 }
 
-export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0 }) {
+export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null }) {
     const [on] = useState(() => force || isSapProgressOn());
     const [orders, setOrders] = useState(null);
     const [info, setInfo] = useState('');
@@ -64,6 +64,9 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
     const [q, setQ] = useState('');
     const [chartOrder, setChartOrder] = useState(null);
     const [hoTab, setHoTab] = useState('passed');
+    const [stageKey, setStageKey] = useState(null);   // 工程中心の見方: 機械グループ名
+    const [stageWc, setStageWc] = useState('');       // 作業区で更に絞る(空=グループ全体)
+    const stageRef = useRef(null);
 
     const list = useMemo(() => (orders ? reachList(orders, today) : []), [orders, today]);
     const shown = useMemo(() => {
@@ -79,6 +82,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
     const daily = useMemo(() => (orders ? dailyLoad(orders, today, { days: 14 }) : null), [orders, today]);
     const groups = useMemo(() => (orders ? loadByGroup(orders) : []), [orders]);
     const wcs = useMemo(() => (orders ? loadByWorkCenter(orders) : []), [orders]);
+    const sv = useMemo(() => (orders && stageKey ? stageView(orders, stageWc || stageKey, today, { by: stageWc ? 'wc' : 'group' }) : null), [orders, stageKey, stageWc, today]);
     const items = useMemo(() => (orders ? itemSummary(orders) : []), [orders]);
 
     const loadBuffer = async (name, buf) => {
@@ -99,6 +103,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
         if (!autoUrl) return;
         (async () => {
             const o = await loadBuffer('(自動読み込み)', await (await fetch(autoUrl)).arrayBuffer());
+            if (o && autoStage) setStageKey(autoStage);
             if (o) { const l = reachList(o, todayIso(), { withinDays: 14 }); if (l[autoChartIndex]) setChartOrder(l[autoChartIndex].order); }
         })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -106,7 +111,9 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
     if (!on) return null;
     const maxH = Math.max(1, ...groups.map((g) => g.openHours));
     const cnt = (f) => list.filter(f).length;
-    const chart = orders && orders.find((x) => x.order === chartOrder);
+    const pinned = orders && orders.find((x) => x.order === chartOrder);
+    const gaugeRows = orders ? [...(pinned ? [pinned] : []), ...shown.filter((o) => !pinned || o.order !== pinned.order).slice(0, 12)] : [];
+    const pickStage = (name) => { setStageKey(name); setStageWc(''); setTimeout(() => stageRef.current && stageRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); };
     const tabBtn = (cur, set, k, l) => (
         <button key={k} onClick={() => set(k)} className={'px-2 py-1 rounded border ' + (cur === k ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-slate-300')}>{l}</button>
     );
@@ -150,9 +157,9 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                 </div>
                 {shown.length > 300 && <p className="text-xs text-slate-500 mt-1">先頭300件を表示(全{shown.length}件)</p>}
 
-                <h3 className="font-bold mt-4 mb-1">指図のチャート <span className="text-xs font-normal text-slate-500">(1つの品番に多数の工程を、活動順に矢印でつなぐ)</span></h3>
-                {chart ? (<div><p className="text-xs mb-1">指図 {chart.order}・{chart.item} {chart.itemText}・今: {chart.currentLabel}</p><OrderChart order={chart} today={today} /></div>)
-                    : <p className="text-xs text-slate-500">上の一覧か下の連絡の行を押してください</p>}
+                <h3 className="font-bold mt-4 mb-1">指図のゲージ <span className="text-xs font-normal text-slate-500">(1行=1指図・工程を活動順に横へ繋ぐ・上の一覧の先頭12件と、押した指図)</span></h3>
+                <GaugeLegend hasTime={gaugeRows.some((o) => gaugeOf(o, today).hasTime)} />
+                {gaugeRows.length ? gaugeRows.map((o) => <Gauge key={o.order} order={o} today={today} />) : <p className="text-xs text-slate-500">該当なし</p>}
 
                 <h3 className="font-bold mt-4 mb-1">次の工程(作業区)への連絡</h3>
                 <div className="flex gap-2 mb-1 text-xs">
@@ -175,7 +182,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                 <div data-testid="sap-load">
                     {groups.filter((g) => g.kind === 'machine').map((g) => (
                         <div key={g.name} className="mb-1">
-                            <button className="w-full text-left flex items-center gap-2" onClick={() => setOpenGroup(openGroup === g.name ? null : g.name)}>
+                            <button className="w-full text-left flex items-center gap-2" onClick={() => { setOpenGroup(openGroup === g.name ? null : g.name); pickStage(g.name); }}>
                                 <span className="w-24 shrink-0 font-bold">{g.name}</span>
                                 <span className="flex-1 bg-slate-100 rounded h-4"><span className="block bg-blue-500 h-4 rounded" style={{ width: `${(g.openHours / maxH) * 100}%` }} /></span>
                                 <span className="w-44 shrink-0 text-right text-xs">{g.openHours}H・{g.openCount}件未完了</span>
@@ -200,6 +207,31 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                         </table>
                     </div>
                 </>)}
+
+                <div ref={stageRef} data-testid="sap-stage">
+                    <h3 className="font-bold mt-4 mb-1">工程(作業区)中心の見方 <span className="text-xs font-normal text-slate-500">(負荷の行を押してもここへ来ます)</span></h3>
+                    <div className="flex flex-wrap items-center gap-2 mb-2 text-xs">
+                        <select value={stageKey || ''} onChange={(e) => { setStageKey(e.target.value || null); setStageWc(''); }} className="border rounded px-1 py-1">
+                            <option value="">工程を選ぶ</option>
+                            {groups.filter((g) => g.kind === 'machine').map((g) => <option key={g.name} value={g.name}>{g.name}</option>)}
+                        </select>
+                        {stageKey && <select value={stageWc} onChange={(e) => setStageWc(e.target.value)} className="border rounded px-1 py-1">
+                            <option value="">作業区: すべて</option>
+                            {wcs.filter((w) => w.name === stageKey).map((w) => <option key={w.wc} value={w.wc}>{w.wc}</option>)}
+                        </select>}
+                    </div>
+                    {sv && [['working', '① 今この工程にいる指図(作業中)', sv.working, sv.working.length, '開始日'], ['next', '② 次にこの工程に来る指図(前の工程が済・来る見込み日順)', sv.next, sv.next.length, '来る見込み日'], ['done', '③ この工程を済ませた指図(最近' + sv.done.length + '件 / 全' + sv.doneTotal + '件)', sv.done, sv.doneTotal, '済んだ日']].map(([k, title, rows, n, dl]) => (
+                        <div key={k} className="mb-3" data-testid={'sap-stage-' + k}>
+                            <h4 className="text-xs font-bold mb-1">{title}: {n}件</h4>
+                            {rows.slice(0, 8).map((r) => (
+                                <div key={r.order + r.act} className="mb-1">
+                                    <div className="text-[11px] text-slate-600">{dl} {r.date || '日付なし'}{k === 'next' ? ` ・前: ${r.prevLabel}` : ''}・{r.stdHours}H</div>
+                                    <Gauge order={r.o} today={today} mark={r.act} />
+                                </div>))}
+                            {rows.length > 8 && <p className="text-[11px] text-slate-500">先頭8件を表示(全{rows.length}件)</p>}
+                            {rows.length === 0 && <p className="text-[11px] text-slate-500">なし</p>}
+                        </div>))}
+                </div>
 
                 <details className="mt-4"><summary className="cursor-pointer font-bold">③ 品目ごとの集計(上位30)</summary>
                     <table className="w-full text-xs mt-1"><thead className="bg-slate-100"><tr><th className="p-1 text-left">品目</th><th className="p-1 text-right">指図</th><th className="p-1 text-right">工程件数</th><th className="p-1 text-right">標準H</th><th className="p-1 text-right">実績あり</th></tr></thead>
