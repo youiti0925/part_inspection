@@ -65,6 +65,7 @@ export function toStage(r) {
         actualStart: start, actualEnd: end,
         planStart: serialToIso(r.R), planEnd: serialToIso(r.S),
         actualStartTime: serialToTime(r.H), actualEndTime: serialToTime(r.I), planStartTime: serialToTime(r.R), planEndTime: serialToTime(r.S),
+        hJ: num(r.J), hL: num(r.L), hN: num(r.N),
         stdHours: Math.round((num(r.J) + num(r.L) + num(r.N)) * 1000) / 1000,
         item: String(r.U ?? ''), itemText: String(r.V ?? ''),
     };
@@ -251,15 +252,21 @@ const labelOf = (iso, time) => (iso ? (time ? `${iso.slice(5)} ${time}` : iso.sl
 /** 1指図の横1本ゲージ: 工程(付帯作業は除く)を活動順に隙間なく。status = done/working/todo/late(予定終了日を過ぎて未完了) */
 export function gaugeOf(o, todayIso) {
     const segs = chainOf(o).map((s) => {
-        const late = s.status !== 'done' && s.planEnd && s.planEnd < todayIso;
+        // 見込みがある(est)時: 見込み終了が計画終了(S)を越えたら遅れ(赤)。見込みが無い時: SAP の計画終了を過ぎて未完了なら遅れ
+        const late = s.status !== 'done' && (s.est ? s.delayMs > 0 : (s.sapPlanEnd ?? s.planEnd) && (s.sapPlanEnd ?? s.planEnd) < todayIso);
         const a = s.actualStart || s.planStart, b = s.actualEnd || s.planEnd;
+        const plan = s.sapPlanEnd ?? s.planEnd;
         return {
             act: s.act, name: s.name, wc: s.wc, status: late ? 'late' : s.status,
             startLabel: labelOf(a, s.actualStart ? s.actualStartTime : s.planStartTime),
             endLabel: labelOf(b, s.actualEnd ? s.actualEndTime : s.planEndTime),
+            startEst: !s.actualStart && !!s.est, endEst: !s.actualEnd && !!s.est,   // 見込み(標準時間から計算)か、SAP の実績か
+            planEndLabel: plan ? plan.slice(5) : '',
+            delayH: s.est && s.delayMs != null && s.status !== 'done' ? Math.round(s.delayMs / 360000) / 10 : null,
+            origin: s.origin ? `${s.origin.name}(${s.origin.wc}) ${s.origin.day.slice(5)}` : '',
         };
     });
-    return { order: o.order, item: o.item, itemText: o.itemText, segs, hasTime: segs.some((g) => /\d\d:\d\d/.test(g.startLabel + g.endLabel)) };
+    return { order: o.order, item: o.item, itemText: o.itemText, segs, hasTime: segs.some((g) => /[0-9]{2}:[0-9]{2}/.test(g.startLabel + g.endLabel)) };
 }
 
 /** 工程中心の見方。key = 機械グループ名(by='group')または作業区(by='wc')
