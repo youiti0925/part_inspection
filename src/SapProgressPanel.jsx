@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { readSapXlsx } from './domain/sapXlsx.js';
 import { scheduleOrders, queueTable, HOURS_MODES } from './domain/sapSchedule.js';
 import SapDueSection from './SapDueList.jsx';
+import { baseNowMs } from './domain/sapBoard.js';
 import { buildOrders, reachList, loadByGroup, loadByWorkCenter, itemSummary, gaugeOf, stageView, handoffList, dailyLoad, STATUS_LABEL } from './domain/sapProgress.js';
 
 const FLAG_KEY = 'feature:sapProgress';
@@ -82,11 +83,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
     const [defCap, setDefCap] = useState(1);                // 作業区の既定の台数(同時に何本まで)
     const [capMap, setCapMap] = useState({});               // 作業区ごとの台数(指定した物だけ)
     const [usePlanStart, setUsePlanStart] = useState(true); // SAP の計画開始日(R)より前には始めない
-    const nowMs = useMemo(() => {
-        if (today === todayIso()) return Date.now();
-        const [y, m, d] = today.split('-').map(Number);
-        return new Date(y, m - 1, d, 8, 30).getTime();
-    }, [today]);
+    const nowMs = useMemo(() => baseNowMs(today), [today]);   // 積み上げの基準時刻 = 基準日の始業 08:30(実行した時刻にしない)
     const sched = useMemo(() => (baseOrders ? scheduleOrders(baseOrders, { nowMs, capacity: capMap, defaultCapacity: defCap, hoursMode, usePlanStart }) : null), [baseOrders, nowMs, capMap, defCap, hoursMode, usePlanStart]);
     const orders = sched ? sched.orders : null;
     const queue = useMemo(() => (sched ? queueTable(sched.waits, nowMs, { days: 21 }) : null), [sched, nowMs]);

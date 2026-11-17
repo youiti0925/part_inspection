@@ -23,6 +23,9 @@ export function msOf(iso, time, dflt) {
     return new Date(y, m - 1, d, h, mi).getTime();
 }
 
+/** 積み上げの基準時刻 = 基準日('YYYY-MM-DD')の始業 08:30。実行した時刻(夜など)で積むと、全部が「今夜終わる」見た目になるため */
+export const baseNowMs = (iso) => msOf(iso, null, '08:30');
+
 /** 工程 → 棒の元(開始・終了の ms)。作業中=実績開始から・未=見込み(est)の開始から。見込みが無ければ SAP の計画日(日の始め〜定時) */
 export function segOf(s) {
     const startMs = s.status === 'working' && s.actualStart ? msOf(s.actualStart, s.actualStartTime, '08:30') : msOf(s.planStart, s.planStartTime, '08:30');

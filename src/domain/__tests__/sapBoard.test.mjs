@@ -92,3 +92,15 @@ test('SB06 上の4枚: 一番溜まっている工程・最初に台数を超え
     assert.ok(s.top && s.top.name);
     assert.equal(s.late, r.filter((x) => x.lateDays != null).length);
 });
+
+test('SB07 積み上げの基準時刻 = 基準日の始業 08:30(実行した夜の時刻にしない)・1h の工程は 09:30 に終わる', async () => {
+    const { baseNowMs } = await import('../sapBoard.js');
+    assert.equal(baseNowMs('2026-11-17'), at(2026, 11, 17, 8, 30));
+    const base = buildOrders([st('1', '0010', '2385', '平面研削:a', 1, { S: D('2026-11-17') })]);
+    const s = scheduleOrders(base, { nowMs: baseNowMs('2026-11-17') });
+    const r = orderRows(s.orders, { nowMs: baseNowMs('2026-11-17') })[0];
+    assert.equal(r.finishMs, at(2026, 11, 17, 9, 30)); assert.equal(r.lateDays, null);
+    // 夜の 22:58 を基準にすると 翌日以降へ送られる(今までの「全部 22:58 終」の元)
+    const night = scheduleOrders(base, { nowMs: at(2026, 11, 17, 22, 58) });
+    assert.ok(orderRows(night.orders, { nowMs: at(2026, 11, 17, 22, 58) })[0].finishMs > at(2026, 11, 17, 17, 0));
+});

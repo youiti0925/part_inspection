@@ -23,7 +23,7 @@ const TIER = DUE_TIER;
 const SHORT_BASIS = { sap: 'SAP 予定どおり', sim: 'シミュ更新', actual: '検査開始済', unknown: '不明' };
 const DAY = 86400000;
 const SORTS = [DUE_SORT.LATE, DUE_SORT.FINISH, DUE_SORT.DUE, DUE_SORT.ORDER, DUE_SORT.MODEL];
-const GRID = 'grid grid-cols-[15rem_6rem_1fr] items-center gap-2';
+const GRID = 'grid grid-cols-[19rem_6rem_1fr] items-center gap-2';
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const p2 = (n) => String(n).padStart(2, '0');
 const fmtMD = (ms) => (isNum(ms) ? `${new Date(ms).getMonth() + 1}/${new Date(ms).getDate()}` : '—');
@@ -340,7 +340,7 @@ function CapacityTable({ cap, passRate, onPick, set, capOf, setLaneCap }) {
             <div className={`mt-0.5 text-2xl font-extrabold leading-tight ${bad ? 'text-rose-600' : 'text-emerald-700'}`}>{v} <small className="text-xs font-semibold text-slate-500">{small}</small></div>
         </div>
     );
-    const GRIDC = { gridTemplateColumns: `9rem 4.5rem repeat(${weeks.length}, minmax(0, 1fr)) 19rem` };
+    const GRIDC = { gridTemplateColumns: `9rem 11rem repeat(${weeks.length}, minmax(0, 1fr)) 19rem` };
     return (
         <div className="mb-3" data-testid="sap-capacity">
             <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -364,7 +364,7 @@ function CapacityTable({ cap, passRate, onPick, set, capOf, setLaneCap }) {
                 {rows.map((r) => (
                     <div key={r.name} className="grid items-center gap-1 border-b border-slate-100 px-2 py-1" style={GRIDC} data-cap-row={r.name}>
                         <span className="flex items-center gap-1.5 truncate text-sm font-black text-slate-900"><Avatar name={r.name} tone={toneOfLane(r.name)} size="w-6 h-6" showName={false} />{r.name}</span>
-                        <label className="text-2xs text-slate-500"><input type="number" min="1" max="20" value={capOf(r.wcs[0])} onChange={(e) => setLaneCap(r.wcs, Math.max(1, Math.floor(Number(e.target.value) || 1)))} className="w-11 rounded border border-slate-300 px-1 text-xs" title={`作業区 ${r.wcs.join(' / ')} の台数(各)`} />×{r.wcs.length}</label>
+                        <label className="text-2xs text-slate-600" title={`作業区 ${r.wcs.join(' / ')}`}>各<input type="number" min="1" max="20" value={capOf(r.wcs[0])} onChange={(e) => setLaneCap(r.wcs, Math.max(1, Math.floor(Number(e.target.value) || 1)))} className="mx-0.5 w-11 rounded border border-slate-300 px-1 text-xs" />台 ×作業区{r.wcs.length}つ=<b>{r.dai}台</b></label>
                         {r.cells.map((c, i) => (
                             <button key={i} type="button" data-cap-cell={`${r.name}|${i}`} data-level={c.level} onClick={() => onPick(r.name, i)}
                                 className={`min-h-12 rounded-lg border px-1 py-0.5 text-center leading-tight hover:ring-2 hover:ring-cyan-400 ${LEVEL_CLS[c.level]}`}
