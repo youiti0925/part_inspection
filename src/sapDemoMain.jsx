@@ -7,6 +7,9 @@ import SapProgressPanel from './SapProgressPanel.jsx';
 const auto = new URLSearchParams(location.search).get('auto');
 const autoUrl = auto && /^http:\/\/127\.0\.0\.1:\d+\//.test(auto) ? auto : null;
 const autoStage = new URLSearchParams(location.search).get('stage');
+const autoDays = Number(new URLSearchParams(location.search).get('days')) || null;
+const autoSort = new URLSearchParams(location.search).get('sort');
+const autoTab = new URLSearchParams(location.search).get('tab') || 'order';
 createRoot(document.getElementById('root')).render(
-    <div className="max-w-5xl mx-auto p-3"><SapProgressPanel force autoUrl={autoUrl} autoStage={autoStage} /></div>
+    <div className="max-w-7xl mx-auto p-3"><SapProgressPanel force autoUrl={autoUrl} autoStage={autoStage} autoTab={autoTab} autoDays={autoDays} autoSort={autoSort} /></div>
 );
