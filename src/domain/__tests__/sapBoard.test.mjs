@@ -104,3 +104,10 @@ test('SB07 積み上げの基準時刻 = 基準日の始業 08:30(実行した�
     const night = scheduleOrders(base, { nowMs: at(2026, 11, 17, 22, 58) });
     assert.ok(orderRows(night.orders, { nowMs: at(2026, 11, 17, 22, 58) })[0].finishMs > at(2026, 11, 17, 17, 0));
 });
+
+test('SB08 同じ機械グループを 2 回通る指図も 指図×活動の鍵で 2 行とも出る', () => {
+    const base = buildOrders([st('1', '0010', '2385', '平面研削:a', 1, { R: D('2026-11-17'), S: D('2026-11-18') }), st('1', '0020', '2325', 'ﾌﾗｲｽ:a', 1), st('1', '0030', '2385', '平面研削:a', 1)]);
+    const { orders } = scheduleOrders(base, { nowMs: NOW });
+    const r = stageRows(orders, '平面研削', { nowMs: NOW });
+    assert.deepEqual(r.map((x) => x.key), ['1|0010', '1|0030']);
+});

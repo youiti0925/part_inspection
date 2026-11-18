@@ -15,6 +15,7 @@
 import { hoursOf, hoursKey } from './sapSchedule.js';
 import { chainOf, msOf, sapStartOf, sapEndOf, LANE_ORDER, HOURS_PER_DAY } from './sapBoard.js';
 import { weekList, GREEN_BELOW } from './sapCapacity.js';
+import { leadTimes } from './sapArrivalForecast.js';
 import { factoryClock, DEFAULT_WORK_SCHEDULE } from './workClock.js';
 
 const r1 = (x) => Math.round(x * 10) / 10;
@@ -76,46 +77,74 @@ const windowOf = (s) => {
     return { startMs: Math.min(s0, e0), endMs: Math.max(s0, e0) };
 };
 
-/** マスの計算(機械と人の悪い方) */
-function cellOf(dm, dw, cm, cw) {
+/** マスの計算。resource: 'machine'(機械の占有だけ)/ 'worker'(人だけ)/ 'both'(悪い方) */
+function cellOf(dm, dw, cm, cw, resource = 'machine') {
     const ratio = (d, c) => (c > 0 ? d / c : (d > 0 ? Infinity : 0));
     const pm = ratio(dm, cm), pw = ratio(dw, cw);
-    const pct = Math.max(pm, pw);
+    const pct = resource === 'worker' ? pw : resource === 'both' ? Math.max(pm, pw) : pm;
     const level = pct > 1 ? 'red' : pct >= GREEN_BELOW ? 'yellow' : 'green';
-    return { demandM: r1(dm), demandW: r1(dw), capM: r1(cm), capW: r1(cw), pctM: pm, pctW: pw, pct, worse: pw > pm ? 'worker' : 'machine', slackM: r1(cm - dm), slackW: r1(cw - dw), slack: r1(Math.min(cm - dm, cw - dw)), level };
+    const slackM = cm - dm, slackW = cw - dw;
+    const slack = resource === 'worker' ? slackW : resource === 'both' ? Math.min(slackM, slackW) : slackM;
+    const worse = resource === 'worker' || (resource === 'both' && pw > pm) ? 'worker' : 'machine';
+    return { demandM: r1(dm), demandW: r1(dw), capM: r1(cm), capW: r1(cw), pctM: pm, pctW: pw, pct, worse, slackM: r1(slackM), slackW: r1(slackW), slack: r1(slack), level };
 }
 
+/** 週ごとの「SAP に入っている仕事量」を 1稼働日あたりで比べ、今週〜2週後の最大の この割合 未満の週は「薄い」(まだ計画が入っていない) */
+export const THIN_RATIO = 0.8;
+
 /**
- * 機械グループ × 作業区 × 週。
- * @param {object} o { nowMs, weeks, perQty, cfgOf(wc)=>{units,people,multi}, otHours, saturday, isWorkday }
- * @returns {{ weeks, groups: Array<{ name, kind, wcs: Array<{ wc, cfg, eff, cells, carry }>, cells, hint, redWcs, tight }>, summary }}
+ * 機械グループ × 作業区 × 週(Fable の検証 11-18 の指示を反映)。
+ *  ・標準値2・3 は ×数量(1個あたり)が既定(perQty)。段取りは 1ロット1回。
+ *  ・計画の窓の 今日より前の日の分(持ち越し)は 今週のマスに足さず 別に持つ(carry: h・件・一番古い計画)。窓の稼働日へ均等に置き 今日以降の分だけを週に入れる。
+ *  ・グループは 作業区コード(readWorkName)で決まった名前。能力に数えるのは 未完了の工程がある作業区だけ。
+ *  ・検査(2509/2519)・洗浄・付帯作業は 機械の表に入れない。付帯作業の数えていない時間は summary.uncounted。
+ *  ・後ろの工程が済で 前が未の工程(完了の入力もれらしい)は 必要量から外し summary.suspect に数える。
+ * @param {object} o { nowMs, weeks, perQty, cfgOf(wc)=>{units,people,multi}, otHours, saturday, isWorkday, resource:'machine'|'worker'|'both' }
  */
-export function capacityGroups(orders, { nowMs, weeks = 5, perQty = false, cfgOf = () => ({ units: 1 }), otHours = 0, saturday = false, isWorkday = factoryClock(DEFAULT_WORK_SCHEDULE, null) } = {}) {
+export function capacityGroups(orders, { nowMs, weeks = 5, perQty = true, cfgOf = () => ({ units: 1 }), otHours = 0, saturday = false, resource = 'machine', isWorkday = factoryClock(DEFAULT_WORK_SCHEDULE, null) } = {}) {
     const wl = weekList(nowMs, weeks);
     const today = startOfDay(nowMs);
-    const weekOfDay = (dayMs) => { if (dayMs < today) return 0; for (let i = 0; i < wl.length; i++) if (dayMs >= wl[i].startMs && dayMs < wl[i].endMs) return i; return -1; };
+    const todayDay = Math.floor((today + 12 * 3600000) / 86400000);
+    const dayNoOf = (ms) => Math.floor((ms + 12 * 3600000) / 86400000);
+    const weekOfDay = (dayMs) => { for (let i = 0; i < wl.length; i++) if (dayMs >= wl[i].startMs && dayMs < wl[i].endMs) return i; return -1; };
     const modeM = hoursKey('machine', perQty), modeW = hoursKey('worker', perQty);
-    const groups = new Map();   // name → { kind, wcs: Map(wc → {m[], w[], carry}) }
-    const mk = () => ({ m: new Array(weeks).fill(0), w: new Array(weeks).fill(0), carry: 0 });
-    for (const o of orders) for (const s of chainOf(o)) {
-        if (!groups.has(s.name)) groups.set(s.name, { kind: s.kind, wcs: new Map() });
-        const g = groups.get(s.name);
-        if (!g.wcs.has(s.wc)) g.wcs.set(s.wc, mk());
-        const rec = g.wcs.get(s.wc);
-        if (s.status === 'done') continue;
-        const hm = hoursOf(s, modeM), hw = hoursOf(s, modeW);
-        if (!(hm > 0) && !(hw > 0)) continue;
-        const w = windowOf(s);
-        if (!w) continue;
-        const days = [];
-        for (let d = w.startMs; d <= w.endMs; d = addDays(d, 1)) if (isWorkday(d)) days.push(d);
-        if (!days.length) days.push(w.startMs);
-        for (const d of days) {
-            const wi = weekOfDay(d);
-            if (wi < 0) continue;
-            rec.m[wi] += hm / days.length; rec.w[wi] += hw / days.length;
-            if (d < today) rec.carry += hm / days.length;
+    const groups = new Map();
+    const mk = () => ({ m: new Array(weeks).fill(0), w: new Array(weeks).fill(0), carryM: 0, carryW: 0, carryN: 0, oldest: 0, n: 0, zero: 0, top: [] });
+    let suspect = 0, uncountedH = 0, uncountedN = 0;
+    for (const o of orders) {
+        const chain = chainOf(o);
+        const lastDoneIdx = chain.reduce((a, s, x) => (s.status === 'done' ? x : a), -1);
+        for (const s of o.stages) {
+            if (s.kind === 'misc' && s.status !== 'done') { const h = hoursOf(s, modeM); if (h > 0) { uncountedH += h; uncountedN++; } }
         }
+        chain.forEach((s, ci) => {
+            if (s.kind !== 'machine') return;
+            if (!groups.has(s.name)) groups.set(s.name, { kind: s.kind, wcs: new Map() });
+            const g = groups.get(s.name);
+            if (!g.wcs.has(s.wc)) g.wcs.set(s.wc, mk());
+            const rec = g.wcs.get(s.wc);
+            if (s.status === 'done') return;
+            if (ci < lastDoneIdx) { suspect++; return; }   // 後ろが済で前が未 = 完了の入力もれらしい
+            const hm = hoursOf(s, modeM), hw = hoursOf(s, modeW);
+            rec.n++;
+            if (!(hm > 0) && !(hw > 0)) { rec.zero++; return; }
+            const w = windowOf(s);
+            if (!w) return;
+            const agoDays = Math.max(0, todayDay - dayNoOf(w.startMs));
+            rec.top.push({ key: o.order + '|' + s.act, order: o.order, tx: (o.itemText || '').trim() || o.item, qty: s.qty, wc: s.wc, ago: agoDays, planIso: sapStartOf(s) || '', h: r1(hm), hw: r1(hw), moved: !!s.moved, from: s.fromWc || '' });
+            // 窓の稼働日に均等に置き、今日より前の日の分は 持ち越し(別の列)・今日以降の分だけを 週のマスに入れる
+            const days = [];
+            for (let d = w.startMs; d <= w.endMs; d = addDays(d, 1)) if (isWorkday(d)) days.push(d);
+            if (!days.length) days.push(w.startMs);
+            const past = days.filter((d) => d < today).length;
+            if (past) { rec.carryM += hm * past / days.length; rec.carryW += hw * past / days.length; rec.carryN++; rec.oldest = Math.max(rec.oldest, agoDays); }
+            for (const d of days) {
+                if (d < today) continue;
+                const wi = weekOfDay(d);
+                if (wi < 0) continue;
+                rec.m[wi] += hm / days.length; rec.w[wi] += hw / days.length;
+            }
+        });
     }
     const dayCounts = wl.map((w) => {
         let work = 0, sat = 0;
@@ -123,37 +152,42 @@ export function capacityGroups(orders, { nowMs, weeks = 5, perQty = false, cfgOf
         return { work, sat };
     });
     const hoursPerUnit = (i) => dayCounts[i].work * (HOURS_PER_DAY + otHours) + (saturday ? dayCounts[i].sat * HOURS_PER_DAY : 0);
+    const lead = leadTimes(orders);
     const out = [];
+    const allDemand = new Array(weeks).fill(0); let allCarry = 0, allCarryN = 0;
     for (const [name, g] of groups) {
-        if (![...g.wcs.values()].some((r) => r.m.some((x) => x > 0) || r.w.some((x) => x > 0))) continue;
-        const wcs = [...g.wcs.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([wc, r]) => {
+        const wcsAll = [...g.wcs.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([wc, r]) => {
             const eff = effUnits(cfgOf(wc));
-            const cells = r.m.map((dm, i) => cellOf(dm, r.w[i], eff.machine * hoursPerUnit(i), eff.worker * hoursPerUnit(i)));
-            return { wc, eff, cells, carry: r1(r.carry), active: r.m.some((x) => x > 0) || r.w.some((x) => x > 0) };
+            const cells = r.m.map((dm, i) => cellOf(dm, r.w[i], eff.machine * hoursPerUnit(i), eff.worker * hoursPerUnit(i), resource));
+            const carry = resource === 'worker' ? r.carryW : r.carryM;
+            const u = (resource === 'worker' ? eff.worker : eff.machine) || 1;
+            return { wc, eff, cells, active: r.n > 0, n: r.n, zero: r.zero, carry: r1(carry), carryN: r.carryN, oldest: r.oldest, carryDays: carry / (u * HOURS_PER_DAY), top: r.top };
         });
-        // グループ全体(同じグループの中で仕事を回せる前提で足し合わせ)
+        const wcs = wcsAll.filter((x) => x.active);      // 能力に数えるのは 未完了の工程がある作業区だけ
+        if (!wcs.length) continue;
         const cells = wl.map((_, i) => {
             let dm = 0, dw = 0, cm = 0, cw = 0;
             for (const x of wcs) { dm += x.cells[i].demandM; dw += x.cells[i].demandW; cm += x.cells[i].capM; cw += x.cells[i].capW; }
-            return cellOf(dm, dw, cm, cw);
+            return cellOf(dm, dw, cm, cw, resource);
         });
-        const redWcs = wcs.filter((x) => x.cells[0].level === 'red').length;
-        const c0 = cells[0];
-        let hint;
-        if (c0.level === 'red') {
-            const res = c0.worse, short = Math.ceil(-(res === 'worker' ? c0.slackW : c0.slackM));
-            const units = wcs.reduce((a, x) => a + x.eff[res === 'worker' ? 'worker' : 'machine'], 0) || 1, u = res === 'worker' ? '人' : '台';
-            const wd = dayCounts[0].work;
-            const ot = wd > 0 ? Math.ceil((short / (units * wd)) * 10) / 10 : null, sat = Math.ceil((short / (units * HOURS_PER_DAY)) * 2) / 2;
-            hint = { kind: 'short', res, short, ot, sat, units, text: `今週 ${res === 'worker' ? '人' : '機械'}が ${short}h 不足 → ${ot != null ? `残業 1日${ot}h(全${units}${u})` : '残業は使えない週'} か 土曜 ${sat}日` };
-        } else if (redWcs > 0) hint = { kind: 'skew', redWcs, text: `全体は足りるが 作業区 ${redWcs} つに偏り・他の作業区へ回せれば こなせる` };
-        else hint = { kind: 'ok', text: `足りる(余裕 ${Math.floor(Math.min(...cells.map((c) => c.slack)))}h〜)` };
-        out.push({ name, kind: g.kind, wcs, cells, redWcs, hint, dai: wcs.reduce((a, x) => a + x.eff.machine, 0), people: wcs.reduce((a, x) => a + x.eff.worker, 0) });
+        cells.forEach((c, i) => { allDemand[i] += resource === 'worker' ? c.demandW : c.demandM; });
+        const carry = wcs.reduce((a, x) => a + x.carry, 0), carryN = wcs.reduce((a, x) => a + x.carryN, 0);
+        const units = wcs.reduce((a, x) => a + (resource === 'worker' ? x.eff.worker : x.eff.machine), 0) || 1;
+        allCarry += carry; allCarryN += carryN;
+        const carryDays = carry / (units * HOURS_PER_DAY);
+        const overWeeks = cells.slice(0, 3).filter((c) => c.pct > 1).length;
+        const redWcs = wcs.filter((x) => x.cells.slice(0, 3).some((c) => c.pct > 1)).length;
+        const verdict = overWeeks ? { level: 'red', text: `計画の分だけで あふれる週が ${overWeeks} つ(今週〜2週後)` }
+            : carryDays > 5 ? { level: 'yellow', text: `持ち越しが 全台で 約${Math.round(carryDays)}日分。片付けるまで 新しい分が待つ` } : { level: 'green', text: '計画の分は足りる見込み' };
+        const top = wcs.flatMap((x) => x.top).sort((a, b) => b.ago - a.ago || b.h - a.h).slice(0, 10);
+        out.push({ name, kind: g.kind, wcs, wcsAll, cells, carry: r1(carry), carryN, oldest: Math.max(0, ...wcs.map((x) => x.oldest)), carryDays: r1(carryDays), redWcs, verdict, n: wcs.reduce((a, x) => a + x.n, 0), zero: wcs.reduce((a, x) => a + x.zero, 0),
+            dai: wcs.reduce((a, x) => a + x.eff.machine, 0), people: wcs.reduce((a, x) => a + x.eff.worker, 0), lead: lead({ kind: 'machine', wc: wcs[0].wc, name }), top });
     }
-    const worstOrder = (a, b) => LEVEL_RANK[b.cells[0].level] - LEVEL_RANK[a.cells[0].level] || (b.cells[0].pct === a.cells[0].pct ? rank(a.name) - rank(b.name) : b.cells[0].pct - a.cells[0].pct);
-    out.sort(worstOrder);
-    const byWeek = wl.map((_, i) => out.filter((g) => g.cells[i].level === 'red').map((g) => g.name));
-    const tight = out.filter((g) => g.cells[0].level !== 'red' && g.redWcs > 0).map((g) => g.name);
-    const short0 = out.filter((g) => g.cells[0].level === 'red').reduce((a, g) => a + Math.max(0, -g.cells[0].slack), 0);
-    return { weeks: wl.map((w, i) => ({ ...w, ...dayCounts[i] })), groups: out, summary: { cannotNow: byWeek[0], byWeek, tight, shortNow: r1(short0), groupCount: out.length } };
+    const vr = { red: 0, yellow: 1, green: 2 };
+    const peak = (g) => Math.max(...g.cells.slice(0, 3).map((c) => c.pct));
+    out.sort((a, b) => vr[a.verdict.level] - vr[b.verdict.level] || peak(b) - peak(a) || rank(a.name) - rank(b.name));
+    const perDay = allDemand.map((h, i) => h / Math.max(1, dayCounts[i].work));
+    const ref = Math.max(...perDay.slice(0, 3));
+    const weeksOut = wl.map((w, i) => ({ ...w, ...dayCounts[i], allH: r1(allDemand[i]), perDay: r1(perDay[i]), thin: perDay[i] < ref * THIN_RATIO }));
+    return { weeks: weeksOut, groups: out, summary: { reds: out.filter((g) => g.verdict.level === 'red').map((g) => g.name), worst: out[0] || null, allCarry: r1(allCarry), allCarryN, suspect, uncounted: { h: r1(uncountedH), n: uncountedN }, groupCount: out.length } };
 }

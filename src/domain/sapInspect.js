@@ -41,7 +41,7 @@ export const BASIS_LABEL = { sap: 'SAP 予定どおり', sim: 'シミュレー�
 export const HOURS_BASIS_LABEL = { MT: 'MT(標準値)', actual: 'アプリの実績の中央値', unknown: '不明(MT なし・実績なし)' };
 
 /** base/sched は同じ並びの指図配列。検査工程が未完了の指図だけ返す(届く順) */
-export function inspectForecast(base, sched, { nearRemaining = NEAR_REMAINING_DEFAULT, actualsByItem = {}, hoursMode = 'machine', schedule = DEFAULT_WORK_SCHEDULE, todayIso = null } = {}) {
+export function inspectForecast(base, sched, { nearRemaining = NEAR_REMAINING_DEFAULT, actualsByItem = {}, hoursMode = 'machine*', schedule = DEFAULT_WORK_SCHEDULE, todayIso = null } = {}) {
     const rows = [];
     base.forEach((bo, oi) => {
         const so = (sched && sched[oi]) || bo;

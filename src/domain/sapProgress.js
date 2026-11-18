@@ -16,7 +16,7 @@ export function isoToDayNo(iso) { return Math.floor(Date.parse(iso + 'T00:00:00Z
 
 // 作業区コード → 名前(作業テキストが空の行の保険)
 const CODE_FALLBACK = [
-    [2381, 2389, '平面研削'], [2371, 2379, '円筒研削'], [2390, 2396, '歯切り'], [2320, 2329, 'フライス'],
+    [2381, 2389, '平面研削'], [2371, 2379, '円筒研削'], [2390, 2396, '歯切り'], [2320, 2329, 'フライス'], [2330, 2336, '仕様変更'],
     [2351, 2359, '横M/C'], [2361, 2369, '門M/C'], [2341, 2349, '立旋盤'], [2313, 2319, '旋盤'],
     [2509, 2509, '三次元検査'], [2519, 2519, '受入検査'],
 ];
@@ -27,27 +27,23 @@ const NAME_RULES = [
     ['立旋盤', '立旋盤'], ['旋盤', '旋盤'],
 ];
 
-/** 作業テキスト・作業区 → { name, kind } kind: machine / inspect / wash / misc */
+/** 作業テキスト・作業区 → { name, kind } kind: machine / inspect / wash / misc
+ *  🚨 グループは 作業区コードの範囲で先に決める(作業テキストの揺れに引きずられない: 実データで 15 作業区が 2 つ以上の名前に入っていた)。
+ *  検査は 作業区 2509(三次元検査)・2519(受入検査)で決める(作業テキストに「検査」とあっても 他の作業区は検査にしない: 検査前洗浄・長期保管本体検査) */
 export function readWorkName(text, code) {
     const raw = String(text || '').replace(/：/g, ':').replace(/\s+/g, ' ').trim();
     const t = raw.replace(/^\d{4}[:\s]+/, '');   // 先頭の「2385:」を外す
-    if (/検査/.test(t) || String(code) === '2509') {
-        const nm = /三次元/.test(t) || String(code) === '2509' ? '三次元検査' : /受入/.test(t) ? '受入検査' : '検査';
-        return { name: nm, kind: 'inspect' };
-    }
+    const c = Number(code);
+    if (c === 2509) return { name: '三次元検査', kind: 'inspect' };
+    if (c === 2519) return { name: '受入検査', kind: 'inspect' };
     if (/洗浄/.test(t)) return { name: '面取り洗浄', kind: 'wash' };
     const head = t.split(':')[0];
-    if (/^(付帯作業|仕様変更)/.test(head) || /一時置き|応援|現合/.test(t)) {
-        if (/^仕様変更/.test(head)) {
-            const m = NAME_RULES.find(([k]) => t.includes(k));
-            return { name: m ? m[1] : '仕様変更', kind: 'machine' };
-        }
-        return { name: t.includes('一時置き') ? '付帯作業(一時置き)' : '付帯作業', kind: 'misc' };
-    }
-    for (const [k, n] of NAME_RULES) if (head.includes(k) || t.includes(k)) return { name: n, kind: 'machine' };
-    const c = Number(code);
+    const isChange = /^仕様変更/.test(head);
+    if (!isChange && (/^付帯作業/.test(head) || /一時置き|応援|現合/.test(t))) return { name: t.includes('一時置き') ? '付帯作業(一時置き)' : '付帯作業', kind: 'misc' };
     const f = CODE_FALLBACK.find(([a, b]) => c >= a && c <= b);
-    if (f) return { name: f[2], kind: /検査/.test(f[2]) ? 'inspect' : 'machine' };
+    if (f) return { name: f[2], kind: 'machine' };
+    if (isChange) { const m = NAME_RULES.find(([k]) => t.includes(k)); return { name: m ? m[1] : '仕様変更', kind: 'machine' }; }
+    for (const [k, n] of NAME_RULES) if (head.includes(k) || t.includes(k)) return { name: n, kind: 'machine' };
     return { name: '付帯作業', kind: 'misc' };
 }
 

@@ -50,7 +50,7 @@ function facts(dueMs, delayMs, finishMs, nowMs) {
 }
 
 /** ① 品目(指図)ごとの行。1行=機械の工程が残る1指図。棒=残りの工程を横に繋ぐ */
-export function orderRows(orders, { nowMs, hoursMode = 'machine' } = {}) {
+export function orderRows(orders, { nowMs, hoursMode = 'machine*' } = {}) {
     const rows = [];
     for (const o of orders) {
         if (o.allDone || !o.stages.some((s) => s.kind === 'machine')) continue;
@@ -72,12 +72,12 @@ export function orderRows(orders, { nowMs, hoursMode = 'machine' } = {}) {
 }
 
 /** ② 工程(作業区グループ)ごと: その工程を まだ済ませていない指図の行。棒=その工程での作業・薄い棒=前の工程が済んでから始まるまでの待ち */
-export function stageRows(orders, name, { nowMs, hoursMode = 'machine' } = {}) {
+export function stageRows(orders, name, { nowMs, hoursMode = 'machine*' } = {}) {
     const rows = [];
     for (const o of orders) {
         const st = chainOf(o);
-        const i = st.findIndex((s) => s.name === name && s.status !== 'done');
-        if (i < 0) continue;
+        st.forEach((_, i) => {
+        if (!(st[i].name === name && st[i].status !== 'done')) return;
         const s = st[i], prev = i > 0 ? st[i - 1] : null;
         const seg = segOf(s);
         let readyMs = null;
@@ -91,12 +91,13 @@ export function stageRows(orders, name, { nowMs, hoursMode = 'machine' } = {}) {
             hours: r1(hoursOf(s, hoursMode)), planStartMs: msOf(sapStartOf(s), null, '08:30'), seg, readyMs, waitMs, segs: seg.startMs != null ? [seg] : [],
             ...facts(planEndMsOf(s), seg.delayMs, seg.endMs, nowMs),
         });
+        });
     }
     return rows;
 }
 
 /** ③ 工程(作業区グループ)そのものの一覧。opts: { capOf(wc)=>台数, queue(queueTable の結果), hoursMode } */
-export function laneSummary(orders, { hoursMode = 'machine', capOf = () => 1, queue = null, days = 14 } = {}) {
+export function laneSummary(orders, { hoursMode = 'machine*', capOf = () => 1, queue = null, days = 14 } = {}) {
     const lanes = new Map();
     const L = (n, kind) => { if (!lanes.has(n)) lanes.set(n, { name: n, kind, now: 0, wait: 0, next: 0, waitH: 0, wcs: new Set() }); return lanes.get(n); };
     for (const o of orders) for (const s of chainOf(o)) L(s.name, s.kind).wcs.add(s.wc);

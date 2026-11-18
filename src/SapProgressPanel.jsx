@@ -87,7 +87,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
     const [stageWc, setStageWc] = useState('');       // 作業区で更に絞る(空=グループ全体)
     const stageRef = useRef(null);
     const [hoursMode, setHoursMode] = useState('machine');  // 標準値の使い方(1=段取り・2=機械・3=作業者)。既定=機械の占有時間=段取り+機械
-    const [perQty, setPerQty] = useState(false);            // 標準値2・3 が1個あたりなら ×数量(未確認なので既定=ロットあたり=掛けない)
+    const [perQty, setPerQty] = useState(true);             // 標準値2・3 は1個あたり(清水さん確定)→ 既定は ×数量
     const hk = hoursKey(hoursMode, perQty);
     const [defCap, setDefCap] = useState(1);                // 作業区の既定の台数(同時に何本まで)
     const [capMap, setCapMapRaw] = useState(() => loadLS('capMap', {}));          // 作業区ごとの台数(指定した物だけ)
@@ -180,11 +180,11 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                 <label>積み上げに使う時間 <select value={hoursMode} onChange={(e) => setHoursMode(e.target.value)} className="border rounded px-1">{HOURS_MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
                 <label>作業区の既定の台数 <input type="number" min="1" max="20" value={defCap} onChange={(e) => setDefCap(Math.max(1, Math.floor(Number(e.target.value) || 1)))} className="border rounded px-1 w-14" />(同時に何本まで)</label>
                 <label><input type="checkbox" checked={usePlanStart} onChange={(e) => setUsePlanStart(e.target.checked)} /> SAP の計画開始日(最早実行開始日)より前には始めない</label>
-                <label title="標準値2(機械)・標準値3(作業者)が 1個あたりの時間なら入れる。段取り(標準値1)は 1ロットにつき1回なので 数量は掛けません"><input type="checkbox" checked={perQty} onChange={(e) => setPerQty(e.target.checked)} data-testid="sap-perqty" /> 標準値2・3 に 数量を掛ける(1個あたりの時間の場合)</label>
-                <span className="text-slate-500">標準値 1=段取り・2=機械・3=作業者(清水さんの回答)。機械の占有時間=段取り+機械・作業者の時間=段取り+作業者。標準値2・3 が「1個あたり」か「1ロットあたり」かは未確認なので、既定は ロットあたり(数量を掛けない)です。日時は 工場カレンダー(平日 08:30-17:00・休憩あり)・前の工程が済んでから次・作業区ごとの台数・機械の占有時間で順に積んだ見込みです。</span>
+                <label title="標準値2(機械)・標準値3(作業者)が 1個あたりの時間なら入れる。段取り(標準値1)は 1ロットにつき1回なので 数量は掛けません"><input type="checkbox" checked={perQty} onChange={(e) => setPerQty(e.target.checked)} data-testid="sap-perqty" /> 標準値2・3 に 数量を掛ける(1個あたり・既定)</label>
+                <span className="text-slate-500">標準値 1=段取り・2=機械・3=作業者(清水さんの回答)。機械の占有時間=段取り+機械・作業者の時間=段取り+作業者。標準値2・3 は 1個あたり(清水さん確定)なので 既定は 数量を掛けます。日時は 工場カレンダー(平日 08:30-17:00・休憩あり)・前の工程が済んでから次・作業区ごとの台数・機械の占有時間で順に積んだ見込みです。</span>
             </div>
 
-                <MachineGroupView initialOpen={autoMg && autoMg !== '1' ? autoMg : null} orders={orders} queue={queue} nowMs={nowMs} perQty={perQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} peopleMap={peopleMap} setPeopleMap={setPeopleMap} multiMap={multiMap} setMultiMap={setMultiMap} moves={moves} setMoves={setMoves} hoursMode={hk} />
+                <MachineGroupView initialOpen={autoMg && autoMg !== '1' ? autoMg : null} orders={orders} nowMs={nowMs} perQty={perQty} setPerQty={setPerQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} peopleMap={peopleMap} setPeopleMap={setPeopleMap} multiMap={multiMap} setMultiMap={setMultiMap} moves={moves} setMoves={setMoves} fileLabel={`SAP の表 ${fileName || ''}`} />
 
                 <details className="mt-4 border-t pt-2"><summary className="cursor-pointer font-bold">前の見せ方(品目ごと/工程ごと/工程の一覧のタブ)</summary>
                 <SapDueSection orders={orders} queue={queue} origins={sched.origins} nowMs={nowMs} hoursMode={hk} perQty={perQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} initialTab={autoTab} initialDays={autoDays} initialSort={autoSort} initialStage={autoStage} />

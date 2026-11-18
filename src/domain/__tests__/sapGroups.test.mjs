@@ -34,10 +34,12 @@ test('SG02 「2台あるが作業者1人」: 掛け持ち 可 なら こなせ�
 
 test('SG03 人が足りない(機械は足りる): 人の方が悪ければ 人の色・マスは悪い方', () => {
     const rows = [stage('1', '2385', 2, 3, 40)];   // 機械 5h・人 42h
-    const g = run(rows, { cfgOf: () => ({ units: 2, people: 1, multi: true }) }).groups[0];
-    assert.equal(g.cells[0].worse, 'worker'); assert.equal(g.cells[0].level, 'red'); assert.equal(g.cells[0].slackW, -11);
-    assert.match(g.hint.text, /人が 11h 不足/);
-    assert.equal(g.hint.res, 'worker');
+    const cfg = () => ({ units: 2, people: 1, multi: true });
+    const both = run(rows, { cfgOf: cfg, resource: 'both' }).groups[0];
+    assert.equal(both.cells[0].worse, 'worker'); assert.equal(both.cells[0].level, 'red'); assert.equal(both.cells[0].slackW, -11);
+    assert.equal(run(rows, { cfgOf: cfg, resource: 'machine' }).groups[0].cells[0].level, 'green');   // 機械だけ見れば足りる
+    const w = run(rows, { cfgOf: cfg, resource: 'worker' }).groups[0];
+    assert.equal(w.cells[0].level, 'red'); assert.equal(w.verdict.level, 'red'); assert.match(w.verdict.text, /あふれる週が 1 つ/);
 });
 
 test('SG04 作業区ごとに割る: 偏り(片方の作業区があふれ もう片方が余る)・グループ全体は足りる=「全体は足りるが偏り」', () => {
@@ -47,15 +49,15 @@ test('SG04 作業区ごとに割る: 偏り(片方の作業区があふれ も�
     const w = Object.fromEntries(g.wcs.map((x) => [x.wc, x.cells[0].level]));
     assert.deepEqual(w, { 2385: 'red', 2386: 'green' });
     assert.equal(g.cells[0].level, 'green');   // 45h ÷ 62h = 73%
-    assert.equal(g.redWcs, 1); assert.equal(g.hint.kind, 'skew'); assert.match(g.hint.text, /偏り/);
+    assert.equal(g.redWcs, 1); assert.equal(g.verdict.level, 'green');   // 全体は足りるが 作業区 1 つがあふれる(行に「1 あふれ」)
 });
 
 test('SG05 グループの並び(悪い順)・上の要約(こなせない工程・偏りの工程・5週の赤の数)', () => {
     const rows = [stage('1', '2385', 0, 40, 0), st('2', '0010', '2371', '円筒研削:a', 0, { L: 5, R: D('2026-11-17'), S: D('2026-11-20') }), st('3', '0010', '2325', 'ﾌﾗｲｽ:a', 0, { L: 28, R: D('2026-11-17'), S: D('2026-11-20') })];
     const t = run(rows);
-    assert.deepEqual(t.groups.map((g) => g.name), ['平面研削', 'フライス', '円筒研削']);   // 129% → 90% → 16%
-    assert.deepEqual(t.summary.cannotNow, ['平面研削']); assert.equal(t.summary.byWeek.length, 5);
-    assert.equal(t.summary.shortNow, 9);
+    assert.deepEqual(t.groups.map((g) => g.name), ['平面研削', 'フライス', '円筒研削']);   // あふれ(129%)→ 90% → 16%
+    assert.deepEqual(t.summary.reds, ['平面研削']); assert.equal(t.weeks.length, 5);
+    assert.equal(t.groups[0].cells[0].slack, -9);
 });
 
 test('SG06 手で回す: 同じ機械グループの別の作業区へ移すと あふれが移る・元は書き換えない・違うグループ/済の工程は動かない・戻せる(moves から消す)', () => {
@@ -84,4 +86,49 @@ test('SG07 積み上げ(スケジュール)も 掛け持ち不可なら 同時�
     const one = scheduleOrders(base, { nowMs: NOW, capacity: { 2385: effUnits({ units: 2, people: 1, multi: false }).machine } }).orders;   // 掛け持ち不可 → 1本ずつ
     assert.equal(two[1].stages[0].planStartTime, two[0].stages[0].planStartTime);
     assert.notEqual(one[1].stages[0].planStartTime, one[0].stages[0].planStartTime);
+});
+
+// ── Fable の検証(11-18)の指示 ──
+const WIN = { R: D('2026-11-17'), S: D('2026-11-20') };
+test('SG08 持ち越し(計画の窓がもう過ぎた未完了)は 今週のマスに足さず 別の列(h・件・一番古い計画)', () => {
+    const g = run([st('1', '0010', '2385', '平面研削:a', 0, { L: 20, R: D('2026-10-01'), S: D('2026-10-05') }), st('2', '0010', '2385', '平面研削:a', 0, { L: 10, ...WIN })]).groups[0];
+    assert.equal(g.cells[0].demandM, 10);                          // 今週は今週の窓の分だけ
+    assert.equal(g.carry, 20); assert.equal(g.carryN, 1); assert.equal(g.oldest, 47);   // 10/1 から 47 日
+    assert.equal(g.wcs[0].carry, 20); assert.ok(g.carryDays > 2);
+});
+
+test('SG09 標準値2・3 は 既定=×数量(1個あたり)・段取りは 1ロット1回・掛けない に切り替えられる', () => {
+    const rows = [st('1', '0010', '2385', '平面研削:a', 1, { L: 2, N: 1, F: 4, ...WIN })];
+    assert.equal(run(rows).groups[0].cells[0].demandM, 9);   // 1 + 2×4
+    assert.equal(run(rows, { perQty: false }).groups[0].cells[0].demandM, 3);
+    assert.equal(run(rows, { resource: 'worker' }).groups[0].cells[0].demandW, 5);
+});
+
+test('SG10 グループは作業区コードで決まる・能力に数えるのは 未完了のある作業区だけ・検査と付帯作業は機械の表に入れない(付帯は数えていない時間に)', () => {
+    const rows = [st('1', '0010', '2371', '歯切り:a', 0, { L: 5, ...WIN }),   // 作業テキストは歯切りでも 2371 は円筒研削
+        st('2', '0010', '2372', '円筒研削:a', 0, { H: D('2026-11-01'), I: D('2026-11-02') }),   // 済だけの作業区 2372 は 能力に数えない
+        st('3', '0010', '2509', '三次元検査:a', 0, { L: 5, N: 5, ...WIN }),
+        st('4', '0010', '2503', '付帯作業:一時応援', 3, WIN)];
+    const t = run(rows);
+    assert.deepEqual(t.groups.map((g) => g.name), ['円筒研削']);   // 歯切りの作業区ではない・検査は無い
+    assert.deepEqual(t.groups[0].wcs.map((x) => x.wc), ['2371']); assert.equal(t.groups[0].dai, 1);
+    assert.equal(t.summary.uncounted.n, 1); assert.equal(t.summary.uncounted.h, 3);
+});
+
+test('SG11 薄い週: 今週〜2週後の 1日あたりの仕事量の最大の 8 割未満の週は 薄い(まだ計画が入っていない)', () => {
+    const rows = [st('1', '0010', '2385', '平面研削:a', 0, { L: 31, ...WIN }), st('2', '0010', '2385', '平面研削:a', 0, { L: 40, R: D('2026-11-30'), S: D('2026-12-04') }), st('3', '0010', '2385', '平面研削:a', 0, { L: 4, R: D('2026-12-14'), S: D('2026-12-18') })];
+    const w = run(rows).weeks;
+    assert.equal(w[0].thin, false); assert.equal(w[2].thin, false); assert.equal(w[4].thin, true);   // 来週・2週後が 8h/日 前後・4週後は 0.8h/日
+});
+
+test('SG12 後ろが済で前が未(完了の入力もれらしい)は 必要量から外し 件数に数える', () => {
+    const rows = [st('1', '0010', '2385', '平面研削:a', 0, { L: 20, ...WIN }), st('1', '0020', '2325', 'ﾌﾗｲｽ:a', 0, { H: D('2026-11-10'), I: D('2026-11-11') })];
+    const t = run(rows);
+    assert.equal(t.groups.length, 0); assert.equal(t.summary.suspect, 1);
+});
+
+test('SG13 窓が今日をまたぐ工程: 窓の稼働日へ均等に置き 今日より前の日の分は 持ち越し・今日以降の分だけ 今週のマスへ', () => {
+    // 窓 11/16(月)〜11/19(木)の 4 稼働日・8h → 1日 2h。今日(火 11/17)より前は 月曜の 1 日分 = 2h が持ち越し・残り 6h が今週
+    const g = run([st('1', '0010', '2385', '平面研削:a', 0, { L: 8, R: D('2026-11-16'), S: D('2026-11-19') })]).groups[0];
+    assert.equal(g.cells[0].demandM, 6); assert.equal(g.carry, 2); assert.equal(g.carryN, 1);
 });

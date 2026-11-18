@@ -17,7 +17,7 @@ import { summarizeOrder } from './sapProgress.js';
 
 /** 標準値の意味(清水さん 11-18): 標準値1=段取り・標準値2=機械・標準値3=作業者。
  *  機械(作業区)の占有時間 = 段取り + 機械 / 作業者の時間 = 段取り + 作業者。
- *  標準値2・3 が「1個あたり」か「1ロットあたり」かは未確認 → 既定は ロットあたり(数量を掛けない)。mode の末尾に '*' を付けると 標準値2・3 に数量を掛ける。
+ *  標準値2・3 は「1個あたり」(清水さん確定・実データでも 同じ品目×工程で数量が違う 416 組のうち 415 組が同じ値)→ 既定は 標準値2・3 に数量を掛ける(mode の末尾 '*')。掛けない時は '*' を付けない('machine' など)。
  *  ただし 検査工程(kind=inspect)と、機械の時間が 0 で作業者の時間がある工程は、既定の「機械の占有時間」でも 段取り+作業者 で数える(人の作業)。
  *  段取りは 1ロットにつき1回なので 数量は掛けない。 */
 export const HOURS_MODES = [
@@ -30,7 +30,7 @@ export const HOURS_MODES = [
 ];
 /** 画面の選び(mode と 数量を掛けるか)→ hoursOf に渡す鍵 */
 export const hoursKey = (mode, perQty) => (perQty ? mode + '*' : mode);
-export const hoursOf = (s, mode = 'machine') => {
+export const hoursOf = (s, mode = 'machine*') => {
     const perQty = typeof mode === 'string' && mode.endsWith('*');
     const m = perQty ? mode.slice(0, -1) : mode;
     const q = perQty ? Math.max(1, s.qty || 1) : 1;
@@ -67,7 +67,7 @@ const dayEndMs = (iso, schedule) => dayStartMs(iso, { ...schedule, dayStart: sch
 const HOUR = 3600000;
 
 /** 指図の配列 → { orders: 見込み日時を入れた指図の配列, origins: キャパオーバーの起点(超えた時間の多い順) } */
-export function scheduleOrders(orders, { nowMs, capacity = {}, defaultCapacity = 1, hoursMode = 'machine', usePlanStart = true, schedule = DEFAULT_WORK_SCHEDULE, calendar = null } = {}) {
+export function scheduleOrders(orders, { nowMs, capacity = {}, defaultCapacity = 1, hoursMode = 'machine*', usePlanStart = true, schedule = DEFAULT_WORK_SCHEDULE, calendar = null } = {}) {
     const capOf = (wc) => Math.max(1, Math.floor(Number(capacity[wc] ?? defaultCapacity) || 1));
     const slots = new Map();   // 作業区 → 台ごとの「空く時刻」
     const slotsOf = (wc) => { if (!slots.has(wc)) slots.set(wc, new Array(capOf(wc)).fill(nowMs)); return slots.get(wc); };

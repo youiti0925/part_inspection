@@ -48,11 +48,11 @@ test('SC04 台数・残業・土曜で使える時間が変わる(変えると�
     assert.equal(run(rows, { otHours: 5 }).t.rows[0].cells[0].level, 'green');   // 4×12.75=51 → 78%
 });
 
-test('SC05 計画の窓がもう過ぎた分(遅れ)は 今週に積む・来週以降の窓は その週へ・範囲外は数えない', () => {
+test('SC05 計画の窓がもう過ぎた分(持ち越し)は 今週に足さず 別に持つ・来週以降の窓は その週へ・範囲外は数えない', () => {
     const rows = [wk(1, 8, '2026-11-02', '2026-11-06'), wk(2, 8, '2026-11-24', '2026-11-24'), wk(3, 8, '2027-03-01', '2027-03-02')];
     const { t } = run(rows, { weeks: 4 });
     const r = t.rows[0];
-    assert.equal(r.cells[0].demand, 8); assert.equal(r.carry, 8);
+    assert.equal(r.cells[0].demand, 0); assert.equal(r.carry, 8);      // 持ち越しは今週のマスに混ぜない(混ぜると 今週がほぼ全部赤になる)
     assert.equal(r.cells[1].demand, 8); assert.equal(r.cells[2].demand, 0);
     assert.equal(t.rows.length, 1);
 });
@@ -85,9 +85,9 @@ test('SC08 機械と人を別に数える: 機械=段取り+機械・人=段取�
     assert.equal(t2.rows[0].units, 2); assert.equal(t2.rows[0].cells[0].level, 'green');    // 42/62 = 68%
 });
 
-test('SC09 標準値2・3 を ×数量 に切り替えると 必要量が増える(既定=ロットあたり)', () => {
+test('SC09 標準値2・3 は 既定=×数量(1個あたり)・掛けない に切り替えると 必要量が減る', () => {
     const rows = [st('1', '0010', '2385', '平面研削:a', 1, { L: 2, N: 1, F: 4, R: D('2026-11-17'), S: D('2026-11-20') })];
-    const lot = run(rows, { resources: ['machine', 'worker'] }).t, qty = run(rows, { resources: ['machine', 'worker'], perQty: true }).t;
-    assert.deepEqual(lot.rows.map((r) => r.cells[0].demand), [3, 2]);    // 機械 1+2・人 1+1
-    assert.deepEqual(qty.rows.map((r) => r.cells[0].demand), [9, 5]);    // 機械 1+2×4・人 1+1×4
+    const qty = run(rows, { resources: ['machine', 'worker'] }).t, lot = run(rows, { resources: ['machine', 'worker'], perQty: false }).t;
+    assert.deepEqual(qty.rows.map((r) => r.cells[0].demand), [9, 5]);    // 機械 1+2×4・人 1+1×4(段取りは 1ロット1回)
+    assert.deepEqual(lot.rows.map((r) => r.cells[0].demand), [3, 2]);    // 掛けない: 機械 1+2・人 1+1
 });

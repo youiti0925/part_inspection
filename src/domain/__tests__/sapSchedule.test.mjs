@@ -11,7 +11,8 @@ const stage = (A, B, C, D2, J, extra = {}) => ({ A, B, C, D: D2, J, U: 'X', V: '
 
 test('SS01 標準値の意味: 1=段取り・2=機械・3=作業者。機械の占有=段取り+機械(既定)・作業者=段取り+作業者・数量は 標準値2・3 だけに掛ける(切替・既定は掛けない)', () => {
     const s = { hJ: 1, hL: 2, hN: 0.5, qty: 3 };
-    assert.equal(hoursOf(s), 3); assert.equal(hoursOf(s, 'machine'), 3); assert.equal(hoursOf(s, 'worker'), 1.5);
+    assert.equal(hoursOf(s), 7);   // 既定 = ×数量(標準値2・3 は1個あたり)
+    assert.equal(hoursOf(s, 'machine'), 3); assert.equal(hoursOf(s, 'worker'), 1.5);   // 掛けない時は '*' を付けない
     assert.equal(hoursOf(s, 'J'), 1); assert.equal(hoursOf(s, 'L'), 2); assert.equal(hoursOf(s, 'N'), 0.5); assert.equal(hoursOf(s, 'sum'), 3.5);
     assert.equal(hoursOf(s, hoursKey('machine', false)), 3);
     assert.equal(hoursOf(s, hoursKey('machine', true)), 1 + 2 * 3);   // 段取りは1ロット1回・機械は ×数量
@@ -27,10 +28,10 @@ test('SS01b 積み上げは 機械の占有時間(段取り+機械)で数える�
 });
 
 test('SS01c 機械が 0 で作業者の時間がある工程・検査工程は 段取り+作業者 で占有する(機械の時間が 0 でも 0 時間にならない)', () => {
-    assert.equal(hoursOf({ hJ: 0.5, hL: 0, hN: 2, qty: 3 }), 2.5);
+    assert.equal(hoursOf({ hJ: 0.5, hL: 0, hN: 2, qty: 3 }, 'machine'), 2.5);
     assert.equal(hoursOf({ hJ: 0.5, hL: 0, hN: 2, qty: 3 }, hoursKey('machine', true)), 0.5 + 6);
-    assert.equal(hoursOf({ kind: 'inspect', hJ: 0.5, hL: 9, hN: 1 }), 1.5);
-    assert.equal(hoursOf({ hJ: 0.5, hL: 1, hN: 2 }), 1.5);   // 機械がある工程は 段取り+機械 のまま
+    assert.equal(hoursOf({ kind: 'inspect', hJ: 0.5, hL: 9, hN: 1 }, 'machine'), 1.5);
+    assert.equal(hoursOf({ hJ: 0.5, hL: 1, hN: 2 }, 'machine'), 1.5);   // 機械がある工程は 段取り+機械 のまま
     const rows = [stage('1', '0010', '2509', '三次元検査:a', 0, { N: 1 })];
     const o = scheduleOrders(buildOrders(rows), { nowMs: NOW }).orders[0].stages[0];
     assert.equal(o.planEndTime, '09:30');   // 作業者 1h ぶん占有

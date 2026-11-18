@@ -173,3 +173,13 @@ test('SP18 工程中心: 今いる・次に来る(前が済・来る見込み日
     assert.deepEqual(h.done.map((x) => x.order), ['2001', '1001', '1003'].filter((x) => x !== '1003'));  // 平面研削の済: 2001(11-06)・1001(11-03)
     assert.equal(stageView(buildOrders(rows), '2325', '2026-11-17', { by: 'wc' }).next.length, 2);
 });
+
+import { readWorkName as _rwn } from '../sapProgress.js';
+test('SP-W グループは作業区コードで先に決める・検査は 2509/2519 だけ(作業テキストの揺れに引きずられない)', () => {
+    assert.deepEqual(_rwn('歯切り:a', 2371), { name: '円筒研削', kind: 'machine' });     // 作業テキストが歯切りでも 2371 は円筒研削
+    assert.deepEqual(_rwn('仕様変更:a', 2331), { name: '仕様変更', kind: 'machine' });
+    assert.deepEqual(_rwn('三次元検査', 2509), { name: '三次元検査', kind: 'inspect' });
+    assert.equal(_rwn('検査前洗浄', 2503).kind, 'wash');                                   // 作業テキストに「検査」とあっても 2509 でなければ検査にしない
+    assert.equal(_rwn('長期保管本体検査', 2309).kind, 'misc');
+    assert.equal(_rwn('付帯作業:一時置き', 2503).name, '付帯作業(一時置き)');
+});

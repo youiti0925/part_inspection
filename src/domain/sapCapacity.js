@@ -2,7 +2,7 @@
 // 目的: 「結局こなせるか・こなせないか」がすぐ分かる表。行=工程(機械グループ)・列=週・マス=その週に SAP の計画が求める標準時間 ÷ 使える時間(台数×稼働時間×稼働日)。
 // 考え方:
 //   ・必要な時間 = まだ済んでいない工程の標準時間を、SAP の計画の窓(最早実行開始日〜終了日)の稼働日へ均等に置く。
-//     計画の窓がもう過ぎている分(遅れ)は「今週」に積む(今週に片付けないといけない分)。
+//     計画の窓がもう過ぎている分(持ち越し)は 今週に足さず 別に数える(carry)。
 //     ※積み上げ(sapSchedule)の見込みは 台に空きが無いと後ろへ送るので、負荷が必ず 100% 以内に収まり 足りない事が見えない。
 //       だから「こなせるか」は 計画が求める量 で測り、積み上げは「計画どおり終わる指図の割合」と 工程の一覧 で使う。
 //   ・必要な時間は 機械(段取り+機械)と 作業者(段取り+作業者)を別々に数える。標準値の意味: 1=段取り・2=機械・3=作業者(清水さん 11-18)
@@ -40,8 +40,8 @@ function windowOf(s) {
 
 /** 工程の週ごとの必要量・使える量・足りない時間。
  *  resources: ['machine'] 機械の占有時間(段取り+機械)÷(台数×稼働時間) / ['worker'] 作業者の時間(段取り+作業者)÷(人数×稼働時間)
- *  perQty: 標準値2・3 に数量を掛けるか(既定 false = ロットあたり) / peopleOf(工程名, 台数) = その工程の人数(既定は台数と同じ) */
-export function capacityTable(orders, { nowMs, weeks = 5, perQty = false, capOf = () => 1, peopleOf = (name, dai) => dai, resources = ['machine'], otHours = 0, saturday = false, isWorkday = factoryClock(DEFAULT_WORK_SCHEDULE, null) } = {}) {
+ *  perQty: 標準値2・3 に数量を掛けるか(既定 true = 1個あたり) / peopleOf(工程名, 台数) = その工程の人数(既定は台数と同じ) */
+export function capacityTable(orders, { nowMs, weeks = 5, perQty = true, capOf = () => 1, peopleOf = (name, dai) => dai, resources = ['machine'], otHours = 0, saturday = false, isWorkday = factoryClock(DEFAULT_WORK_SCHEDULE, null) } = {}) {
     const wl = weekList(nowMs, weeks);
     const today = startOfDay(nowMs);
     const weekOfDay = (dayMs) => { if (dayMs < today) return 0; for (let i = 0; i < wl.length; i++) if (dayMs >= wl[i].startMs && dayMs < wl[i].endMs) return i; return -1; };
@@ -57,15 +57,16 @@ export function capacityTable(orders, { nowMs, weeks = 5, perQty = false, capOf 
             const h = hoursOf(s, modeOf[res]);
             if (!(h > 0)) continue;
             if (!w) { l[res].noDate += h; continue; }
+            // 🚨 計画の窓がもう過ぎた分(持ち越し)は 今週のマスに足さない(足すと今週がほぼ全グループ赤になり 本当にきつい所が見えない)。別に carry として持つ
+            if (w.endMs < today) { l[res].carry += h; continue; }
             const days = [];
-            for (let d = w.startMs; d <= w.endMs; d = addDays(d, 1)) if (isWorkday(d)) days.push(d);
-            if (!days.length) days.push(w.startMs);
+            for (let d = Math.max(w.startMs, today); d <= w.endMs; d = addDays(d, 1)) if (isWorkday(d)) days.push(d);
+            if (!days.length) days.push(Math.max(w.startMs, today));
             const per = h / days.length;
             for (const d of days) {
                 const wi = weekOfDay(d);
                 if (wi < 0) continue;
                 l[res].demand[wi] += per;
-                if (d < today) l[res].carry += per;
             }
         }
     }

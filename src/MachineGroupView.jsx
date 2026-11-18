@@ -1,149 +1,111 @@
-// 🏭 機械グループ「こなせるか」(Fable の見本の形): 上=今週こなせない工程+5週の○×・行=機械グループ・開くと 前の工程→この工程→次の工程/作業区×週/かかる指図
-// 目的: 「結局こなせるか・こなせないか」をすぐ分かる形で出し、あふれた作業区の工程を 同じグループの別の作業区へ手で回して すぐ再計算できる。
-// 数は作らない(src/domain/sapGroups.js・sapBoard.js の答えを置くだけ)。保存は呼ぶ側(端末の localStorage・本番には書かない)。
-// 入力: orders(scheduleOrders の結果)・queue・基準時刻・作業区の設定(台数・人数・掛け持ち)・手で回した物(moves)
-// 呼ぶ人: SapProgressPanel.jsx の「機械グループ(試作)」の折りたたみ
+// 🏭 機械グループ 負荷(Fable の見本「機械_負荷_見本2」): いま言える事・数字の確かさ・SAP に入っている仕事量・機械グループの行(持ち越しは別の列・薄い週は斜線)
+// 目的: 「結局こなせるか」を、計画の分だけ(今週のマスに持ち越しを混ぜない)で見せる。行を開くと 中の作業区(台数・人数・掛け持ち)と「先に片付ける候補」。
+//       あふれた作業区の工程を 同じ機械グループの別の作業区へ 手で回せる(決めるのは人・端末の中だけに覚える・本番には書かない)。
+// 数は作らない(src/domain/sapGroups.js の答えを置くだけ)。検査(2509)はこの画面に出さない(検査の画面へ)。
+// 入力: orders(scheduleOrders の結果)・基準時刻・作業区の設定・手で回した物(moves)
+// 呼ぶ人: SapProgressPanel.jsx の「機械グループ」の入口
 // 確かめ方: sap-demo.html で実データを選ぶ
 import React, { useMemo, useState } from 'react';
-import { capacityGroups, effUnits, groupWcs, moveKey } from './domain/sapGroups.js';
-import { rowInWeek } from './domain/sapCapacity.js';
-import { stageRows, laneSummary, chainOf } from './domain/sapBoard.js';
+import { capacityGroups, groupWcs } from './domain/sapGroups.js';
 
 const LV = {
-    red: { box: 'border-rose-300 bg-rose-50 text-rose-700', bar: 'bg-rose-500', dot: 'bg-rose-500 border-rose-700' },
-    yellow: { box: 'border-amber-300 bg-amber-50 text-amber-800', bar: 'bg-amber-500', dot: 'bg-amber-300 border-amber-700' },
-    green: { box: 'border-emerald-200 bg-emerald-50 text-emerald-700', bar: 'bg-emerald-400', dot: 'bg-emerald-100 border-emerald-300' },
+    red: 'border-rose-300 bg-rose-100 text-rose-700', yellow: 'border-amber-300 bg-amber-50 text-amber-800', green: 'border-slate-200 bg-white text-slate-700',
 };
-const COLS = '12rem 11rem repeat(5, minmax(0, 1fr)) 10rem 17rem';
-const pctText = (p) => (p === Infinity ? '∞' : `${Math.round(p * 100)}%`);
+const SQ = { red: 'bg-rose-600', yellow: 'bg-amber-500', green: 'bg-slate-200' };
+const THIN_BG = { backgroundImage: 'repeating-linear-gradient(45deg,#fff,#fff 5px,#f1f5f9 5px,#f1f5f9 10px)' };
+const pc = (p) => (Number.isFinite(p) ? `${Math.round(p * 100)}%` : '—');
+const int = (v) => Math.max(1, Math.floor(Number(v) || 1));
+const mdOf = (iso) => (iso ? `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))}` : '—');
 
-function WeekCell({ c, calm, onClick, title }) {
-    const lv = LV[c.level];
+function Cell({ c, thin, dem, cap }) {
+    const cls = c.level === 'red' ? LV.red : c.level === 'yellow' ? LV.yellow : LV.green;
     return (
-        <button type="button" onClick={onClick} title={title} className={`flex ${calm ? 'min-h-8' : 'min-h-11'} flex-col items-center justify-center rounded-lg border px-0.5 leading-tight hover:ring-2 hover:ring-cyan-400 ${lv.box}`}>
-            <b className={`${calm ? 'text-xs' : 'text-base'} tabular-nums`}>{pctText(c.pct)}</b>
-            {c.level === 'red' ? <small className="text-xs font-bold tabular-nums">{c.worse === 'worker' ? `人 ${Math.ceil(-c.slackW)}h不足` : `−${Math.ceil(-c.slackM)}h`}</small> : c.level === 'yellow' && c.worse === 'worker' ? <small className="text-xs font-bold">人</small> : null}
-        </button>
+        <div className={`rounded-lg border px-1 py-1 text-center font-bold tabular-nums ${cls} ${thin ? 'border-dashed text-slate-400' : ''} ${thin && c.level === 'red' ? '!text-rose-600' : ''}`} style={thin ? THIN_BG : undefined} data-level={c.level} data-thin={thin ? '1' : '0'} title={thin ? 'SAP にまだ計画が入りきっていない週(低く見えるだけ)' : ''}>
+            <div className="text-base">{pc(c.pct)}</div>
+            <small className="block text-xs font-normal opacity-85">{Math.round(dem)} / {Math.round(cap)}h</small>
+        </div>
     );
 }
 
-export default function MachineGroupView({ initialOpen = null, orders, queue, nowMs, perQty = false, defCap = 1, capMap, setCapMap, peopleMap, setPeopleMap, multiMap, setMultiMap, moves, setMoves, hoursMode = 'machine' }) {
+export default function MachineGroupView({ initialOpen = null, orders, nowMs, perQty = true, setPerQty, defCap = 1, capMap, setCapMap, peopleMap, setPeopleMap, multiMap, setMultiMap, moves, setMoves, fileLabel = '' }) {
+    const [res, setRes] = useState('machine');     // 数える資源: machine=機械(段取り+機械) / worker=人(段取り+作業者)
     const [ot, setOt] = useState(0);
     const [sat, setSat] = useState(false);
-    const [order, setOrder] = useState('bad');          // 'bad'=悪い順・'flow'=工程の流れ順
     const [openName, setOpenName] = useState(initialOpen);
-    const [weekSel, setWeekSel] = useState(0);          // 開いた行の「かかる指図」の週
-    const [listAll, setListAll] = useState(false);
     const cfgOf = (wc) => { const units = capMap[wc] ?? defCap; return { units, people: peopleMap[wc] ?? units, multi: !!multiMap[wc] }; };
-    const cap = useMemo(() => capacityGroups(orders, { nowMs, weeks: 5, perQty, cfgOf, otHours: ot, saturday: sat }), [orders, nowMs, perQty, capMap, peopleMap, multiMap, defCap, ot, sat]); // eslint-disable-line react-hooks/exhaustive-deps
-    const lanes = useMemo(() => Object.fromEntries(laneSummary(orders, { hoursMode, capOf: (wc) => effUnits(cfgOf(wc)).machine, queue, days: 14 }).map((l) => [l.name, l])), [orders, hoursMode, queue, capMap, peopleMap, multiMap, defCap]); // eslint-disable-line react-hooks/exhaustive-deps
-    const groups = cap.groups;
-    const sortedFlow = useMemo(() => {
-        if (order !== 'flow') return groups;
-        const idx = Object.keys(lanes);   // laneSummary は工程の流れ順
-        return groups.slice().sort((a, b) => idx.indexOf(a.name) - idx.indexOf(b.name));
-    }, [groups, lanes, order]);
-    const { summary } = cap;
-    const maxWait = Math.max(1, ...Object.values(lanes).map((l) => l.wait + l.now));
-
-    // 前の工程→この工程→次の工程の件数(今この工程にいる/来る指図)
-    const flowOf = (name) => {
-        const prev = {}, next = {};
-        for (const o of orders) { const st = chainOf(o); const ci = st.findIndex((s) => s.status !== 'done'); if (ci < 0) continue;
-            if (st[ci].name === name && st[ci + 1]) next[st[ci + 1].name] = (next[st[ci + 1].name] || 0) + 1;
-            if (st[ci + 1] && st[ci + 1].name === name) prev[st[ci].name] = (prev[st[ci].name] || 0) + 1; }
-        const top = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 3);
-        return { prev: top(prev), next: top(next) };
-    };
-    const orderById = useMemo(() => new Map(orders.map((o) => [o.order, o])), [orders]);
+    const cap = useMemo(() => capacityGroups(orders, { nowMs, weeks: 5, perQty, cfgOf, otHours: ot, saturday: sat, resource: res }), [orders, nowMs, perQty, capMap, peopleMap, multiMap, defCap, ot, sat, res]); // eslint-disable-line react-hooks/exhaustive-deps
+    const { summary: S, weeks, groups } = cap;
     const moved = Object.entries(moves || {});
+    const orderById = useMemo(() => new Map(orders.map((o) => [o.order, o])), [orders]);
     const doMove = (key, to) => setMoves({ ...moves, [key]: to });
     const undo = (key) => { const m = { ...moves }; delete m[key]; setMoves(m); };
+    const worst = S.worst;
+    const others = worst ? groups.filter((g) => g !== worst && g.lead && g.lead.n >= 10).map((g) => g.lead.med) : [];
+    const maxPerDay = Math.max(1, ...weeks.map((w) => w.perDay), S.allCarry / 5 / 3);
+    const wcAll = useMemo(() => groupWcs(orders, openName || ''), [orders, openName]);
 
-    const renderOpen = (g) => {
-        const fl = flowOf(g.name), lane = lanes[g.name] || {};
-        const rows = stageRows(orders, g.name, { nowMs, hoursMode }).filter((r) => rowInWeek(r, cap.weeks[weekSel], weekSel, nowMs))
-            .sort((a, b) => (b.pastDays || 0) - (a.pastDays || 0) || (b.lateDays || 0) - (a.lateDays || 0) || b.hours - a.hours);
-        const shown = listAll ? rows : rows.slice(0, 8);
-        const wcNames = groupWcs(orders, g.name);
-        const wcCell = (wc, i) => (g.wcs.find((x) => x.wc === wc) || { cells: [] }).cells[i];
-        return (
-            <div className="border-b border-slate-200 bg-cyan-50 px-4 py-3" data-mg-open={g.name}>
-                <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
-                    <span className="text-xs text-slate-500">前の工程から来る</span>
-                    {fl.prev.length ? fl.prev.map(([n, c]) => <span key={n} className="rounded-lg border border-slate-300 bg-white px-2 py-0.5 text-xs">{n} <b>{c}件</b></span>) : <span className="text-xs text-slate-400">なし</span>}
-                    <span className="text-slate-400">→</span>
-                    <span className="rounded-lg border-2 border-cyan-600 bg-white px-2 py-0.5 text-xs font-black">{g.name} 待ち {(lane.wait || 0) + (lane.now || 0)}件 <span className="font-normal text-slate-500">({lane.waitH || 0}h)</span></span>
-                    <span className="text-xs text-slate-500">→ 済むと次へ連絡</span>
-                    {fl.next.length ? fl.next.map(([n, c]) => <span key={n} className="rounded-lg border border-slate-300 bg-white px-2 py-0.5 text-xs">{n} <b>{c}件</b></span>) : <span className="text-xs text-slate-400">(最後の工程)</span>}
-                </div>
-                <div className="grid gap-3 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+    const renderOpen = (g) => (
+        <tr className="bg-cyan-50" data-mg-open={g.name}>
+            <td colSpan={5 + weeks.length} className="px-3 py-3">
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
                     <div className="rounded-xl border border-slate-200 bg-white p-3" data-mg-wcs={g.name}>
-                        <b className="text-sm">中の作業区</b> <span className="text-xs text-slate-500">{g.wcs.filter((x) => x.active).length}つ(うち あふれ・ぎりぎり {g.wcs.filter((x) => x.cells[0].level !== 'green').length})・台数と人数と掛け持ちは ここで変えられます</span>
+                        <b className="text-sm">中の作業区</b> <span className="text-xs text-slate-500">(台数・人数・掛け持ちを入れると 計算し直します・今は 台数の仮=各1台)</span>
                         <table className="mt-1 w-full text-xs">
-                            <thead><tr className="text-slate-500"><th className="p-0.5 text-left">作業区</th><th className="p-0.5" title="同時に何台動かせるか">台数</th><th className="p-0.5" title="その作業区で働く人数(既定は台数と同じ)">人数</th><th className="p-0.5" title="1人で複数台を同時に回せる(人が要るのは段取り+作業者の間だけ)。不可なら 同時に動ける台数=min(台数,人数)">掛け持ち</th>{cap.weeks.map((w) => <th key={w.startMs} className="p-0.5 font-normal" title={w.label}>{w.name}</th>)}</tr></thead>
-                            <tbody>{g.wcs.filter((x) => x.active || capMap[x.wc] != null).map((x) => { const cf = cfgOf(x.wc); return (
+                            <thead><tr className="text-slate-500"><th className="p-0.5 text-left">作業区</th><th className="p-0.5" title="同時に何台動かせるか">台数</th><th className="p-0.5" title="その作業区で働く人数(既定は台数と同じ)">人数</th><th className="p-0.5" title="1人で複数台を同時に回せる(人が要るのは段取り+作業者の間だけ)。不可なら 同時に動ける台数=min(台数,人数)">掛け持ち</th><th className="p-0.5 text-left">持ち越し</th>{weeks.map((w) => <th key={w.startMs} className="p-0.5 font-normal" title={w.label}>{w.name}</th>)}</tr></thead>
+                            <tbody>{g.wcs.slice().sort((a, b) => Math.max(...b.cells.slice(0, 3).map((c) => c.pct)) - Math.max(...a.cells.slice(0, 3).map((c) => c.pct))).map((x) => { const cf = cfgOf(x.wc); return (
                                 <tr key={x.wc} className="border-t border-slate-100" data-mg-wc={x.wc}>
                                     <td className="p-0.5 font-bold tabular-nums">{x.wc}</td>
                                     <td className="p-0.5 text-center"><input type="number" min="1" max="20" value={cf.units} onChange={(e) => setCapMap({ ...capMap, [x.wc]: int(e.target.value) })} className="w-10 rounded border border-slate-300 px-0.5" data-mg-units={x.wc} /></td>
                                     <td className="p-0.5 text-center"><input type="number" min="1" max="99" value={cf.people} onChange={(e) => setPeopleMap({ ...peopleMap, [x.wc]: int(e.target.value) })} className="w-10 rounded border border-slate-300 px-0.5" data-mg-people={x.wc} /></td>
                                     <td className="p-0.5 text-center"><input type="checkbox" checked={cf.multi} onChange={(e) => setMultiMap({ ...multiMap, [x.wc]: e.target.checked })} data-mg-multi={x.wc} /></td>
-                                    {x.cells.map((c, i) => <td key={i} className="p-0.5"><button type="button" onClick={() => setWeekSel(i)} className={`w-full rounded border px-0.5 py-0.5 font-bold tabular-nums ${LV[c.level].box} ${weekSel === i ? 'ring-2 ring-cyan-500' : ''}`} title={`機械 ${c.demandM}h÷${c.capM}h・人 ${c.demandW}h÷${c.capW}h`}>{pctText(c.pct)}{c.worse === 'worker' && c.level !== 'green' ? '人' : ''}</button></td>)}
+                                    <td className="p-0.5 tabular-nums">{Math.round(x.carry)}h・{x.carryN}件<span className="text-slate-500">(約{Math.round(x.carryDays)}日分)</span></td>
+                                    {x.cells.map((c, i) => <td key={i} className="p-0.5"><span className={`inline-block min-w-[3.25rem] rounded border px-1 text-center font-semibold tabular-nums ${c.level === 'red' ? LV.red : c.level === 'yellow' ? LV.yellow : LV.green} ${weeks[i].thin ? 'border-dashed !text-slate-400' : ''}`} style={weeks[i].thin ? THIN_BG : undefined} title={`機械 ${c.demandM}h÷${c.capM}h・人 ${c.demandW}h÷${c.capW}h`}>{pc(c.pct)}</span></td>)}
                                 </tr>); })}</tbody>
                         </table>
-                        <p className="mt-1 text-xs text-slate-500">マス = 機械と人の悪い方。「人」の字=人が足りない方。掛け持ち不可の作業区は 同時に動ける台数 = min(台数, 人数)。</p>
+                        {g.wcsAll.some((x) => !x.active) ? <p className="mt-1 text-xs text-slate-500">未完了の工程が無い作業区({g.wcsAll.filter((x) => !x.active).map((x) => x.wc).join('・')})は 能力に数えていません。</p> : null}
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-white p-3" data-mg-list={g.name}>
-                        <b className="text-sm">{cap.weeks[weekSel].name} この工程にかかる指図</b> <span className="text-xs text-slate-500">{rows.length}件(うち 計画を過ぎた {rows.filter((r) => r.pastDays).length}件)・遅れの大きい順{listAll ? '' : ` に ${shown.length} 件`}</span>
-                        {shown.map((r) => {
-                            const o = orderById.get(r.orderNo); const st = o ? chainOf(o) : [];
-                            const act = r.key.split('|')[1]; const key = moveKey(r.orderNo, act);
-                            const isMoved = key in (moves || {});
-                            const others = wcNames.filter((w) => w !== r.stageWc);
-                            return (
-                                <div key={r.key} className="border-b border-slate-100 py-1.5" data-mg-row={r.key}>
-                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                                        <div className="min-w-0 flex-1"><b className="text-sm">{r.model}</b> <span className="text-xs text-slate-500 tabular-nums">指図 {r.orderNo} ×{r.qty}・作業区 {r.stageWc}・{r.hours}h</span>
-                                            {isMoved ? <span className="ml-1 rounded border border-violet-300 bg-violet-50 px-1 text-xs font-black text-violet-700">手で回した</span> : null}</div>
-                                        <div className="flex flex-wrap items-center gap-0.5">{st.map((s, i) => <span key={i} className={`rounded border px-1 text-xs ${s.status === 'done' ? 'border-slate-200 bg-slate-100 text-slate-400' : s.name === g.name ? 'border-cyan-600 bg-cyan-600 font-bold text-white' : 'border-slate-300 bg-white text-slate-600'}`}>{s.status === 'done' ? '✓' : ''}{s.name}</span>)}</div>
-                                        <b className="w-14 text-right text-sm text-rose-600 tabular-nums">{r.pastDays ? `+${r.pastDays}日` : r.lateDays ? `+${r.lateDays}日` : ''}</b>
-                                    </div>
-                                    <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs">
-                                        {isMoved ? <><span className="text-violet-700">作業区 {(orderById.get(r.orderNo).stages.find((s) => s.act === act) || {}).fromWc || '?'}→{r.stageWc} に移してあります</span><button type="button" onClick={() => undo(key)} className="min-h-7 rounded border border-slate-300 bg-white px-2 font-bold" data-mg-undo={key}>戻す</button></>
-                                            : others.length ? <><span className="text-slate-500">別の作業区へ回す(同じ機械グループの候補・決めるのは人):</span>
-                                                <select defaultValue="" onChange={(e) => { if (e.target.value) doMove(key, e.target.value); }} className="rounded border border-slate-300 px-1" data-mg-move={key}>
-                                                    <option value="">選ぶ</option>{others.map((w) => { const c = wcCell(w, weekSel); return <option key={w} value={w}>{w}(今の{cap.weeks[weekSel].name} {c ? pctText(c.pct) : '仕事なし'})</option>; })}
-                                                </select></> : null}
-                                    </div>
-                                </div>
-                            );
-                        })}
-                        {rows.length === 0 ? <p className="py-2 text-xs text-slate-500">この週にかかる指図はありません</p> : null}
-                        {!listAll && rows.length > 8 ? <button type="button" onClick={() => setListAll(true)} className="mt-1 min-h-8 w-full rounded border border-dashed border-slate-300 bg-white text-xs font-black text-cyan-700">あと {rows.length - 8} 件を開く</button> : null}
+                        <b className="text-sm">先に片付ける候補</b> <span className="text-xs text-slate-500">(計画開始の古い順・上位10)・同じ機械グループの別の作業区へ回せます(決めるのは人)</span>
+                        <table className="mt-1 w-full text-xs">
+                            <thead><tr className="text-slate-500"><th className="p-0.5 text-left">品名 / 指図</th><th className="p-0.5">作業区</th><th className="p-0.5">計画開始</th><th className="p-0.5 text-right">{res === 'worker' ? '人の時間' : '機械の時間'}</th><th className="p-0.5 text-left">回す</th></tr></thead>
+                            <tbody>{g.top.map((t) => { const key = t.key; const isMoved = key in (moves || {}); const cand = wcAll.filter((w) => w !== t.wc); return (
+                                <tr key={key} className="border-t border-slate-100" data-mg-row={key}>
+                                    <td className="p-0.5"><b>{t.tx}</b><div className="text-slate-500 tabular-nums">指図 {t.order} ×{t.qty}</div></td>
+                                    <td className="p-0.5 text-center tabular-nums">{t.wc}</td>
+                                    <td className="p-0.5 text-center tabular-nums">{mdOf(t.planIso)}<span className="text-rose-600">{t.ago ? `(${t.ago}日前)` : ''}</span></td>
+                                    <td className="p-0.5 text-right tabular-nums">{res === 'worker' ? t.hw : t.h}h</td>
+                                    <td className="p-0.5">{isMoved || t.moved ? <span className="text-violet-700">手で回した {t.from || '?'}→{t.wc} <button type="button" onClick={() => undo(key)} className="ml-1 rounded border border-slate-300 bg-white px-1 font-bold" data-mg-undo={key}>戻す</button></span>
+                                        : cand.length ? <select defaultValue="" onChange={(e) => { if (e.target.value) doMove(key, e.target.value); }} className="rounded border border-slate-300 px-1" data-mg-move={key}><option value="">選ぶ</option>{cand.map((w) => { const x = g.wcsAll.find((y) => y.wc === w); const c = x && x.cells[0]; return <option key={w} value={w}>{w}(今週 {c && x.active ? pc(c.pct) : '仕事なし'})</option>; })}</select> : null}</td>
+                                </tr>); })}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </td>
+        </tr>
+    );
+
+    return (
+        <div data-testid="sap-mg" className="text-slate-800">
+            <div className="mb-1"><h2 className="inline-block text-xl font-bold">機械グループ 負荷</h2><span className="ml-2 text-xs text-slate-500">{fileLabel}・済んでいない機械工程だけ(検査は 検査の画面へ)</span></div>
+            <div className="my-3 grid gap-3 lg:grid-cols-[1.1fr_1fr]">
+                <div className="rounded-xl border border-slate-200 p-3" data-testid="sap-mg-answer">
+                    <h3 className="mb-1 text-sm font-semibold text-slate-600">いま言える事</h3>
+                    <div className="text-xl font-bold leading-snug">{S.reds.length ? <>計画の分だけで あふれるのは <em className="not-italic text-rose-600">{S.reds.join('・')}</em></> : '計画の分だけで あふれるグループは ありません'}</div>
+                    {worst ? <div className="mt-1 text-xs text-slate-500">{worst.name}: 今週分 {pc(worst.cells[0].pct)}・来週 {pc(worst.cells[1].pct)}・2週後 {pc(worst.cells[2].pct)}。{worst.lead && worst.lead.n >= 10 ? `実績でも 前の工程が済んでから ${worst.name} が済むまで 中央 ${worst.lead.med}日${others.length ? `(他のグループは ${Math.min(...others)}〜${Math.max(...others)}日)` : ''}。` : ''}</div> : null}
+                    <div className="mt-1 text-xs text-slate-500">「計画の日を過ぎた 持ち越し」が 全体で {Math.round(S.allCarry).toLocaleString()}h({S.allCarryN}件)あります(今週のマスには 混ぜていません・左の列に分けています)。</div>
+                </div>
+                <div className="rounded-xl border border-slate-200 p-3">
+                    <h3 className="mb-1 text-sm font-semibold text-slate-600">この画面の数字の確かさ(実データで確かめた結果)</h3>
+                    <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs text-slate-700" data-testid="sap-mg-sure">
+                        {[['見える', 'bg-cyan-100 text-cyan-800', 'どのグループ・どの作業区が 一番きついか(順位)。実績の待ち日数とも合う'], ['目安', 'bg-amber-100 text-amber-800', '何%か。台数=作業区1つにつき1台・1日 7.75時間 の仮の数字(夜の無人運転や2台持ちは 入っていない)'], ['目安', 'bg-amber-100 text-amber-800', 'どの週か。SAP の計画日は 実績と 中央で 0日・半分が −5〜+5日・1割は 2週間以上ずれる'], ['低く見える', 'bg-amber-100 text-amber-800', '3週後から先。SAP にまだ計画が入りきっていない(斜線の週)'], ['見えない', 'bg-slate-200 text-slate-700', '今 どの機械で作業中か(SAP に「作業中」の記録が 0件)・同じグループの別の機械へ回せるか'], ['確定', 'bg-cyan-100 text-cyan-800', '標準値2・3 は 1個あたり(清水さん確定・同じ品目×工程で数量が違う 416組のうち 415組が同じ値)→ 数量を掛ける。掛けないと 約4割に見える']].map(([k, c, t], i) => <React.Fragment key={i}><span className={`rounded px-1.5 text-center font-bold ${c}`}>{k}</span><span>{t}</span></React.Fragment>)}
                     </div>
                 </div>
             </div>
-        );
-    };
-
-    return (
-        <div data-testid="sap-mg">
-            <div className="my-3 grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,2fr)]">
-                <div className={`rounded-xl border border-slate-200 border-l-8 bg-white p-4 ${summary.cannotNow.length ? 'border-l-rose-500' : 'border-l-emerald-600'}`} data-testid="sap-mg-answer">
-                    <div className={`text-2xl font-extrabold ${summary.cannotNow.length ? 'text-rose-700' : 'text-emerald-700'}`}>今週 こなせない工程 {summary.cannotNow.length} <small className="text-sm font-semibold text-slate-600">/ {summary.groupCount} 工程</small></div>
-                    <p className="mt-1 text-sm text-slate-700">{summary.cannotNow.length ? <><b>{summary.cannotNow.join('・')}</b> があふれます(足りない時間 合計 約 {Math.round(summary.shortNow)}h)。</> : '今週は 全部の工程がこなせます。'}</p>
-                    {summary.tight.length ? <p className="text-sm text-slate-600">ぎりぎり・中の作業区があふれる工程: {summary.tight.join('・')}</p> : null}
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                    <div className="mb-1 text-xs text-slate-500">この先 5 週(こなせない工程の数)</div>
-                    <div className="grid grid-cols-5 gap-2">
-                        {cap.weeks.map((w, i) => { const n = summary.byWeek[i].length; return (
-                            <div key={w.startMs} className={`rounded-lg border px-2 py-1 ${n ? LV.red.box : LV.green.box}`} data-mg-week={i}>
-                                <div className="text-xs text-slate-600">{w.name} {w.label}</div>
-                                <div className="text-lg font-extrabold">{n ? `${n} 工程 ✕` : 'こなせる ○'}</div>
-                                <div className="text-xs">{n ? summary.byWeek[i].join('・') : `稼働 ${w.work} 日`}</div>
-                            </div>); })}
-                    </div>
+            <div className="mb-3 rounded-xl border border-slate-200 p-3">
+                <h3 className="mb-1 text-sm font-semibold text-slate-600">SAP に入っている仕事量({res === 'worker' ? '人' : '機械'}の時間・全グループ)― 先の週ほど まだ計画が入っていません</h3>
+                <div className="mt-2 flex items-end gap-2" data-testid="sap-mg-vol">
+                    <div className="flex-1 text-center text-xs text-slate-600"><div className="mx-2 rounded-t bg-slate-500" style={{ height: `${Math.min(44, Math.round(S.allCarry / 5 / 3 / maxPerDay * 44))}px` }} />持ち越し {Math.round(S.allCarry).toLocaleString()}h<br /><span className="text-slate-400">計画日を過ぎた分</span></div>
+                    {weeks.map((w) => <div key={w.startMs} className="flex-1 text-center text-xs text-slate-600"><div className={`mx-2 rounded-t ${w.thin ? 'border border-dashed border-cyan-400' : 'bg-cyan-300'}`} style={{ height: `${Math.max(2, Math.round(w.perDay / maxPerDay * 44))}px`, ...(w.thin ? { backgroundImage: 'repeating-linear-gradient(45deg,#fff,#fff 5px,#cffafe 5px,#cffafe 10px)' } : null) }} />{w.name} {Math.round(w.allH).toLocaleString()}h<br /><span className="text-slate-400">1日あたり {Math.round(w.perDay)}h{w.thin ? '・薄い' : ''}</span></div>)}
                 </div>
             </div>
 
@@ -155,43 +117,54 @@ export default function MachineGroupView({ initialOpen = null, orders, queue, no
                 </div>
             ) : null}
 
-            <div className="mb-1 flex flex-wrap items-center gap-2 text-xs">
-                <b className="text-base">工程ごと</b><span className="text-slate-500">行を押すと 中の作業区とかかる指図が開きます</span>
-                {[['bad', '悪い順'], ['flow', '工程の流れ順']].map(([k, l]) => <button key={k} type="button" onClick={() => setOrder(k)} className={`min-h-8 rounded border-2 px-2 font-black ${order === k ? 'border-slate-800 bg-slate-800 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{l}</button>)}
-                <label className="ml-2">残業 1日 <input type="number" min="0" max="4" step="0.5" value={ot} onChange={(e) => setOt(Math.max(0, Math.min(4, Number(e.target.value) || 0)))} className="w-12 rounded border border-slate-300 px-1" data-testid="sap-mg-ot" /> h</label>
-                <label><input type="checkbox" checked={sat} onChange={(e) => setSat(e.target.checked)} /> 土曜も出る</label>
-                <span className="ml-auto flex items-center gap-2 text-slate-600">{[['red', 'こなせない(100%超)'], ['yellow', 'ぎりぎり(90%〜)'], ['green', 'こなせる']].map(([k, l]) => <span key={k}><i className={`mr-1 inline-block h-3 w-3 rounded border align-[-2px] ${LV[k].box}`} />{l}</span>)}<span>マス=機械と人の悪い方</span></span>
+            <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
+                <span>数える資源</span>
+                <span className="inline-flex overflow-hidden rounded-lg border border-slate-300">{[['machine', '機械(段取り+機械)'], ['worker', '人(段取り+作業者)']].map(([k, l]) => <button key={k} type="button" onClick={() => setRes(k)} className={`px-3 py-1 ${res === k ? 'bg-slate-900 text-white' : 'bg-white text-slate-700'}`} data-mg-res={k}>{l}</button>)}</span>
+                <span>標準値2・3</span>
+                <span className="inline-flex overflow-hidden rounded-lg border border-slate-300">{[[true, '× 数量(1個あたり)'], [false, '掛けない']].map(([k, l]) => <button key={String(k)} type="button" onClick={() => setPerQty(k)} className={`px-3 py-1 ${perQty === k ? 'bg-slate-900 text-white' : 'bg-white text-slate-700'}`} data-mg-qty={String(k)}>{l}</button>)}</span>
+                <label className="text-xs">残業 1日 <input type="number" min="0" max="4" step="0.5" value={ot} onChange={(e) => setOt(Math.max(0, Math.min(4, Number(e.target.value) || 0)))} className="w-12 rounded border border-slate-300 px-1" data-testid="sap-mg-ot" /> h</label>
+                <label className="text-xs"><input type="checkbox" checked={sat} onChange={(e) => setSat(e.target.checked)} /> 土曜も出る</label>
+                <span className="ml-auto flex items-center gap-3 text-xs text-slate-600"><span><i className="mr-1 inline-block h-3.5 w-3.5 rounded border border-rose-300 bg-rose-100 align-[-2px]" />あふれる(100%超)</span><span><i className="mr-1 inline-block h-3.5 w-3.5 rounded border border-amber-300 bg-amber-50 align-[-2px]" />ぎりぎり(90%〜)</span><span><i className="mr-1 inline-block h-3.5 w-3.5 rounded border border-dashed border-slate-300 align-[-2px]" style={THIN_BG} />計画が薄い週(低く見えるだけ)</span></span>
             </div>
 
             <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-                <div className="grid items-end gap-1.5 border-b border-slate-200 px-3 py-2 text-xs text-slate-500" style={{ gridTemplateColumns: COLS }}>
-                    <span>工程(機械グループ)</span><span>中の作業区(今週)</span>
-                    {cap.weeks.map((w) => <span key={w.startMs} className="text-center leading-tight"><b className="block text-slate-700">{w.name}</b>{w.label}</span>)}
-                    <span>溜まり(今)</span><span>どうすれば足りるか</span>
-                </div>
-                {sortedFlow.map((g) => {
-                    const lane = lanes[g.name] || { wait: 0, now: 0, next: 0, waitH: 0 };
-                    const calm = g.cells[0].level === 'green' && g.redWcs === 0 && g.cells.every((c) => c.level === 'green') && g.cells[0].pct < 0.5;
-                    const open = openName === g.name;
-                    const lv = LV[g.cells[0].level];
-                    return (
-                        <React.Fragment key={g.name}>
-                            <div className={`grid cursor-pointer items-center gap-1.5 border-b border-slate-100 px-3 ${calm ? 'py-1' : 'py-2'} hover:bg-slate-50 ${open ? 'bg-cyan-50' : ''}`} style={{ gridTemplateColumns: COLS }} role="button" tabIndex={0}
-                                onClick={() => { setOpenName(open ? null : g.name); setWeekSel(0); setListAll(false); }} onKeyDown={(e) => { if (e.key === 'Enter') { setOpenName(open ? null : g.name); setWeekSel(0); setListAll(false); } }} data-mg-group={g.name} data-level={g.cells[0].level}>
-                                <div className="flex min-w-0 items-center gap-2"><span className="w-3 text-xs text-slate-400">{open ? '▼' : '▶'}</span><span className={`inline-block w-2.5 shrink-0 rounded ${calm ? 'h-5' : 'h-8'} ${lv.bar}`} />
-                                    <div className="min-w-0"><b className="text-base">{g.name}</b><div className="text-xs text-slate-500">{g.dai}台・{g.people}人</div></div></div>
-                                <div className="flex flex-wrap items-center gap-0.5">{g.wcs.filter((x) => x.active).map((x) => <i key={x.wc} title={`${x.wc}: ${pctText(x.cells[0].pct)}`} className={`inline-block h-3 w-3 rounded-sm border ${LV[x.cells[0].level].dot}`} />)}{g.redWcs ? <small className="ml-1 text-xs font-bold text-rose-700">{g.redWcs} あふれ</small> : null}</div>
-                                {g.cells.map((c, i) => <WeekCell key={i} c={c} calm={calm} title={`機械 ${c.demandM}h÷${c.capM}h(${pctText(c.pctM)})・人 ${c.demandW}h÷${c.capW}h(${pctText(c.pctW)})`} onClick={(e) => { e.stopPropagation(); setOpenName(g.name); setWeekSel(i); setListAll(false); }} />)}
-                                <div className="text-xs leading-tight text-slate-600"><div className="mb-0.5 flex h-2 overflow-hidden rounded bg-slate-100"><i className="bg-slate-600" style={{ width: `${(lane.wait / maxWait) * 100}%` }} /><u className="bg-cyan-400 no-underline" style={{ width: `${(lane.now / maxWait) * 100}%` }} /></div>待ち <b className="text-slate-900">{lane.wait + lane.now}</b> 件({Math.round(lane.waitH)}h)<br />これから来る {lane.next}</div>
-                                <div className={`text-xs leading-snug ${g.hint.kind === 'ok' ? 'text-slate-500' : g.hint.kind === 'short' ? 'font-semibold text-rose-700' : 'font-semibold text-amber-800'}`}>{g.hint.text}</div>
-                            </div>
-                            {open ? renderOpen(g) : null}
-                        </React.Fragment>
-                    );
-                })}
+                <table className="w-full border-separate border-spacing-0 text-sm" data-testid="sap-mg-table">
+                    <thead><tr className="bg-slate-50 text-xs font-semibold text-slate-600">
+                        <th className="border-b border-slate-200 px-2 py-1.5 text-left">工程(機械グループ)</th>
+                        <th className="border-b border-slate-200 px-2 py-1.5 text-left">作業区(今週〜2週後)</th>
+                        <th className="border-b border-slate-200 px-2 py-1.5 text-left">持ち越し<br /><span className="font-normal">計画日を過ぎた未完了</span></th>
+                        {weeks.map((w, i) => <th key={w.startMs} className={`border-b border-slate-200 px-1 py-1.5 text-center ${w.thin ? 'text-slate-400' : ''}`}>{w.name}<br /><span className="font-normal">{w.label}{i === 0 ? `・残り${w.work}日` : ''}</span></th>)}
+                        <th className="border-b border-slate-200 px-2 py-1.5 text-left">実績の待ち<br /><span className="font-normal">前の済→済 中央</span></th>
+                        <th className="border-b border-slate-200 px-2 py-1.5 text-left">見立て・注意</th>
+                    </tr></thead>
+                    <tbody>
+                        {groups.map((g) => {
+                            const open = openName === g.name;
+                            const unset = g.wcs.every((x) => capMap[x.wc] == null);
+                            const vc = g.verdict.level === 'red' ? 'font-semibold text-rose-600' : g.verdict.level === 'yellow' ? 'font-semibold text-amber-700' : 'text-slate-600';
+                            return (
+                                <React.Fragment key={g.name}>
+                                    <tr className={`cursor-pointer ${open ? 'bg-cyan-50' : 'hover:bg-slate-50'}`} onClick={() => setOpenName(open ? null : g.name)} data-mg-group={g.name} data-verdict={g.verdict.level}>
+                                        <td className="border-b border-slate-100 px-2 py-2"><div className="text-base font-bold">{open ? '▼' : '▶'} {g.name}</div><div className="text-xs text-slate-500">作業区 {g.wcs.length}・{g.dai}台・{g.people}人・残り {g.n} 工程</div></td>
+                                        <td className="border-b border-slate-100 px-2 py-2">{g.wcs.map((x) => { const p = Math.max(...x.cells.slice(0, 3).map((c) => c.pct)); return <i key={x.wc} title={`${x.wc}: 今週〜2週後の最大 ${pc(p)}`} className={`mr-0.5 inline-block h-3 w-3 rounded-sm ${p > 1 ? SQ.red : p >= 0.9 ? SQ.yellow : SQ.green}`} />; })}<div className="text-xs text-slate-500">{g.redWcs} つ あふれ</div></td>
+                                        <td className="border-b border-slate-100 px-2 py-2"><div className="text-sm font-bold tabular-nums">{Math.round(g.carry).toLocaleString()}h</div><div className="text-xs text-slate-500">{g.carryN}件・全台で 約{Math.round(g.carryDays)}日分<br />一番古い計画 {g.oldest}日前</div></td>
+                                        {g.cells.map((c, i) => <td key={i} className="border-b border-slate-100 px-1 py-2"><Cell c={c} thin={weeks[i].thin} dem={res === 'worker' ? c.demandW : c.demandM} cap={res === 'worker' ? c.capW : c.capM} /></td>)}
+                                        <td className="border-b border-slate-100 px-2 py-2">{g.lead && g.lead.n >= 10 ? <><b>{g.lead.med}日</b><div className="text-xs text-slate-500">幅 {g.lead.p25}〜{g.lead.p75}日・{g.lead.n}件</div></> : <span className="text-xs text-slate-500">実績が少ない</span>}</td>
+                                        <td className="border-b border-slate-100 px-2 py-2"><div className={`text-xs ${vc}`}>{g.verdict.text}</div>{unset ? <span className="mr-1 rounded border border-slate-300 px-1 text-xs text-slate-600">台数 未確認</span> : null}{g.zero ? <span className="rounded border border-slate-300 px-1 text-xs text-slate-600">標準値なし {g.zero}件</span> : null}</td>
+                                    </tr>
+                                    {open ? renderOpen(g) : null}
+                                </React.Fragment>
+                            );
+                        })}
+                    </tbody>
+                </table>
             </div>
-            <p className="mt-2 text-xs text-slate-500">マス = 必要な標準時間 ÷ 使える時間(台数・人数×7.75h×稼働日)。機械=段取り+機械・人=段取り+作業者。計画の窓が過ぎた分は今週に積んでいます。台数・人数が未確定の作業区は 各1台・人数=台数 で計算しています。「中の作業区」の四角 1つ = 作業区 1つ(今週)。同じ機械グループの中で仕事を回せるかは未確認なので、回すのは人が決めます。</p>
+            <div className="mt-3 rounded-xl border border-slate-200 p-3 text-xs text-slate-600">
+                <b className="text-slate-900">読み方</b> マス = その週に SAP の計画が求める時間 ÷ 使える時間(台数または人数 × 7.75h × 稼働日)。<b>持ち越し</b>(計画の日を過ぎても済でない分)は 今週のマスに混ぜず 左の列に分けています(混ぜると 今週が ほぼ全グループ 200〜800% になり、本当にきつい所が見えません)。斜線の週は SAP にまだ計画が入りきっていない週(低く見えるだけ)。<br />
+                <b className="text-slate-900">注意</b> SAP の日付は「最早」の日付で、納期側(最遅)の日付は この表にありません。「持ち越し」は 必ずしも 納期遅れではありません(計画日より あと、の意味です)。三次元検査(2509)は この画面から外し、検査の画面に出します。
+                {S.suspect ? <> 後ろの工程が済んでいるのに 前が未完了のまま(完了の入力もれらしい)の工程 {S.suspect}件は 数えていません。</> : null}
+                {S.uncounted.n ? <> 付帯作業に分類されて 数えていない時間 {Math.round(S.uncounted.h)}h({S.uncounted.n}工程)。</> : null}
+            </div>
         </div>
     );
 }
-const int = (v) => Math.max(1, Math.floor(Number(v) || 1));
