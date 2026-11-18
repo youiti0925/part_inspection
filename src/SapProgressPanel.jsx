@@ -8,12 +8,18 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { readSapXlsx } from './domain/sapXlsx.js';
 import { scheduleOrders, queueTable, HOURS_MODES, hoursKey } from './domain/sapSchedule.js';
 import SapDueSection, { SapInspectSection } from './SapDueList.jsx';
+import MachineGroupView from './MachineGroupView.jsx';
+import { applyMoves, effUnits } from './domain/sapGroups.js';
 import { sapFlagOn } from './domain/sapArrivalStore.js';
 import { baseNowMs } from './domain/sapBoard.js';
 import { buildOrders, reachList, loadByGroup, loadByWorkCenter, itemSummary, gaugeOf, stageView, handoffList, dailyLoad, STATUS_LABEL } from './domain/sapProgress.js';
 
 /** 旗: localStorage の feature:sapProgress が '1' の時だけ ON(既定 OFF)。読み方は domain/sapArrivalStore.js の sapFlagOn と同じ1本 */
 export function isSapProgressOn() { return sapFlagOn(); }
+/** 端末の中(localStorage)だけに覚える。読み書きできない時は 覚えずに動く。本番(Firestore)には書かない */
+const LS = 'sapProgress:';
+const loadLS = (k, dflt) => { try { const v = typeof localStorage !== 'undefined' && localStorage.getItem(LS + k); return v ? JSON.parse(v) : dflt; } catch { return dflt; } };
+const saveLS = (k, v) => { try { if (typeof localStorage !== 'undefined') localStorage.setItem(LS + k, JSON.stringify(v)); } catch { /* 覚えられなくても動く */ } };
 const todayIso = () => { const d = new Date(); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 const REACH_NOTE = {
     estimate: '検査の直前の機械工程の終了日',
@@ -63,7 +69,7 @@ function GaugeLegend() {
     );
 }
 
-export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, actualsByItem = {}, lots = null }) {
+export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, autoMg = null, actualsByItem = {}, lots = null }) {
     const [on] = useState(() => force || isSapProgressOn());
     const [baseOrders, setOrders] = useState(null);
     const [info, setInfo] = useState('');
@@ -81,10 +87,22 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
     const [perQty, setPerQty] = useState(false);            // 標準値2・3 が1個あたりなら ×数量(未確認なので既定=ロットあたり=掛けない)
     const hk = hoursKey(hoursMode, perQty);
     const [defCap, setDefCap] = useState(1);                // 作業区の既定の台数(同時に何本まで)
-    const [capMap, setCapMap] = useState({});               // 作業区ごとの台数(指定した物だけ)
+    const [capMap, setCapMapRaw] = useState(() => loadLS('capMap', {}));          // 作業区ごとの台数(指定した物だけ)
+    const [peopleMap, setPeopleMapRaw] = useState(() => loadLS('peopleMap', {}));   // 作業区ごとの人数(既定=台数)
+    const [multiMap, setMultiMapRaw] = useState(() => loadLS('multiMap', {}));      // 作業区ごとの掛け持ち可(既定=不可)
+    const [moves, setMovesRaw] = useState(() => loadLS('moves', {}));               // 手で回した工程 { '指図|活動': 移し先の作業区 }
+    const mk = (set, key) => (v) => { set(v); saveLS(key, v); };
+    const setCapMap = mk(setCapMapRaw, 'capMap'), setPeopleMap = mk(setPeopleMapRaw, 'peopleMap'), setMultiMap = mk(setMultiMapRaw, 'multiMap'), setMoves = mk(setMovesRaw, 'moves');
     const [usePlanStart, setUsePlanStart] = useState(true); // SAP の計画開始日(R)より前には始めない
     const nowMs = useMemo(() => baseNowMs(today), [today]);   // 積み上げの基準時刻 = 基準日の始業 08:30(実行した時刻にしない)
-    const sched = useMemo(() => (baseOrders ? scheduleOrders(baseOrders, { nowMs, capacity: capMap, defaultCapacity: defCap, hoursMode: hk, usePlanStart }) : null), [baseOrders, nowMs, capMap, defCap, hk, usePlanStart]);
+    const movedOrders = useMemo(() => (baseOrders ? applyMoves(baseOrders, moves).orders : null), [baseOrders, moves]);   // 手で回した写し(元は書き換えない)
+    // 作業区の同時に動かせる台数 = 掛け持ち可なら台数・不可なら min(台数, 人数)
+    const capEff = useMemo(() => {
+        const m = {};
+        if (movedOrders) for (const o of movedOrders) for (const st of o.stages) if (!(st.wc in m)) { const u = capMap[st.wc] ?? defCap; m[st.wc] = effUnits({ units: u, people: peopleMap[st.wc] ?? u, multi: !!multiMap[st.wc] }).machine; }
+        return m;
+    }, [movedOrders, capMap, peopleMap, multiMap, defCap]);
+    const sched = useMemo(() => (movedOrders ? scheduleOrders(movedOrders, { nowMs, capacity: capEff, defaultCapacity: defCap, hoursMode: hk, usePlanStart }) : null), [movedOrders, nowMs, capEff, defCap, hk, usePlanStart]);
     const orders = sched ? sched.orders : null;
     const queue = useMemo(() => (sched ? queueTable(sched.waits, nowMs, { days: 21 }) : null), [sched, nowMs]);
 
@@ -159,8 +177,12 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
             {orders && (<>
                 <SapInspectSection baseOrders={baseOrders} orders={orders} nowMs={nowMs} hoursMode={hk} actualsByItem={actualsByItem} lots={lots} initialDays={autoDays} initialSort={autoSort} />
 
-                <details className="mt-6 border-t pt-3" data-testid="sap-machine-proto"><summary className="cursor-pointer font-bold">機械グループ(試作・見せ方は別に設計中)</summary>
+                <details className="mt-6 border-t pt-3" data-testid="sap-machine-proto" open={!!autoMg}><summary className="cursor-pointer font-bold">機械グループ(試作・見せ方は別に設計中)</summary>
+                <MachineGroupView initialOpen={autoMg && autoMg !== '1' ? autoMg : null} orders={orders} queue={queue} nowMs={nowMs} perQty={perQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} peopleMap={peopleMap} setPeopleMap={setPeopleMap} multiMap={multiMap} setMultiMap={setMultiMap} moves={moves} setMoves={setMoves} hoursMode={hk} />
+
+                <details className="mt-4 border-t pt-2"><summary className="cursor-pointer font-bold">前の見せ方(品目ごと/工程ごと/工程の一覧のタブ)</summary>
                 <SapDueSection orders={orders} queue={queue} origins={sched.origins} nowMs={nowMs} hoursMode={hk} perQty={perQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} initialTab={autoTab} initialDays={autoDays} initialSort={autoSort} initialStage={autoStage} />
+                </details>
 
                 <details className="mt-6 border-t pt-3" data-testid="sap-old-tables"><summary className="cursor-pointer font-bold">くわしい表(前の画面: 表とゲージ)</summary>
                 <h3 className="font-bold mt-3 mb-1">遅れの起点トップ5 <span className="text-xs font-normal text-slate-500">(どの作業区のどの日に能力=台数を超えて待たされたか・その遅れが後ろの工程と指図へ波及)</span></h3>
