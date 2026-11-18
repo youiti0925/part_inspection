@@ -66,6 +66,10 @@ import {
 } from 'lucide-react';
 
 import { ErrorBoundary } from './ErrorBoundary.jsx';
+// 🔗 SAP の検査の到着見込みを「これから届く」(lot.entryAt)へ入れる(旗 feature:sapProgress=1 で xlsx を読んだ時だけ・既定 OFF=何も変わらない)
+import { useSapArrivalFeed } from './useSapArrivalFeed.js';
+import { applySapArrivals } from './domain/sapArrival.js';
+import { SapArrivalStrip } from './SapArrivalStrip.jsx';
 import { useOperationsSimulation, makeScopeFilter, makeDefaultScopeFilter, SCOPE_PRESETS, DEFAULT_HORIZON_DAYS } from './useOperationsSimulation.js';
 // 決定(2026-08-28): 過去納期+到着予定なし=対象外 / 入荷が納期より後=矛盾アラーム
 import { staleOverdue, dueConflict } from './domain/dueConflict.js';
@@ -1600,7 +1604,10 @@ function OperationsSimulationBody({ planShelf = null, publishOnly = false, isAdm
 
   const evidenceRef = useRef(null);
 
-  const lotList = useMemo(() => (Array.isArray(lots) ? lots : []), [lots]);
+  // 🔗 旗が OFF か xlsx 未読込なら sapFeed は null → lotList は今までと同じ。元の lots には書かない(写しを作る)。
+  const sapFeed = useSapArrivalFeed();
+  const sapApplied = useMemo(() => (sapFeed ? applySapArrivals(lots, sapFeed.rows, { nowMs: sapFeed.baseMs }) : null), [lots, sapFeed]);
+  const lotList = useMemo(() => (sapApplied ? sapApplied.lots : (Array.isArray(lots) ? lots : [])), [lots, sapApplied]);
 
   /**
    * 急ぎ(lot.priority === 'high')のロットID。
@@ -2214,6 +2221,7 @@ function OperationsSimulationBody({ planShelf = null, publishOnly = false, isAdm
   //   「割付と空き」の 🎓 ボタンで true → 次の計算に runSkillTrials:true が載る(useOperationsSimulation が runKey と payload へ)。
   //   ⚠ hooks はガードより上(既存の並びの直前に足しただけ)。
   const [runSkillTrials, setRunSkillTrials] = useState(false);
+  const sapScenario = useMemo(() => (sapApplied && sapApplied.key ? { ...effScenario, sapArrivalKey: sapApplied.key } : effScenario), [effScenario, sapApplied]);
   const sim = useOperationsSimulation({
     scenarioHints: scenarioHintsRef,
     runSkillTrials,
@@ -2226,7 +2234,8 @@ function OperationsSimulationBody({ planShelf = null, publishOnly = false, isAdm
     //   登録し直しても計算し直さない(押しても何も変わらない画面になる)。
     factoryCalendar,
     enabled: true,          // この画面が開いている間だけ組み立てられるので、ここでは常に true
-    scenario: effScenario,
+    // 🔗 SAP の到着を入れた時だけ、差し替えた内容を鍵に混ぜる(entryAt はロットの指紋に入っていないので、混ぜないと計算し直さない)
+    scenario: sapScenario,
     mode: effMode,
     horizonDays,
     scopeFilter,
@@ -3443,6 +3452,8 @@ function OperationsSimulationBody({ planShelf = null, publishOnly = false, isAdm
               🚨 1文字も消していない ―「開く」で2本がそのまま出る。
               🚨 [今日] の時は Header の一番上の行の左に出る(同じ物が2つ出る事は無い)。 */}
           {opsimTab === 'board' ? null : boardWarningsLine}
+          {/* 🔗 SAP から見込んだ検査の到着を入れている間だけ出る帯(旗 OFF・未読込なら何も出ない)。畳まず 全タブの上に出す */}
+          <SapArrivalStrip applied={sapApplied} />
 
           <Header
             explain={explain}

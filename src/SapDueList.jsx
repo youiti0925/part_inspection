@@ -6,7 +6,7 @@
 // 出力: 画面(Firebase・ネットワーク・保存に触れない)
 // 呼ぶ人: SapProgressPanel.jsx
 // 確かめ方: sap-demo.html で実データを選ぶ
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { buildDayColumns, xOf, segmentsOf, columnAt } from './opsim/dueAxis.js';
 import { LATE_TONE } from './opsim/lateTone.js';
 import { OFF_HATCH } from './opsim/idleTone.js';
@@ -18,6 +18,8 @@ import { factoryClock, DEFAULT_WORK_SCHEDULE, timeStrToMinutes } from './domain/
 import { orderRows, stageRows, laneSummary, boardStats, LANE_ORDER, HOURS_PER_DAY } from './domain/sapBoard.js';
 import { capacityTable, rowInWeek } from './domain/sapCapacity.js';
 import { inspectForecast, HOURS_BASIS_LABEL, NEAR_REMAINING_DEFAULT } from './domain/sapInspect.js';
+import { matchSapToLots, sapRowsWithMs } from './domain/sapArrival.js';
+import { setSapArrivals } from './domain/sapArrivalStore.js';
 
 const TIER = DUE_TIER;
 const SHORT_BASIS = { sap: 'SAP 予定どおり', sim: 'シミュ更新', actual: '検査開始済', unknown: '不明' };
@@ -260,7 +262,7 @@ function LaneList({ lanes, queueDays, cols, nowMs, onPick }) {
 }
 
 /** ④ 部品検査に届く見込み(検査工程 2509 の開始見込みと所要) */
-function InspectList({ fc, cols, nowMs, q, sortKey, limit, openAll, setOpenAll }) {
+function InspectList({ fc, cols, nowMs, q, sortKey, limit, openAll, setOpenAll, matchOf = null }) {
     const list = useMemo(() => {
         const k = q.trim();
         let l = k ? fc.rows.filter((r) => (r.item + r.itemText + r.order).includes(k)) : fc.rows;
@@ -286,6 +288,7 @@ function InspectList({ fc, cols, nowMs, q, sortKey, limit, openAll, setOpenAll }
                         <NameCell lead="検" tone={WORKER_TONES[4]} title={[r.itemText || r.item, r.inspName]}
                             sub={<><span className="tabular-nums">指図 {r.order}</span><span className="tabular-nums">×{r.qty}</span>
                                 <Chip cls={tag} title={`検査の手前に未完了の工程が ${r.remaining}つ(直前: ${r.prevLabel})`}>{SHORT_BASIS[r.startBasis]}</Chip>
+                                {matchOf ? (() => { const m = matchOf(r.order); return <Chip cls={m.kind === 'match' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : m.kind === 'ambiguous' ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-dashed border-slate-400 bg-white text-slate-500'} title={m.title}>{m.kind === 'match' ? 'ロット対応あり' : m.kind === 'ambiguous' ? 'あいまい' : '対応なし'}</Chip>; })() : null}
                                 {r.overdue ? <Chip cls="border-rose-300 bg-rose-50 text-rose-700" title="SAP の予定開始日はもう過ぎていますが、検査の手前の工程が未完了です">予定日を過ぎている</Chip> : null}
                                 <Chip cls={hTag} title="所要=MT(標準値)。MT が無ければ アプリの検査実績の中央値。どちらも無ければ不明のまま">{r.hoursBasis === 'actual' ? `${HOURS_BASIS_LABEL.actual} ${r.actualN}件` : r.hoursBasis === 'MT' ? `MT ${r.hours}h` : '所要 不明'}</Chip></>} />
                         {r.diffDays > 0 ? <LateChip days={r.diffDays} soon maxDays={maxDiff} title={`SAP の予定開始日(${isoMd(r.sapStart)})より ${r.diffDays}日 遅れる見込み`} />
@@ -386,16 +389,57 @@ function CapacityTable({ cap, passRate, onPick, set, capOf, setLaneCap, peopleOf
     );
 }
 
-const TABS = [['order', '品目(指図)ごと'], ['stage', '工程ごと'], ['lanes', '工程の一覧'], ['inspect', '部品検査に届く見込み']];
+/** 部品検査に届く見込み(検査工程 2509 の開始見込み)。前工程が近づいた物は積み上げ直し・遠い物は SAP 予定どおり。
+ *  この答えを 部品検査アプリの操業シミュレーションの「これから届く」(到着の見込み)へ渡す(domain/sapArrivalStore.js・旗 ON の間だけ)。 */
+export function SapInspectSection({ baseOrders, orders, nowMs, hoursMode, actualsByItem = {}, lots = null, initialDays = null, initialSort = null }) {
+    const [near, setNear] = useState(NEAR_REMAINING_DEFAULT);
+    const [sortKey, setSortKey] = useState(SORTS.includes(initialSort) ? initialSort : DUE_SORT.LATE);
+    const [q, setQ] = useState('');
+    const [days, setDays] = useState(initialDays || 30);
+    const [openAll, setOpenAll] = useState(false);
+    const limit = 30;
+    const cols = useMemo(() => {
+        const d0 = new Date(nowMs); d0.setHours(0, 0, 0, 0);
+        const w = DEFAULT_WORK_SCHEDULE;
+        return buildDayColumns({ fromMs: d0.getTime(), toMs: d0.getTime() + days * DAY, isWorkday: factoryClock(w, null), startMin: timeStrToMinutes(w.dayStart), endMin: timeStrToMinutes(w.dayEnd) });
+    }, [nowMs, days]);
+    const fc = useMemo(() => inspectForecast(baseOrders, orders, { nearRemaining: near, actualsByItem, hoursMode, todayIso: isoOf(nowMs) }), [baseOrders, orders, near, actualsByItem, hoursMode, nowMs]);
+    const sapRows = useMemo(() => sapRowsWithMs(fc.rows), [fc]);
+    // 操業シミュレーションへ渡す(メモリの中だけ)。この部品が消えたら取り下げる
+    useEffect(() => { setSapArrivals({ rows: sapRows, baseMs: nowMs }); return () => setSapArrivals(null); }, [sapRows, nowMs]);
+    const mt = useMemo(() => (lots ? matchSapToLots(sapRows, lots) : null), [sapRows, lots]);
+    const matchOf = useMemo(() => {
+        if (!mt) return null;
+        const by = new Map(mt.matches.map((m) => [m.row.order, m])), amb = new Map(mt.ambiguous.map((m) => [m.row.order, m]));
+        return (order) => (by.has(order) ? { kind: 'match', title: `部品検査のロット ${by.get(order).lotId} に当たった(${{ order: '指図番号が同じ', item: '品目コードが1対1', text: '品目テキストが1対1' }[by.get(order).by]})` }
+            : amb.has(order) ? { kind: 'ambiguous', title: amb.get(order).reason + '(勝手に当てません)' } : { kind: 'none', title: '部品検査のロットに当たらない(対応なし)' });
+    }, [mt]);
+    const horizon = (
+        <span className="inline-flex items-center gap-1 text-xs"><label>日付の軸 <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="rounded border border-slate-300 px-1">{[...new Set([14, 21, 30, 45, 60, 90, 180, days])].sort((a, b) => a - b).map((d) => <option key={d} value={d}>{d}日</option>)}</select></label></span>
+    );
+    return (
+        <div data-testid="sap-inspect">
+                <div className="mb-2 rounded border bg-slate-50 p-2 text-xs" data-testid="sap-inspect-summary">
+                    検査工程(作業区 2509・受入検査/三次元検査)が未完了の指図 <b>{fc.counts.total}件</b>: 近づいた(シミュレーションで更新) <b>{fc.counts.near}件</b>・遠い(SAP 予定どおり) <b>{fc.counts.far}件</b>・MT(標準値)なし <b>{fc.counts.noMt}件</b>(うちアプリの実績あり {fc.counts.withActual}件・所要 不明 {fc.counts.unknownHours}件)・予定開始日なし {fc.counts.unknownStart}件
+                    <label className="ml-3">近づいたとみなす: 検査の手前の未完了の工程が <input type="number" min="0" max="10" value={near} onChange={(e) => setNear(Math.max(0, Math.floor(Number(e.target.value) || 0)))} className="w-12 rounded border px-1" /> つ以下(直前の工程が作業中か済でも近い)</label>
+                    {mt ? <div className="mt-1" data-testid="sap-match-summary">部品検査アプリのロットとの対応(指図番号→品目コード→品目テキストの順・1対1の時だけ当てる): 当たった <b>{mt.matches.length}件</b>・あいまい <b>{mt.ambiguous.length}件</b>・対応なし <b>{mt.unmatched.length}件</b>。当たった未入荷ロットの到着は 操業シミュレーションの「これから届く」に入ります(旗 ON の間だけ・保存しません)。</div> : <div className="mt-1 text-slate-500">ロットを渡されていない画面なので、部品検査のロットとの対応は出していません。</div>}
+                    <div className="mt-1 text-slate-500">MT が無い検査は所要を「不明」とします(作り物の数字は出しません)。アプリで時間取り(実績の記録)が貯まれば、品目ごとの実績の中央値を所要に使えます(この画面にはまだつないでいません)。</div>
+                </div>
+                <Toolbar sortKey={sortKey} setSortKey={setSortKey} q={q} setQ={setQ} extra={horizon} />
+                <InspectList fc={fc} cols={cols} nowMs={nowMs} q={q} sortKey={sortKey} limit={limit} openAll={openAll} setOpenAll={setOpenAll} matchOf={matchOf} />
+        </div>
+    );
+}
 
-export default function SapDueSection({ baseOrders, orders, queue, origins, nowMs, hoursMode, defCap, capMap, setCapMap, perQty = false, actualsByItem = {}, initialTab = 'order', initialDays = null, initialStage = null, initialSort = null }) {
+const TABS = [['order', '品目(指図)ごと'], ['stage', '工程ごと'], ['lanes', '工程の一覧']];
+
+export default function SapDueSection({ orders, queue, origins, nowMs, hoursMode, defCap, capMap, setCapMap, perQty = false, initialTab = 'order', initialDays = null, initialStage = null, initialSort = null }) {
     const [tab, setTab] = useState(initialTab);
     const [sortKey, setSortKey] = useState(SORTS.includes(initialSort) ? initialSort : DUE_SORT.LATE);
     const [q, setQ] = useState('');
     const [days, setDays] = useState(initialDays || 30);
     const [stageName, setStageName] = useState(initialStage);
     const [openAllMap, setOpenAllMap] = useState({});
-    const [near, setNear] = useState(NEAR_REMAINING_DEFAULT);
     const [ot, setOt] = useState(0);
     const [sat, setSat] = useState(false);
     const [nWeeks, setNWeeks] = useState(5);
@@ -421,7 +465,6 @@ export default function SapDueSection({ baseOrders, orders, queue, origins, nowM
     const sRowsAll = useMemo(() => (stage ? stageRows(orders, stage, { nowMs, hoursMode }) : []), [orders, stage, nowMs, hoursMode]);
     const weekObj = weekSel != null ? cap.weeks[weekSel] : null;
     const sRows = useMemo(() => (weekObj ? sRowsAll.filter((r) => rowInWeek(r, weekObj, weekSel, nowMs)) : sRowsAll), [sRowsAll, weekObj, weekSel, nowMs]);
-    const fc = useMemo(() => inspectForecast(baseOrders, orders, { nearRemaining: near, actualsByItem, hoursMode, todayIso: isoOf(nowMs) }), [baseOrders, orders, near, actualsByItem, hoursMode, nowMs]);
     const openAll = !!openAllMap[tab], setOpenAll = (v) => setOpenAllMap({ ...openAllMap, [tab]: v });
     const stageLane = lanes.find((l) => l.name === stage);
     const maxFin = Math.max(0, ...oRows.map((r) => r.finishMs || 0));
@@ -435,7 +478,7 @@ export default function SapDueSection({ baseOrders, orders, queue, origins, nowM
             <CapacityTable cap={cap} passRate={passRate} onPick={pickCell} set={{ ot, setOt, sat, setSat, weeks: nWeeks, setWeeks: setNWeeks, view, setView }} capOf={capOf} setLaneCap={setLaneCap} peopleOf={peopleOf} setPeople={(n, v) => setPeopleMap({ ...peopleMap, [n]: v })} />
             <StatCards st={st} />
             <div className="mb-2 flex flex-wrap gap-1" role="tablist">
-                {TABS.map(([k, l]) => <button key={k} type="button" role="tab" onClick={() => setTab(k)} data-sap-tab={k} className={`min-h-9 rounded-lg border-2 px-3 text-sm font-black ${tab === k ? 'border-cyan-600 bg-cyan-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{l}{k === 'inspect' ? `(${fc.counts.total})` : k === 'order' ? `(${oRows.length})` : ''}</button>)}
+                {TABS.map(([k, l]) => <button key={k} type="button" role="tab" onClick={() => setTab(k)} data-sap-tab={k} className={`min-h-9 rounded-lg border-2 px-3 text-sm font-black ${tab === k ? 'border-cyan-600 bg-cyan-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{l}{k === 'order' ? `(${oRows.length})` : ''}</button>)}
             </div>
             {tab === 'order' && (<>
                 <Toolbar sortKey={sortKey} setSortKey={setSortKey} q={q} setQ={setQ} extra={horizon} />
@@ -455,15 +498,6 @@ export default function SapDueSection({ baseOrders, orders, queue, origins, nowM
             {tab === 'lanes' && (<>
                 <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">{horizon}</div>
                 <LaneList lanes={lanes} queueDays={queue ? queue.days : []} cols={cols} nowMs={nowMs} onPick={(n) => { setStageName(n); setWeekSel(null); setTab('stage'); }} />
-            </>)}
-            {tab === 'inspect' && (<>
-                <div className="mb-2 rounded border bg-slate-50 p-2 text-xs" data-testid="sap-inspect-summary">
-                    検査工程(作業区 2509・受入検査/三次元検査)が未完了の指図 <b>{fc.counts.total}件</b>: 近づいた(シミュレーションで更新) <b>{fc.counts.near}件</b>・遠い(SAP 予定どおり) <b>{fc.counts.far}件</b>・MT(標準値)なし <b>{fc.counts.noMt}件</b>(うちアプリの実績あり {fc.counts.withActual}件・所要 不明 {fc.counts.unknownHours}件)・予定開始日なし {fc.counts.unknownStart}件
-                    <label className="ml-3">近づいたとみなす: 検査の手前の未完了の工程が <input type="number" min="0" max="10" value={near} onChange={(e) => setNear(Math.max(0, Math.floor(Number(e.target.value) || 0)))} className="w-12 rounded border px-1" /> つ以下(直前の工程が作業中か済でも近い)</label>
-                    <div className="mt-1 text-slate-500">MT が無い検査は所要を「不明」とします(作り物の数字は出しません)。アプリで時間取り(実績の記録)が貯まれば、品目ごとの実績の中央値を所要に使えます(この画面にはまだつないでいません)。</div>
-                </div>
-                <Toolbar sortKey={sortKey === DUE_SORT.FINISH || sortKey === DUE_SORT.DUE ? DUE_SORT.DUE : sortKey} setSortKey={setSortKey} q={q} setQ={setQ} extra={horizon} />
-                <InspectList fc={fc} cols={cols} nowMs={nowMs} q={q} sortKey={sortKey} limit={limit} openAll={openAll} setOpenAll={setOpenAll} />
             </>)}
         </div>
     );

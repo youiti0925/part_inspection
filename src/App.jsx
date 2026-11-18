@@ -26171,7 +26171,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          {/* 📊 P053 進捗管理表の読み方(表ごと・シート名・開始行・列の字・Z列の意味・出荷日の日数) */}
          <ProgressSheetMapPanel settings={settings} saveSettings={saveSettings} openBook={openProgressBook_pi} />
 
-         <SapProgressPanel />
+         <SapProgressPanel lots={lots} />
 
          {/* 🗂 P057 未登録リスト(進捗管理表の取込で品質規格マスタに紐付けが無く落ちた行。無ければ何も出さない) */}
          <PendingImportPanel settings={settings} onRegisterPending={onRegisterPending} onRemovePending={onRemovePending} />

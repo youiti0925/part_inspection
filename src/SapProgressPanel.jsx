@@ -7,15 +7,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { readSapXlsx } from './domain/sapXlsx.js';
 import { scheduleOrders, queueTable, HOURS_MODES, hoursKey } from './domain/sapSchedule.js';
-import SapDueSection from './SapDueList.jsx';
+import SapDueSection, { SapInspectSection } from './SapDueList.jsx';
+import { sapFlagOn } from './domain/sapArrivalStore.js';
 import { baseNowMs } from './domain/sapBoard.js';
 import { buildOrders, reachList, loadByGroup, loadByWorkCenter, itemSummary, gaugeOf, stageView, handoffList, dailyLoad, STATUS_LABEL } from './domain/sapProgress.js';
 
-const FLAG_KEY = 'feature:sapProgress';
-/** 旗: localStorage の feature:sapProgress が '1' の時だけ ON(既定 OFF) */
-export function isSapProgressOn() {
-    try { return typeof localStorage !== 'undefined' && localStorage.getItem(FLAG_KEY) === '1'; } catch { return false; }
-}
+/** 旗: localStorage の feature:sapProgress が '1' の時だけ ON(既定 OFF)。読み方は domain/sapArrivalStore.js の sapFlagOn と同じ1本 */
+export function isSapProgressOn() { return sapFlagOn(); }
 const todayIso = () => { const d = new Date(); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 const REACH_NOTE = {
     estimate: '検査の直前の機械工程の終了日',
@@ -65,7 +63,7 @@ function GaugeLegend() {
     );
 }
 
-export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, actualsByItem = {} }) {
+export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, actualsByItem = {}, lots = null }) {
     const [on] = useState(() => force || isSapProgressOn());
     const [baseOrders, setOrders] = useState(null);
     const [info, setInfo] = useState('');
@@ -159,7 +157,10 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
             {err && <p className="text-xs text-red-600 mb-2">{err}</p>}
 
             {orders && (<>
-                <SapDueSection baseOrders={baseOrders} orders={orders} queue={queue} origins={sched.origins} nowMs={nowMs} hoursMode={hk} perQty={perQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} actualsByItem={actualsByItem} initialTab={autoTab} initialDays={autoDays} initialSort={autoSort} initialStage={autoStage} />
+                <SapInspectSection baseOrders={baseOrders} orders={orders} nowMs={nowMs} hoursMode={hk} actualsByItem={actualsByItem} lots={lots} initialDays={autoDays} initialSort={autoSort} />
+
+                <details className="mt-6 border-t pt-3" data-testid="sap-machine-proto"><summary className="cursor-pointer font-bold">機械グループ(試作・見せ方は別に設計中)</summary>
+                <SapDueSection orders={orders} queue={queue} origins={sched.origins} nowMs={nowMs} hoursMode={hk} perQty={perQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} initialTab={autoTab} initialDays={autoDays} initialSort={autoSort} initialStage={autoStage} />
 
                 <details className="mt-6 border-t pt-3" data-testid="sap-old-tables"><summary className="cursor-pointer font-bold">くわしい表(前の画面: 表とゲージ)</summary>
                 <h3 className="font-bold mt-3 mb-1">遅れの起点トップ5 <span className="text-xs font-normal text-slate-500">(どの作業区のどの日に能力=台数を超えて待たされたか・その遅れが後ろの工程と指図へ波及)</span></h3>
@@ -295,6 +296,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                 <details className="mt-4"><summary className="cursor-pointer font-bold">③ 品目ごとの集計(上位30)</summary>
                     <table className="w-full text-xs mt-1"><thead className="bg-slate-100"><tr><th className="p-1 text-left">品目</th><th className="p-1 text-right">指図</th><th className="p-1 text-right">工程件数</th><th className="p-1 text-right">標準H</th><th className="p-1 text-right">実績あり</th></tr></thead>
                         <tbody>{items.slice(0, 30).map((e) => <tr key={e.item} className="border-t"><td className="p-1">{e.item} <span className="text-slate-500">{e.itemText}</span></td><td className="p-1 text-right">{e.orderCount}</td><td className="p-1 text-right">{e.count}</td><td className="p-1 text-right">{e.stdHours}</td><td className="p-1 text-right">{e.actual}</td></tr>)}</tbody></table>
+                </details>
                 </details>
                 </details>
             </>)}
