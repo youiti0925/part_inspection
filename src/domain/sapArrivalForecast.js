@@ -122,8 +122,9 @@ export function arrivalForecast(orders, { todayIso, shipByOrder = null } = {}) {
         const limit = ship == null ? null : addWork(ship, -LIMIT_DAYS_BEFORE_SHIP);
         const over = limit != null && arrive != null && arrive > limit ? arrive - limit : (limit != null && arrive == null && limit < 0 ? -limit : null);
         const curIdx = st.indexOf(cur);
+        const ih = ins.hN > 0 ? Math.round(ins.hN * Math.max(1, ins.qty || 1) * 100) / 100 : null;   // 検査の時間(h)= 標準値3(作業者)× 数量。0 なら null(不明のまま)
         rows.push({
-            it: o.item || '', k: curIdx + 1, n: st.length, curAct: cur.act, curWc: cur.wc, insAct: ins.act, ship, limit, over,
+            it: o.item || '', k: curIdx + 1, n: st.length, curAct: cur.act, curWc: cur.wc, insAct: ins.act, ih, ship, limit, over,
             stg: st.map((s) => (s.status === 'done' ? 1 : 0)).join(''), insIdx: i,
             o: o.order, tx: (o.itemText || '').normalize('NFKC').trim() || '(品名なし)', q: ins.qty || st[0].qty || 0,
             cur: state === 'here' ? '検査' : nmOf(cur), state, kind, sapAsIs, idle, sap, arrive, arriveIso: arrive == null ? null : isoOf(arrive), late, lateKind, segs: merged, why, short, tag, left: openB.length,

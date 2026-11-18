@@ -70,7 +70,7 @@ function GaugeLegend() {
     );
 }
 
-export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, autoMg = null, actualsByItem = {}, lots = null }) {
+export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, autoMg = null, autoSub = null, actualsByItem = {}, lots = null }) {
     const [on] = useState(() => force || isSapProgressOn());
     const [baseOrders, setOrders] = useState(null);
     const [info, setInfo] = useState('');
@@ -174,7 +174,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                 <div className="mb-3 flex flex-wrap gap-2" role="tablist" data-testid="sap-entry-tabs">
                     {[['inspect', '部品検査に いつ来るか'], ['machine', '機械グループ(こなせるか・試作)']].map(([k, l]) => <button key={k} type="button" role="tab" aria-selected={entry === k} onClick={() => setEntry(k)} data-sap-entry={k} className={`min-h-10 rounded-lg border-2 px-4 text-sm font-black ${entry === k ? 'border-cyan-600 bg-cyan-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{l}</button>)}
                 </div>
-                {entry === 'inspect' && <InspectArrivalSection baseOrders={baseOrders} todayIso={today} lots={lots} fileLabel={`SAP の表 ${fileName || ''}`} />}
+                {entry === 'inspect' && <InspectArrivalSection initialSub={autoSub || 'when'} baseOrders={baseOrders} todayIso={today} lots={lots} fileLabel={`SAP の表 ${fileName || ''}`} />}
                 {entry === 'machine' && (<>
             <div className="flex flex-wrap items-center gap-3 mb-2 text-xs bg-slate-50 border rounded p-2" data-testid="sap-settings">
                 <label>積み上げに使う時間 <select value={hoursMode} onChange={(e) => setHoursMode(e.target.value)} className="border rounded px-1">{HOURS_MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>

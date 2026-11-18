@@ -13,7 +13,8 @@ const autoMg = new URLSearchParams(location.search).get('mg');
 // 確かめ用: ?moves=<JSON> で 手で回した工程を端末の中に仕込む(画面の確認のためだけ)
 const seedMoves = new URLSearchParams(location.search).get('moves');
 if (seedMoves) { try { JSON.parse(seedMoves); localStorage.setItem('sapProgress:moves', seedMoves); } catch { /* 読めなければ仕込まない */ } }
+const autoSub = new URLSearchParams(location.search).get('sub');
 const autoTab = new URLSearchParams(location.search).get('tab') || 'order';
 createRoot(document.getElementById('root')).render(
-    <div className="max-w-7xl mx-auto p-3"><SapProgressPanel force autoUrl={autoUrl} autoStage={autoStage} autoTab={autoTab} autoDays={autoDays} autoSort={autoSort} autoMg={autoMg} /></div>
+    <div className="max-w-7xl mx-auto p-3"><SapProgressPanel force autoUrl={autoUrl} autoStage={autoStage} autoTab={autoTab} autoDays={autoDays} autoSort={autoSort} autoMg={autoMg} autoSub={autoSub} /></div>
 );

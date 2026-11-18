@@ -21,9 +21,9 @@ const GROUPS = [
     ['green', '予定どおり', '◇ と ◆ が同じ位置', (r) => r.kind === 'bar' && r.late == null],
 ];
 
-export default function InspectArrivalView({ forecast, shipByOrder = null, mockShip = null, fileLabel = '' }) {
+export default function InspectArrivalView({ forecast, shipIsMock = true, fileLabel = '' }) {
     const { rows, sum: S, weekEnd, limitDays, today } = forecast;
-    const real = !!shipByOrder;
+    const real = !shipIsMock;
     const rootRef = useRef(null);
     const [span, setSpan] = useState('a');
     const [filter, setFilter] = useState('all');
@@ -43,17 +43,7 @@ export default function InspectArrivalView({ forecast, shipByOrder = null, mockS
     }, [A, B, T0]); // eslint-disable-line react-hooks/exhaustive-deps
     const X = (n) => (n < A ? 0 : n > B ? 100 : cols[n - A].mid);
 
-    // 出庫日(本物があればそれ・無ければ作り物)を日数にして行へ載せる
-    const shown0 = useMemo(() => {
-        const ship = real ? shipByOrder : (mockShip || {});
-        const addWork = (n, k) => { let x = n; const step = k < 0 ? -1 : 1; for (let i = 0; i < Math.abs(k);) { x += step; const w = new Date((Math.floor(T0 / 86400000) + x) * 86400000).getUTCDay(); if (w !== 0 && w !== 6) i++; } return x; };
-        return rows.map((r) => {
-            const sh = ship[r.o] ? Math.round((new Date(ship[r.o] + 'T00:00:00Z').getTime() - T0) / 86400000) : null;
-            const lim = sh == null ? null : addWork(sh, -limitDays);
-            const over = lim != null && r.arrive != null && r.arrive > lim ? r.arrive - lim : (lim != null && r.arrive == null && lim < 0 ? -lim : null);
-            return { ...r, ship: sh, limit: lim, over };
-        });
-    }, [rows, real, shipByOrder, mockShip, T0, limitDays]);
+    const shown0 = rows;   // 出庫日・リミット・越えた日数は 見込みの行に入っている(本物が無い間は 作り物の日付で渡される)
     const overCount = shown0.filter((r) => r.over != null).length;
     const lateMax = Math.max(1, ...shown0.map((r) => r.late || 0));
     const FILTERS = {
