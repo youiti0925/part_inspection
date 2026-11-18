@@ -18,6 +18,7 @@ import { summarizeOrder } from './sapProgress.js';
 /** 標準値の意味(清水さん 11-18): 標準値1=段取り・標準値2=機械・標準値3=作業者。
  *  機械(作業区)の占有時間 = 段取り + 機械 / 作業者の時間 = 段取り + 作業者。
  *  標準値2・3 が「1個あたり」か「1ロットあたり」かは未確認 → 既定は ロットあたり(数量を掛けない)。mode の末尾に '*' を付けると 標準値2・3 に数量を掛ける。
+ *  ただし 検査工程(kind=inspect)と、機械の時間が 0 で作業者の時間がある工程は、既定の「機械の占有時間」でも 段取り+作業者 で数える(人の作業)。
  *  段取りは 1ロットにつき1回なので 数量は掛けない。 */
 export const HOURS_MODES = [
     ['machine', '機械の占有時間 = 段取り(標準値1)+ 機械(標準値2)(既定)'],
@@ -39,7 +40,9 @@ export const hoursOf = (s, mode = 'machine') => {
     if (m === 'N') return N;
     if (m === 'worker') return J + N;
     if (m === 'sum') return J + L + N;
-    return J + L;   // machine
+    // machine(既定): 検査工程は人の作業なので 段取り+作業者。機械の時間が 0 で人の時間がある工程も 人の時間で占有する(機械を持たない作業)
+    if (s.kind === 'inspect' || (L === 0 && N > 0)) return J + N;
+    return J + L;
 };
 
 const p2 = (n) => String(n).padStart(2, '0');

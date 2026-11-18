@@ -26,6 +26,16 @@ test('SS01b 積み上げは 機械の占有時間(段取り+機械)で数える�
     assert.equal(q.planEndTime, '13:25');   // 1 + 1×3 = 4h(10時休憩・昼休憩をまたぐ)
 });
 
+test('SS01c 機械が 0 で作業者の時間がある工程・検査工程は 段取り+作業者 で占有する(機械の時間が 0 でも 0 時間にならない)', () => {
+    assert.equal(hoursOf({ hJ: 0.5, hL: 0, hN: 2, qty: 3 }), 2.5);
+    assert.equal(hoursOf({ hJ: 0.5, hL: 0, hN: 2, qty: 3 }, hoursKey('machine', true)), 0.5 + 6);
+    assert.equal(hoursOf({ kind: 'inspect', hJ: 0.5, hL: 9, hN: 1 }), 1.5);
+    assert.equal(hoursOf({ hJ: 0.5, hL: 1, hN: 2 }), 1.5);   // 機械がある工程は 段取り+機械 のまま
+    const rows = [stage('1', '0010', '2509', '三次元検査:a', 0, { N: 1 })];
+    const o = scheduleOrders(buildOrders(rows), { nowMs: NOW }).orders[0].stages[0];
+    assert.equal(o.planEndTime, '09:30');   // 作業者 1h ぶん占有
+});
+
 test('SS02 1本の指図: 前の工程が終わると次が始まる・休憩を飛ばして時刻が出る', () => {
     // 平面研削 2h: 08:30 開始・10:00-10:10 の休憩をまたぐので 10:40 終了。次のフライス 1h は 10:40 開始
     const orders = buildOrders([stage('1', '0010', '2385', '平面研削：a', 2), stage('1', '0020', '2325', 'ﾌﾗｲｽ:a', 1)]);
