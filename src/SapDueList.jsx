@@ -6,7 +6,7 @@
 // 出力: 画面(Firebase・ネットワーク・保存に触れない)
 // 呼ぶ人: SapProgressPanel.jsx
 // 確かめ方: sap-demo.html で実データを選ぶ
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { buildDayColumns, xOf, segmentsOf, columnAt } from './opsim/dueAxis.js';
 import { LATE_TONE } from './opsim/lateTone.js';
 import { OFF_HATCH } from './opsim/idleTone.js';
@@ -17,12 +17,8 @@ import { DUE_TIER } from './domain/operationsSimulation/dueRowFacts.js';
 import { factoryClock, DEFAULT_WORK_SCHEDULE, timeStrToMinutes } from './domain/workClock.js';
 import { orderRows, stageRows, laneSummary, boardStats, LANE_ORDER, HOURS_PER_DAY } from './domain/sapBoard.js';
 import { capacityTable, rowInWeek } from './domain/sapCapacity.js';
-import { inspectForecast, HOURS_BASIS_LABEL, NEAR_REMAINING_DEFAULT } from './domain/sapInspect.js';
-import { matchSapToLots, sapRowsWithMs } from './domain/sapArrival.js';
-import { setSapArrivals } from './domain/sapArrivalStore.js';
 
 const TIER = DUE_TIER;
-const SHORT_BASIS = { sap: 'SAP 予定どおり', sim: 'シミュ更新', actual: '検査開始済', unknown: '不明' };
 const DAY = 86400000;
 const SORTS = [DUE_SORT.LATE, DUE_SORT.FINISH, DUE_SORT.DUE, DUE_SORT.ORDER, DUE_SORT.MODEL];
 const GRID = 'grid grid-cols-[19rem_6rem_1fr] items-center gap-2';
@@ -31,7 +27,6 @@ const p2 = (n) => String(n).padStart(2, '0');
 const fmtMD = (ms) => (isNum(ms) ? `${new Date(ms).getMonth() + 1}/${new Date(ms).getDate()}` : '—');
 const fmtHM = (ms) => (isNum(ms) ? `${p2(new Date(ms).getHours())}:${p2(new Date(ms).getMinutes())}` : '');
 const fmtMDHM = (ms) => (isNum(ms) ? `${fmtMD(ms)} ${fmtHM(ms)}` : '—');
-const isoOf = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
 const isoMd = (iso) => (iso ? `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))}` : '—');
 
 /** 工程ごとの色(丸い印)。工程の順で色を配る。色だけでなく頭文字も出す */
@@ -261,56 +256,6 @@ function LaneList({ lanes, queueDays, cols, nowMs, onPick }) {
     );
 }
 
-/** ④ 部品検査に届く見込み(検査工程 2509 の開始見込みと所要) */
-function InspectList({ fc, cols, nowMs, q, sortKey, limit, openAll, setOpenAll, matchOf = null }) {
-    const list = useMemo(() => {
-        const k = q.trim();
-        let l = k ? fc.rows.filter((r) => (r.item + r.itemText + r.order).includes(k)) : fc.rows;
-        if (sortKey === DUE_SORT.ORDER) l = l.slice().sort((a, b) => (a.order < b.order ? -1 : 1));
-        else if (sortKey === DUE_SORT.MODEL) l = l.slice().sort((a, b) => (a.itemText || a.item).localeCompare(b.itemText || b.item, 'ja'));
-        else if (sortKey === DUE_SORT.LATE) l = l.slice().sort((a, b) => (b.diffDays ?? -1e9) - (a.diffDays ?? -1e9));
-        return l;
-    }, [fc, q, sortKey]);
-    const shown = openAll ? list : list.slice(0, limit);
-    const maxDiff = Math.max(1, ...list.map((r) => Math.abs(r.diffDays || 0)));
-    const msOfIso = (iso, t, d) => { if (!iso) return null; const [y, m, dd] = iso.split('-').map(Number); const [h, mi] = (t || d).split(':').map(Number); return new Date(y, m - 1, dd, h, mi).getTime(); };
-    return (
-        <div data-testid="sap-due-inspect">
-            <AxisHead cols={cols} nowMs={nowMs} left={['品目｜検査 ／ 指図・個数・根拠', 'SAP 予定との差', '+は SAP の予定開始日より遅れる・−は早まる(「シミュレーションで更新」の行だけ)']} />
-            {shown.map((r) => {
-                const startMs = msOfIso(r.startIso, r.startTime, '08:30'), endMs = msOfIso(r.endIso, r.endTime, '17:00'), sapMs = msOfIso(r.sapStart, null, '08:30');
-                const row = { segs: startMs != null ? [{ act: r.order, name: r.hours != null ? `所要 ${r.hours}h` : '所要 不明', wc: r.inspWc, status: 'todo', startMs, endMs: endMs ?? startMs, est: true }] : [], finishMs: endMs, tier: TIER.OK, dueMs: null, waitMs: 0 };
-                const sapPct = sapMs != null ? xOf(cols, sapMs) : null;
-                const tag = r.startBasis === 'sap' ? 'border-slate-300 bg-white text-slate-700' : r.startBasis === 'sim' ? 'border-cyan-300 bg-cyan-50 text-cyan-800' : r.startBasis === 'actual' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-dashed border-slate-400 bg-white text-slate-500';
-                const hTag = r.hoursBasis === 'unknown' ? 'border-dashed border-slate-400 bg-white text-slate-500' : 'border-slate-300 bg-white text-slate-700';
-                return (
-                    <div key={r.order} data-sap-inspect-row={r.order} data-phase={r.phase} className={`${GRID} min-h-14 w-full border-b border-slate-100 py-1`}>
-                        <NameCell lead="検" tone={WORKER_TONES[4]} title={[r.itemText || r.item, r.inspName]}
-                            sub={<><span className="tabular-nums">指図 {r.order}</span><span className="tabular-nums">×{r.qty}</span>
-                                <Chip cls={tag} title={`検査の手前に未完了の工程が ${r.remaining}つ(直前: ${r.prevLabel})`}>{SHORT_BASIS[r.startBasis]}</Chip>
-                                {matchOf ? (() => { const m = matchOf(r.order); return <Chip cls={m.kind === 'match' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : m.kind === 'ambiguous' ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-dashed border-slate-400 bg-white text-slate-500'} title={m.title}>{m.kind === 'match' ? 'ロット対応あり' : m.kind === 'ambiguous' ? 'あいまい' : '対応なし'}</Chip>; })() : null}
-                                {r.overdue ? <Chip cls="border-rose-300 bg-rose-50 text-rose-700" title="SAP の予定開始日はもう過ぎていますが、検査の手前の工程が未完了です">予定日を過ぎている</Chip> : null}
-                                <Chip cls={hTag} title="所要=MT(標準値)。MT が無ければ アプリの検査実績の中央値。どちらも無ければ不明のまま">{r.hoursBasis === 'actual' ? `${HOURS_BASIS_LABEL.actual} ${r.actualN}件` : r.hoursBasis === 'MT' ? `MT ${r.hours}h` : '所要 不明'}</Chip></>} />
-                        {r.diffDays > 0 ? <LateChip days={r.diffDays} soon maxDays={maxDiff} title={`SAP の予定開始日(${isoMd(r.sapStart)})より ${r.diffDays}日 遅れる見込み`} />
-                            : r.diffDays < 0 ? <b className="justify-self-end whitespace-nowrap text-sm font-black text-emerald-700 tabular-nums" title={`SAP の予定開始日(${isoMd(r.sapStart)})より早まる見込み`}>{`${r.diffDays}日`}</b> : <span />}
-                        <div className="relative">
-                            <BarAxis r={row} cols={cols} nowMs={nowMs} showNames noteWhenOut={r.startIso ? `この範囲の外(${isoMd(r.startIso)} 開始の見込み)` : 'SAP に予定開始日が無く 見込みを出せません'} />
-                            {sapPct != null && sapPct >= 0 && sapPct <= 100 ? <div className="pointer-events-none absolute bottom-0 top-0 z-20 w-0 border-l-2 border-dashed border-amber-500" title={`SAP の予定開始 ${isoMd(r.sapStart)}`} style={{ left: `${sapPct}%` }} /> : null}
-                        </div>
-                    </div>
-                );
-            })}
-            {list.length === 0 ? <p className="p-3 text-center text-xs text-slate-500">検査工程が未完了の指図はありません</p> : null}
-            {!openAll && list.length > limit ? <button type="button" data-due-more={list.length - limit} onClick={() => setOpenAll(true)} className="mt-1 inline-flex min-h-9 w-full items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white py-1.5 text-2xs font-black text-cyan-700 hover:bg-slate-50">あと {(list.length - limit).toLocaleString('ja-JP')}件を開く（届く順）</button> : null}
-            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-slate-50 px-2 py-1.5 text-2xs font-bold text-slate-500">
-                <span className="inline-flex items-center gap-1"><span className="inline-block h-3.5 w-0 border-l-2 border-dashed border-amber-500" />SAP の予定開始日</span>
-                <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-5 rounded-full bg-cyan-500" />検査の見込み(開始〜終了・所要が分かる時だけ)</span>
-                <span className="ml-auto font-normal text-slate-400">遠い=SAP の予定どおり・MT どおり / 近い=前工程の実績から積み上げ直し / MT が無ければ アプリの実績の中央値・それも無ければ「不明」</span>
-            </div>
-        </div>
-    );
-}
-
 /** 上の4枚(小さく) */
 function StatCards({ st }) {
     const card = (k, v, small, s, bad) => (
@@ -385,48 +330,6 @@ function CapacityTable({ cap, passRate, onPick, set, capOf, setLaneCap, peopleOf
                 {rows.length === 0 ? <p className="p-3 text-center text-xs text-slate-500">必要な標準時間のある工程がありません</p> : null}
             </div>
             <p className="mt-1 text-2xs text-slate-500">必要な時間 = まだ済んでいない工程の標準時間(機械=段取り+機械・人=段取り+作業者)を、SAP の計画の窓(最早実行開始日〜終了日)の稼働日に均等に置いた量(窓が過ぎた遅れ分は今週に積む)。緑 &lt;90% ・黄 90〜100% ・赤 &gt;100%(足りない時間)。使える時間 = 台数(人は人数)×(定時 7.75h＋残業)× 稼働日(今週は今日から)。</p>
-        </div>
-    );
-}
-
-/** 部品検査に届く見込み(検査工程 2509 の開始見込み)。前工程が近づいた物は積み上げ直し・遠い物は SAP 予定どおり。
- *  この答えを 部品検査アプリの操業シミュレーションの「これから届く」(到着の見込み)へ渡す(domain/sapArrivalStore.js・旗 ON の間だけ)。 */
-export function SapInspectSection({ baseOrders, orders, nowMs, hoursMode, actualsByItem = {}, lots = null, initialDays = null, initialSort = null }) {
-    const [near, setNear] = useState(NEAR_REMAINING_DEFAULT);
-    const [sortKey, setSortKey] = useState(SORTS.includes(initialSort) ? initialSort : DUE_SORT.LATE);
-    const [q, setQ] = useState('');
-    const [days, setDays] = useState(initialDays || 30);
-    const [openAll, setOpenAll] = useState(false);
-    const limit = 30;
-    const cols = useMemo(() => {
-        const d0 = new Date(nowMs); d0.setHours(0, 0, 0, 0);
-        const w = DEFAULT_WORK_SCHEDULE;
-        return buildDayColumns({ fromMs: d0.getTime(), toMs: d0.getTime() + days * DAY, isWorkday: factoryClock(w, null), startMin: timeStrToMinutes(w.dayStart), endMin: timeStrToMinutes(w.dayEnd) });
-    }, [nowMs, days]);
-    const fc = useMemo(() => inspectForecast(baseOrders, orders, { nearRemaining: near, actualsByItem, hoursMode, todayIso: isoOf(nowMs) }), [baseOrders, orders, near, actualsByItem, hoursMode, nowMs]);
-    const sapRows = useMemo(() => sapRowsWithMs(fc.rows), [fc]);
-    // 操業シミュレーションへ渡す(メモリの中だけ)。この部品が消えたら取り下げる
-    useEffect(() => { setSapArrivals({ rows: sapRows, baseMs: nowMs }); return () => setSapArrivals(null); }, [sapRows, nowMs]);
-    const mt = useMemo(() => (lots ? matchSapToLots(sapRows, lots) : null), [sapRows, lots]);
-    const matchOf = useMemo(() => {
-        if (!mt) return null;
-        const by = new Map(mt.matches.map((m) => [m.row.order, m])), amb = new Map(mt.ambiguous.map((m) => [m.row.order, m]));
-        return (order) => (by.has(order) ? { kind: 'match', title: `部品検査のロット ${by.get(order).lotId} に当たった(${{ order: '指図番号が同じ', item: '品目コードが1対1', text: '品目テキストが1対1' }[by.get(order).by]})` }
-            : amb.has(order) ? { kind: 'ambiguous', title: amb.get(order).reason + '(勝手に当てません)' } : { kind: 'none', title: '部品検査のロットに当たらない(対応なし)' });
-    }, [mt]);
-    const horizon = (
-        <span className="inline-flex items-center gap-1 text-xs"><label>日付の軸 <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="rounded border border-slate-300 px-1">{[...new Set([14, 21, 30, 45, 60, 90, 180, days])].sort((a, b) => a - b).map((d) => <option key={d} value={d}>{d}日</option>)}</select></label></span>
-    );
-    return (
-        <div data-testid="sap-inspect">
-                <div className="mb-2 rounded border bg-slate-50 p-2 text-xs" data-testid="sap-inspect-summary">
-                    検査工程(作業区 2509・受入検査/三次元検査)が未完了の指図 <b>{fc.counts.total}件</b>: 近づいた(シミュレーションで更新) <b>{fc.counts.near}件</b>・遠い(SAP 予定どおり) <b>{fc.counts.far}件</b>・MT(標準値)なし <b>{fc.counts.noMt}件</b>(うちアプリの実績あり {fc.counts.withActual}件・所要 不明 {fc.counts.unknownHours}件)・予定開始日なし {fc.counts.unknownStart}件
-                    <label className="ml-3">近づいたとみなす: 検査の手前の未完了の工程が <input type="number" min="0" max="10" value={near} onChange={(e) => setNear(Math.max(0, Math.floor(Number(e.target.value) || 0)))} className="w-12 rounded border px-1" /> つ以下(直前の工程が作業中か済でも近い)</label>
-                    {mt ? <div className="mt-1" data-testid="sap-match-summary">部品検査アプリのロットとの対応(指図番号→品目コード→品目テキストの順・1対1の時だけ当てる): 当たった <b>{mt.matches.length}件</b>・あいまい <b>{mt.ambiguous.length}件</b>・対応なし <b>{mt.unmatched.length}件</b>。当たった未入荷ロットの到着は 操業シミュレーションの「これから届く」に入ります(旗 ON の間だけ・保存しません)。</div> : <div className="mt-1 text-slate-500">ロットを渡されていない画面なので、部品検査のロットとの対応は出していません。</div>}
-                    <div className="mt-1 text-slate-500">MT が無い検査は所要を「不明」とします(作り物の数字は出しません)。アプリで時間取り(実績の記録)が貯まれば、品目ごとの実績の中央値を所要に使えます(この画面にはまだつないでいません)。</div>
-                </div>
-                <Toolbar sortKey={sortKey} setSortKey={setSortKey} q={q} setQ={setQ} extra={horizon} />
-                <InspectList fc={fc} cols={cols} nowMs={nowMs} q={q} sortKey={sortKey} limit={limit} openAll={openAll} setOpenAll={setOpenAll} matchOf={matchOf} />
         </div>
     );
 }

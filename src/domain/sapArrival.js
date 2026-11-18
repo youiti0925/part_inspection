@@ -94,6 +94,7 @@ export function applySapArrivals(lots, sapRows, { nowMs } = {}) {
         const r = m.row;
         const base = { lotId: str(l.id), orderNo: l.orderNo, model: l.model, row: r, by: m.by };
         if (l.location !== 'arrival') { skipped.push({ ...base, why: `もう手元にあるロット(場所=${str(l.location) || '不明'})なので到着は差し替えない` }); return l; }
+        if (r.noDateWhy) { skipped.push({ ...base, why: r.noDateWhy }); return l; }
         if (!Number.isFinite(r.startMs)) { skipped.push({ ...base, why: 'SAP に予定開始日が無い' }); return l; }
         if (r.startBasis === 'actual') { skipped.push({ ...base, why: 'SAP でも検査を始めている(実績)' }); return l; }
         if (Number.isFinite(nowMs) && r.startMs < nowMs) { skipped.push({ ...base, why: `SAP の見込み(${r.startIso})が基準日より前=手前の工程が未完了のまま予定日を過ぎている` }); return l; }

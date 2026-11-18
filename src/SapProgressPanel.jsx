@@ -7,7 +7,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { readSapXlsx } from './domain/sapXlsx.js';
 import { scheduleOrders, queueTable, HOURS_MODES, hoursKey } from './domain/sapSchedule.js';
-import SapDueSection, { SapInspectSection } from './SapDueList.jsx';
+import SapDueSection from './SapDueList.jsx';
+import InspectArrivalSection from './InspectArrivalSection.jsx';
 import MachineGroupView from './MachineGroupView.jsx';
 import { applyMoves, effUnits } from './domain/sapGroups.js';
 import { sapFlagOn } from './domain/sapArrivalStore.js';
@@ -73,6 +74,8 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
     const [on] = useState(() => force || isSapProgressOn());
     const [baseOrders, setOrders] = useState(null);
     const [info, setInfo] = useState('');
+    const [entry, setEntry] = useState(autoMg ? 'machine' : 'inspect');   // 入口: inspect=部品検査に いつ来るか / machine=機械グループ(こなせるか)
+    const [fileName, setFileName] = useState('');
     const [err, setErr] = useState('');
     const [today, setToday] = useState(todayIso());
     const [tab, setTab] = useState('14');
@@ -128,7 +131,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
         try {
             const { rows } = await readSapXlsx(buf);
             const o = buildOrders(rows);
-            setOrders(o); setChartOrder(null); setInfo(`${name}: ${rows.length}行 → 指図 ${o.length}件(この端末の中だけで読みました・送信なし)`);
+            setOrders(o); setFileName(name); setChartOrder(null); setInfo(`${name}: ${rows.length}行 → 指図 ${o.length}件(この端末の中だけで読みました・送信なし)`);
             return o;
         } catch (ex) { setOrders(null); setInfo(''); setErr('読めませんでした: ' + (ex && ex.message ? ex.message : ex)); return null; }
     };
@@ -164,6 +167,15 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                 <input type="file" accept=".xlsx" onChange={onFile} data-testid="sap-file" className="text-xs" />
                 <label className="text-xs">基準日 <input type="date" value={today} onChange={(e) => e.target.value && setToday(e.target.value)} className="border rounded px-1" /></label>
             </div>
+            {info && <p className="text-xs text-emerald-700 mb-2" data-testid="sap-info">{info}</p>}
+            {err && <p className="text-xs text-red-600 mb-2">{err}</p>}
+
+            {orders && (<>
+                <div className="mb-3 flex flex-wrap gap-2" role="tablist" data-testid="sap-entry-tabs">
+                    {[['inspect', '部品検査に いつ来るか'], ['machine', '機械グループ(こなせるか・試作)']].map(([k, l]) => <button key={k} type="button" role="tab" aria-selected={entry === k} onClick={() => setEntry(k)} data-sap-entry={k} className={`min-h-10 rounded-lg border-2 px-4 text-sm font-black ${entry === k ? 'border-cyan-600 bg-cyan-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{l}</button>)}
+                </div>
+                {entry === 'inspect' && <InspectArrivalSection baseOrders={baseOrders} todayIso={today} lots={lots} fileLabel={`SAP の表 ${fileName || ''}`} />}
+                {entry === 'machine' && (<>
             <div className="flex flex-wrap items-center gap-3 mb-2 text-xs bg-slate-50 border rounded p-2" data-testid="sap-settings">
                 <label>積み上げに使う時間 <select value={hoursMode} onChange={(e) => setHoursMode(e.target.value)} className="border rounded px-1">{HOURS_MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
                 <label>作業区の既定の台数 <input type="number" min="1" max="20" value={defCap} onChange={(e) => setDefCap(Math.max(1, Math.floor(Number(e.target.value) || 1)))} className="border rounded px-1 w-14" />(同時に何本まで)</label>
@@ -171,13 +183,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                 <label title="標準値2(機械)・標準値3(作業者)が 1個あたりの時間なら入れる。段取り(標準値1)は 1ロットにつき1回なので 数量は掛けません"><input type="checkbox" checked={perQty} onChange={(e) => setPerQty(e.target.checked)} data-testid="sap-perqty" /> 標準値2・3 に 数量を掛ける(1個あたりの時間の場合)</label>
                 <span className="text-slate-500">標準値 1=段取り・2=機械・3=作業者(清水さんの回答)。機械の占有時間=段取り+機械・作業者の時間=段取り+作業者。標準値2・3 が「1個あたり」か「1ロットあたり」かは未確認なので、既定は ロットあたり(数量を掛けない)です。日時は 工場カレンダー(平日 08:30-17:00・休憩あり)・前の工程が済んでから次・作業区ごとの台数・機械の占有時間で順に積んだ見込みです。</span>
             </div>
-            {info && <p className="text-xs text-emerald-700 mb-2" data-testid="sap-info">{info}</p>}
-            {err && <p className="text-xs text-red-600 mb-2">{err}</p>}
 
-            {orders && (<>
-                <SapInspectSection baseOrders={baseOrders} orders={orders} nowMs={nowMs} hoursMode={hk} actualsByItem={actualsByItem} lots={lots} initialDays={autoDays} initialSort={autoSort} />
-
-                <details className="mt-6 border-t pt-3" data-testid="sap-machine-proto" open={!!autoMg}><summary className="cursor-pointer font-bold">機械グループ(試作・見せ方は別に設計中)</summary>
                 <MachineGroupView initialOpen={autoMg && autoMg !== '1' ? autoMg : null} orders={orders} queue={queue} nowMs={nowMs} perQty={perQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} peopleMap={peopleMap} setPeopleMap={setPeopleMap} multiMap={multiMap} setMultiMap={setMultiMap} moves={moves} setMoves={setMoves} hoursMode={hk} />
 
                 <details className="mt-4 border-t pt-2"><summary className="cursor-pointer font-bold">前の見せ方(品目ごと/工程ごと/工程の一覧のタブ)</summary>
@@ -320,7 +326,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                         <tbody>{items.slice(0, 30).map((e) => <tr key={e.item} className="border-t"><td className="p-1">{e.item} <span className="text-slate-500">{e.itemText}</span></td><td className="p-1 text-right">{e.orderCount}</td><td className="p-1 text-right">{e.count}</td><td className="p-1 text-right">{e.stdHours}</td><td className="p-1 text-right">{e.actual}</td></tr>)}</tbody></table>
                 </details>
                 </details>
-                </details>
+                </>)}
             </>)}
         </section>
     );

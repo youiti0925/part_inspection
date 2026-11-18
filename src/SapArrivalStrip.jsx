@@ -5,7 +5,7 @@ import React, { useState } from 'react';
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 const fmt = (ms) => { const d = new Date(ms); return `${d.getMonth() + 1}/${d.getDate()}(${WD[d.getDay()]}) ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 const BY = { order: '指図番号が同じ', item: '品目コードが1対1', text: '品目テキストが1対1' };
-const BASIS = { sap: 'SAP 予定どおり', sim: 'シミュレーションで更新', actual: '検査開始済', unknown: '不明' };
+const BASIS = { sap: 'SAP 予定どおり', calc: '前工程の実績から逆算', sim: '前工程の実績から逆算', actual: '検査に着いている', unknown: '不明' };
 
 export function SapArrivalStrip({ applied = null }) {
     const [open, setOpen] = useState(false);
@@ -21,7 +21,7 @@ export function SapArrivalStrip({ applied = null }) {
                 <span>対応なし {unmatched.length}件</span>
                 <button type="button" onClick={() => setOpen(!open)} className="ml-auto min-h-8 rounded border border-cyan-400 bg-white px-2 font-black text-cyan-800" data-testid="sap-arrival-toggle">{open ? '閉じる' : '一覧を開く'}</button>
             </div>
-            <div className="text-slate-500">検査の手前の工程が近づいた物は前工程の実績から積み上げ直した日、遠い物は SAP の予定開始日。入荷の縦線は既存の「登録された入荷日」と同じ見た目で出ます(SAP 由来はこの帯の一覧で見分けます)。保存はしません・本番のロットには書きません。</div>
+            <div className="text-slate-500">近い物は前工程の実績+工程ごとの普段の日数で逆算した日、遠い物は SAP の検査予定日。止まっている物・予定を過ぎて未着手の物は日付を作らず入れません。入荷の縦線は既存の「登録された入荷日」と同じ見た目で出ます(SAP 由来はこの帯の一覧で見分けます)。保存はしません・本番のロットには書きません。</div>
             {open ? (
                 <div className="mt-2 grid gap-2 lg:grid-cols-2">
                     <div>
