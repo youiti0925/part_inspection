@@ -31,7 +31,7 @@ export function segOf(s) {
     const startMs = s.status === 'working' && s.actualStart ? msOf(s.actualStart, s.actualStartTime, '08:30') : msOf(s.planStart, s.planStartTime, '08:30');
     let endMs = msOf(s.planEnd, s.planEndTime, '17:00');
     if (startMs != null && endMs != null && endMs < startMs) endMs = startMs;
-    return { act: s.act, name: s.name, wc: s.wc, kind: s.kind, status: s.status, startMs, endMs, est: !!s.est, h: s.stdHours, planEndMs: msOf(sapEndOf(s), null, '17:00'), delayMs: s.est && s.status !== 'done' ? s.delayMs : null, origin: s.origin ? `${s.origin.name}(${s.origin.wc}) ${s.origin.day.slice(5)}` : '' };
+    return { act: s.act, name: s.name, wc: s.wc, kind: s.kind, status: s.status, startMs, endMs, est: !!s.est, h: s.stdHours, hJ: s.hJ, hL: s.hL, hN: s.hN, planEndMs: msOf(sapEndOf(s), null, '17:00'), delayMs: s.est && s.status !== 'done' ? s.delayMs : null, origin: s.origin ? `${s.origin.name}(${s.origin.wc}) ${s.origin.day.slice(5)}` : '' };
 }
 /** SAP の計画日(見込みで差し替わる前の元)。見込み(est)の工程は sapPlan*・見込みの無い工程は planStart/End がそのまま SAP の日付 */
 export const sapStartOf = (s) => (s.est ? s.sapPlanStart : s.planStart) || null;
@@ -50,7 +50,7 @@ function facts(dueMs, delayMs, finishMs, nowMs) {
 }
 
 /** ① 品目(指図)ごとの行。1行=機械の工程が残る1指図。棒=残りの工程を横に繋ぐ */
-export function orderRows(orders, { nowMs, hoursMode = 'sum' } = {}) {
+export function orderRows(orders, { nowMs, hoursMode = 'machine' } = {}) {
     const rows = [];
     for (const o of orders) {
         if (o.allDone || !o.stages.some((s) => s.kind === 'machine')) continue;
@@ -72,7 +72,7 @@ export function orderRows(orders, { nowMs, hoursMode = 'sum' } = {}) {
 }
 
 /** ② 工程(作業区グループ)ごと: その工程を まだ済ませていない指図の行。棒=その工程での作業・薄い棒=前の工程が済んでから始まるまでの待ち */
-export function stageRows(orders, name, { nowMs, hoursMode = 'sum' } = {}) {
+export function stageRows(orders, name, { nowMs, hoursMode = 'machine' } = {}) {
     const rows = [];
     for (const o of orders) {
         const st = chainOf(o);
@@ -96,7 +96,7 @@ export function stageRows(orders, name, { nowMs, hoursMode = 'sum' } = {}) {
 }
 
 /** ③ 工程(作業区グループ)そのものの一覧。opts: { capOf(wc)=>台数, queue(queueTable の結果), hoursMode } */
-export function laneSummary(orders, { hoursMode = 'sum', capOf = () => 1, queue = null, days = 14 } = {}) {
+export function laneSummary(orders, { hoursMode = 'machine', capOf = () => 1, queue = null, days = 14 } = {}) {
     const lanes = new Map();
     const L = (n, kind) => { if (!lanes.has(n)) lanes.set(n, { name: n, kind, now: 0, wait: 0, next: 0, waitH: 0, wcs: new Set() }); return lanes.get(n); };
     for (const o of orders) for (const s of chainOf(o)) L(s.name, s.kind).wcs.add(s.wc);

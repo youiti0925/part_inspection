@@ -2,17 +2,28 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildOrders, gaugeOf } from '../sapProgress.js';
-import { scheduleOrders, queueTable, hoursOf } from '../sapSchedule.js';
+import { scheduleOrders, queueTable, hoursOf, hoursKey } from '../sapSchedule.js';
 
 const D = (iso) => Math.round(Date.parse(iso + 'T00:00:00Z') / 86400000) + 25569;
 const at = (y, m, d, h = 0, mi = 0) => new Date(y, m - 1, d, h, mi).getTime();
 const NOW = at(2026, 11, 17, 8, 30);   // 火曜 08:30
 const stage = (A, B, C, D2, J, extra = {}) => ({ A, B, C, D: D2, J, U: 'X', V: 'x', F: 1, ...extra });
 
-test('SS01 標準時間の使い方を選べる(既定=合計)', () => {
+test('SS01 標準値の意味: 1=段取り・2=機械・3=作業者。機械の占有=段取り+機械(既定)・作業者=段取り+作業者・数量は 標準値2・3 だけに掛ける(切替・既定は掛けない)', () => {
     const s = { hJ: 1, hL: 2, hN: 0.5, qty: 3 };
-    assert.equal(hoursOf(s), 3.5); assert.equal(hoursOf(s, 'J'), 1); assert.equal(hoursOf(s, 'L'), 2);
-    assert.equal(hoursOf(s, 'N'), 0.5); assert.equal(hoursOf(s, 'JLq'), 7);
+    assert.equal(hoursOf(s), 3); assert.equal(hoursOf(s, 'machine'), 3); assert.equal(hoursOf(s, 'worker'), 1.5);
+    assert.equal(hoursOf(s, 'J'), 1); assert.equal(hoursOf(s, 'L'), 2); assert.equal(hoursOf(s, 'N'), 0.5); assert.equal(hoursOf(s, 'sum'), 3.5);
+    assert.equal(hoursOf(s, hoursKey('machine', false)), 3);
+    assert.equal(hoursOf(s, hoursKey('machine', true)), 1 + 2 * 3);   // 段取りは1ロット1回・機械は ×数量
+    assert.equal(hoursOf(s, hoursKey('worker', true)), 1 + 0.5 * 3);
+});
+
+test('SS01b 積み上げは 機械の占有時間(段取り+機械)で数える・作業者の時間(標準値3)では伸びない', () => {
+    const rows = [stage('1', '0010', '2385', '平面研削：a', 1, { L: 1, N: 5 })];   // 段取り1h + 機械1h = 2h・作業者 5h は別
+    const { orders: o } = scheduleOrders(buildOrders(rows), { nowMs: NOW });
+    assert.deepEqual([o[0].stages[0].planStartTime, o[0].stages[0].planEndTime], ['08:30', '10:40']);   // 2h(10時休憩10分をまたぐ)
+    const q = scheduleOrders(buildOrders([stage('1', '0010', '2385', '平面研削：a', 1, { L: 1, F: 3 })]), { nowMs: NOW, hoursMode: hoursKey('machine', true) }).orders[0].stages[0];
+    assert.equal(q.planEndTime, '13:25');   // 1 + 1×3 = 4h(10時休憩・昼休憩をまたぐ)
 });
 
 test('SS02 1本の指図: 前の工程が終わると次が始まる・休憩を飛ばして時刻が出る', () => {

@@ -70,3 +70,24 @@ test('SC07 マスを押した時の一覧: 工程ごとの行のうち その週
     assert.deepEqual(sr.filter((r) => rowInWeek(r, w[0], 0, NOW)).map((r) => r.orderNo).sort(), ['1', '3']);
     assert.deepEqual(sr.filter((r) => rowInWeek(r, w[1], 1, NOW)).map((r) => r.orderNo), ['2']);
 });
+
+test('SC08 機械と人を別に数える: 機械=段取り+機械・人=段取り+作業者。機械は足りても人が足りない/その逆', () => {
+    // 窓 11/17〜11/20(4日=31h/台・人)。段取り 2h + 機械 20h + 作業者 40h
+    const rows = [st('1', '0010', '2385', '平面研削:a', 2, { L: 20, N: 40, R: D('2026-11-17'), S: D('2026-11-20') })];
+    const { t } = run(rows, { resources: ['machine', 'worker'] });
+    const m = t.rows.find((r) => r.res === 'machine'), w = t.rows.find((r) => r.res === 'worker');
+    assert.equal(m.cells[0].demand, 22); assert.equal(m.cells[0].level, 'green');            // 22 ÷ 31 = 71%
+    assert.equal(w.cells[0].demand, 42); assert.equal(w.cells[0].level, 'red');              // 42 > 31 → 人が足りない
+    assert.equal(w.cells[0].slack, -11); assert.match(w.hint.text, /残業 1日.*×1人/);
+    assert.equal(t.byRes.machine.cannotNow, 0); assert.equal(t.byRes.worker.cannotNow, 1); assert.equal(t.totals.shortNow, 11);
+    // 人数を増やすと足りる(既定は台数と同じ=1人)
+    const t2 = run(rows, { resources: ['worker'], peopleOf: () => 2 }).t;
+    assert.equal(t2.rows[0].units, 2); assert.equal(t2.rows[0].cells[0].level, 'green');    // 42/62 = 68%
+});
+
+test('SC09 標準値2・3 を ×数量 に切り替えると 必要量が増える(既定=ロットあたり)', () => {
+    const rows = [st('1', '0010', '2385', '平面研削:a', 1, { L: 2, N: 1, F: 4, R: D('2026-11-17'), S: D('2026-11-20') })];
+    const lot = run(rows, { resources: ['machine', 'worker'] }).t, qty = run(rows, { resources: ['machine', 'worker'], perQty: true }).t;
+    assert.deepEqual(lot.rows.map((r) => r.cells[0].demand), [3, 2]);    // 機械 1+2・人 1+1
+    assert.deepEqual(qty.rows.map((r) => r.cells[0].demand), [9, 5]);    // 機械 1+2×4・人 1+1×4
+});

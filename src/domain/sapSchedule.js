@@ -15,21 +15,31 @@
 import { addWorkSeconds, DEFAULT_WORK_SCHEDULE, timeStrToMinutes } from './workClock.js';
 import { summarizeOrder } from './sapProgress.js';
 
-/** 標準値1〜3 の意味は未確認。どれを時間に使うかを選べる(既定=3つの合計) */
+/** 標準値の意味(清水さん 11-18): 標準値1=段取り・標準値2=機械・標準値3=作業者。
+ *  機械(作業区)の占有時間 = 段取り + 機械 / 作業者の時間 = 段取り + 作業者。
+ *  標準値2・3 が「1個あたり」か「1ロットあたり」かは未確認 → 既定は ロットあたり(数量を掛けない)。mode の末尾に '*' を付けると 標準値2・3 に数量を掛ける。
+ *  段取りは 1ロットにつき1回なので 数量は掛けない。 */
 export const HOURS_MODES = [
-    ['sum', '標準値1+2+3 の合計(既定)'],
-    ['J', '標準値1 だけ'],
-    ['L', '標準値2 だけ'],
-    ['N', '標準値3 だけ'],
-    ['JLq', '標準値1 + 標準値2×作業数量'],
+    ['machine', '機械の占有時間 = 段取り(標準値1)+ 機械(標準値2)(既定)'],
+    ['worker', '作業者の時間 = 段取り(標準値1)+ 作業者(標準値3)'],
+    ['J', '段取り(標準値1)だけ'],
+    ['L', '機械(標準値2)だけ'],
+    ['N', '作業者(標準値3)だけ'],
+    ['sum', '3つの合計(旧い見方)'],
 ];
-export const hoursOf = (s, mode = 'sum') => {
-    const J = s.hJ || 0, L = s.hL || 0, N = s.hN || 0;
-    if (mode === 'J') return J;
-    if (mode === 'L') return L;
-    if (mode === 'N') return N;
-    if (mode === 'JLq') return J + L * Math.max(1, s.qty || 1);
-    return J + L + N;
+/** 画面の選び(mode と 数量を掛けるか)→ hoursOf に渡す鍵 */
+export const hoursKey = (mode, perQty) => (perQty ? mode + '*' : mode);
+export const hoursOf = (s, mode = 'machine') => {
+    const perQty = typeof mode === 'string' && mode.endsWith('*');
+    const m = perQty ? mode.slice(0, -1) : mode;
+    const q = perQty ? Math.max(1, s.qty || 1) : 1;
+    const J = s.hJ || 0, L = (s.hL || 0) * q, N = (s.hN || 0) * q;
+    if (m === 'J') return J;
+    if (m === 'L') return L;
+    if (m === 'N') return N;
+    if (m === 'worker') return J + N;
+    if (m === 'sum') return J + L + N;
+    return J + L;   // machine
 };
 
 const p2 = (n) => String(n).padStart(2, '0');
@@ -54,7 +64,7 @@ const dayEndMs = (iso, schedule) => dayStartMs(iso, { ...schedule, dayStart: sch
 const HOUR = 3600000;
 
 /** 指図の配列 → { orders: 見込み日時を入れた指図の配列, origins: キャパオーバーの起点(超えた時間の多い順) } */
-export function scheduleOrders(orders, { nowMs, capacity = {}, defaultCapacity = 1, hoursMode = 'sum', usePlanStart = true, schedule = DEFAULT_WORK_SCHEDULE, calendar = null } = {}) {
+export function scheduleOrders(orders, { nowMs, capacity = {}, defaultCapacity = 1, hoursMode = 'machine', usePlanStart = true, schedule = DEFAULT_WORK_SCHEDULE, calendar = null } = {}) {
     const capOf = (wc) => Math.max(1, Math.floor(Number(capacity[wc] ?? defaultCapacity) || 1));
     const slots = new Map();   // 作業区 → 台ごとの「空く時刻」
     const slotsOf = (wc) => { if (!slots.has(wc)) slots.set(wc, new Array(capOf(wc)).fill(nowMs)); return slots.get(wc); };

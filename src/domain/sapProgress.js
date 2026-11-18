@@ -66,7 +66,7 @@ export function toStage(r) {
         planStart: serialToIso(r.R), planEnd: serialToIso(r.S),
         actualStartTime: serialToTime(r.H), actualEndTime: serialToTime(r.I), planStartTime: serialToTime(r.R), planEndTime: serialToTime(r.S),
         hJ: num(r.J), hL: num(r.L), hN: num(r.N),
-        stdHours: Math.round((num(r.J) + num(r.L) + num(r.N)) * 1000) / 1000,
+        stdHours: Math.round((num(r.J) + num(r.L)) * 1000) / 1000,   // 機械の占有時間 = 段取り(標準値1)+機械(標準値2)
         item: String(r.U ?? ''), itemText: String(r.V ?? ''),
     };
 }

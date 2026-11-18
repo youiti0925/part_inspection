@@ -152,7 +152,7 @@ function DetailStrip({ r }) {
             <div className="mt-1 grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-1">
                 {(r.segs || []).map((g) => (
                     <div key={g.act} className="rounded border border-slate-200 bg-white px-2 py-1">
-                        <b>{g.name}</b>({g.wc}) <span className="text-slate-500">{g.status === 'working' ? '作業中' : '未'} ・{g.h}h</span>
+                        <b>{g.name}</b>({g.wc}) <span className="text-slate-500">{g.status === 'working' ? '作業中' : '未'} ・段取り {g.hJ}h・機械 {g.hL}h・作業者 {g.hN}h</span>
                         <div className="tabular-nums">{g.status === 'working' ? '実績開始' : '≈'}{fmtMDHM(g.startMs)} → ≈{fmtMDHM(g.endMs)}</div>
                         <div className="tabular-nums text-amber-700">▲計画終了 {fmtMD(g.planEndMs)}{g.delayMs > 0 ? <b className="ml-1 text-rose-600">{`+${Math.ceil(g.delayMs / DAY)}日`}</b> : null}</div>
                         {g.origin ? <div className="text-slate-500">遅れの元: {g.origin}</div> : null}
@@ -332,8 +332,8 @@ function StatCards({ st }) {
 const LEVEL_CLS = { green: 'border-emerald-300 bg-emerald-50 text-emerald-800', yellow: 'border-amber-300 bg-amber-50 text-amber-900', red: 'border-rose-300 bg-rose-100 text-rose-700' };
 
 /** こなせるか表: 行=工程・列=週・マス=必要な標準時間 ÷ 使える時間(緑<90%・黄90〜100%・赤>100%=足りない時間) */
-function CapacityTable({ cap, passRate, onPick, set, capOf, setLaneCap }) {
-    const { weeks, rows, totals } = cap;
+function CapacityTable({ cap, passRate, onPick, set, capOf, setLaneCap, peopleOf, setPeople }) {
+    const { weeks, rows, totals, byRes } = cap;
     const card = (k, v, small, bad) => (
         <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
             <div className="text-xs text-slate-500">{k}</div>
@@ -344,27 +344,30 @@ function CapacityTable({ cap, passRate, onPick, set, capOf, setLaneCap }) {
     return (
         <div className="mb-3" data-testid="sap-capacity">
             <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                {card('今週こなせない工程', `${totals.cannotNow}`, `/ ${rows.length}工程`, totals.cannotNow > 0)}
-                {card('今週足りない時間の合計', `${totals.shortNow}h`, '', totals.shortNow > 0)}
+                {card('今週こなせない工程', `${totals.cannotNow}`, `/ ${rows.length}行${set.view === 'both' ? `(機械 ${byRes.machine.cannotNow}・人 ${byRes.worker.cannotNow})` : ''}`, totals.cannotNow > 0)}
+                {card('今週足りない時間の合計', `${totals.shortNow}h`, set.view === 'both' ? `(機械 ${byRes.machine.shortNow}h・人 ${byRes.worker.shortNow}h)` : '', totals.shortNow > 0)}
                 {card('計画どおり終わる指図の割合', passRate == null ? '—' : `${Math.round(passRate * 100)}%`, '積み上げの見込みが SAP の計画終了に収まる指図', passRate != null && passRate < 0.9)}
             </div>
             <div className="mb-1 flex flex-wrap items-center gap-3 text-xs" data-testid="sap-capacity-settings">
                 <b className="text-sm text-slate-900">こなせるか表</b>
-                <span className="text-slate-500">マス = 必要な標準時間 ÷ 使える時間(台数×稼働時間×稼働日)</span>
+                <span className="text-slate-500">マス = 必要な標準時間 ÷ 使える時間(台数または人数×稼働時間×稼働日)</span>
                 <label>残業 1日 <input type="number" min="0" max="4" step="0.5" value={set.ot} onChange={(e) => set.setOt(Math.max(0, Math.min(4, Number(e.target.value) || 0)))} className="w-14 rounded border border-slate-300 px-1" data-testid="sap-ot" /> h</label>
                 <label><input type="checkbox" checked={set.sat} onChange={(e) => set.setSat(e.target.checked)} data-testid="sap-sat" /> 土曜も出る</label>
+                <label>見る <select value={set.view} onChange={(e) => set.setView(e.target.value)} className="rounded border border-slate-300 px-1" data-testid="sap-capview"><option value="both">機械と人</option><option value="machine">機械だけ</option><option value="worker">人だけ</option></select></label>
                 <label>週の数 <select value={set.weeks} onChange={(e) => set.setWeeks(Number(e.target.value))} className="rounded border border-slate-300 px-1">{[4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
                 <div className="grid items-end gap-1 border-b-2 border-slate-200 px-2 py-1 text-2xs font-black text-slate-500" style={GRIDC}>
-                    <span>工程</span><span title="各作業区の台数(同時に何本まで)。変えると表がすぐ変わります">台数</span>
+                    <span>工程</span><span title="機械=各作業区の台数(同時に何本まで)・人=その工程の人数(既定は台数と同じ)。変えると表がすぐ変わります">台数・人数</span>
                     {weeks.map((w) => <span key={w.startMs} className="text-center" title={`${w.work}稼働日${w.sat ? `(土曜 ${w.sat}日)` : ''}`}>{w.name}<br /><span className="font-normal">{w.label}</span></span>)}
                     <span>どうすれば足りるか(足りない週の目安)</span>
                 </div>
                 {rows.map((r) => (
-                    <div key={r.name} className="grid items-center gap-1 border-b border-slate-100 px-2 py-1" style={GRIDC} data-cap-row={r.name}>
-                        <span className="flex items-center gap-1.5 truncate text-sm font-black text-slate-900"><Avatar name={r.name} tone={toneOfLane(r.name)} size="w-6 h-6" showName={false} />{r.name}</span>
-                        <label className="text-2xs text-slate-600" title={`作業区 ${r.wcs.join(' / ')}`}>各<input type="number" min="1" max="20" value={capOf(r.wcs[0])} onChange={(e) => setLaneCap(r.wcs, Math.max(1, Math.floor(Number(e.target.value) || 1)))} className="mx-0.5 w-11 rounded border border-slate-300 px-1 text-xs" />台 ×作業区{r.wcs.length}つ=<b>{r.dai}台</b></label>
+                    <div key={r.name + r.res} className={`grid items-center gap-1 border-b border-slate-100 px-2 py-1 ${r.res === 'worker' ? 'bg-slate-50' : ''}`} style={GRIDC} data-cap-row={r.name} data-cap-res={r.res}>
+                        <span className="flex items-center gap-1.5 truncate text-sm font-black text-slate-900">{r.res === 'worker' ? <span className="ml-2 truncate text-2xs font-bold text-slate-600">└ {r.name} 人(段取り+作業者)</span> : <><Avatar name={r.name} tone={toneOfLane(r.name)} size="w-6 h-6" showName={false} />{r.name}{set.view === 'both' ? <span className="text-xs font-bold text-slate-500">機械</span> : null}</>}</span>
+                        {r.res === 'worker'
+                            ? <label className="text-2xs text-slate-600" title="この工程で働く人数(既定は台数と同じ)"><input type="number" min="1" max="99" value={peopleOf(r.name, r.dai)} onChange={(e) => setPeople(r.name, Math.max(1, Math.floor(Number(e.target.value) || 1)))} className="mx-0.5 w-11 rounded border border-slate-300 px-1 text-xs" />人</label>
+                            : <label className="text-2xs text-slate-600" title={`作業区 ${r.wcs.join(' / ')}`}>各<input type="number" min="1" max="20" value={capOf(r.wcs[0])} onChange={(e) => setLaneCap(r.wcs, Math.max(1, Math.floor(Number(e.target.value) || 1)))} className="mx-0.5 w-11 rounded border border-slate-300 px-1 text-xs" />台 ×作業区{r.wcs.length}つ=<b>{r.dai}台</b></label>}
                         {r.cells.map((c, i) => (
                             <button key={i} type="button" data-cap-cell={`${r.name}|${i}`} data-level={c.level} onClick={() => onPick(r.name, i)}
                                 className={`min-h-12 rounded-lg border px-1 py-0.5 text-center leading-tight hover:ring-2 hover:ring-cyan-400 ${LEVEL_CLS[c.level]}`}
@@ -378,14 +381,14 @@ function CapacityTable({ cap, passRate, onPick, set, capOf, setLaneCap }) {
                 ))}
                 {rows.length === 0 ? <p className="p-3 text-center text-xs text-slate-500">必要な標準時間のある工程がありません</p> : null}
             </div>
-            <p className="mt-1 text-2xs text-slate-500">必要な時間 = まだ済んでいない工程の標準時間を、SAP の計画の窓(最早実行開始日〜終了日)の稼働日に均等に置いた量(窓が過ぎた遅れ分は今週に積む)。緑 &lt;90% ・黄 90〜100% ・赤 &gt;100%(足りない時間)。使える時間 = 台数 ×(定時 7.75h＋残業)× 稼働日(今週は今日から)。</p>
+            <p className="mt-1 text-2xs text-slate-500">必要な時間 = まだ済んでいない工程の標準時間(機械=段取り+機械・人=段取り+作業者)を、SAP の計画の窓(最早実行開始日〜終了日)の稼働日に均等に置いた量(窓が過ぎた遅れ分は今週に積む)。緑 &lt;90% ・黄 90〜100% ・赤 &gt;100%(足りない時間)。使える時間 = 台数(人は人数)×(定時 7.75h＋残業)× 稼働日(今週は今日から)。</p>
         </div>
     );
 }
 
 const TABS = [['order', '品目(指図)ごと'], ['stage', '工程ごと'], ['lanes', '工程の一覧'], ['inspect', '部品検査に届く見込み']];
 
-export default function SapDueSection({ baseOrders, orders, queue, origins, nowMs, hoursMode, defCap, capMap, setCapMap, actualsByItem = {}, initialTab = 'order', initialDays = null, initialStage = null, initialSort = null }) {
+export default function SapDueSection({ baseOrders, orders, queue, origins, nowMs, hoursMode, defCap, capMap, setCapMap, perQty = false, actualsByItem = {}, initialTab = 'order', initialDays = null, initialStage = null, initialSort = null }) {
     const [tab, setTab] = useState(initialTab);
     const [sortKey, setSortKey] = useState(SORTS.includes(initialSort) ? initialSort : DUE_SORT.LATE);
     const [q, setQ] = useState('');
@@ -396,6 +399,9 @@ export default function SapDueSection({ baseOrders, orders, queue, origins, nowM
     const [ot, setOt] = useState(0);
     const [sat, setSat] = useState(false);
     const [nWeeks, setNWeeks] = useState(5);
+    const [view, setView] = useState('both');   // こなせるか表: 機械 / 人 / 両方
+    const [peopleMap, setPeopleMap] = useState({});   // 工程ごとの人数(指定した物だけ・既定は台数と同じ)
+    const peopleOf = (name, dai) => peopleMap[name] ?? dai;
     const [weekSel, setWeekSel] = useState(null);   // こなせるか表のマスから来た時: 週の番号
     const limit = 30;
     const capOf = (wc) => capMap[wc] ?? defCap;
@@ -407,7 +413,7 @@ export default function SapDueSection({ baseOrders, orders, queue, origins, nowM
     const oRows = useMemo(() => orderRows(orders, { nowMs, hoursMode }), [orders, nowMs, hoursMode]);
     const lanes = useMemo(() => laneSummary(orders, { hoursMode, capOf, queue, days: 14 }), [orders, hoursMode, queue, capMap, defCap]); // eslint-disable-line react-hooks/exhaustive-deps
     const st = useMemo(() => boardStats(oRows, lanes, origins), [oRows, lanes, origins]);
-    const cap = useMemo(() => capacityTable(orders, { nowMs, weeks: nWeeks, hoursMode, capOf, otHours: ot, saturday: sat }), [orders, nowMs, nWeeks, hoursMode, capMap, defCap, ot, sat]); // eslint-disable-line react-hooks/exhaustive-deps
+    const cap = useMemo(() => capacityTable(orders, { nowMs, weeks: nWeeks, perQty, capOf, peopleOf, resources: view === 'both' ? ['machine', 'worker'] : [view], otHours: ot, saturday: sat }), [orders, nowMs, nWeeks, perQty, capMap, defCap, ot, sat, view, peopleMap]); // eslint-disable-line react-hooks/exhaustive-deps
     const passRate = oRows.length ? oRows.filter((r) => r.lateDays == null && r.tier !== DUE_TIER.PAST).length / oRows.length : null;
     const setLaneCap = (wcs, n) => { const m = { ...capMap }; wcs.forEach((wc) => { m[wc] = n; }); setCapMap(m); };
     const pickCell = (name, wi) => { setStageName(name); setWeekSel(wi); setTab('stage'); setOpenAllMap({}); const w = cap.weeks[wi]; if (w) setDays((d) => Math.max(d, Math.ceil((w.endMs - nowMs) / DAY) + 1)); };
@@ -426,7 +432,7 @@ export default function SapDueSection({ baseOrders, orders, queue, origins, nowM
     );
     return (
         <div data-testid="sap-due">
-            <CapacityTable cap={cap} passRate={passRate} onPick={pickCell} set={{ ot, setOt, sat, setSat, weeks: nWeeks, setWeeks: setNWeeks }} capOf={capOf} setLaneCap={setLaneCap} />
+            <CapacityTable cap={cap} passRate={passRate} onPick={pickCell} set={{ ot, setOt, sat, setSat, weeks: nWeeks, setWeeks: setNWeeks, view, setView }} capOf={capOf} setLaneCap={setLaneCap} peopleOf={peopleOf} setPeople={(n, v) => setPeopleMap({ ...peopleMap, [n]: v })} />
             <StatCards st={st} />
             <div className="mb-2 flex flex-wrap gap-1" role="tablist">
                 {TABS.map(([k, l]) => <button key={k} type="button" role="tab" onClick={() => setTab(k)} data-sap-tab={k} className={`min-h-9 rounded-lg border-2 px-3 text-sm font-black ${tab === k ? 'border-cyan-600 bg-cyan-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{l}{k === 'inspect' ? `(${fc.counts.total})` : k === 'order' ? `(${oRows.length})` : ''}</button>)}

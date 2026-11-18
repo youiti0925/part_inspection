@@ -6,7 +6,7 @@
 // 確かめ方: sap-demo.html で実データを選ぶ
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { readSapXlsx } from './domain/sapXlsx.js';
-import { scheduleOrders, queueTable, HOURS_MODES } from './domain/sapSchedule.js';
+import { scheduleOrders, queueTable, HOURS_MODES, hoursKey } from './domain/sapSchedule.js';
 import SapDueSection from './SapDueList.jsx';
 import { baseNowMs } from './domain/sapBoard.js';
 import { buildOrders, reachList, loadByGroup, loadByWorkCenter, itemSummary, gaugeOf, stageView, handoffList, dailyLoad, STATUS_LABEL } from './domain/sapProgress.js';
@@ -79,12 +79,14 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
     const [stageKey, setStageKey] = useState(null);   // 工程中心の見方: 機械グループ名
     const [stageWc, setStageWc] = useState('');       // 作業区で更に絞る(空=グループ全体)
     const stageRef = useRef(null);
-    const [hoursMode, setHoursMode] = useState('sum');      // 標準値1〜3 のどれを時間に使うか(意味は未確認・既定=合計)
+    const [hoursMode, setHoursMode] = useState('machine');  // 標準値の使い方(1=段取り・2=機械・3=作業者)。既定=機械の占有時間=段取り+機械
+    const [perQty, setPerQty] = useState(false);            // 標準値2・3 が1個あたりなら ×数量(未確認なので既定=ロットあたり=掛けない)
+    const hk = hoursKey(hoursMode, perQty);
     const [defCap, setDefCap] = useState(1);                // 作業区の既定の台数(同時に何本まで)
     const [capMap, setCapMap] = useState({});               // 作業区ごとの台数(指定した物だけ)
     const [usePlanStart, setUsePlanStart] = useState(true); // SAP の計画開始日(R)より前には始めない
     const nowMs = useMemo(() => baseNowMs(today), [today]);   // 積み上げの基準時刻 = 基準日の始業 08:30(実行した時刻にしない)
-    const sched = useMemo(() => (baseOrders ? scheduleOrders(baseOrders, { nowMs, capacity: capMap, defaultCapacity: defCap, hoursMode, usePlanStart }) : null), [baseOrders, nowMs, capMap, defCap, hoursMode, usePlanStart]);
+    const sched = useMemo(() => (baseOrders ? scheduleOrders(baseOrders, { nowMs, capacity: capMap, defaultCapacity: defCap, hoursMode: hk, usePlanStart }) : null), [baseOrders, nowMs, capMap, defCap, hk, usePlanStart]);
     const orders = sched ? sched.orders : null;
     const queue = useMemo(() => (sched ? queueTable(sched.waits, nowMs, { days: 21 }) : null), [sched, nowMs]);
 
@@ -147,16 +149,17 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                 <label className="text-xs">基準日 <input type="date" value={today} onChange={(e) => e.target.value && setToday(e.target.value)} className="border rounded px-1" /></label>
             </div>
             <div className="flex flex-wrap items-center gap-3 mb-2 text-xs bg-slate-50 border rounded p-2" data-testid="sap-settings">
-                <label>標準時間に使う値 <select value={hoursMode} onChange={(e) => setHoursMode(e.target.value)} className="border rounded px-1">{HOURS_MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
+                <label>積み上げに使う時間 <select value={hoursMode} onChange={(e) => setHoursMode(e.target.value)} className="border rounded px-1">{HOURS_MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
                 <label>作業区の既定の台数 <input type="number" min="1" max="20" value={defCap} onChange={(e) => setDefCap(Math.max(1, Math.floor(Number(e.target.value) || 1)))} className="border rounded px-1 w-14" />(同時に何本まで)</label>
                 <label><input type="checkbox" checked={usePlanStart} onChange={(e) => setUsePlanStart(e.target.checked)} /> SAP の計画開始日(最早実行開始日)より前には始めない</label>
-                <span className="text-slate-500">※標準値1〜3 の意味は未確認。日時は 工場カレンダー(平日 08:30-17:00・休憩あり)・前の工程が済んでから次・作業区ごとの台数・標準時間で順に積んだ見込みです。</span>
+                <label title="標準値2(機械)・標準値3(作業者)が 1個あたりの時間なら入れる。段取り(標準値1)は 1ロットにつき1回なので 数量は掛けません"><input type="checkbox" checked={perQty} onChange={(e) => setPerQty(e.target.checked)} data-testid="sap-perqty" /> 標準値2・3 に 数量を掛ける(1個あたりの時間の場合)</label>
+                <span className="text-slate-500">標準値 1=段取り・2=機械・3=作業者(清水さんの回答)。機械の占有時間=段取り+機械・作業者の時間=段取り+作業者。標準値2・3 が「1個あたり」か「1ロットあたり」かは未確認なので、既定は ロットあたり(数量を掛けない)です。日時は 工場カレンダー(平日 08:30-17:00・休憩あり)・前の工程が済んでから次・作業区ごとの台数・機械の占有時間で順に積んだ見込みです。</span>
             </div>
             {info && <p className="text-xs text-emerald-700 mb-2" data-testid="sap-info">{info}</p>}
             {err && <p className="text-xs text-red-600 mb-2">{err}</p>}
 
             {orders && (<>
-                <SapDueSection baseOrders={baseOrders} orders={orders} queue={queue} origins={sched.origins} nowMs={nowMs} hoursMode={hoursMode} defCap={defCap} capMap={capMap} setCapMap={setCapMap} actualsByItem={actualsByItem} initialTab={autoTab} initialDays={autoDays} initialSort={autoSort} initialStage={autoStage} />
+                <SapDueSection baseOrders={baseOrders} orders={orders} queue={queue} origins={sched.origins} nowMs={nowMs} hoursMode={hk} perQty={perQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} actualsByItem={actualsByItem} initialTab={autoTab} initialDays={autoDays} initialSort={autoSort} initialStage={autoStage} />
 
                 <details className="mt-6 border-t pt-3" data-testid="sap-old-tables"><summary className="cursor-pointer font-bold">くわしい表(前の画面: 表とゲージ)</summary>
                 <h3 className="font-bold mt-3 mb-1">遅れの起点トップ5 <span className="text-xs font-normal text-slate-500">(どの作業区のどの日に能力=台数を超えて待たされたか・その遅れが後ろの工程と指図へ波及)</span></h3>
@@ -232,7 +235,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                     </table>
                 </div>
 
-                <h3 className="font-bold mt-4 mb-1">② 機械グループごとの負荷 <span className="text-xs font-normal text-slate-500">(未完了の標準時間=標準値1〜3の合計・H)</span></h3>
+                <h3 className="font-bold mt-4 mb-1">② 機械グループごとの負荷 <span className="text-xs font-normal text-slate-500">(未完了の機械の占有時間=段取り+機械・H)</span></h3>
                 <div data-testid="sap-load">
                     {groups.filter((g) => g.kind === 'machine').map((g) => (
                         <div key={g.name} className="mb-1">
