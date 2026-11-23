@@ -77,7 +77,9 @@ export function arrivalForecast(orders, { todayIso, shipByOrder = null } = {}) {
         const stuckNow = !ooo && (state === 'near' || state === 'mid') && idle > Math.max(L0.p90, STUCK_MIN_DAYS);
 
         let kind, arrive = null, segs = [], why = '', short = '', tag = null, sapAsIs = false;
-        if (state === 'here') { kind = 'here'; arrive = D(lastDone) - T; }
+        if (state === 'here' && lastDone) { kind = 'here'; arrive = D(lastDone) - T; }
+        // 検査が最初の工程(手前の工程が無く・済も無い): 着いた日が分からない。日付を作らず「不明」(以前は D(null) が NaN になり画面ごと落ちた・実データで 356 指図中 6 件)
+        else if (state === 'here') { kind = 'unknown'; short = '検査が最初の工程'; why = '手前の工程が表に無く、着いた日が分かりません(検査が最初の工程)。'; }
         else if (ooo) { kind = 'unknown'; short = '完了の入力もれ?'; why = `後ろの工程が済んでいるのに ${nmOf(cur)} が未完了のままです(完了の入力もれと思われます)。検査に着く日は出せません。`; }
         else if (stuckNow) { kind = 'stuck'; tag = idle; why = `${nmOf(cur)} の前で ${idle}日 動きがありません(普段は ${L0.med}日・長い時でも ${L0.p90}日)。動き出す日が分からないので、検査に着く日は出せません。`; }
         else if (sap == null) { kind = 'unknown'; short = '検査の予定日なし'; why = 'SAP に検査の予定日が入っていません。'; }

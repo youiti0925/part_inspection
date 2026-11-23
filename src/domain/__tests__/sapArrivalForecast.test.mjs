@@ -106,3 +106,10 @@ test('FA11 上の 4 つの数字と並び: 遅れ → 止まり → 日付が出
     assert.deepEqual([r.sum.late, r.sum.stuck, r.sum.unknown, r.sum.here, r.sum.ontime], [1, 1, 1, 1, 1]);
     assert.equal(r.sum.total, 5); assert.equal(r.sum.week, 2);   // 今週(〜日曜 11/22)に着く: 1 と 4
 });
+
+test('FA12 検査が最初の工程(手前も済も無い)でも落ちない・日付を作らず「不明」(実データ 6 件で NaN になり画面ごと落ちた)', () => {
+    const r = run([INSP('1', '2026-12-10')]).rows[0];
+    assert.equal(r.kind, 'unknown'); assert.equal(r.arrive, null); assert.equal(r.arriveIso, null); assert.match(r.why, /最初の工程/);
+    const all = run([INSP('1', '2026-12-10'), st('2', '0010', '2385', '平面研削:a', done('2026-11-16')), INSP('2', '2026-11-30')]);
+    assert.equal(all.rows.length, 2);   // 他の指図の行は これまで通り出る
+});
