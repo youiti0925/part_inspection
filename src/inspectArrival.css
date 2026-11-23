@@ -117,3 +117,14 @@
 .ia .dh .rel{display:block;font-size:0.75rem;font-weight:900;color:#0f172a;margin-top:0.125rem}
 .ia .dh{font-weight:900;color:#0f172a}
 .ia .dh.today{color:#fff}
+
+/* 狭い画面(スマホ 375px など): 一覧(見出し・棒グラフ)を 最低幅のある箱に入れ 箱の中で 横にスクロールする。
+   つぶさない理由: 名前の列が 10.5rem・棒が 50px ほどになり 品名が切れ・棒が右で切れ・見出しが重なる。PC 幅(821px〜)は 今までと同じ(箱は 幅いっぱい・最低幅なし) */
+.ia .scrollhint{display:none;margin:0 0 0.25rem;font-size:0.75rem;font-weight:700;color:#64748b}
+.ia .ia-scroll{overflow-x:auto;padding-left:0.5rem;margin-left:-0.5rem}
+@media (max-width:820px){
+  .ia .scrollhint{display:block}
+  .ia .ia-scroll-in{min-width:48rem}
+  .ia .grid{grid-template-columns:13rem 5rem 1fr}
+  .ia .grp{white-space:nowrap}
+}

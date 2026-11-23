@@ -160,7 +160,8 @@ export default function InspectArrivalView({ forecast, shipIsMock = true, fileLa
                 <button type="button" className="btn" style={{ marginLeft: '0.5rem' }} aria-pressed={filter === 'over'} onClick={() => { setFilter(filter === 'over' ? 'all' : 'over'); }}>リミット越え {overCount}件{real ? '' : '(作り物)'}</button>
                 <button type="button" className="btn" style={{ marginLeft: '0.5rem' }} aria-pressed={zig} onClick={() => setZig(!zig)}>イナズマ線を重ねる</button>
                 <span className="other">全 {S.total}件(ほかに もう検査に着いている {S.here}件・日付が出せない {S.unknown}件)</span></div>
-            <div>
+            <p className="scrollhint" data-testid="sap-ia-scrollhint">棒グラフは 左右に スクロールできます →</p>
+            <div className="ia-scroll" data-testid="sap-ia-scroll"><div className="ia-scroll-in">
                 <div dangerouslySetInnerHTML={{ __html: hdrHtml }} />
                 {GROUPS.map(([k, title, hint, f]) => {
                     const g = list.filter(f); if (!g.length) return null;
@@ -174,7 +175,7 @@ export default function InspectArrivalView({ forecast, shipIsMock = true, fileLa
                     );
                 })}
                 {!list.length ? <div className="foot">この条件の指図はありません。</div> : null}
-            </div>
+            </div></div>
             <div className="foot">検査に着く見込み: 残りの機械工程が 1 つ以下の物 = 前の工程の実績 + 工程ごとの普段の日数 / それより手前の物 = SAP の予定どおり(ただし SAP の予定がもう過ぎた・普段の日数では間に合わない物は 普段の日数で出す)。止まっている物・予定を過ぎて未着手の物・完了の入力もれらしい物は 日付を作らず「不明」と出します。土日は休みとして描いています(会社の暦は未反映)。SAP には「作業中」の記録が無いので、済んだ日だけを使っています。</div>
         </div>
     );
