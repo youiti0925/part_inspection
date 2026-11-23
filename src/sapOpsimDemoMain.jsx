@@ -59,3 +59,4 @@ function Demo() {
     );
 }
 createRoot(document.getElementById('root')).render(<Demo />);
+export default Demo;   // 画面部品だけを出す(react-refresh の規則を満たす・入口なので他からは読まない)

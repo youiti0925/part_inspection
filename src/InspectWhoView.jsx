@@ -8,7 +8,7 @@ import './inspectArrival.css';
 import './inspectWho.css';
 import { allocate, WORK, ASSUMED_MIN } from './domain/sapInspectAlloc.js';
 
-export const MOCK_INSPECTORS = ['佐藤', '鈴木', '高橋'];   // 作り物の名前(本番は読まない)
+const MOCK_INSPECTORS = ['佐藤', '鈴木', '高橋'];   // 作り物の名前(本番は読まない)
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 const TONES = ['#3b82f6', '#14b8a6', '#8b5cf6', '#d946ef', '#0ea5e9'];
 const MODES = { week: { days: 7, label: '1 週間', px: null }, month: { days: 31, label: '1 か月', px: 76 } };
@@ -80,11 +80,15 @@ export default function InspectWhoView({ forecast, inspectors = null, shipIsMock
     const [mode, setMode] = useState(MODES[initialMode] ? initialMode : 'week');
     const names = inspectors && inspectors.length ? inspectors : MOCK_INSPECTORS;
     const namesMock = !(inspectors && inspectors.length);
+    // 検査者の名前の並びが同じなら 組み直さない(親が毎回新しい配列を渡しても動かない)。
+    // 依存には 文字列にした鍵を入れ、中で配列に戻す(JSON なので名前に '|' が入っても同じ)
+    const namesKey = JSON.stringify(names);
     const DATA = useMemo(() => {
+        const nm = JSON.parse(namesKey);
         const dow0 = new Date(forecast.today + 'T00:00:00Z').getUTCDay();
-        const A = allocate({ rows: forecast.rows, inspectors: names, dow0, horizonDays: 45 });
-        return { today: forecast.today, work: WORK, inspectors: names, jobs: A.jobs, gaps: A.gaps, skipped: A.skipped };
-    }, [forecast, names.join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
+        const A = allocate({ rows: forecast.rows, inspectors: nm, dow0, horizonDays: 45 });
+        return { today: forecast.today, work: WORK, inspectors: nm, jobs: A.jobs, gaps: A.gaps, skipped: A.skipped };
+    }, [forecast, namesKey]);
     const html = useMemo(() => whoHtml(DATA, mode), [DATA, mode]);
     const T0 = new Date(forecast.today + 'T00:00:00Z');
     return (

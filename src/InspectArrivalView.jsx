@@ -35,12 +35,14 @@ export default function InspectArrivalView({ forecast, shipIsMock = true, fileLa
     const dow = (n) => dt(n).getUTCDay();
     const monOff = -((dow(0) + 6) % 7);
     const [A, B] = [monOff + SPAN_DEF[span][0], monOff + SPAN_DEF[span][1]];
-    const cols = useMemo(() => {
+    // 毎回の描画で組み直す(日数の列を並べるだけで軽い)。useMemo にすると dow/dt を依存に入れる必要があり、
+    // React Compiler の「メモ化を保てない」指摘になるため、メモ化せず素の計算にしてある。
+    const cols = (() => {
         const c = []; let tot = 0;
         for (let n = A; n <= B; n++) { const off = dow(n) === 0 || dow(n) === 6; c.push({ n, off, w: off ? 0.35 : 1, l: tot }); tot += off ? 0.35 : 1; }
         c.forEach((x) => { x.left = x.l / tot * 100; x.width = x.w / tot * 100; x.mid = x.left + x.width / 2; });
         return c;
-    }, [A, B, T0]); // eslint-disable-line react-hooks/exhaustive-deps
+    })();
     const X = (n) => (n < A ? 0 : n > B ? 100 : cols[n - A].mid);
 
     const shown0 = rows;   // 出庫日・リミット・越えた日数は 見込みの行に入っている(本物が無い間は 作り物の日付で渡される)
@@ -118,7 +120,7 @@ export default function InspectArrivalView({ forecast, shipIsMock = true, fileLa
         return `<div class="row grid${r.over != null ? ' over' : ''}" data-o="${esc(r.o)}" data-sig="${r.sig}" data-kind="${r.kind}"><span class="sig ${r.sig}"></span>${nmHtml}<span class="lc">${lateHtml}${overHtml}</span><div class="ax">${h}</div></div>`;
     };
 
-    const list = useMemo(() => shown0.filter(FILTERS[filter] || FILTERS.all), [shown0, filter, weekEnd]); // eslint-disable-line react-hooks/exhaustive-deps
+    const list = shown0.filter(FILTERS[filter] || FILTERS.all);   // 毎回絞り直す(軽い・useMemo は FILTERS を依存に入れる必要があり Compiler の指摘になる)
     const wide = cols.length <= 31;
     const heads = cols.map((c) => {
         if (c.n === 0) return `<div class="dh today t" style="left:${c.mid}%">今日 ${md(0)}(${WD[dow(0)]})</div>`;

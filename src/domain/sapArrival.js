@@ -16,12 +16,12 @@ const str = (v) => (v == null ? '' : String(v));
 
 /** 品目コードの比べ方: 全角→半角・大文字・空白と各種ハイフンを揃える */
 export function normCode(v) {
-    return str(v).normalize('NFKC').toUpperCase().replace(/[\s　]+/g, '').replace(/[‐-―−ー]/g, '-');
+    return str(v).normalize('NFKC').toUpperCase().replace(/[\s\u3000]+/g, '').replace(/[‐-―−ー]/g, '-');
 }
 const SMALL = { ぁ: 'あ', ぃ: 'い', ぅ: 'う', ぇ: 'え', ぉ: 'お', ゃ: 'や', ゅ: 'ゆ', ょ: 'よ', ゎ: 'わ', っ: 'つ', ァ: 'ア', ィ: 'イ', ゥ: 'ウ', ェ: 'エ', ォ: 'オ', ャ: 'ヤ', ュ: 'ユ', ョ: 'ヨ', ヮ: 'ワ', ッ: 'ツ' };
 /** 品目テキストの比べ方: 半角カナ→全角・小さい仮名を大きく・長音とハイフンを揃える・空白を除く */
 export function normText(v) {
-    return str(v).normalize('NFKC').replace(/[ぁ-ゖァ-ヶ]/g, (c) => SMALL[c] || c).replace(/[\s　]+/g, '').replace(/[‐-―−ー]/g, '-').toUpperCase();
+    return str(v).normalize('NFKC').replace(/[ぁ-ゖァ-ヶ]/g, (c) => SMALL[c] || c).replace(/[\s\u3000]+/g, '').replace(/[‐-―−ー]/g, '-').toUpperCase();
 }
 
 /** 'YYYY-MM-DD' と 'HH:MM'(無ければ始業 08:30)→ ms */

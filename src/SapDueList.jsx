@@ -358,9 +358,16 @@ export default function SapDueSection({ orders, queue, origins, nowMs, hoursMode
         return buildDayColumns({ fromMs: d0.getTime(), toMs: d0.getTime() + days * DAY, isWorkday: factoryClock(w, null), startMin: timeStrToMinutes(w.dayStart), endMin: timeStrToMinutes(w.dayEnd) });
     }, [nowMs, days]);
     const oRows = useMemo(() => orderRows(orders, { nowMs, hoursMode }), [orders, nowMs, hoursMode]);
-    const lanes = useMemo(() => laneSummary(orders, { hoursMode, capOf, queue, days: 14 }), [orders, hoursMode, queue, capMap, defCap]); // eslint-disable-line react-hooks/exhaustive-deps
+    const lanes = useMemo(() => {
+        const capOfIn = (wc) => capMap[wc] ?? defCap;   // 外の capOf と同じ式(外のは毎回別の関数なので依存に入れられない)
+        return laneSummary(orders, { hoursMode, capOf: capOfIn, queue, days: 14 });
+    }, [orders, hoursMode, queue, capMap, defCap]);
     const st = useMemo(() => boardStats(oRows, lanes, origins), [oRows, lanes, origins]);
-    const cap = useMemo(() => capacityTable(orders, { nowMs, weeks: nWeeks, perQty, capOf, peopleOf, resources: view === 'both' ? ['machine', 'worker'] : [view], otHours: ot, saturday: sat }), [orders, nowMs, nWeeks, perQty, capMap, defCap, ot, sat, view, peopleMap]); // eslint-disable-line react-hooks/exhaustive-deps
+    const cap = useMemo(() => {
+        const capOfIn = (wc) => capMap[wc] ?? defCap;               // 外の capOf / peopleOf と同じ式
+        const peopleOfIn = (name, dai) => peopleMap[name] ?? dai;
+        return capacityTable(orders, { nowMs, weeks: nWeeks, perQty, capOf: capOfIn, peopleOf: peopleOfIn, resources: view === 'both' ? ['machine', 'worker'] : [view], otHours: ot, saturday: sat });
+    }, [orders, nowMs, nWeeks, perQty, capMap, defCap, ot, sat, view, peopleMap]);
     const passRate = oRows.length ? oRows.filter((r) => r.lateDays == null && r.tier !== DUE_TIER.PAST).length / oRows.length : null;
     const setLaneCap = (wcs, n) => { const m = { ...capMap }; wcs.forEach((wc) => { m[wc] = n; }); setCapMap(m); };
     const pickCell = (name, wi) => { setStageName(name); setWeekSel(wi); setTab('stage'); setOpenAllMap({}); const w = cap.weeks[wi]; if (w) setDays((d) => Math.max(d, Math.ceil((w.endMs - nowMs) / DAY) + 1)); };

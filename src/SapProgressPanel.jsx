@@ -16,7 +16,7 @@ import { baseNowMs } from './domain/sapBoard.js';
 import { buildOrders, reachList, loadByGroup, loadByWorkCenter, itemSummary, gaugeOf, stageView, handoffList, dailyLoad, STATUS_LABEL } from './domain/sapProgress.js';
 
 /** 旗: localStorage の feature:sapProgress が '1' の時だけ ON(既定 OFF)。読み方は domain/sapArrivalStore.js の sapFlagOn と同じ1本 */
-export function isSapProgressOn() { return sapFlagOn(); }
+function isSapProgressOn() { return sapFlagOn(); }
 /** 端末の中(localStorage)だけに覚える。読み書きできない時は 覚えずに動く。本番(Firestore)には書かない */
 const LS = 'sapProgress:';
 const loadLS = (k, dflt) => { try { const v = typeof localStorage !== 'undefined' && localStorage.getItem(LS + k); return v ? JSON.parse(v) : dflt; } catch { return dflt; } };
@@ -70,7 +70,7 @@ function GaugeLegend() {
     );
 }
 
-export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, autoMg = null, autoSub = null, actualsByItem = {}, lots = null }) {
+export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, autoMg = null, autoSub = null, lots = null }) {
     const [on] = useState(() => force || isSapProgressOn());
     const [baseOrders, setOrders] = useState(null);
     const [info, setInfo] = useState('');

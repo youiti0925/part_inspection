@@ -33,8 +33,12 @@ export default function MachineGroupView({ initialOpen = null, orders, nowMs, pe
     const [ot, setOt] = useState(0);
     const [sat, setSat] = useState(false);
     const [openName, setOpenName] = useState(initialOpen);
-    const cfgOf = (wc) => { const units = capMap[wc] ?? defCap; return { units, people: peopleMap[wc] ?? units, multi: !!multiMap[wc] }; };
-    const cap = useMemo(() => capacityGroups(orders, { nowMs, weeks: 5, perQty, cfgOf, otHours: ot, saturday: sat, resource: res }), [orders, nowMs, perQty, capMap, peopleMap, multiMap, defCap, ot, sat, res]); // eslint-disable-line react-hooks/exhaustive-deps
+    const cfgOf = (wc) => { const units = capMap[wc] ?? defCap; return { units, people: peopleMap[wc] ?? units, multi: !!multiMap[wc] }; };   // 画面の下の方で使う
+    const cap = useMemo(() => {
+        // 同じ式を中でも作る(外の cfgOf は毎回別の関数になり、useMemo の依存に入れられない)
+        const cfgOf = (wc) => { const units = capMap[wc] ?? defCap; return { units, people: peopleMap[wc] ?? units, multi: !!multiMap[wc] }; };
+        return capacityGroups(orders, { nowMs, weeks: 5, perQty, cfgOf, otHours: ot, saturday: sat, resource: res });
+    }, [orders, nowMs, perQty, capMap, peopleMap, multiMap, defCap, ot, sat, res]);
     const { summary: S, weeks, groups } = cap;
     const moved = Object.entries(moves || {});
     const orderById = useMemo(() => new Map(orders.map((o) => [o.order, o])), [orders]);
