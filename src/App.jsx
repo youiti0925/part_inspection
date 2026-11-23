@@ -34,6 +34,8 @@ import TemplateSkipPanel from './TemplateSkipPanel.jsx';
 import ProgressImportExtras from './ProgressImportExtras.jsx';
 import PendingImportPanel from './PendingImportPanel.jsx';
 import ProgressSheetMapPanel from './ProgressSheetMapPanel.jsx';
+import { SHIP_DONE_COL } from './domain/progressShipDone.js'; // 🔗 進捗管理表の U 列(出庫完了日)の列の字(部品検査だけの追加・progressSheet.js は製品と対なので触らない)
+import SapProgressPanel from './SapProgressPanel.jsx'; // 🏭 SAP 工程の進み(旗 feature:sapProgress=1 の時だけ出る・既定 OFF)
 import MapViewLanes from './mapviews/MapViewLanes.jsx';
 import MapViewTimeline from './mapviews/MapViewTimeline.jsx';
 import { fmtWorkSec } from './domain/incomingWork.js';
@@ -26187,6 +26189,8 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          {/* 📊 P053 進捗管理表の読み方(表ごと・シート名・開始行・列の字・Z列の意味・出荷日の日数) */}
          <ProgressSheetMapPanel settings={settings} saveSettings={saveSettings} openBook={openProgressBook_pi} />
 
+         <SapProgressPanel lots={lots} />
+
          {/* 🗂 P057 未登録リスト(進捗管理表の取込で品質規格マスタに紐付けが無く落ちた行。無ければ何も出さない) */}
          <PendingImportPanel settings={settings} onRegisterPending={onRegisterPending} onRemovePending={onRemovePending} />
 
@@ -35354,6 +35358,8 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
            row: r, orderNo,
            productNo: strAt(row, 'productNo'), model: strAt(row, 'model'), qty: strAt(row, 'qty'),
            k33: rawAt(row, 'k33'), assyDone: rawAt(row, 'assyDone'), start: rawAt(row, 'start'), shipDate: rawAt(row, 'shipDate'),
+           // 🔗 U 列(出庫完了日)の生の値。部品の指図のリミット(U の 2 稼働日前)の元。今は何にも使わない(取り込みの結果は変わらない)
+           shipDone: (() => { const i = colToIndex(smap.cols.shipDone || SHIP_DONE_COL); return i < 0 ? null : rawOf(row.getCell(i + 1)); })(),
            stage: strAt(row, 'stage'), progress: strAt(row, 'progress'),
            isGray: smap.grayIsShipped ? isShippedGray(row) : false,
          });
