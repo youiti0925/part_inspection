@@ -129,9 +129,11 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
     const loadBuffer = async (name, buf) => {
         setErr(''); setInfo('読み込み中…');
         try {
-            const { rows } = await readSapXlsx(buf);
+            const { rows, baseDate } = await readSapXlsx(buf);
             const o = buildOrders(rows);
-            setOrders(o); setFileName(name); setChartOrder(null); setInfo(`${name}: ${rows.length}行 → 指図 ${o.length}件(この端末の中だけで読みました・送信なし)`);
+            // 基準日: ファイルに基準日が入っている時(変換スクリプトが X 列に足す)はそれに合わせる。分からなければ 今日のまま(古い写しを今日で見ると 全部「遅れ」に見えるため、分かる時だけ合わせる)
+            if (baseDate) setToday(baseDate);
+            setOrders(o); setFileName(name); setChartOrder(null); setInfo(`${name}: ${rows.length}行 → 指図 ${o.length}件(この端末の中だけで読みました・送信なし)・基準日 ${baseDate ? `${baseDate}(ファイルの値に合わせました・上で変えられます)` : '今日のまま(ファイルに基準日が無いため)'}`);
             return o;
         } catch (ex) { setOrders(null); setInfo(''); setErr('読めませんでした: ' + (ex && ex.message ? ex.message : ex)); return null; }
     };
