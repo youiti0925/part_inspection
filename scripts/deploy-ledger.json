@@ -919,6 +919,21 @@
         "assets/operationsSimulation.worker-DQXFnYnP.js",
         "assets/operationsSimulation.worker-Tz3WMq-t.js"
       ]
+    },
+    {
+      "at": "2026-11-23",
+      "by": "bootstrap（本番に HEAD を投げて、1つずつ実測して控えた）",
+      "assets": [
+        "assets/asyncToGenerator-DfzxTqCh.js",
+        "assets/chunk-D-KKor_A.js",
+        "assets/fullPair.worker-CE-Oo6yN.js",
+        "assets/mp4-muxer-B93Nn4L1.js",
+        "assets/mp4box.all-CgqH0IY1.js",
+        "assets/objectSpread2-BPJQjAj5.js",
+        "assets/operationsSimulation.worker-BbfnoIjp.js",
+        "assets/index-HhAVt4Ss.js",
+        "assets/index-BD9VUvc3.css"
+      ]
     }
   ],
   "lost": [],
