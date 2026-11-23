@@ -63,3 +63,14 @@ test('XH7 SAP の元の見出し(括弧つき)でも読める', async () => {
     const r = await readSapXlsx(await xlsx([SAP_RAW, dataRow]));
     assert.equal(r.rows.length, 1);
 });
+
+test('XH8 共有文字列(sharedStrings)で書かれた xlsx も読める(Excel で保存し直した物)・正規表現を壊していない', async () => {
+    const z = new JSZip();
+    const strs = [...OUT_HEAD, 'X1', '部品'];
+    const idx = (s) => strs.indexOf(s);
+    z.file('xl/sharedStrings.xml', `<sst>${strs.map((t) => `<si><t>${t}</t></si>`).join('')}</sst>`);
+    const head = OUT_HEAD.map((h, j) => (h ? `<c r="${COLS[j]}1" t="s"><v>${idx(h)}</v></c>` : '')).join('');
+    z.file('xl/worksheets/sheet1.xml', `<worksheet><sheetData><row r="1">${head}</row><row r="2"><c r="A2" t="s"><v>${idx('X1')}</v></c><c r="B2"><v>10</v></c><c r="C2"><v>2509</v></c></row></sheetData></worksheet>`);
+    const r = await readSapXlsx(await z.generateAsync({ type: 'uint8array' }));
+    assert.equal(r.rows.length, 1); assert.equal(r.rows[0].A, 'X1'); assert.equal(r.rows[0].C, 2509);
+});

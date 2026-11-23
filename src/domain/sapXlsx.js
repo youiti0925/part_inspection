@@ -47,7 +47,7 @@ export function parseSheetXml(xml, sst = []) {
 // 期待する列 = この取込(sapProgress.js の toStage)が実際に読む列だけ。変換スクリプト(scripts/sap_narrow_for_app.py の OUT_HEAD)の
 // 見出し・SAP の元の見出し(「作業 Text (短)」「標準値 1」)の両方が通るよう、空白と末尾の(…)を無視して名前の頭で見る。
 // 値が数でも文字でも同じ: 見出しの文字だけを見る。
-const normHead = (v) => String(v == null ? '' : v).replace(/[\s　]+/g, '').replace(/[(（][^)）]*[)）]$/, '').toLowerCase();
+const normHead = (v) => String(v == null ? '' : v).replace(/[\s\u3000]+/g, '').replace(/[(（][^)）]*[)）]$/, '').toLowerCase();
 export const SAP_HEAD_SPEC = [
     ['A', '指図', /^指図/], ['B', '活動', /^活動/], ['C', '作業区', /^作業区/], ['D', '作業 Text', /^作業text/], ['F', '作業数量', /^作業数量/],
     ['H', '実績実行開始日', /^実績.*開始/], ['I', '実績実行終了日', /^実績.*終了/],
@@ -77,8 +77,8 @@ export async function readSapXlsx(data) {
     const sstFile = zip.file('xl/sharedStrings.xml');
     if (sstFile) {
         const x = await sstFile.async('string');
-        sst = [...x.matchAll(/<si[^>]*>([\s\S]*?)<\/si>/g)].map((m) =>
-            [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((t) => ent(t[1])).join(''));
+        sst = [...x.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((m) =>
+            [...m[1].matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((t) => ent(t[1])).join(''));
     }
     const sheetName = Object.keys(zip.files).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort()[0];
     if (!sheetName) throw new Error('シートが見つかりません');
