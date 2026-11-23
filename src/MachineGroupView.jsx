@@ -7,6 +7,7 @@
 // 確かめ方: sap-demo.html で実データを選ぶ
 import React, { useMemo, useState } from 'react';
 import { capacityGroups, groupWcs } from './domain/sapGroups.js';
+import { machineBundleCheck } from './domain/sapBundleCheck.js';
 
 const LV = {
     red: 'border-rose-300 bg-rose-100 text-rose-700', yellow: 'border-amber-300 bg-amber-50 text-amber-800', green: 'border-slate-200 bg-white text-slate-700',
@@ -43,6 +44,7 @@ export default function MachineGroupView({ initialOpen = null, orders, nowMs, pe
     const others = worst ? groups.filter((g) => g !== worst && g.lead && g.lead.n >= 10).map((g) => g.lead.med) : [];
     const maxPerDay = Math.max(1, ...weeks.map((w) => w.perDay), S.allCarry / 5 / 3);
     const wcAll = useMemo(() => groupWcs(orders, openName || ''), [orders, openName]);
+    const bundle = useMemo(() => machineBundleCheck(orders), [orders]);   // 入れた束が 機械グループの計算に足りない時だけ 画面で言う
 
     const renderOpen = (g) => (
         <tr className="bg-cyan-50" data-mg-open={g.name}>
@@ -87,10 +89,12 @@ export default function MachineGroupView({ initialOpen = null, orders, nowMs, pe
     return (
         <div data-testid="sap-mg" className="text-slate-800">
             <div className="mb-1"><h2 className="inline-block text-xl font-bold">機械グループ 負荷</h2><span className="ml-2 text-xs text-slate-500">{fileLabel}・済んでいない機械工程だけ(検査は 検査の画面へ)</span></div>
+            {bundle.short ? <div className="my-2 rounded-xl border-2 border-amber-400 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900" role="alert" data-testid="sap-mg-bundle-short" data-why={bundle.why}>⚠ {bundle.text}</div> : null}
             <div className="my-3 grid gap-3 lg:grid-cols-[1.1fr_1fr]">
                 <div className="rounded-xl border border-slate-200 p-3" data-testid="sap-mg-answer">
                     <h3 className="mb-1 text-sm font-semibold text-slate-600">いま言える事</h3>
-                    <div className="text-xl font-bold leading-snug">{S.reds.length ? <>計画の分だけで あふれるのは <em className="not-italic text-rose-600">{S.reds.join('・')}</em></> : '計画の分だけで あふれるグループは ありません'}</div>
+                    <div className="text-xl font-bold leading-snug">{S.reds.length ? <>計画の分だけで あふれるのは <em className="not-italic text-rose-600">{S.reds.join('・')}</em></> : '計画の分だけで グループ全体としては あふれません'}</div>
+                    {S.redWcGroups.length ? <div className="mt-1 text-sm font-semibold text-amber-700" data-testid="sap-mg-wc-over">{S.reds.length ? 'ほかに ' : 'ただし '}作業区ごとに見ると 100%を超える作業区が あるグループ: {S.redWcGroups.map((x) => `${x.name}(${x.n}つ)`).join('・')}<span className="font-normal text-slate-500">(グループ全体では 足りる=同じグループの別の作業区へ回すと 収まる所です)</span></div> : null}
                     {worst ? <div className="mt-1 text-xs text-slate-500">{worst.name}: 今週分 {pc(worst.cells[0].pct)}・来週 {pc(worst.cells[1].pct)}・2週後 {pc(worst.cells[2].pct)}。{worst.lead && worst.lead.n >= 10 ? `実績でも 前の工程が済んでから ${worst.name} が済むまで 中央 ${worst.lead.med}日${others.length ? `(他のグループは ${Math.min(...others)}〜${Math.max(...others)}日)` : ''}。` : ''}</div> : null}
                     <div className="mt-1 text-xs text-slate-500">「計画の日を過ぎた 持ち越し」が 全体で {Math.round(S.allCarry).toLocaleString()}h({S.allCarryN}件)あります(今週のマスには 混ぜていません・左の列に分けています)。</div>
                 </div>
@@ -127,14 +131,16 @@ export default function MachineGroupView({ initialOpen = null, orders, nowMs, pe
                 <span className="ml-auto flex items-center gap-3 text-xs text-slate-600"><span><i className="mr-1 inline-block h-3.5 w-3.5 rounded border border-rose-300 bg-rose-100 align-[-2px]" />あふれる(100%超)</span><span><i className="mr-1 inline-block h-3.5 w-3.5 rounded border border-amber-300 bg-amber-50 align-[-2px]" />ぎりぎり(90%〜)</span><span><i className="mr-1 inline-block h-3.5 w-3.5 rounded border border-dashed border-slate-300 align-[-2px]" style={THIN_BG} />計画が薄い週(低く見えるだけ)</span></span>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-                <table className="w-full border-separate border-spacing-0 text-sm" data-testid="sap-mg-table">
+            <p className="mb-1 text-xs text-slate-500 md:hidden" data-testid="sap-mg-scrollhint">表は 左右に スクロールできます →</p>
+            {/* 幅が狭い端末(375px など)では 表を つぶさず 最低幅を持たせ、箱の中で 横にスクロールする(つぶすと 「門M/C」が縦に折れ 1 行が 数百px になる) */}
+            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white" data-testid="sap-mg-scroll">
+                <table className="w-full max-lg:min-w-[56rem] border-separate border-spacing-0 text-sm" data-testid="sap-mg-table">
                     <thead><tr className="bg-slate-50 text-xs font-semibold text-slate-600">
-                        <th className="border-b border-slate-200 px-2 py-1.5 text-left">工程(機械グループ)</th>
-                        <th className="border-b border-slate-200 px-2 py-1.5 text-left">作業区(今週〜2週後)</th>
-                        <th className="border-b border-slate-200 px-2 py-1.5 text-left">持ち越し<br /><span className="font-normal">計画日を過ぎた未完了</span></th>
-                        {weeks.map((w, i) => <th key={w.startMs} className={`border-b border-slate-200 px-1 py-1.5 text-center ${w.thin ? 'text-slate-400' : ''}`}>{w.name}<br /><span className="font-normal">{w.label}{i === 0 ? `・残り${w.work}日` : ''}</span></th>)}
-                        <th className="border-b border-slate-200 px-2 py-1.5 text-left">実績の待ち<br /><span className="font-normal">前の済→済 中央</span></th>
+                        <th className="max-lg:whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left">工程(機械グループ)</th>
+                        <th className="max-lg:whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left">作業区(今週〜2週後)</th>
+                        <th className="max-lg:whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left">持ち越し<br /><span className="font-normal">計画日を過ぎた未完了</span></th>
+                        {weeks.map((w, i) => <th key={w.startMs} className={`max-lg:whitespace-nowrap border-b border-slate-200 px-1 py-1.5 text-center ${w.thin ? 'text-slate-400' : ''}`}>{w.name}<br /><span className="font-normal">{w.label}{i === 0 ? `・残り${w.work}日` : ''}</span></th>)}
+                        <th className="max-lg:whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left">実績の待ち<br /><span className="font-normal">前の済→済 中央</span></th>
                         <th className="border-b border-slate-200 px-2 py-1.5 text-left">見立て・注意</th>
                     </tr></thead>
                     <tbody>
@@ -145,12 +151,12 @@ export default function MachineGroupView({ initialOpen = null, orders, nowMs, pe
                             return (
                                 <React.Fragment key={g.name}>
                                     <tr className={`cursor-pointer ${open ? 'bg-cyan-50' : 'hover:bg-slate-50'}`} onClick={() => setOpenName(open ? null : g.name)} data-mg-group={g.name} data-verdict={g.verdict.level}>
-                                        <td className="border-b border-slate-100 px-2 py-2"><div className="text-base font-bold">{open ? '▼' : '▶'} {g.name}</div><div className="text-xs text-slate-500">作業区 {g.wcs.length}・{g.dai}台・{g.people}人・残り {g.n} 工程</div></td>
-                                        <td className="border-b border-slate-100 px-2 py-2">{g.wcs.map((x) => { const p = Math.max(...x.cells.slice(0, 3).map((c) => c.pct)); return <i key={x.wc} title={`${x.wc}: 今週〜2週後の最大 ${pc(p)}`} className={`mr-0.5 inline-block h-3 w-3 rounded-sm ${p > 1 ? SQ.red : p >= 0.9 ? SQ.yellow : SQ.green}`} />; })}<div className="text-xs text-slate-500">{g.redWcs} つ あふれ</div></td>
-                                        <td className="border-b border-slate-100 px-2 py-2"><div className="text-sm font-bold tabular-nums">{Math.round(g.carry).toLocaleString()}h</div><div className="text-xs text-slate-500">{g.carryN}件・全台で 約{Math.round(g.carryDays)}日分<br />一番古い計画 {g.oldest}日前</div></td>
+                                        <td className="max-lg:whitespace-nowrap border-b border-slate-100 px-2 py-2"><div className="text-base font-bold">{open ? '▼' : '▶'} {g.name}</div><div className="text-xs text-slate-500">作業区 {g.wcs.length}・{g.dai}台・{g.people}人・残り {g.n} 工程</div></td>
+                                        <td className="max-lg:whitespace-nowrap border-b border-slate-100 px-2 py-2">{g.wcs.map((x) => { const p = Math.max(...x.cells.slice(0, 3).map((c) => c.pct)); return <i key={x.wc} title={`${x.wc}: 今週〜2週後の最大 ${pc(p)}`} className={`mr-0.5 inline-block h-3 w-3 rounded-sm ${p > 1 ? SQ.red : p >= 0.9 ? SQ.yellow : SQ.green}`} />; })}<div className="text-xs text-slate-500" data-mg-redwcs={g.redWcs}>{g.verdict.level === 'red' ? `${g.redWcs} つ あふれ` : g.redWcs ? `${g.redWcs} つ 100%超(グループ全体では足りる)` : 'あふれなし'}</div></td>
+                                        <td className="max-lg:whitespace-nowrap border-b border-slate-100 px-2 py-2"><div className="text-sm font-bold tabular-nums">{Math.round(g.carry).toLocaleString()}h</div><div className="text-xs text-slate-500">{g.carryN}件・全台で 約{Math.round(g.carryDays)}日分<br />一番古い計画 {g.oldest}日前</div></td>
                                         {g.cells.map((c, i) => <td key={i} className="border-b border-slate-100 px-1 py-2"><Cell c={c} thin={weeks[i].thin} dem={res === 'worker' ? c.demandW : c.demandM} cap={res === 'worker' ? c.capW : c.capM} /></td>)}
-                                        <td className="border-b border-slate-100 px-2 py-2">{g.lead && g.lead.n >= 10 ? <><b>{g.lead.med}日</b><div className="text-xs text-slate-500">幅 {g.lead.p25}〜{g.lead.p75}日・{g.lead.n}件</div></> : <span className="text-xs text-slate-500">実績が少ない</span>}</td>
-                                        <td className="border-b border-slate-100 px-2 py-2"><div className={`text-xs ${vc}`}>{g.verdict.text}</div>{unset ? <span className="mr-1 rounded border border-slate-300 px-1 text-xs text-slate-600">台数 未確認</span> : null}{g.zero ? <span className="rounded border border-slate-300 px-1 text-xs text-slate-600">標準値なし {g.zero}件</span> : null}</td>
+                                        <td className="max-lg:whitespace-nowrap border-b border-slate-100 px-2 py-2">{g.lead && g.lead.n >= 10 ? <><b>{g.lead.med}日</b><div className="text-xs text-slate-500">幅 {g.lead.p25}〜{g.lead.p75}日・{g.lead.n}件</div></> : <span className="text-xs text-slate-500">実績が少ない</span>}</td>
+                                        <td className="max-lg:min-w-[14rem] border-b border-slate-100 px-2 py-2"><div className={`text-xs ${vc}`}>{g.verdict.text}</div>{unset ? <span className="mr-1 rounded border border-slate-300 px-1 text-xs text-slate-600">台数 未確認</span> : null}{g.zero ? <span className="rounded border border-slate-300 px-1 text-xs text-slate-600">標準値なし {g.zero}件</span> : null}</td>
                                     </tr>
                                     {open ? renderOpen(g) : null}
                                 </React.Fragment>

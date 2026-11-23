@@ -189,5 +189,5 @@ export function capacityGroups(orders, { nowMs, weeks = 5, perQty = true, cfgOf 
     const perDay = allDemand.map((h, i) => h / Math.max(1, dayCounts[i].work));
     const ref = Math.max(...perDay.slice(0, 3));
     const weeksOut = wl.map((w, i) => ({ ...w, ...dayCounts[i], allH: r1(allDemand[i]), perDay: r1(perDay[i]), thin: perDay[i] < ref * THIN_RATIO }));
-    return { weeks: weeksOut, groups: out, summary: { reds: out.filter((g) => g.verdict.level === 'red').map((g) => g.name), worst: out[0] || null, allCarry: r1(allCarry), allCarryN, suspect, uncounted: { h: r1(uncountedH), n: uncountedN }, groupCount: out.length } };
+    return { weeks: weeksOut, groups: out, summary: { reds: out.filter((g) => g.verdict.level === 'red').map((g) => g.name), redWcGroups: out.filter((g) => g.verdict.level !== 'red' && g.redWcs > 0).map((g) => ({ name: g.name, n: g.redWcs })), worst: out[0] || null, allCarry: r1(allCarry), allCarryN, suspect, uncounted: { h: r1(uncountedH), n: uncountedN }, groupCount: out.length } };
 }
