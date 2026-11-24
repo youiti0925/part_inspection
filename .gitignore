@@ -52,3 +52,6 @@ auth_export/
 # 前のビルドの assets の置き場 (scripts/keep-old-assets.mjs)。
 # デプロイのたびに数百MBになるのでコミットしない。dist と同じ扱い。
 .hosting-attic/
+
+# Python
+__pycache__/

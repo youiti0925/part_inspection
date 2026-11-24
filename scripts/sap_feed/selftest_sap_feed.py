@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """段2(読む・検査する・絞る)の試験(家の PC で・合成データだけ)。設計 §E の 6 つ + 規則ごとの「外すと赤」。
 目的: ①合成データで往復(分かっている答えと同じ) ②壊れた入力が全部止まって理由が出る ③規則ごとに、外した版を自動で作り試験が赤になる事を見せる
-      ④同じ入力なら同じ束・2 回やって増えない ⑤束に客先・仕入先・金額の欄が 0 ⑥見ていない種(作る時=7,8 / 最後に 1 回だけ=101)
-入力: なし(一時ファイルを作って消す)。--final を付けた時だけ最後の種(101)を流す(実装が固まるまで流さない)
+      ④同じ入力なら同じ束・2 回やって増えない ⑤束に客先・仕入先・金額の欄が 0 ⑥見ていない種(作る時=7,8 / 最後に 1 回だけ=202)
+入力: なし(一時ファイルを作って消す)。--final を付けた時だけ最後の種(202)を流す(実装が固まるまで流さない)
 出力: 標準出力に OK/NG と、壊れた入力の止まり方・外すと赤の一覧。全部 OK で終了コード 0
 呼ぶ人: npm run sap-feed:test  /  npm run sap-feed:final(最後の種)
 触る外の物: 一時フォルダだけ
+履歴: 最後の種 101 は 11-24 に 1 回流して赤 1 件(規則 order_str の試験入力が、全体で一番新しい実績日を消して検査⑦を正しく止めた=試験入力の欠陥・feed.py は正しい)。
+      直し: 実績日は消さず未完了の工程を足す形に変更。種 101 は使い切りなので最後の種は 202 に替えた(直した後に 1 回だけ流す)
 """
 import copy
 import datetime
@@ -98,7 +100,10 @@ def case_order_str():
     z = [h for h in sorted(sh(sheets, 'SAP_製造指図')[1:], key=lambda h: h[0]) if h[HO].startswith('0')][0]
     z[HST] = 'REL'
     ops = [r for r in sh(sheets, 'SAP_作業')[1:] if r[WO] == z[HO]]
-    ops[-1][WS] = ops[-1][WE] = None
+    extra = list(ops[-1])        # 実績日は消さず、その指図に未完了の工程を 1 つ足す(種 101 の赤の直し・履歴は先頭コメント)
+    extra[WA] = '0999'
+    extra[WS] = extra[WE] = None
+    sh(sheets, 'SAP_作業').append(extra)
     return {'sheets': sheets, 'ok': lambda rec, b, d: rec['status'] == 'ok' and {o['order'] for o in b['orders']} == set(included(sheets)) and any(o['order'].startswith('0') for o in b['orders'])}
 
 
@@ -450,7 +455,7 @@ def t5_forbidden():
     print('\n== ⑤ 束に客先・仕入先・金額の欄が 0 ==')
     n = 0
     bad = []
-    for seed in ((101,) if SEED[0] == 101 else (7, 8)):
+    for seed in ((202,) if SEED[0] == 202 else (7, 8)):
         sheets, truth = S(seed, 'D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D15 D16 D17'.split(), 300)
         rec, b, data = run(sheets, reference=truth_to_reference(truth))
         if b is None:
@@ -469,15 +474,15 @@ def t5_forbidden():
 def main():
     final = '--final' in sys.argv
     if final:
-        SEED[0] = 101
-        print('######## 最後の種(101)を 1 回だけ流す(直さずにそのまま報告する) ########')
-    t1_roundtrip([101] if final else [7, 8], '【最後の種 101】' if final else '【作る時の種 7,8】')
+        SEED[0] = 202
+        print('######## 最後の種(202)を 1 回だけ流す(直さずにそのまま報告する) ########')
+    t1_roundtrip([202] if final else [7, 8], '【最後の種 202】' if final else '【作る時の種 7,8】')
     t2_broken()
     t3_mutants()
     t4_determinism()
     t5_forbidden()
     if not final:
-        print('== ⑥ 見ていない種: 作る時=7,8 / 最後に 1 回だけ=101(npm run sap-feed:final・実装が固まるまで流さない) ==')
+        print('== ⑥ 見ていない種: 作る時=7,8 / 最後に 1 回だけ=202(npm run sap-feed:final・実装が固まるまで流さない) ==')
     return finish()
 
 
