@@ -32,10 +32,11 @@ FORBIDDEN_KEYS = ('客先', '仕入先', '金額', '単価', '購買', 'MRP', '�
 ISO = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
 # 外せる規則の名前(試験用・既定は全部有効)。外した版は試験が赤になる事で、試験が働いている事を示す
-RULES = ('made_text', 'by_name', 'order_str', 'act_str', 'done_by_end', 'date_floor', 'std_zero_null', 'unit_h_only', 'suspect_flag',
+RULES = ('app_partition', 'app_orders_only', 'app_history', 'other_counted', 'made_text', 'by_name', 'order_str', 'act_str', 'done_by_end', 'date_floor', 'std_zero_null', 'unit_h_only', 'suspect_flag',
          'keep_weekend', 'exclude_done_orders', 'drop_wc_empty', 'item_text_raw', 'gen_separate')
 CHK = {i: c for i, c in enumerate('①②③④⑤⑥⑦⑧⑨⑩⑪⑫', 1)}
-CHK['P1'] = 'P1'   # 型の検査(日付が文字・数値セルの指図 など)。設計の①〜⑫に足した物
+CHK['P1'] = 'P1'
+CHK['A1'] = 'A1'   # アプリ別の分け方の検査(段2 に足した物・app_wcs がある時だけ)   # 型の検査(日付が文字・数値セルの指図 など)。設計の①〜⑫に足した物
 
 REQ_WORK = ['指図', '活動', '作業区', '作業数量', '実績実行開始日', '実績実行終了日', '標準値 1', '標準値 2', '標準値 3', '最早実行開始日', '最早実行終了日']
 REQ_HEAD = ['指図', '品目', '品目 Text', '指図タイプ', '指図数量', '基準開始日付', '基準終了日付', 'システム Status']
@@ -313,7 +314,7 @@ def stop_record(base, stage, checks, reason_lines, extra=None):
     return rec
 
 
-def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_BYTES, inject=None):
+def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_BYTES, inject=None, app_wcs=None):
     rules = rules or Rules()
     base = {'schema': SCHEMA, 'fileName': os.path.basename(path)}
     checks = []
@@ -521,11 +522,6 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
             e[1] += 1
     weekly = [{'wc': k[0], 'week': k[1], 'hours': round(v[0], 2), 'count': v[1]} for k, v in sorted(wk.items())]
 
-    bundle = {'schema': SCHEMA, 'baseDate': base_date, 'generatedAt': generated_at,
-              'source': {'fileName': os.path.basename(path), 'sheetRows': {nm: rc[nm] for nm in ('SAP_作業', 'SAP_製造指図')}},
-              'checks': None, 'wcMap': {}, 'orders': orders_out, 'ops': ops_out,
-              'history': {'weekly': weekly, 'usualDays': {}}}
-
     # 段2 の検査
     open_ops = [o for o in ops_out if not o['done']]
     hours = round(sum((o['std1'] or 0.0) + (o['std2'] or 0.0) * o['qty'] for o in open_ops), 2)
@@ -565,26 +561,106 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
         checks.append(c)
     bundle_checks = {'items': None, 'dropped': dict(sorted(dropped.items())), 'info': dict(sorted(info_all.items())),
                      'notes': ['⑧⑨⑩は ' + subst, '出庫日(issueDate)は全部 null(「組立指図」シートの見出しが不明なので読んでいない)', 'wcMap・history.usualDays は空(元のシートの見出しが不明)']}
-    bundle['checks'] = bundle_checks
-    if inject:
-        bundle.update(inject)
-    keys = _all_keys(bundle)
-    bad_keys = sorted({k for k in keys if any(f.lower() in k.lower() for f in FORBIDDEN_KEYS)})
+
+    # ---- 束に分ける(app_wcs が無ければ全部入りの 1 個・ある時はアプリごと) ----
+    def mkbundle(app, wcs, orders, ops, wk_):
+        b = {'schema': SCHEMA, 'baseDate': base_date, 'generatedAt': generated_at,
+             'source': {'fileName': os.path.basename(path), 'sheetRows': {nm: rc[nm] for nm in ('SAP_作業', 'SAP_製造指図')}},
+             'checks': bundle_checks, 'wcMap': {}, 'orders': orders, 'ops': ops, 'history': {'weekly': wk_, 'usualDays': {}}}
+        if app:
+            b['app'] = app
+            b['wcs'] = list(wcs)
+        if inject:
+            b.update(inject)
+        return b
+
+    def hrs(ops):
+        return sum((o['std1'] or 0.0) + (o['std2'] or 0.0) * o['qty'] for o in ops if not o['done'])
+    parts, other_ops, a1_probs, other_info = {}, [], [], None
+    if app_wcs is None:
+        parts['all'] = ((), orders_out, ops_out, weekly)
+    else:
+        owner = {}
+        for app, wl in app_wcs.items():
+            for w in wl:
+                if w in owner:
+                    a1_probs.append('作業区 %s が %s と %s の両方にある(設定の重なり)' % (w, owner[w], app))
+                else:
+                    owner[w] = app
+        for app, wl in app_wcs.items():
+            if rules.on('app_partition'):
+                a_ops = [o for o in ops_out if owner.get(o['wc']) == app]
+            else:
+                a_ops = [o for o in ops_out if o['wc'] in owner]          # 規則を外した版: どのアプリの作業区の工程も全アプリに入れる
+            if rules.on('app_orders_only'):
+                have = {o['order'] for o in a_ops}
+                a_ord = [o for o in orders_out if o['order'] in have]
+            else:
+                a_ord = list(orders_out)                                    # 規則を外した版: 工程の無い指図も入れる
+            a_wk = [w for w in weekly if w['wc'] in wl] if rules.on('app_history') else list(weekly)
+            parts[app] = (tuple(wl), a_ord, a_ops, a_wk)
+        other_ops = [o for o in ops_out if o['wc'] not in owner]
+        if not rules.on('other_counted'):
+            other_ops = []                                                  # 規則を外した版: 属さない工程を黙って捨てる(件数を出さない)
+        n_app = sum(len(v[2]) for v in parts.values())
+        if n_app + len(other_ops) != len(ops_out):
+            a1_probs.append('工程の数が合わない: アプリ分の合計 %d + どれにも属さない %d ≠ 全体 %d' % (n_app, len(other_ops), len(ops_out)))
+        seen_k = {}
+        for app, (wl, ords, a_ops, a_wk) in parts.items():
+            for o in a_ops:
+                k = (o['order'], o['act'])
+                if k in seen_k and seen_k[k] != app:
+                    a1_probs.append('工程が 2 つのアプリに入っている(%s と %s)' % (seen_k[k], app))
+                    break
+                seen_k[k] = app
+            if any(o['wc'] not in wl for o in a_ops):
+                a1_probs.append('%s の束に他のアプリの作業区の工程が混じっている' % app)
+            if any(w['wc'] not in wl for w in a_wk):
+                a1_probs.append('%s の束の history に他のアプリの作業区が混じっている' % app)
+            have = {o['order'] for o in a_ops}
+            if any(o['order'] not in have for o in ords):
+                a1_probs.append('%s の束に、そのアプリの工程が 1 つも無い指図が入っている' % app)
+        if sum(sum(1 for o in v[2] if not o['done']) for v in parts.values()) + sum(1 for o in other_ops if not o['done']) != len(open_ops):
+            a1_probs.append('未完了の工程の数が、アプリ分+どれにも属さない分と全体で合わない')
+        h_parts = sum(hrs(v[2]) for v in parts.values()) + hrs(other_ops)
+        if abs(h_parts - hours) > 0.011 * max(1, len(open_ops)):
+            a1_probs.append('時間の合計が、アプリ分+どれにも属さない分と全体で合わない(%.2f と %.2f)' % (h_parts, hours))
+        a1_probs = sorted(set(a1_probs))
+        checks.append(mk('A1', not a1_probs or 'A1' in rules.skip, len(a1_probs),
+                         'アプリ別の分け方(重複 0・漏れは「どれにも属さない」に件数で出る・他アプリの作業区が混じらない・和が全体と一致): ' + ('全部合っている' if not a1_probs else ' / '.join(a1_probs))))
+        other_info = {'ops': len(other_ops), 'openOps': sum(1 for o in other_ops if not o['done']), 'wcs': sorted({o['wc'] for o in other_ops}),
+                      'orders': len({o['order'] for o in other_ops}),
+                      'note': 'どのアプリの作業区にも無い工程。束にしない(件数だけ)。理由: 全体の大部分で 1 個が上限を超える・設計 C-3 のアプリ別の大きさは検査の作業区だけの前提'}
+    bundles = {k: mkbundle(k if app_wcs is not None else None, v[0], v[1], v[2], v[3]) for k, v in parts.items()}
+    bad_keys = sorted({k for b in bundles.values() for k in _all_keys(b) if any(f.lower() in k.lower() for f in FORBIDDEN_KEYS)})
     checks.append(mk(11, not bad_keys or 11 in rules.skip, len(bad_keys), '束の中に客先・仕入先・金額などの欄名が 0 か' + ('(0 だった)' if not bad_keys else ': 見つかった ' + ','.join(bad_keys))))
     bundle_checks['items'] = checks
-    size = len(json.dumps(bundle, ensure_ascii=False, separators=(',', ':')).encode('utf-8')) + 40
-    checks.append(mk(12, size <= max_bytes or 12 in rules.skip, size, '束の大きさ %d バイト(上限 %d)' % (size, max_bytes)))
+    def size_of(bs_):
+        return {k: len(json.dumps(b, ensure_ascii=False, separators=(',', ':')).encode('utf-8')) + 40 for k, b in bs_.items()}
+    c12 = mk(12, True, 0, '')
+    checks.append(c12)                       # 検査の欄自身の大きさも束に入るので、先に入れてから測る
+    for _ in range(2):
+        sizes = size_of(bundles)
+        over = [k for k, v in sizes.items() if v > max_bytes]
+        c12.update(mk(12, not over or 12 in rules.skip, max(sizes.values()), '束の大きさ(各束が上限 %d バイト以内か): ' % max_bytes + ' / '.join('%s=%d' % x for x in sizes.items())))
     red2 = [c for c in checks if not c['ok']]
     base['dropped'] = bundle_checks['dropped']
     base['info'] = bundle_checks['info']
     if red2:
         return stop_record(base, '2 絞る', checks, ['検査%s: %s' % (c['id'], c['note']) for c in red2]), None, None
-    data = json.dumps(bundle, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    datas = {k: json.dumps(b, ensure_ascii=False, separators=(',', ':')).encode('utf-8') for k, b in bundles.items()}
     rec = dict(base)
     rec.update({'status': 'ok', 'stoppedStage': None, 'reasons': [], 'checks': checks, 'bundleWritten': True,
-                'bundleSha256': hashlib.sha256(data).hexdigest(), 'bundleBytes': len(data), 'orders': len(orders_out), 'ops': len(ops_out),
+                'orders': len(orders_out), 'ops': len(ops_out),
                 'note': '検査①〜⑫が全部通った。⑧⑨⑩は ' + subst})
-    return rec, bundle, data
+    if app_wcs is None:
+        rec.update({'bundleSha256': hashlib.sha256(datas['all']).hexdigest(), 'bundleBytes': len(datas['all'])})
+        return rec, bundles['all'], datas['all']
+    rec['apps'] = {k: {'wcs': list(parts[k][0]), 'orders': len(parts[k][1]), 'ops': len(parts[k][2]), 'openOps': sum(1 for o in parts[k][2] if not o['done']),
+                       'bytes': len(datas[k]), 'sha256': hashlib.sha256(datas[k]).hexdigest()} for k in parts}
+    rec['other'] = other_info
+    rec['note'] += '。アプリ別に分けた(束の大きさの検査は各束ごと)'
+    return rec, bundles, datas
 
 
 def _raw_date(x):
@@ -619,12 +695,18 @@ def _all_keys(x, out=None):
 
 
 def write_outputs(out_dir, record, bundle_bytes, bundle_name='sap-feed.json', record_name='sap-feed-record.json'):
-    """束は検査が全部通った時だけ書く(止まった時は前の束に触らない)。記録は毎回書く。同じ内容なら同じファイル(上書き・増えない)"""
+    """束は検査が全部通った時だけ書く(止まった時は前の束に触らない)。記録は毎回書く。同じ内容なら同じファイル(上書き・増えない)。
+    bundle_bytes が dict(アプリ名 → バイト列)なら sap-feed-<アプリ名>.json を 1 つずつ書く"""
     os.makedirs(out_dir, exist_ok=True)
-    if bundle_bytes is not None:
-        tmp = os.path.join(out_dir, bundle_name + '.tmp')
+    items = {}
+    if isinstance(bundle_bytes, dict):
+        items = {'sap-feed-%s.json' % k: v for k, v in bundle_bytes.items()}
+    elif bundle_bytes is not None:
+        items = {bundle_name: bundle_bytes}
+    for nm, data in items.items():
+        tmp = os.path.join(out_dir, nm + '.tmp')
         with open(tmp, 'wb') as f:
-            f.write(bundle_bytes)
-        os.replace(tmp, os.path.join(out_dir, bundle_name))
+            f.write(data)
+        os.replace(tmp, os.path.join(out_dir, nm))
     with open(os.path.join(out_dir, record_name), 'w', encoding='utf-8') as f:
         json.dump(record, f, ensure_ascii=False, indent=1, sort_keys=True)
