@@ -25,7 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 EPOCH = datetime.date(1899, 12, 30)
 DONE_TOKENS = ('TECO', 'CMPL', 'DLV', 'CLSD', 'DLT', 'LKD')   # 終わった指図の記号(RPA と同じ 6 つ)
 INSPECT_WC = ('2309', '2526', '2509', '2519')
-MACHINE_WC = ('2101', '2205', '2210', '2320', '2410', 'B05', '2630')
+MACHINE_WC = ('2313', '2351', '2320', '2381', '2101', 'B05', '2630')   # 機械加工の作業区(旋盤・横M/C・フライス・平面研削)+機械でない作業区(2101 付帯・B05 キーワード分類・2630 洗浄)
 INSPECT_STD3 = {'2309': 1.0, '2526': 1.04, '2509': 0.45, '2519': 0.2}   # 設計 A-4 の中央値(2519 は作り物)
 
 QUIRKS = {
@@ -50,6 +50,18 @@ UNSUPPORTED = {
     'D14': '組立指図は 250 件だけ・出庫日なし(「組立指図」の見出しが設計書に無い)',
 }
 
+
+def work_text(wc, act):
+    """作業 Text(作り物)。機械グループの分類(sapProgress.js readWorkName)の試験用に、作業区コードの範囲・キーワード・洗浄・付帯作業の 4 通りが出る"""
+    if wc == 'B05':
+        return '横M/C:加工%s' % act            # コードの範囲の外・キーワードで機械に分類される
+    if wc == '2630':
+        return '面取り洗浄%s' % act            # 洗浄 → wash
+    if wc == '2101':
+        return '付帯作業:応援%s' % act          # 付帯作業 → misc(機械グループに入れない)
+    if wc in INSPECT_WC:
+        return '作業%s-%s' % (wc, act)
+    return ('%s:機械%s' % (wc, act)) if int(act) % 20 == 0 else ''    # 範囲の中のコード: 空の時は作業区コードで名前を引く
 
 def serial(d):
     return (d - EPOCH).days
@@ -207,7 +219,7 @@ def build(seed=1, base_date=datetime.date(2026, 11, 22), n_orders=40, wcs=INSPEC
             cw.put(r, '指図', o['no'])
             cw.put(r, '活動', act)
             cw.put(r, '作業区', wc)
-            cw.put(r, '作業 Text (短)', '作業%s-%s' % (wc, act))
+            cw.put(r, '作業 Text (短)', work_text(wc, act) or None)
             cw.put(r, '作業数量', qty)
             cw.put(r, '作業単位', 'PC')
             is_done = done_flags[j]

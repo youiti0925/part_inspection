@@ -1,29 +1,31 @@
 #!/usr/bin/env python3
 """段2(読む・検査する・絞る)の試験(家の PC で・合成データだけ)。設計 §E の 6 つ + 規則ごとの「外すと赤」。
 目的: ①合成データで往復(分かっている答えと同じ) ②壊れた入力が全部止まって理由が出る ③規則ごとに、外した版を自動で作り試験が赤になる事を見せる
-      ④同じ入力なら同じ束・2 回やって増えない ⑤束に客先・仕入先・金額の欄が 0 ⑥見ていない種(作る時=7,8 / 最後に 1 回だけ=404)
-入力: なし(一時ファイルを作って消す)。--final を付けた時だけ最後の種(404)を流す(実装が固まるまで流さない)
+      ④同じ入力なら同じ束・2 回やって増えない ⑤束に客先・仕入先・金額の欄が 0 ⑥見ていない種(作る時=7,8 / 最後に 1 回だけ=505)
+入力: なし(一時ファイルを作って消す)。--final を付けた時だけ最後の種(505)を流す(実装が固まるまで流さない)
 出力: 標準出力に OK/NG と、壊れた入力の止まり方・外すと赤の一覧。全部 OK で終了コード 0
 呼ぶ人: npm run sap-feed:test  /  npm run sap-feed:final(最後の種)
 触る外の物: 一時フォルダだけ
 履歴: 最後の種 101 は 11-24 に 1 回流して赤 1 件(規則 order_str の試験入力が、全体で一番新しい実績日を消して検査⑦を正しく止めた=試験入力の欠陥・feed.py は正しい)。
-      直し: 実績日は消さず未完了の工程を足す形に変更。種 101 は使い切りなので最後の種は 404 に替えた(直した後に 1 回だけ流す)
+      直し: 実績日は消さず未完了の工程を足す形に変更。種 101 は使い切りなので最後の種は 505 に替えた(直した後に 1 回だけ流す)
       11-24 種 202 は緑。その後、実物の説明シートは「作成」が文字列 YYYY/MM/DD HH:MM(基準日は日付)で検査①に止まった=仕様変更(規則 made_text・合成 Excel も実物の形に)。
       202 も使い切りなので最後の種は 303 に替えたが、303 は order_str(D1)の試験入力が種に頼っていて赤 1 件(3 番目の指図が英字始まりになり、数に直しても変わらなかった=試験入力の欠陥)。
-      直し: 先頭が 0 で数字だけの指図を試験の中で自分で作る形に変更(種に頼らない)。303 も使い切りなので最後の種は 404(--final)。アプリ別の束(段2 B)も同じ回で足した
+      直し: 先頭が 0 で数字だけの指図を試験の中で自分で作る形に変更(種に頼らない)。303 も使い切り。404 は全部緑(1 回目)。その後、機械グループ用の束 machine(分類表 machine_rules.json・上限を超えたら指図ごとに冊を割る)を足したので、最後の種は 505(--final)
 """
 import copy
 import datetime
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from feed import CHK, FORBIDDEN_KEYS, RULES, Rules, run_feed, write_outputs   # noqa: E402
+from feed import CHK, FORBIDDEN_KEYS, RULES, Rules, classify_work, run_feed, write_outputs   # noqa: E402
 from make_feed import truth_to_reference   # noqa: E402
 from make_synth_xlsx import build, serial   # noqa: E402
 from xlsx_min import XDate, write_xlsx   # noqa: E402
@@ -54,11 +56,14 @@ def sh(sheets, name):
 APPS = {'product': ['2309'], 'final': ['2526'], 'parts': ['2509', '2519']}     # app_wcs.json と同じ(試験は設定ファイルに頼らない)
 
 
-def run(sheets, prev=None, reference=None, rules=None, max_bytes=1000000, inject=None, name='x', app_wcs=None):
+MR = json.load(open(os.path.join(HERE, 'machine_rules.json'), encoding='utf-8'))      # 束 machine の分類表(設定ファイルそのもの)
+
+
+def run(sheets, prev=None, reference=None, rules=None, max_bytes=1000000, inject=None, name='x', app_wcs=None, machine_rules=None):
     _n[0] += 1
     p = os.path.join(TMP.name, '操業データ_%s_%d.xlsx' % (name, _n[0]))
     write_xlsx(p, sheets)
-    return run_feed(p, prev_record=prev, reference=reference, rules=rules, max_bytes=max_bytes, inject=inject, app_wcs=app_wcs)
+    return run_feed(p, prev_record=prev, reference=reference, rules=rules, max_bytes=max_bytes, inject=inject, app_wcs=app_wcs, machine_rules=machine_rules)
 
 
 # 生の行の列の位置(headers_spec.json の SAP_作業 / SAP_製造指図 の並び)
@@ -232,6 +237,63 @@ def case_made_text():
     return {'sheets': sheets, 'ok': lambda rec, b, d: rec['status'] == 'ok' and b['generatedAt'] == '2026-11-22T22:35:00+09:00'}
 
 
+_NODE = {}
+
+
+def node_classify(pairs):
+    """アプリ本体(src/domain/sapProgress.js の readWorkName)を node で呼んで分類した答え。[(text, wc)] → [{name, kind}]"""
+    need = [list(x) for x in dict.fromkeys((str(t or ''), str(c or '')) for t, c in pairs) if x not in _NODE]
+    if need:
+        node = shutil.which('node')
+        if not node:
+            raise RuntimeError('node が見つからない(分類の突き合わせ試験に要る)')
+        out = subprocess.run([node, os.path.join(HERE, 'classify_node.mjs')], input=json.dumps(need, ensure_ascii=False).encode('utf-8'), capture_output=True, check=True, cwd=os.path.dirname(os.path.dirname(HERE)))
+        for (t, c), r in zip(need, json.loads(out.stdout.decode('utf-8'))):
+            _NODE[(t, c)] = r
+    return [_NODE[(str(t or ''), str(c or ''))] for t, c in pairs]
+
+
+MAPPED = {w for wl in APPS.values() for w in wl}
+
+
+def exp_machine(sheets):
+    """生の行 + node(アプリ本体)の分類から: 束 machine に入るはずの {(指図, 活動): {name, kind}}・どこにも使わない工程の (全部, 未完了)"""
+    rows = [(o, r) for o, rs in included(sheets).items() for r in rs if r[WC] not in MAPPED]
+    cl = node_classify([(r[3], r[WC]) for _o, r in rows])
+    m, oth, oth_open = {}, 0, 0
+    for (o, r), c in zip(rows, cl):
+        if c['kind'] in ('machine', 'wash'):
+            m[(o, r[WA])] = c
+        else:
+            oth += 1
+            oth_open += r[WE] is None
+    return m, oth, oth_open
+
+
+def machine_ok(sheets, rec, bs):
+    """束 machine(1 冊以上)が、node の分類から作った答えと全部一致するか(工程の集合・名前・kind・指図・他アプリの作業区が混じらない・指図が冊をまたがない・suspectOrder なし)"""
+    if rec['status'] != 'ok' or not isinstance(bs, dict):
+        return False
+    ms = [bs[k] for k in sorted(bs) if k.startswith('machine-')]
+    if not ms:
+        return False
+    exp, _o, _oo = exp_machine(sheets)
+    got, ords = {}, []
+    for b in ms:
+        have = {o['order'] for o in b['ops']}
+        if {o['order'] for o in b['orders']} != have or any('suspectOrder' in o for o in b['ops']) or b['app'] != 'machine' or b['parts'] != len(ms):
+            return False
+        if set(ords) & have:
+            return False
+        ords += list(have)
+        for o in b['ops']:
+            k = (o['order'], o['act'])
+            if k in got or o['wc'] in MAPPED or exp.get(k) != {'name': o['name'], 'kind': o['kind']}:
+                return False
+            got[k] = 1
+    return set(got) == set(exp)
+
+
 def exp_app(sheets, wcs):
     """生の行だけから: そのアプリの束に入るはずの工程の鍵の集合"""
     return {(o, r[WA]) for o, rs in included(sheets).items() for r in rs if r[WC] in wcs}
@@ -276,7 +338,44 @@ def case_other_counted():
     return {'sheets': sheets, 'app': True, 'skip': ['A1'], 'ok': lambda rec, b, d: rec['status'] == 'ok' and rec['other']['ops'] == n_all > 0 and rec['other']['openOps'] == n_open}
 
 
+def case_machine_partition():
+    sheets, _ = S(SEED[0], [], 300)
+    return {'sheets': sheets, 'app': True, 'machine': True, 'skip': ['A1'], 'ok': lambda rec, b, d: machine_ok(sheets, rec, b)}
+
+
+def case_machine_rules_same_as_app():
+    sheets, _ = S(SEED[0], [], 300)
+    return {'sheets': sheets, 'app': True, 'machine': True, 'skip': ['A1'], 'ok': lambda rec, b, d: machine_ok(sheets, rec, b)}
+
+
+def case_machine_split_by_order():
+    sheets, _ = S(SEED[0], [], 40)
+    return {'sheets': sheets, 'app': True, 'machine': True, 'max_bytes': 20000, 'skip': ['A1'], 'ok': lambda rec, b, d: machine_ok(sheets, rec, b) and len([k for k in b if k.startswith('machine-')]) >= 2}
+
+
+def case_machine_history_once():
+    sheets, _ = S(SEED[0], [], 40)
+
+    def ok(rec, b, d):
+        if rec['status'] != 'ok':
+            return False
+        ks = [(w['wc'], w['week']) for k in sorted(b) if k.startswith('machine-') for w in b[k]['history']['weekly']]
+        return len([k for k in b if k.startswith('machine-')]) >= 2 and len(ks) > 0 and len(ks) == len(set(ks))
+    return {'sheets': sheets, 'app': True, 'machine': True, 'max_bytes': 20000, 'skip': ['A1'], 'ok': ok}
+
+
+def case_machine_other_remainder():
+    sheets, _ = S(SEED[0], [], 300)
+    _m, n_oth, n_open = exp_machine(sheets)
+    return {'sheets': sheets, 'app': True, 'machine': True, 'skip': ['A1'], 'ok': lambda rec, b, d: rec['status'] == 'ok' and rec['other']['ops'] == n_oth > 0 and rec['other']['openOps'] == n_open}
+
+
 RULE_CASES = {
+    'machine_partition': ('machine: 入るのは機械・洗浄の工程だけ(付帯作業・検査を入れない)・検査の作業区は入れない', case_machine_partition),
+    'machine_rules_same_as_app': ('machine: 分類がアプリ本体(sapProgress.js)と同じ答え', case_machine_rules_same_as_app),
+    'machine_split_by_order': ('machine: 上限を超えたら指図ごとに冊を割る(同じ指図が冊をまたがない)', case_machine_split_by_order),
+    'machine_history_once': ('machine: history は 1 冊目だけ(足して二重にならない)', case_machine_history_once),
+    'machine_other_remainder': ('どこにも使わない工程の件数 = machine に入れた分を引いた残り', case_machine_other_remainder),
     'app_partition': ('アプリ別: どの工程も 1 つのアプリにだけ入る・作業区が混じらない', case_app_partition),
     'app_orders_only': ('アプリ別: orders はそのアプリの作業区の工程を持つ指図だけ', case_app_orders_only),
     'app_history': ('アプリ別: history はそのアプリの作業区だけ', case_app_history),
@@ -459,7 +558,7 @@ def t3_mutants():
         results = []
         for off in (False, True):
             try:
-                rec, b, d = run(c['sheets'], reference=c.get('ref'), rules=Rules(off=[rule] if off else [], skip_checks=c.get('skip', ()) if off else ()), name='m', app_wcs=APPS if c.get('app') else None)
+                rec, b, d = run(c['sheets'], reference=c.get('ref'), rules=Rules(off=[rule] if off else [], skip_checks=c.get('skip', ()) if off else ()), name='m', app_wcs=APPS if c.get('app') else None, machine_rules=MR if c.get('machine') else None, max_bytes=c.get('max_bytes', 1000000))
                 results.append(b is not None and bool(c['ok'](rec, b, d)))
             except Exception as e:   # noqa: BLE001 規則を外して落ちた=赤
                 results.append(False)
@@ -564,6 +663,59 @@ def t7_apps():
           and all(open(os.path.join(outd, n), 'rb').read() == v for n, v in shas.items()))
 
 
+def t8_machine():
+    print('\n== 束 machine(機械グループの画面用・機械と洗浄の工程・分類は machine_rules.json・アプリ本体と同じ答え) ==')
+    # (1) 分類がアプリ本体と全工程で同じ答え(node でアプリ本体の readWorkName を呼ぶ)
+    pairs = []
+    sheets, _ = S(SEED[0], 'D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D15 D16 D17'.split(), 300)
+    pairs += [(r[3], r[WC]) for r in sh(sheets, 'SAP_作業')[1:]]
+    texts = ['', '2385:平面研削', '旋盤', 'ﾌﾗｲｽ加工', '仕様変更:旋盤', '仕様変更', '付帯作業', '付帯作業:一時置き', '応援', '現合', '洗浄', '検査前洗浄', '歯切り', '全角：コロン', '  ２３８５：円筒研削 ', '横M/C', '門M/C', '立旋盤', '2330:仕様変更', '作業 2381-0010', '三次元検査', '2509:何か']
+    codes = [str(c) for c in range(2300, 2401)] + ['B05', '', 'abc', '2509', '2519', '2330', ' 2381 ', '2381.0', '0', 'NaN']
+    pairs += [(t, c) for t in texts for c in codes]
+    node = node_classify(pairs)
+    diff = [(p_, n_, classify_work(p_[0], p_[1], MR)) for p_, n_ in zip(pairs, node) if classify_work(p_[0], p_[1], MR) != n_]
+    check('分類: Python(machine_rules.json)と sapProgress.js の readWorkName が %d 通りの(作業テキスト, 作業区)で同じ答え(うち合成データの全工程 %d 行)' % (len(set((str(t or ''), str(c or '')) for t, c in pairs)), len(sh(sheets, 'SAP_作業')) - 1), not diff, str(diff[:3]))
+    kinds = {}
+    for n_ in node:
+        kinds[n_['kind']] = kinds.get(n_['kind'], 0) + 1
+    check('分類の突き合わせは 4 つの kind(machine・wash・misc・inspect)を全部通っている', set(kinds) == {'machine', 'wash', 'misc', 'inspect'}, str(kinds))
+    # (2) 束 machine の中身
+    for n, quirks in ((40, []), (300, 'D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D15 D16 D17'.split())):
+        sheets, truth = S(SEED[0], quirks, n)
+        one = run(sheets, reference=truth_to_reference(truth), name='m1')
+        rec, bs, ds = run(sheets, reference=truth_to_reference(truth), name='m2', app_wcs=APPS, machine_rules=MR)
+        nm = '指図%d・癖%s' % (n, 'all' if quirks else 'なし')
+        check('machine %s: 検査が全部 OK(A1 を含む)' % nm, rec['status'] == 'ok', str(rec.get('reasons')))
+        if rec['status'] != 'ok':
+            continue
+        check('machine %s: 工程の集合・名前・kind が node(アプリ本体)の分類から作った答えと一致・machine の工程に検査の作業区・付帯作業なし・指図が冊をまたがない・suspectOrder なし' % nm, machine_ok(sheets, rec, bs))
+        m = rec['apps']['machine']
+        _e, n_oth, n_open = exp_machine(sheets)
+        tot = len(one[1]['ops'])
+        check('machine %s: 工程の和が全体と一致(検査アプリ %d + machine %d + どこにも使わない %d = 全体 %d)' % (nm, sum(v['ops'] for k, v in rec['apps'].items() if k != 'machine'), m['ops'], rec['other']['ops'], tot),
+              sum(v['ops'] for v in rec['apps'].values()) + rec['other']['ops'] == tot and rec['other']['ops'] == n_oth and rec['other']['openOps'] == n_open)
+        print('     記録 apps.machine: 作業区 %s・指図 %d・工程 %d(未完了 %d)・%d バイト・工程名ごと %s' % (','.join(m['wcs']), m['orders'], m['ops'], m['openOps'], m['bytes'], {k: v['ops'] for k, v in m['byName'].items()}))
+        check('machine %s: 記録に作業区・指図数・工程数・未完了数・バイト数・ハッシュ・工程名ごとの件数がある' % nm, all(k in m for k in ('wcs', 'orders', 'ops', 'openOps', 'bytes', 'sha256', 'byName', 'parts')) and sum(v['ops'] for v in m['byName'].values()) == m['ops'])
+    # (3) 上限を超えたら指図ごとに冊を割る
+    sheets, truth = S(SEED[0], [], 40)
+    rec, bs, ds = run(sheets, reference=truth_to_reference(truth), max_bytes=20000, name='m3', app_wcs=APPS, machine_rules=MR)
+    mk_ = [k for k in bs if k.startswith('machine-')] if bs else []
+    print('     上限 20000 で割る: machine は %d 冊・大きさ %s' % (len(mk_), [len(ds[k]) for k in sorted(mk_)] if ds else None))
+    check('machine 上限 20000: 2 冊以上に割れて、各冊が上限以内・指図ごとに割れていて答えと一致', rec['status'] == 'ok' and len(mk_) >= 2 and all(len(ds[k]) <= 20000 for k in mk_) and machine_ok(sheets, rec, bs), str(rec.get('reasons')))
+    # (4) 合成 3000 指図
+    sheets, truth = S(SEED[0], [], 3000)
+    rec, bs, ds = run(sheets, reference=truth_to_reference(truth), name='m4', app_wcs=APPS, machine_rules=MR)
+    sizes = {k: len(v) for k, v in (ds or {}).items()}
+    print('     指図 3000 の束の大きさ(バイト): %s・どこにも使わない工程 %s' % (sizes, rec.get('other', {}).get('ops')))
+    check('machine 指図 3000: 全部の束(machine は冊ごと)が上限 1,000,000 以内で検査が全部 OK・machine の答えが一致', rec['status'] == 'ok' and all(v <= 1000000 for v in sizes.values()) and machine_ok(sheets, rec, bs), str(rec.get('reasons')))
+    # (5) 書き出し
+    sheets, truth = S(SEED[0], [], 40)
+    rec, bs, ds = run(sheets, reference=truth_to_reference(truth), name='m5', app_wcs=APPS, machine_rules=MR)
+    outd = os.path.join(TMP.name, 'out_machine')
+    write_outputs(outd, rec, ds)
+    check('書き出し: sap-feed-machine-1.json を含む', 'sap-feed-machine-1.json' in os.listdir(outd) and 'sap-feed-record.json' in os.listdir(outd))
+
+
 def _all_keys_t(x):
     return all_keys(x)
 
@@ -601,7 +753,7 @@ def t5_forbidden():
     print('\n== ⑤ 束に客先・仕入先・金額の欄が 0 ==')
     n = 0
     bad = []
-    for seed in ((404,) if SEED[0] == 404 else (7, 8)):
+    for seed in ((505,) if SEED[0] == 505 else (7, 8)):
         sheets, truth = S(seed, 'D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D15 D16 D17'.split(), 300)
         rec, b, data = run(sheets, reference=truth_to_reference(truth))
         if b is None:
@@ -620,17 +772,18 @@ def t5_forbidden():
 def main():
     final = '--final' in sys.argv
     if final:
-        SEED[0] = 404
-        print('######## 最後の種(404)を 1 回だけ流す(直さずにそのまま報告する) ########')
-    t1_roundtrip([404] if final else [7, 8], '【最後の種 404】' if final else '【作る時の種 7,8】')
+        SEED[0] = 505
+        print('######## 最後の種(505)を 1 回だけ流す(直さずにそのまま報告する) ########')
+    t1_roundtrip([505] if final else [7, 8], '【最後の種 505】' if final else '【作る時の種 7,8】')
     t2_broken()
     t3_mutants()
     t4_determinism()
     t5_forbidden()
     t6_made()
     t7_apps()
+    t8_machine()
     if not final:
-        print('== ⑥ 見ていない種: 作る時=7,8 / 最後に 1 回だけ=404(npm run sap-feed:final・実装が固まるまで流さない) ==')
+        print('== ⑥ 見ていない種: 作る時=7,8 / 最後に 1 回だけ=505(npm run sap-feed:final・実装が固まるまで流さない) ==')
     return finish()
 
 

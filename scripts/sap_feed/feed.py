@@ -32,19 +32,19 @@ FORBIDDEN_KEYS = ('客先', '仕入先', '金額', '単価', '購買', 'MRP', '�
 ISO = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
 # 外せる規則の名前(試験用・既定は全部有効)。外した版は試験が赤になる事で、試験が働いている事を示す
-RULES = ('app_partition', 'app_orders_only', 'app_history', 'other_counted', 'made_text', 'by_name', 'order_str', 'act_str', 'done_by_end', 'date_floor', 'std_zero_null', 'unit_h_only', 'suspect_flag',
+RULES = ('machine_partition', 'machine_rules_same_as_app', 'machine_split_by_order', 'machine_history_once', 'machine_other_remainder', 'app_partition', 'app_orders_only', 'app_history', 'other_counted', 'made_text', 'by_name', 'order_str', 'act_str', 'done_by_end', 'date_floor', 'std_zero_null', 'unit_h_only', 'suspect_flag',
          'keep_weekend', 'exclude_done_orders', 'drop_wc_empty', 'item_text_raw', 'gen_separate')
 CHK = {i: c for i, c in enumerate('①②③④⑤⑥⑦⑧⑨⑩⑪⑫', 1)}
 CHK['P1'] = 'P1'
 CHK['A1'] = 'A1'   # アプリ別の分け方の検査(段2 に足した物・app_wcs がある時だけ)   # 型の検査(日付が文字・数値セルの指図 など)。設計の①〜⑫に足した物
 
-REQ_WORK = ['指図', '活動', '作業区', '作業数量', '実績実行開始日', '実績実行終了日', '標準値 1', '標準値 2', '標準値 3', '最早実行開始日', '最早実行終了日']
+REQ_WORK = ['指図', '活動', '作業区', '作業 Text', '作業数量', '実績実行開始日', '実績実行終了日', '標準値 1', '標準値 2', '標準値 3', '最早実行開始日', '最早実行終了日']
 REQ_HEAD = ['指図', '品目', '品目 Text', '指図タイプ', '指図数量', '基準開始日付', '基準終了日付', 'システム Status']
 LABEL_BASE = '今日（計算の基準日）'
 LABEL_MADE = '作成'
 # 列ごとの型: text=文字 / textopt=文字か空 / int=整数 / num=数か空 / date=日付 / dateopt=日付か空
 TYPES = {
-    'SAP_作業': {'指図': 'text', '活動': 'text', '作業区': 'textopt', '作業数量': 'int', '実績実行開始日': 'dateopt', '実績実行終了日': 'dateopt',
+    'SAP_作業': {'指図': 'text', '活動': 'text', '作業区': 'textopt', '作業 Text': 'textopt', '作業数量': 'int', '実績実行開始日': 'dateopt', '実績実行終了日': 'dateopt',
                '標準値 1': 'num', '標準値 2': 'num', '標準値 3': 'num', '最早実行開始日': 'date', '最早実行終了日': 'date'},
     'SAP_製造指図': {'指図': 'text', '品目': 'textopt', '品目 Text': 'textopt', '指図タイプ': 'text', '指図数量': 'int',
                  '基準開始日付': 'date', '基準終了日付': 'date', 'システム Status': 'text'},
@@ -61,6 +61,48 @@ class Rules:
 
     def on(self, name):
         return name not in self.off
+
+
+def js_number(code):
+    """JS の Number(code) と同じ(空=0・数でない=NaN)。sapProgress.js readWorkName の c と同じ値にする"""
+    t = str(code if code is not None else '').strip()
+    if t == '':
+        return 0.0
+    if re.fullmatch(r'[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?', t):
+        return float(t)
+    return float('nan')
+
+
+def classify_work(text, code, mr, same_as_app=True):
+    """作業テキスト・作業区 → {name, kind}(kind: machine / inspect / wash / misc)。src/domain/sapProgress.js の readWorkName と同じ答え(表は machine_rules.json)。
+    same_as_app=False は規則を外した版(試験用): 作業区コードの範囲の表を使わない"""
+    raw = re.sub(r'\s+', ' ', str(text or '').replace('：', ':')).strip()
+    t = re.sub(r'^\d{4}[:\s]+', '', raw)
+    c = js_number(code)
+    ic = mr['inspect_codes']
+    for k, nm in ic.items():
+        if c == float(k):
+            return {'name': nm, 'kind': 'inspect'}
+    if re.search(mr['wash']['pattern'], t):
+        return {'name': mr['wash']['name'], 'kind': 'wash'}
+    head = t.split(':')[0]
+    is_change = bool(re.search(mr['change']['head_pattern'], head))
+    mi = mr['misc']
+    if not is_change and (re.search(mi['head_pattern'], head) or re.search(mi['text_pattern'], t)):
+        return {'name': mi['name_if_text_contains'][1] if mi['name_if_text_contains'][0] in t else mi['name'], 'kind': 'misc'}
+    if same_as_app:
+        for a, b, nm in mr['code_fallback']:
+            if a <= c <= b:
+                return {'name': nm, 'kind': 'machine'}
+    if is_change:
+        for k, nm in mr['name_rules']:
+            if k in t:
+                return {'name': nm, 'kind': 'machine'}
+        return {'name': mr['change']['default_name'], 'kind': 'machine'}
+    for k, nm in mr['name_rules']:
+        if k in head or k in t:
+            return {'name': nm, 'kind': 'machine'}
+    return {'name': mi['default_name'], 'kind': 'misc'}
 
 
 def sha256_file(path):
@@ -191,7 +233,8 @@ def parse_work(rows, pos, rules, dropped, info):
             act = str(int(act))              # 規則を外した版: 活動を数に直す
         wc = g(row, pos['作業区'])
         wc = '' if blank(wc) else val(wc).strip()
-        r = {'order': order, 'act': act, 'wc': wc, 'qty': toint(g(row, pos['作業数量'])) or 0, 'row': ri}
+        tx = g(row, pos['作業 Text'])
+        r = {'order': order, 'act': act, 'wc': wc, 'text': '' if blank(tx) else val(tx), 'qty': toint(g(row, pos['作業数量'])) or 0, 'row': ri}
         for nm, key in (('実績実行開始日', 'aS'), ('実績実行終了日', 'aE'), ('最早実行開始日', 'eS'), ('最早実行終了日', 'eE')):
             c = g(row, pos[nm])
             if c is not None and kind(c) == 'date':
@@ -314,7 +357,7 @@ def stop_record(base, stage, checks, reason_lines, extra=None):
     return rec
 
 
-def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_BYTES, inject=None, app_wcs=None):
+def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_BYTES, inject=None, app_wcs=None, machine_rules=None):
     rules = rules or Rules()
     base = {'schema': SCHEMA, 'fileName': os.path.basename(path)}
     checks = []
@@ -471,6 +514,7 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
     counts = {'std_all_zero': 0, 'unit_blank': 0, 'unit_other': 0}
     excluded_hours = 0.0
     ops_out = []
+    text_by_key = {}
     for r, suspect in kept_ops:
         s = [x[0] for x in r['std']]
         allzero = all(v is None or v == 0 for v in s)
@@ -492,6 +536,7 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
                 vals.append(v)
         if allzero and rules.on('std_zero_null') and any(x is not None for x in s):
             counts['std_all_zero'] += 1
+        text_by_key[(r['order'], r['act'])] = r['text']
         ops_out.append({'order': r['order'], 'act': r['act'], 'wc': r['wc'], 'qty': r['qty'], 'std1': vals[0], 'std2': vals[1], 'std3': vals[2],
                         'done': done, 'actualEnd': fmt(r['aE']),
                         'earlyStart': fmt(r['eS']), 'earlyEnd': fmt(r['eE']),
@@ -587,6 +632,17 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
                     a1_probs.append('作業区 %s が %s と %s の両方にある(設定の重なり)' % (w, owner[w], app))
                 else:
                     owner[w] = app
+        machine_ops = []
+        if machine_rules is not None:
+            mkinds = set(machine_rules['machine_kinds'])
+            for o in ops_out:
+                if o['wc'] in owner:
+                    continue                                                # 検査の作業区(アプリの束)が先
+                c = classify_work(text_by_key.get((o['order'], o['act']), ''), o['wc'], machine_rules, rules.on('machine_rules_same_as_app'))
+                if c['kind'] in mkinds or not rules.on('machine_partition'):   # 規則を外した版: 属さない工程を全部 machine に入れる
+                    d = {k: v for k, v in o.items() if k != 'suspectOrder'}      # 機械グループの画面は suspectOrder を読まない(sapGroups.js が順番から自分で数える)
+                    d['name'], d['kind'] = c['name'], c['kind']
+                    machine_ops.append(d)
         for app, wl in app_wcs.items():
             if rules.on('app_partition'):
                 a_ops = [o for o in ops_out if owner.get(o['wc']) == app]
@@ -599,7 +655,54 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
                 a_ord = list(orders_out)                                    # 規則を外した版: 工程の無い指図も入れる
             a_wk = [w for w in weekly if w['wc'] in wl] if rules.on('app_history') else list(weekly)
             parts[app] = (tuple(wl), a_ord, a_ops, a_wk)
-        other_ops = [o for o in ops_out if o['wc'] not in owner]
+        m_keys = {(o['order'], o['act']) for o in machine_ops}
+        if rules.on('machine_other_remainder'):
+            other_ops = [o for o in ops_out if o['wc'] not in owner and (o['order'], o['act']) not in m_keys]
+        else:
+            other_ops = [o for o in ops_out if o['wc'] not in owner]       # 規則を外した版: machine に入れた分を引かない(二重に数える)
+        if machine_rules is not None:
+            m_wcs = sorted({o['wc'] for o in machine_ops})
+            m_have = {o['order'] for o in machine_ops}
+            m_orders = [o for o in orders_out if o['order'] in m_have]
+            m_weekly = [w for w in weekly if w['wc'] in m_wcs]
+            by_ord = {}
+            for o in machine_ops:
+                by_ord.setdefault(o['order'], []).append(o)
+
+            def jl(x):
+                return len(json.dumps(x, ensure_ascii=False, separators=(',', ':')).encode('utf-8')) + 1
+            overhead = len(json.dumps(mkbundle('machine', m_wcs, [], [], m_weekly), ensure_ascii=False, separators=(',', ':')).encode('utf-8')) + 6000
+            budget = max(1000, max_bytes - overhead)
+            chunks, cur, cur_sz = [], [], 0
+            for o in m_orders:
+                u = jl(o) + sum(jl(x) for x in by_ord[o['order']])
+                if cur and cur_sz + u > budget:
+                    chunks.append(cur)
+                    cur, cur_sz = [], 0
+                cur.append(o)
+                cur_sz += u
+            if cur:
+                chunks.append(cur)
+            if not chunks:
+                chunks = [[]]
+            if not rules.on('machine_split_by_order') and len(chunks) > 1:
+                # 規則を外した版: 工程を並び順に割る(同じ指図が複数の束に入る)
+                n = len(chunks)
+                chunks = []
+                for i in range(n):
+                    chunks.append(m_orders)
+                m_split = [[x for j, x in enumerate(machine_ops) if j % n == i] for i in range(n)]
+            else:
+                m_split = [[x for o in ch for x in by_ord[o['order']]] for ch in chunks]
+            for i, (ch, mo) in enumerate(zip(chunks, m_split), 1):
+                if rules.on('machine_split_by_order'):
+                    ords = ch
+                else:
+                    have = {x['order'] for x in mo}
+                    ords = [o for o in m_orders if o['order'] in have]
+                wk_i = m_weekly if (i == 1 or not rules.on('machine_history_once')) else []
+                parts['machine-%d' % i] = (tuple(m_wcs), ords, mo, wk_i)
+            m_parts = len(chunks)
         if not rules.on('other_counted'):
             other_ops = []                                                  # 規則を外した版: 属さない工程を黙って捨てる(件数を出さない)
         n_app = sum(len(v[2]) for v in parts.values())
@@ -620,6 +723,12 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
             have = {o['order'] for o in a_ops}
             if any(o['order'] not in have for o in ords):
                 a1_probs.append('%s の束に、そのアプリの工程が 1 つも無い指図が入っている' % app)
+        if machine_rules is not None:
+            wk_keys = [(w['wc'], w['week']) for k, v in parts.items() if k.startswith('machine-') for w in v[3]]
+            if len(wk_keys) != len(set(wk_keys)):
+                a1_probs.append('machine の束の history が複数の束で重複している(足すと二重になる)')
+            if any(o['kind'] not in set(machine_rules['machine_kinds']) for k, v in parts.items() if k.startswith('machine-') for o in v[2]):
+                a1_probs.append('machine の束に、機械・洗浄でない工程(付帯作業・検査など)が入っている')
         if sum(sum(1 for o in v[2] if not o['done']) for v in parts.values()) + sum(1 for o in other_ops if not o['done']) != len(open_ops):
             a1_probs.append('未完了の工程の数が、アプリ分+どれにも属さない分と全体で合わない')
         h_parts = sum(hrs(v[2]) for v in parts.values()) + hrs(other_ops)
@@ -630,8 +739,14 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
                          'アプリ別の分け方(重複 0・漏れは「どれにも属さない」に件数で出る・他アプリの作業区が混じらない・和が全体と一致): ' + ('全部合っている' if not a1_probs else ' / '.join(a1_probs))))
         other_info = {'ops': len(other_ops), 'openOps': sum(1 for o in other_ops if not o['done']), 'wcs': sorted({o['wc'] for o in other_ops}),
                       'orders': len({o['order'] for o in other_ops}),
-                      'note': 'どのアプリの作業区にも無い工程。束にしない(件数だけ)。理由: 全体の大部分で 1 個が上限を超える・設計 C-3 のアプリ別の大きさは検査の作業区だけの前提'}
-    bundles = {k: mkbundle(k if app_wcs is not None else None, v[0], v[1], v[2], v[3]) for k, v in parts.items()}
+                      'note': 'どのアプリの検査の作業区にも、機械グループ(machine)にも使わない工程(付帯作業など)。束にしない(件数だけ)。machine に入れた分は引いてある'}
+    bundles = {}
+    for k, v in parts.items():
+        if k.startswith('machine-'):
+            bundles[k] = mkbundle('machine', v[0], v[1], v[2], v[3])
+            bundles[k]['part'], bundles[k]['parts'] = int(k.split('-')[1]), m_parts
+        else:
+            bundles[k] = mkbundle(k if app_wcs is not None else None, v[0], v[1], v[2], v[3])
     bad_keys = sorted({k for b in bundles.values() for k in _all_keys(b) if any(f.lower() in k.lower() for f in FORBIDDEN_KEYS)})
     checks.append(mk(11, not bad_keys or 11 in rules.skip, len(bad_keys), '束の中に客先・仕入先・金額などの欄名が 0 か' + ('(0 だった)' if not bad_keys else ': 見つかった ' + ','.join(bad_keys))))
     bundle_checks['items'] = checks
@@ -656,8 +771,24 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
     if app_wcs is None:
         rec.update({'bundleSha256': hashlib.sha256(datas['all']).hexdigest(), 'bundleBytes': len(datas['all'])})
         return rec, bundles['all'], datas['all']
-    rec['apps'] = {k: {'wcs': list(parts[k][0]), 'orders': len(parts[k][1]), 'ops': len(parts[k][2]), 'openOps': sum(1 for o in parts[k][2] if not o['done']),
-                       'bytes': len(datas[k]), 'sha256': hashlib.sha256(datas[k]).hexdigest()} for k in parts}
+    def entry(keys):
+        ords = {x['order'] for k in keys for x in parts[k][2]}
+        d = {'wcs': list(parts[keys[0]][0]), 'orders': len(ords), 'ops': sum(len(parts[k][2]) for k in keys), 'openOps': sum(1 for k in keys for o in parts[k][2] if not o['done']),
+             'bytes': sum(len(datas[k]) for k in keys), 'sha256': hashlib.sha256(b''.join(datas[k] for k in keys)).hexdigest()}
+        return d
+    rec['apps'] = {k: entry([k]) for k in parts if not k.startswith('machine-')}
+    mk_ = sorted(k for k in parts if k.startswith('machine-'))
+    if mk_:
+        e = entry(mk_)
+        e['parts'] = [{'file': 'sap-feed-%s.json' % k, 'orders': len(parts[k][1]), 'ops': len(parts[k][2]), 'bytes': len(datas[k]), 'sha256': hashlib.sha256(datas[k]).hexdigest()} for k in mk_]
+        byn = {}
+        for k in mk_:
+            for o in parts[k][2]:
+                x = byn.setdefault(o['name'], {'ops': 0, 'openOps': 0})
+                x['ops'] += 1
+                x['openOps'] += 0 if o['done'] else 1
+        e['byName'] = dict(sorted(byn.items()))
+        rec['apps']['machine'] = e
     rec['other'] = other_info
     rec['note'] += '。アプリ別に分けた(束の大きさの検査は各束ごと)'
     return rec, bundles, datas

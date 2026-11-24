@@ -33,12 +33,15 @@ def main(argv=None):
     ap.add_argument('--prev-record')
     ap.add_argument('--truth')
     ap.add_argument('--app-wcs', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app_wcs.json'), help='アプリ別の作業区の表(既定 app_wcs.json)')
+    ap.add_argument('--machine-rules', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'machine_rules.json'), help='機械グループの分類表(既定 machine_rules.json・束 machine を出す)')
+    ap.add_argument('--no-machine', action='store_true', help='束 machine を出さない')
     ap.add_argument('--single', action='store_true', help='アプリ別に分けず全部入りの 1 個(大きいので上限を超えやすい・試験用)')
     a = ap.parse_args(argv)
     prev = load_json(a.prev_record) if a.prev_record and os.path.exists(a.prev_record) else None
     ref = truth_to_reference(load_json(a.truth)) if a.truth else None
     app = None if a.single else load_json(a.app_wcs)['apps']
-    rec, _bundle, data = run_feed(a.xlsx, prev_record=prev, reference=ref, app_wcs=app)
+    mr = None if (a.single or a.no_machine) else load_json(a.machine_rules)
+    rec, _bundle, data = run_feed(a.xlsx, prev_record=prev, reference=ref, app_wcs=app, machine_rules=mr)
     write_outputs(a.out_dir, rec, data)
     print('結果: %s' % rec['status'])
     if rec['status'] == 'stopped':
@@ -49,7 +52,7 @@ def main(argv=None):
     if rec['status'] == 'ok':
         if 'apps' in rec:
             for k, v in rec['apps'].items():
-                print('束 %s: 作業区 %s・指図 %d・工程 %d(未完了 %d)・%d バイト' % (k, ','.join(v['wcs']), v['orders'], v['ops'], v['openOps'], v['bytes']))
+                print('束 %s: 作業区 %d 種類・指図 %d・工程 %d(未完了 %d)・%d バイト%s' % (k, len(v['wcs']), v['orders'], v['ops'], v['openOps'], v['bytes'], ('・%d 冊' % len(v['parts'])) if 'parts' in v else ''))
             o = rec['other']
             print('どのアプリにも属さない(束にしない): 工程 %d(未完了 %d)・作業区 %d 種類' % (o['ops'], o['openOps'], len(o['wcs'])))
         else:

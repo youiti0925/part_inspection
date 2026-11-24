@@ -1,0 +1,17 @@
+{
+  "_about": "機械グループの分類表(設定)。元: src/domain/sapProgress.js の CODE_FALLBACK・NAME_RULES・readWorkName(11-24)。Python(feed.py の classify_work)はこの表を読む。sapProgress.js と同じ答えを返す事は npm run sap-feed:test が node を呼んで全工程で確かめる(sapProgress.js を直したら、ここも同じに直す)。束 machine に入れるのは kind が machine と wash の工程だけ(misc=付帯作業 と inspect=検査 は入れない)。",
+  "inspect_codes": {"2509": "三次元検査", "2519": "受入検査"},
+  "wash": {"pattern": "洗浄", "name": "面取り洗浄"},
+  "change": {"head_pattern": "^仕様変更", "default_name": "仕様変更"},
+  "misc": {"head_pattern": "^付帯作業", "text_pattern": "一時置き|応援|現合", "name": "付帯作業", "name_if_text_contains": ["一時置き", "付帯作業(一時置き)"], "default_name": "付帯作業"},
+  "code_fallback": [
+    [2381, 2389, "平面研削"], [2371, 2379, "円筒研削"], [2390, 2396, "歯切り"], [2320, 2329, "フライス"], [2330, 2336, "仕様変更"],
+    [2351, 2359, "横M/C"], [2361, 2369, "門M/C"], [2341, 2349, "立旋盤"], [2313, 2319, "旋盤"]
+  ],
+  "name_rules": [
+    ["平面研削", "平面研削"], ["円筒研削", "円筒研削"], ["歯切り", "歯切り"],
+    ["ﾌﾗｲｽ", "フライス"], ["フライス", "フライス"], ["門M/C", "門M/C"], ["横M/C", "横M/C"],
+    ["立旋盤", "立旋盤"], ["旋盤", "旋盤"]
+  ],
+  "machine_kinds": ["machine", "wash"]
+}
