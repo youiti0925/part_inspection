@@ -12,6 +12,7 @@
     "attic-guard": "node scripts/selftest-keep-old-assets.mjs",
     "version-watch": "node scripts/selftest-version-watch.mjs && node scripts/verify-version-watch.mjs",
     "reload-gate": "node scripts/verify-reload-gate.mjs",
+    "sap-synth:test": "python -I -X utf8 scripts/sap_synth/selftest_synth.py",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "node --test \"src/domain/**/*.test.mjs\" \"src/data/**/*.test.mjs\" \"src/opsim/**/*.test.mjs\"",

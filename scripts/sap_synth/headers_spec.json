@@ -1,0 +1,69 @@
+{
+  "_about": "見本(操業データ_*.xlsx)の見出し・型の一覧。根拠は docs/設計_SAP生データ取込と加工_1123.md の A-2(シートの表)と A-3(中心の 2 枚の列と型)だけ。見本の xlsx は開いていない・値は写していない。",
+  "_columns_format": "[見出し, 型, 欠けてよいか(1=よい)]。型: text=文字 / int=整数 / number=数 / date=日付 / any=型が分かっていない",
+  "_normalize": "比べる時は 見出し末尾の ( … ) と余分な空白を無視する(元の見出しに '作業数量 (MEINH)' の様な付き方がある事が scripts/sap_narrow_for_app.py に書いてある)。列の並び順は設計書に無いので比べない(見出しの重なりと数だけ比べる)。",
+  "_unconfirmed": "名前が (未確認) で始まる列と headers_known=false のシートは、設計書に見出しが書かれていない。名前を作らず placeholder にしてある。本物の見出し名が分かったら ここだけ直す。",
+  "spec_version": 1,
+  "sheets": [
+    {
+      "name": "説明", "kind": "text", "headers_known": false, "cols": 2, "rows": 19,
+      "note": "A=項目名・B=値の 2 列・19 行・見出し行なし。A に『今日（計算の基準日）』『作成』の行があり、B はそれぞれ日付(作成は時刻つき)。他の 17 行の文は設計書に無い(作り物の文を入れる)。",
+      "required_labels": [["今日（計算の基準日）", "date"], ["作成", "date"]]
+    },
+    {"name": "組立指図", "kind": "calc", "headers_known": false, "cols": 27},
+    {"name": "不足部品", "kind": "calc", "headers_known": false, "cols": 22},
+    {"name": "作業区", "kind": "calc", "headers_known": false, "cols": 31},
+    {"name": "作業区_週負荷", "kind": "calc", "headers_known": false, "cols": 9},
+    {"name": "工程_未完了", "kind": "calc", "headers_known": false, "cols": 23},
+    {"name": "実績_週", "kind": "calc", "headers_known": false, "cols": 5},
+    {"name": "作業区MT", "kind": "calc", "headers_known": false, "cols": 4},
+    {
+      "name": "SAP_製造指図", "kind": "raw", "headers_known": "partial", "cols": 15,
+      "columns": [
+        ["指図", "text", 0],
+        ["品目", "text", 1],
+        ["品目 Text", "text", 1],
+        ["指図タイプ", "text", 0],
+        ["指図数量", "int", 0],
+        ["(未確認)指図数量の単位", "text", 0],
+        ["基準開始日付", "date", 0],
+        ["基準終了日付", "date", 0],
+        ["システム Status", "text", 0],
+        ["MRP 管理者", "text", 1],
+        ["製造責任者", "text", 1],
+        ["(未確認)列12", "any", 1],
+        ["(未確認)列13", "any", 1],
+        ["(未確認)列14", "any", 1],
+        ["(未確認)列15", "any", 1]
+      ]
+    },
+    {
+      "name": "SAP_作業", "kind": "raw", "headers_known": "partial", "cols": 20,
+      "columns": [
+        ["指図", "text", 0],
+        ["活動", "text", 0],
+        ["作業区", "text", 1],
+        ["作業 Text (短)", "text", 1],
+        ["能力カテゴリ", "any", 1],
+        ["作業数量", "int", 0],
+        ["作業単位", "text", 0],
+        ["実績実行開始日", "date", 1],
+        ["実績実行終了日", "date", 1],
+        ["標準値 1", "number", 1],
+        ["標準値単位", "text", 1],
+        ["標準値 2", "number", 1],
+        ["標準値単位", "text", 1],
+        ["標準値 3", "number", 1],
+        ["標準値単位", "text", 1],
+        ["標準値 4", "number", 1],
+        ["標準値単位", "text", 1],
+        ["最早実行開始日", "date", 0],
+        ["最早実行終了日", "date", 0],
+        ["確認", "text", 0]
+      ]
+    },
+    {"name": "SAP_組立指図の部品", "kind": "raw", "headers_known": false, "cols": 16},
+    {"name": "SAP_在庫", "kind": "raw", "headers_known": false, "cols": 23},
+    {"name": "SAP_購買発注", "kind": "raw", "headers_known": false, "cols": 28}
+  ]
+}
