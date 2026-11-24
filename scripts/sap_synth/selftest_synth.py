@@ -107,7 +107,7 @@ def probes(book):
     txt = [val(r, col(hh, '品目 Text')) or '' for r in hr]
     p['D15'] = any(',' in t for t in txt) and any(any('Ａ' <= ch <= 'ｚ' for ch in t) for t in txt) and any(' ' in t for t in txt)
     dh = dict((r[0][1], r[1][1]) for r in dict(book)['説明'] if r and r[0] and len(r) > 1 and r[1])
-    p['D16'] = int(dh['作成']) - int(dh['今日（計算の基準日）']) == 1
+    p['D16'] = (datetime.date(*[int(x) for x in dh['作成'][:10].split('/')]) - (EPOCH_DATE + datetime.timedelta(days=int(dh['今日（計算の基準日）'])))).days == 1
     bs = [val(r, col(hh, '基準開始日付')) for r in hr]
     p['D17'] = max(bs) - dh['今日（計算の基準日）'] <= 35
     return p
@@ -184,6 +184,7 @@ def main():
         '余計なシートを足す': lambda dd, b: b.append(('メモ', [[('str', 'x')]])),
         'シートの並びを入れ替える': lambda dd, b: b.reverse(),
         '説明シートの基準日を文字にする': lambda dd, b: dd['説明'][1].__setitem__(1, ('str', '2026-11-22')),
+        '説明シートの「作成」を日付型にする(実物は文字列)': lambda dd, b: dd['説明'][2].__setitem__(1, ('date', 46000.9)),
         '説明シートの「作成」の行を消す': lambda dd, b: dd['説明'].pop(2),
         'SAP_在庫の列数を 22 列にする': lambda dd, b: [r.pop() for r in dd['SAP_在庫']],
     }

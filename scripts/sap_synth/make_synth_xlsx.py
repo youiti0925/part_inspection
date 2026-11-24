@@ -322,10 +322,9 @@ def build(seed=1, base_date=datetime.date(2026, 11, 22), n_orders=40, wcs=INSPEC
 
     # ---- 説明 ----
     created = datetime.datetime.combine(base + datetime.timedelta(days=1 if 'D16' in q else 0), datetime.time(22, 35))
-    created_serial = serial(created.date()) + (22 * 60 + 35) / 1440.0
     desc = [['操業データ(合成・作り物)', None]]
     desc.append(['今日（計算の基準日）', XDate(serial(base))])
-    desc.append(['作成', XDate(round(created_serial, 6))])
+    desc.append(['作成', created.strftime('%Y/%m/%d %H:%M')])    # 実物(11-24)は文字列 YYYY/MM/DD HH:MM
     for i in range(len(desc), 19):
         desc.append(['説明行%02d(作り物)' % (i + 1), '作り物の説明文'])
 

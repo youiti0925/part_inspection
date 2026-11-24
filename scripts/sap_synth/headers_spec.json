@@ -7,8 +7,8 @@
   "sheets": [
     {
       "name": "説明", "kind": "text", "headers_known": false, "cols": 2, "rows": 19,
-      "note": "A=項目名・B=値の 2 列・19 行・見出し行なし。A に『今日（計算の基準日）』『作成』の行があり、B はそれぞれ日付(作成は時刻つき)。他の 17 行の文は設計書に無い(作り物の文を入れる)。",
-      "required_labels": [["今日（計算の基準日）", "date"], ["作成", "date"]]
+      "note": "A=項目名・B=値の 2 列・19 行・見出し行なし。A に『今日（計算の基準日）』『作成』の行があり、B は 基準日=日付(数値)・作成=文字列 YYYY/MM/DD HH:MM(実物 11-24 の形)。他の 17 行の文は設計書に無い(作り物の文を入れる)。",
+      "required_labels": [["今日（計算の基準日）", "date"], ["作成", "datetext"]]
     },
     {"name": "組立指図", "kind": "calc", "headers_known": false, "cols": 27},
     {"name": "不足部品", "kind": "calc", "headers_known": false, "cols": 22},

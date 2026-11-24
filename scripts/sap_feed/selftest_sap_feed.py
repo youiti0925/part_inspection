@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """段2(読む・検査する・絞る)の試験(家の PC で・合成データだけ)。設計 §E の 6 つ + 規則ごとの「外すと赤」。
 目的: ①合成データで往復(分かっている答えと同じ) ②壊れた入力が全部止まって理由が出る ③規則ごとに、外した版を自動で作り試験が赤になる事を見せる
-      ④同じ入力なら同じ束・2 回やって増えない ⑤束に客先・仕入先・金額の欄が 0 ⑥見ていない種(作る時=7,8 / 最後に 1 回だけ=202)
-入力: なし(一時ファイルを作って消す)。--final を付けた時だけ最後の種(202)を流す(実装が固まるまで流さない)
+      ④同じ入力なら同じ束・2 回やって増えない ⑤束に客先・仕入先・金額の欄が 0 ⑥見ていない種(作る時=7,8 / 最後に 1 回だけ=303)
+入力: なし(一時ファイルを作って消す)。--final を付けた時だけ最後の種(303)を流す(実装が固まるまで流さない)
 出力: 標準出力に OK/NG と、壊れた入力の止まり方・外すと赤の一覧。全部 OK で終了コード 0
 呼ぶ人: npm run sap-feed:test  /  npm run sap-feed:final(最後の種)
 触る外の物: 一時フォルダだけ
 履歴: 最後の種 101 は 11-24 に 1 回流して赤 1 件(規則 order_str の試験入力が、全体で一番新しい実績日を消して検査⑦を正しく止めた=試験入力の欠陥・feed.py は正しい)。
-      直し: 実績日は消さず未完了の工程を足す形に変更。種 101 は使い切りなので最後の種は 202 に替えた(直した後に 1 回だけ流す)
+      直し: 実績日は消さず未完了の工程を足す形に変更。種 101 は使い切りなので最後の種は 303 に替えた(直した後に 1 回だけ流す)
+      11-24 種 202 は緑。その後、実物の説明シートは「作成」が文字列 YYYY/MM/DD HH:MM(基準日は日付)で検査①に止まった=仕様変更(規則 made_text・合成 Excel も実物の形に)。
+      202 も使い切りなので最後の種は 303(--final)
 """
 import copy
 import datetime
@@ -220,7 +222,13 @@ def case_gen_separate():
     return {'sheets': sheets, 'ok': lambda rec, b, d: rec['status'] == 'ok' and b['baseDate'] == '2026-11-22' and b['generatedAt'].startswith('2026-11-23T22:35')}
 
 
+def case_made_text():
+    sheets, _ = S(SEED[0])
+    return {'sheets': sheets, 'ok': lambda rec, b, d: rec['status'] == 'ok' and b['generatedAt'] == '2026-11-22T22:35:00+09:00'}
+
+
 RULE_CASES = {
+    'made_text': ('「作成」が文字列 YYYY/MM/DD HH:MM(実物の形)でも読む', case_made_text),
     'by_name': ('見出しを名前で探す(列の記号で読まない)', case_by_name),
     'order_str': ('D1 指図は文字のまま(先頭の 0・英字を落とさない)', case_order_str),
     'act_str': ('D2 活動は 4 桁の文字', case_act_str),
@@ -422,6 +430,34 @@ def t3_mutants():
     check('外せる規則 %d 個すべてに「外すと赤」の例がある' % len(RULES), covered == set(RULES), str(set(RULES) - covered))
 
 
+def t6_made():
+    print('== 説明シートの「作成」(実物は文字列 YYYY/MM/DD HH:MM・基準日は日付のまま厳しく) ==')
+    sheets, _ = S(SEED[0])
+    desc = lambda sh_: sh(sh_, '説明')[2]   # noqa: E731
+    assert desc(sheets)[0] == '作成' and isinstance(desc(sheets)[1], str)
+
+    def with_made(v):
+        s2 = copy.deepcopy(sheets)
+        desc(s2)[1] = v
+        return run(s2)
+    for label, v, want in (('文字列 YYYY/MM/DD HH:MM', '2026/11/23 22:35', '2026-11-23T22:35:00+09:00'),
+                           ('文字列 秒あり', '2026/11/23 22:35:10', '2026-11-23T22:35:10+09:00'),
+                           ('文字列 - 区切り', '2026-11-23 22:35', '2026-11-23T22:35:00+09:00'),
+                           ('日付型', XDate(serial(BASE) + 1 + (22 * 60 + 35) / 1440.0), '2026-11-23T22:35:00+09:00')):
+        rec, b, _ = with_made(v)
+        check('作成=%s で通り generatedAt=%s' % (label, want), rec['status'] == 'ok' and b['generatedAt'] == want, str(rec['reasons']))
+    for label, v in (('別形式の文字(11月23日)', '11月23日 22:35'), ('時刻なしの文字', '2026/11/23'), ('空', None), ('存在しない日付', '2026/13/40 25:99')):
+        rec, b, _ = with_made(v)
+        print('     止まり方: [作成=%s] 段=%s 理由=%s' % (label, rec.get('stoppedStage'), ' | '.join(rec['reasons'])))
+        check('作成=%s は止まる(検査①)' % label, rec['status'] == 'stopped' and '①' in red_ids(rec))
+    s3 = copy.deepcopy(sheets)
+    sh(s3, '説明')[1][1] = '2026/11/22'
+    rec, b, _ = run(s3)
+    check('基準日は文字だと止まる(日付のまま厳しく)', rec['status'] == 'stopped' and '①' in red_ids(rec))
+    rec, b, _ = run(sheets, rules=Rules(off=['made_text']))
+    check('直す前の版(作成=日付のみ許す)に戻すと、文字列の作成で赤(止まる)', rec['status'] == 'stopped')
+
+
 def t4_determinism():
     print('\n== ④ 同じ入力なら同じ束・2 回やって増えない ==')
     sheets, truth = S(SEED[0], ['D1', 'D5', 'D9'])
@@ -455,7 +491,7 @@ def t5_forbidden():
     print('\n== ⑤ 束に客先・仕入先・金額の欄が 0 ==')
     n = 0
     bad = []
-    for seed in ((202,) if SEED[0] == 202 else (7, 8)):
+    for seed in ((303,) if SEED[0] == 303 else (7, 8)):
         sheets, truth = S(seed, 'D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D15 D16 D17'.split(), 300)
         rec, b, data = run(sheets, reference=truth_to_reference(truth))
         if b is None:
@@ -474,15 +510,16 @@ def t5_forbidden():
 def main():
     final = '--final' in sys.argv
     if final:
-        SEED[0] = 202
-        print('######## 最後の種(202)を 1 回だけ流す(直さずにそのまま報告する) ########')
-    t1_roundtrip([202] if final else [7, 8], '【最後の種 202】' if final else '【作る時の種 7,8】')
+        SEED[0] = 303
+        print('######## 最後の種(303)を 1 回だけ流す(直さずにそのまま報告する) ########')
+    t1_roundtrip([303] if final else [7, 8], '【最後の種 303】' if final else '【作る時の種 7,8】')
     t2_broken()
     t3_mutants()
     t4_determinism()
     t5_forbidden()
+    t6_made()
     if not final:
-        print('== ⑥ 見ていない種: 作る時=7,8 / 最後に 1 回だけ=202(npm run sap-feed:final・実装が固まるまで流さない) ==')
+        print('== ⑥ 見ていない種: 作る時=7,8 / 最後に 1 回だけ=303(npm run sap-feed:final・実装が固まるまで流さない) ==')
     return finish()
 
 

@@ -4,7 +4,7 @@
 入力: xlsx のパス(--spec で headers_spec.json の別の場所も指定できる)
 出力: 差の一覧を標準出力へ・差が 0 なら「差 0」と出して終了コード 0・1 つでもあれば 1
 検査の中身: ①シートの名前と並びが同じ ②各シートの列数が同じ ③見出しが同じ(末尾の ( … ) と空白は無視・並び順は比べない) ④各列の値の型(文字/整数/数/日付)と空欄の可否
-      ⑤説明シートは 19 行 2 列・『今日（計算の基準日）』『作成』の行の値が日付
+      ⑤説明シートは 19 行 2 列・『今日（計算の基準日）』『作成』の行の値(基準日=日付・作成=文字列 YYYY/MM/DD HH:MM)
 呼ぶ人: selftest_synth.py・人
 触る外の物: 読むだけ(xlsx と spec)
 確かめ方: python -I scripts/sap_synth/compare_headers.py 合成.xlsx
@@ -39,6 +39,8 @@ def kind_ok(t, cell):
         return k == 'num'
     if t == 'date':
         return k == 'date'
+    if t == 'datetext':      # 文字列 YYYY/MM/DD HH:MM(説明シートの「作成」・実物の形)
+        return k == 'str' and bool(re.match(r'^\d{4}/\d{2}/\d{2} \d{2}:\d{2}(:\d{2})?$', v.strip()))
     return False
 
 

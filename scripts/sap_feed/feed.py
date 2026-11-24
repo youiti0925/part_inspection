@@ -32,7 +32,7 @@ FORBIDDEN_KEYS = ('客先', '仕入先', '金額', '単価', '購買', 'MRP', '�
 ISO = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
 # 外せる規則の名前(試験用・既定は全部有効)。外した版は試験が赤になる事で、試験が働いている事を示す
-RULES = ('by_name', 'order_str', 'act_str', 'done_by_end', 'date_floor', 'std_zero_null', 'unit_h_only', 'suspect_flag',
+RULES = ('made_text', 'by_name', 'order_str', 'act_str', 'done_by_end', 'date_floor', 'std_zero_null', 'unit_h_only', 'suspect_flag',
          'keep_weekend', 'exclude_done_orders', 'drop_wc_empty', 'item_text_raw', 'gen_separate')
 CHK = {i: c for i, c in enumerate('①②③④⑤⑥⑦⑧⑨⑩⑪⑫', 1)}
 CHK['P1'] = 'P1'   # 型の検査(日付が文字・数値セルの指図 など)。設計の①〜⑫に足した物
@@ -239,8 +239,26 @@ def parse_head(rows, pos, dropped, rules):
     return out
 
 
-def read_desc(rows):
-    """説明シートから基準日と作成日時(名前=A 列の文言で探す)。(基準日の数, 作成の数, 問題の一覧)"""
+MADE_TEXT = re.compile(r'^(\d{4})[/-](\d{1,2})[/-](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$')
+
+
+def parse_made(c, rules):
+    """「作成」: 日付型、または文字列 YYYY/MM/DD HH:MM(秒あり/なし・区切りは / か -)。それ以外は None(=止める)。実物(11-24)は文字列の形"""
+    if kind(c) == 'date':
+        d = datetime.datetime(1899, 12, 30) + datetime.timedelta(days=float(val(c)))
+        return (d + datetime.timedelta(seconds=30)).replace(second=0, microsecond=0)
+    if kind(c) == 'str' and rules.on('made_text'):
+        m = MADE_TEXT.match(val(c).strip())
+        if m:
+            try:
+                return datetime.datetime(*[int(x) for x in m.groups() if x is not None])
+            except ValueError:
+                return None
+    return None
+
+
+def read_desc(rows, rules):
+    """説明シートから基準日と作成日時(名前=A 列の文言で探す)。(基準日の数, 作成の日時, 問題の一覧)。基準日は日付型だけ(厳しく)"""
     got, probs = {}, []
     for row in rows:
         a = g(row, 0)
@@ -249,12 +267,17 @@ def read_desc(rows):
             for L in (LABEL_BASE, LABEL_MADE):
                 if lab == re.sub(r'\s+', '', L):
                     got[L] = g(row, 1)
+    made = None
     for L in (LABEL_BASE, LABEL_MADE):
         if L not in got:
             probs.append('説明シートに「%s」の行が無い' % L)
-        elif kind(got[L]) != 'date':
+        elif L == LABEL_BASE and kind(got[L]) != 'date':
             probs.append('説明シートの「%s」が日付でない' % L)
-    return (None if probs else float(val(got[LABEL_BASE]))), (None if probs else float(val(got[LABEL_MADE]))), probs
+        elif L == LABEL_MADE:
+            made = parse_made(got[L], rules)
+            if made is None:
+                probs.append('説明シートの「%s」が日付でも「YYYY/MM/DD HH:MM」の文字列でもない' % L)
+    return (None if probs else float(val(got[LABEL_BASE]))), (None if probs else made), probs
 
 
 def alt_reference(work_rows, head_rows, wpos, hpos):
@@ -327,11 +350,11 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
         elif nm != '説明' and len(sheets[nm]) < 2:
             missing_lines.append('シート「%s」に見出ししか無い(データの行が 0)' % nm)
     wpos = hpos = None
-    base_x = made_x = None
+    base_x = made_dt = None
     if not missing_lines:
         wpos, m1 = find_cols('SAP_作業', sheets['SAP_作業'], REQ_WORK, rules)
         hpos, m2 = find_cols('SAP_製造指図', sheets['SAP_製造指図'], REQ_HEAD, rules)
-        base_x, made_x, m3 = read_desc(sheets['説明'])
+        base_x, made_dt, m3 = read_desc(sheets['説明'], rules)
         missing_lines += ['「SAP_作業」に見出し「%s」が無い' % x for x in m1] + ['「SAP_製造指図」に見出し「%s」が無い' % x for x in m2] + m3
     c1 = mk(1, not missing_lines or 1 in rules.skip, len(missing_lines), '要る見出し・シートを名前で探した: ' + ('全部ある' if not missing_lines else '足りない物がある'))
     checks.append(c1)
@@ -351,10 +374,8 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
     work = parse_work(sheets['SAP_作業'], wpos, rules, dropped, info)
     head = parse_head(sheets['SAP_製造指図'], hpos, dropped, rules)
     base_x = 0.0 if base_x is None else base_x      # ① を外した版(試験用)でも落ちない様に
-    made_x = 0.0 if made_x is None else made_x
+    made_dt = datetime.datetime(1899, 12, 30) if made_dt is None else made_dt
     base_date = iso_date(base_x)
-    made_dt = datetime.datetime(1899, 12, 30) + datetime.timedelta(days=made_x)
-    made_dt = (made_dt + datetime.timedelta(seconds=30)).replace(second=0, microsecond=0)
     generated_at = made_dt.isoformat() + '+09:00'
     if not rules.on('gen_separate'):
         generated_at = base_date + 'T00:00:00+09:00'     # 規則を外した版: 作成日時を基準日で代用してしまう
