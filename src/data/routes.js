@@ -106,6 +106,9 @@ export const COLLECTION_AREA = Object.freeze({
   //   組立ポータルから読めてしまう。だから **別の棚** に分ける(隠すのではなく、置かない)。
   arrival_actuals: 'analytics',
   usage_daily: 'analytics',   // P101: 端末ごとの1日の読み取り件数(③司令塔が4アプリぶん足す)
+  // 🏯 2026-11-26 最上位司令塔の置き場(overview-app-v1/top_status)。機械の集計 1件(docId = machine)を 部品検査の管理者が「載せる」を押した時だけ書く。
+  //   入れてよい欄は グループ名×週の%と件数だけ(src/domain/machineDigest.js が検査する)。③が開いた時に1件読む。
+  top_status: 'analytics',
 
   // --- プッシュ通知(Firebaseに残す) ----------------------------------------
   push_tokens: 'push',
@@ -191,6 +194,7 @@ export const COLLECTION_APPS = Object.freeze({
   arrival_times: ['final', 'product', 'parts'],
   arrival_actuals: ['final', 'product'],
   usage_daily: ['parts'],   // P101: 部品は自分の名前空間へ1端末1日1件だけ書く
+  top_status: ['parts', 'overview'],   // 🏯 部品が機械の集計を書き(押した時だけ)・③が読む
   push_tokens: ['final', 'product', 'parts'],
   app_feedback: ['final', 'product', 'parts'],
   app_notices: ['final', 'product', 'parts'],

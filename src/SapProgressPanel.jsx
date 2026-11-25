@@ -14,6 +14,7 @@ import { applyMoves, effUnits } from './domain/sapGroups.js';
 import { sapFlagOn } from './domain/sapArrivalStore.js';
 import { t, setActiveLabels, buildLabels } from './domain/labels.js';   // 画面の言葉の辞書(空なら今の文字のまま)
 import { sapSortFlagOn, applySapSortOnce } from './domain/sapSortStore.js';   // 仕分けの登録を開いた時に1回だけ読む(旗 feature:sapSort が ON の時だけ・既定 OFF)
+import { sortRowsOf } from './domain/machineDigest.js';   // 最上位司令塔へ載せる: 仕分けていない作業区の数え用
 import { baseNowMs } from './domain/sapBoard.js';
 import { buildOrders, reachList, loadByGroup, loadByWorkCenter, itemSummary, gaugeOf, stageView, handoffList, dailyLoad, STATUS_LABEL } from './domain/sapProgress.js';
 
@@ -72,9 +73,10 @@ function GaugeLegend() {
     );
 }
 
-export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, autoMg = null, autoSub = null, lots = null, sapSortLoader = null, groupLabels = null }) {
+export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, autoMg = null, autoSub = null, lots = null, sapSortLoader = null, groupLabels = null, onPublishTop = null, canPublishTop = false }) {
     const [on] = useState(() => force || isSapProgressOn());
     const [baseOrders, setOrders] = useState(null);
+    const [sortRows, setSortRows] = useState([]);   // 未完了の行を 作業区×作業テキストで数えた物(最上位司令塔へ載せる時の「まだ仕分けていない作業区」用・指図番号は持たない)
     const [info, setInfo] = useState('');
     const [entry, setEntry] = useState(autoMg ? 'machine' : 'inspect');   // 入口: inspect=部品検査に いつ来るか / machine=機械グループ(こなせるか)
     const [fileName, setFileName] = useState('');
@@ -135,7 +137,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
             const o = buildOrders(rows);
             // 基準日: ファイルに基準日が入っている時(変換スクリプトが X 列に足す)はそれに合わせる。分からなければ 今日のまま(古い写しを今日で見ると 全部「遅れ」に見えるため、分かる時だけ合わせる)
             if (baseDate) setToday(baseDate);
-            setOrders(o); setFileName(name); setChartOrder(null); setInfo(`${name}: ${rows.length}行 → 指図 ${o.length}件(この端末の中だけで読みました・送信なし)・基準日 ${baseDate ? `${baseDate}(ファイルの値に合わせました・上で変えられます)` : '今日のまま(ファイルに基準日が無いため)'}`);
+            setSortRows(sortRowsOf(rows)); setOrders(o); setFileName(name); setChartOrder(null); setInfo(`${name}: ${rows.length}行 → 指図 ${o.length}件(この端末の中だけで読みました・送信なし)・基準日 ${baseDate ? `${baseDate}(ファイルの値に合わせました・上で変えられます)` : '今日のまま(ファイルに基準日が無いため)'}`);
             return o;
         } catch (ex) { setOrders(null); setInfo(''); setErr('読めませんでした: ' + (ex && ex.message ? ex.message : ex)); return null; }
     };
@@ -202,7 +204,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                 <span className="text-slate-500">標準値 1=段取り・2=機械・3=作業者(清水さんの回答)。機械の占有時間=段取り+機械・作業者の時間=段取り+作業者。標準値2・3 は 1個あたり(清水さん確定)なので 既定は 数量を掛けます。日時は 工場カレンダー(平日 08:30-17:00・休憩あり)・前の工程が済んでから次・作業区ごとの台数・機械の占有時間で順に積んだ見込みです。</span>
             </div>
 
-                <MachineGroupView initialOpen={autoMg && autoMg !== '1' ? autoMg : null} orders={orders} nowMs={nowMs} perQty={perQty} setPerQty={setPerQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} peopleMap={peopleMap} setPeopleMap={setPeopleMap} multiMap={multiMap} setMultiMap={setMultiMap} moves={moves} setMoves={setMoves} fileLabel={`SAP の表 ${fileName || ''}`} />
+                <MachineGroupView initialOpen={autoMg && autoMg !== '1' ? autoMg : null} orders={orders} nowMs={nowMs} perQty={perQty} setPerQty={setPerQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} peopleMap={peopleMap} setPeopleMap={setPeopleMap} multiMap={multiMap} setMultiMap={setMultiMap} moves={moves} setMoves={setMoves} fileLabel={`SAP の表 ${fileName || ''}`} topPublish={onPublishTop ? { handoffs, todayIso: today, sortRows, onPublish: onPublishTop, canPublish: canPublishTop } : null} />
 
                 <details className="mt-4 border-t pt-2"><summary className="cursor-pointer font-bold">前の見せ方(品目ごと/工程ごと/工程の一覧のタブ)</summary>
                 <SapDueSection orders={orders} queue={queue} origins={sched.origins} nowMs={nowMs} hoursMode={hk} perQty={perQty} defCap={defCap} capMap={capMap} setCapMap={setCapMap} initialTab={autoTab} initialDays={autoDays} initialSort={autoSort} initialStage={autoStage} />

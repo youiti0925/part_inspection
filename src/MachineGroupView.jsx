@@ -9,6 +9,7 @@ import React, { useMemo, useState } from 'react';
 import { capacityGroups, groupWcs } from './domain/sapGroups.js';
 import { machineBundleCheck } from './domain/sapBundleCheck.js';
 import { t } from './domain/labels.js';   // 画面の言葉の辞書(空なら今の文字のまま)
+import TopPublishBar from './TopPublishBar.jsx';   // 🏯 最上位司令塔へ載せる(topPublish が渡された時だけ出る)
 
 const LV = {
     red: 'border-rose-300 bg-rose-100 text-rose-700', yellow: 'border-amber-300 bg-amber-50 text-amber-800', green: 'border-slate-200 bg-white text-slate-700',
@@ -29,7 +30,7 @@ function Cell({ c, thin, dem, cap }) {
     );
 }
 
-export default function MachineGroupView({ initialOpen = null, orders, nowMs, perQty = true, setPerQty, defCap = 1, capMap, setCapMap, peopleMap, setPeopleMap, multiMap, setMultiMap, moves, setMoves, fileLabel = '' }) {
+export default function MachineGroupView({ initialOpen = null, orders, nowMs, perQty = true, setPerQty, defCap = 1, capMap, setCapMap, peopleMap, setPeopleMap, multiMap, setMultiMap, moves, setMoves, fileLabel = '', topPublish = null }) {
     const [res, setRes] = useState('machine');     // 数える資源: machine=機械(段取り+機械) / worker=人(段取り+作業者)
     const [ot, setOt] = useState(0);
     const [sat, setSat] = useState(false);
@@ -94,6 +95,7 @@ export default function MachineGroupView({ initialOpen = null, orders, nowMs, pe
     return (
         <div data-testid="sap-mg" className="text-slate-800">
             <div className="mb-1"><h2 className="inline-block text-xl font-bold">{t('machine.title', '機械グループ 負荷')}</h2><span className="ml-2 text-xs text-slate-500">{fileLabel}・済んでいない機械工程だけ(検査は 検査の画面へ)</span></div>
+            {topPublish ? <TopPublishBar cap={cap} basis={{ resource: res, otHours: ot, saturday: sat, perQty }} {...topPublish} /> : null}
             {bundle.short ? <div className="my-2 rounded-xl border-2 border-amber-400 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900" role="alert" data-testid="sap-mg-bundle-short" data-why={bundle.why}>⚠ {bundle.text}</div> : null}
             <div className="my-3 grid gap-3 lg:grid-cols-[1.1fr_1fr]">
                 <div className="rounded-xl border border-slate-200 p-3" data-testid="sap-mg-answer">

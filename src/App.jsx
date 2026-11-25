@@ -35,7 +35,8 @@ import ProgressImportExtras from './ProgressImportExtras.jsx';
 import PendingImportPanel from './PendingImportPanel.jsx';
 import ProgressSheetMapPanel from './ProgressSheetMapPanel.jsx';
 import { SHIP_DONE_COL } from './domain/progressShipDone.js'; // 🔗 進捗管理表の U 列(出庫完了日)の列の字(部品検査だけの追加・progressSheet.js は製品と対なので触らない)
-import { loadSapSort } from './domain/sapSortStore.js'; // 🗂 SAP 工程の仕分けの登録を読む(旗 feature:sapSort が ON の時だけ・画面を開いた時に1回)
+import { loadSapSort, isSapSortAdmin } from './domain/sapSortStore.js'; // 🗂 SAP 工程の仕分けの登録を読む(旗 feature:sapSort が ON の時だけ・画面を開いた時に1回)
+import { publishMachineDigest } from './domain/machineDigest.js'; // 🏯 機械の集計を最上位司令塔へ載せる(管理者が押した時の1件だけ・SAP 工程の進みの機械グループの画面)
 import SapProgressPanel from './SapProgressPanel.jsx'; // 🏭 SAP 工程の進み(旗 feature:sapProgress=1 の時だけ出る・既定 OFF)
 import MapViewLanes from './mapviews/MapViewLanes.jsx';
 import MapViewTimeline from './mapviews/MapViewTimeline.jsx';
@@ -25475,7 +25476,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
    saveData('workers', w.id, resumePatch(Date.now()));
  };
 
- const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onRegisterPending = null, onRemovePending = null, onOpenStrictManager = null, sapSortLoader = null, currentUserName = '', factoryCalendar = null, parentTabs = null }) => {
+ const TemplatesView = ({ editingTemplate, setEditingTemplate, handleSaveTemplate, workers, saveData, deleteData, templates, lots = [],handleExcelImport, handleExcelDownload, handleBackupExport, handleBackupImport, excelInputRef, backupInputRef, settings, saveSettings, mapZones, deleteSettingsFields, onRegisterPending = null, onRemovePending = null, onOpenStrictManager = null, sapSortLoader = null, onPublishTop = null, currentUserName = '', factoryCalendar = null, parentTabs = null }) => {
   // 🧾➡📋 P109 品質規格の日数を直した → 検査リストの関係するロットの納期・入庫も直す(押す前に全部見せる・0件なら出さない)
   const [qsPropagate, setQsPropagate] = useState(null);
   const [qsPropagateBusy, setQsPropagateBusy] = useState('');
@@ -26190,7 +26191,7 @@ const TemplateListSection = ({ templates, lots = [], settings, setEditingTemplat
          {/* 📊 P053 進捗管理表の読み方(表ごと・シート名・開始行・列の字・Z列の意味・出荷日の日数) */}
          <ProgressSheetMapPanel settings={settings} saveSettings={saveSettings} openBook={openProgressBook_pi} />
 
-         <SapProgressPanel lots={lots} sapSortLoader={sapSortLoader} groupLabels={settings && settings.labels} />
+         <SapProgressPanel lots={lots} sapSortLoader={sapSortLoader} groupLabels={settings && settings.labels} onPublishTop={onPublishTop} canPublishTop={isSapSortAdmin(currentUserName)} />
 
          {/* 🗂 P057 未登録リスト(進捗管理表の取込で品質規格マスタに紐付けが無く落ちた行。無ければ何も出さない) */}
          <PendingImportPanel settings={settings} onRegisterPending={onRegisterPending} onRemovePending={onRemovePending} />
@@ -37213,7 +37214,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
              getQsTemplateEntries={getQsTemplateEntries} isAutoStep={isAutoStep} itemMaster={settings.itemMaster || null} />
          </div></div>}
          {activeTab === 'measurement-settings' && <MeasurementSettingsView settings={settings} saveSettings={saveSettings} comboPresets={settings?.comboPresets || []} templates={templates} />}
-         {activeTab === 'templates' && <TemplatesView onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel} editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} sapSortLoader={() => loadSapSort({ provider: DATA(db), ns: APP_DATA_ID })} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} factoryCalendar={factoryCalendar} />}
+         {activeTab === 'templates' && <TemplatesView onRegisterPending={registerPendingForModel} onRemovePending={removePendingModel} editingTemplate={editingTemplate} setEditingTemplate={setEditingTemplate} handleSaveTemplate={handleSaveTemplate} workers={workers} saveData={saveData} deleteData={deleteData} templates={templates} lots={lots} handleExcelImport={handleExcelImport} handleExcelDownload={handleExcelDownload} handleBackupExport={handleBackupExport} handleBackupImport={handleBackupImport} excelInputRef={excelInputRef} backupInputRef={backupInputRef} settings={settings} saveSettings={saveSettings} mapZones={settings.mapZones} deleteSettingsFields={deleteSettingsFields} onOpenStrictManager={() => setShowStrictManager(true)} sapSortLoader={() => loadSapSort({ provider: DATA(db), ns: APP_DATA_ID })} onPublishTop={(digest) => publishMachineDigest({ provider: DATA(db), digest, user: { name: currentUserName } })} currentUserName={currentUserName} parentTabs={renderTabGroupButtons(TAB_GROUPS.templates)} factoryCalendar={factoryCalendar} />}
          </div>
        </main>
        
