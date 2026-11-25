@@ -101,6 +101,7 @@ export async function saveSapSort({ provider, ns, reg, baseRev, user, now = Date
     if (size > SAFE_BYTES) throw new SapSortError('too-big', `登録が大きすぎます(${Math.round(size / 1024)}KB)。1文書の上限(1MB)の手前の ${Math.round(SAFE_BYTES / 1024)}KB までです。`);
     await provider.save(ns, SAP_SORT_COL, SAP_SORT_ID, doc, { merge: false });   // 丸ごと置き換える(入れ子の古い項目を残さない)
     cache.set({ day: dayOf(now), doc });
+    refreshOnce(reg, rev);   // 画面を開き直した時(applySapSortOnce)に、保存前の古い登録を返さない
     return { rev, bytes: size };
 }
 
@@ -120,6 +121,13 @@ export function applySapSortOnce({ loader } = {}) {
     return onceP;
 }
 export const _resetOnceForTest = () => { onceP = null; };
+/** 保存した登録を「1回だけ読んだ結果」にも入れる(開いてある画面を閉じて開き直しても 新しい版が出る)。まだ1回も読んでいなければ何もしない */
+function refreshOnce(reg, rev) {
+    if (!onceP) return;
+    const cl = {};
+    for (const c of reg.commanders) if (c && c.labels) cl[c.key] = c.labels;
+    onceP = Promise.resolve({ reg: { ...reg, rev }, usedDefault: false, errors: [], source: 'saved', commanderLabels: cl, rev });
+}
 
 // ---- 未分類・重なりの数え方 ----
 /** 仕分ける行 [{ text, code, n? }] を数える。数えるグループは1つだけ(重ね入れの shared は別に数え、足し合わせない)。

@@ -14,7 +14,9 @@ import { applyMoves, effUnits } from './domain/sapGroups.js';
 import { sapFlagOn } from './domain/sapArrivalStore.js';
 import { t, setActiveLabels, buildLabels } from './domain/labels.js';   // 画面の言葉の辞書(空なら今の文字のまま)
 import { sapSortFlagOn, applySapSortOnce } from './domain/sapSortStore.js';   // 仕分けの登録を開いた時に1回だけ読む(旗 feature:sapSort が ON の時だけ・既定 OFF)
-import { sortRowsOf } from './domain/machineDigest.js';   // 最上位司令塔へ載せる: 仕分けていない作業区の数え用
+import { sortRowsOf } from './domain/machineDigest.js';
+import { setSharedSortRows } from './domain/sapSortEdit.js';   // 管理者の登録画面へ「未完了の件数」だけ渡す(メモリの中だけ)
+import { subscribeActiveSapSort } from './domain/sapSort.js';   // 最上位司令塔へ載せる: 仕分けていない作業区の数え用
 import { baseNowMs } from './domain/sapBoard.js';
 import { buildOrders, reachList, loadByGroup, loadByWorkCenter, itemSummary, gaugeOf, stageView, handoffList, dailyLoad, STATUS_LABEL } from './domain/sapProgress.js';
 
@@ -137,7 +139,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
             const o = buildOrders(rows);
             // 基準日: ファイルに基準日が入っている時(変換スクリプトが X 列に足す)はそれに合わせる。分からなければ 今日のまま(古い写しを今日で見ると 全部「遅れ」に見えるため、分かる時だけ合わせる)
             if (baseDate) setToday(baseDate);
-            setSortRows(sortRowsOf(rows)); setOrders(o); setFileName(name); setChartOrder(null); setInfo(`${name}: ${rows.length}行 → 指図 ${o.length}件(この端末の中だけで読みました・送信なし)・基準日 ${baseDate ? `${baseDate}(ファイルの値に合わせました・上で変えられます)` : '今日のまま(ファイルに基準日が無いため)'}`);
+            setSortRows(sortRowsOf(rows)); setSharedSortRows(sortRowsOf(rows)); setOrders(o); setFileName(name); setChartOrder(null); setInfo(`${name}: ${rows.length}行 → 指図 ${o.length}件(この端末の中だけで読みました・送信なし)・基準日 ${baseDate ? `${baseDate}(ファイルの値に合わせました・上で変えられます)` : '今日のまま(ファイルに基準日が無いため)'}`);
             return o;
         } catch (ex) { setOrders(null); setInfo(''); setErr('読めませんでした: ' + (ex && ex.message ? ex.message : ex)); return null; }
     };
@@ -147,13 +149,14 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
     };
     // 仕分けの登録と辞書: この画面を開いた時に1回だけ(旗 feature:sapSort が ON の時だけ・開きっぱなしで聞き直さない・同じ日の2回目からは端末の控え)。無い・壊れている時は 今と同じ分け方・今の文字
     const [, setSortRev] = useState(0);
+    useEffect(() => subscribeActiveSapSort(() => setSortRev((n) => n + 1)), []);   // 管理者が保存した仕分け・言葉を、開いているこの画面にもすぐ効かせる
     useEffect(() => {
         if (!on || !sapSortFlagOn()) return undefined;
         let dead = false;
         (async () => {
             const r = await applySapSortOnce({ loader: sapSortLoader });
             if (dead) return;
-            setActiveLabels(buildLabels({ commander: r.commanderLabels, group: groupLabels }));
+            setActiveLabels(buildLabels({ commander: r.commanderLabels && r.commanderLabels.machine, group: groupLabels }));
             setSortRev((n) => n + 1);
         })();
         return () => { dead = true; };
