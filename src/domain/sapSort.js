@@ -2,7 +2,7 @@
 // 目的: 今まで sapProgress.js・sapBoard.js・束を作る係(feed.py)に別々に書いてあった分類表を、登録 sap-sort/1(sap_sort.default.json)1つにまとめる。
 // 入力: classifyOp(作業テキスト, 作業区, 登録) / validateSapSort(登録) / resolveSapSort(登録の候補)
 // 出力: { name, kind, group, commander }(kind: machine / inspect / wash / misc)・並び順・アプリ別の作業区
-// 触る外の物: なし(同梱の JSON を読むだけ・Firebase・ネットワーク・保存に触れない)
+// 触る外の物: なし(同梱の JSON を読むだけ・Firebase・ネットワーク・保存に触れない)。今使う登録の差し替え(setActiveSapSort)はメモリの中だけ
 // 確かめ方: node --test src/domain/__tests__/sapSort.test.mjs
 import bundled from './sap_sort.default.json' with { type: 'json' };
 
@@ -46,12 +46,24 @@ export function validateSapSort(reg) {
             if (!g || typeof g.key !== 'string' || typeof g.name !== 'string') { errors.push(`${c.key}: グループの形が違います`); continue; }
             if (keys.has(g.key)) errors.push(`グループの目印が重なっています: ${g.key}`);
             keys.add(g.key);
+            // shared:true のグループ(見るだけの重ね入れ)は他と重なってよい。数には足さない(classifyOp は shared を見ない)。重なりの印は overlapMarks が出す
+            // templateOps: 検査テンプレートごとの SAP の作業区の結びつけ { テンプレID または 品目コード__テンプレID: [作業区…] }。作業区はこのグループの wc の中だけ(知らない作業区は赤)
+            if (g.templateOps != null) {
+                if (typeof g.templateOps !== 'object' || Array.isArray(g.templateOps)) errors.push(`${g.key}: テンプレートの結びつけの形が違います`);
+                else for (const [tid, list] of Object.entries(g.templateOps)) {
+                    if (!tid) errors.push(`${g.key}: テンプレートの目印が空です`);
+                    else if (!isStrList(list)) errors.push(`${g.key}: テンプレート ${tid} の作業区の一覧の形が違います`);
+                    else for (const w of list) if (!(g.wc || []).includes(w)) errors.push(`${g.key}: テンプレート ${tid} の作業区 ${w} はこのグループにありません(知らない作業区)`);
+                }
+            }
+            const sh = g.shared === true;
             if (g.wc != null) {
                 if (!isStrList(g.wc)) errors.push(`${g.key}: 作業区の一覧の形が違います`);
-                else for (const w of g.wc) { if (wcSeen.has(w)) errors.push(`作業区 ${w} が ${wcSeen.get(w)} と ${g.key} の両方に入っています`); wcSeen.set(w, g.key); }
+                else if (!sh) for (const w of g.wc) { if (wcSeen.has(w)) errors.push(`作業区 ${w} が ${wcSeen.get(w)} と ${g.key} の両方に入っています`); wcSeen.set(w, g.key); }
             }
             for (const r of g.wcRanges || []) {
                 if (!Array.isArray(r) || r.length !== 2 || !Number.isFinite(r[0]) || !Number.isFinite(r[1]) || r[0] > r[1]) { errors.push(`${g.key}: 作業区の範囲の形が違います`); continue; }
+                if (sh) continue;
                 for (const o of ranges) if (r[0] <= o.b && o.a <= r[1]) errors.push(`作業区の範囲が重なっています: ${g.key}(${r[0]}〜${r[1]}) と ${o.key}`);
                 ranges.push({ a: r[0], b: r[1], key: g.key });
             }
@@ -84,6 +96,13 @@ export function resolveSapSort(candidate) {
     return { reg: DEFAULT_SAP_SORT, usedDefault: true, errors: v.errors };
 }
 
+// 今使う登録(既定=同梱の物)。登録を読み込めた時だけ setActiveSapSort で差し替える(旗 ON の時だけ・画面の並びなどの購読者へ知らせる)
+let activeReg = DEFAULT_SAP_SORT;
+const activeSubs = new Set();
+export const getActiveSapSort = () => activeReg;
+export function setActiveSapSort(reg) { activeReg = reg && validateSapSort(reg).ok ? reg : DEFAULT_SAP_SORT; activeSubs.forEach((f) => { try { f(activeReg); } catch { /* 1つの購読者の失敗で他を止めない */ } }); }
+export function subscribeActiveSapSort(f) { activeSubs.add(f); return () => activeSubs.delete(f); }
+
 const cache = new WeakMap();
 function compile(reg) {
     const hit = cache.get(reg);
@@ -93,6 +112,7 @@ function compile(reg) {
     for (const c of reg.commanders) {
         const byKey = new Map(c.groups.map((g) => [g.key, g]));
         for (const g of c.groups) {
+            if (g.shared === true) continue;   // 見るだけの重ね入れは仕分けに使わない(二重に数えない)
             for (const [w, nm] of Object.entries(g.wcNames || {})) inspect.set(Number(w), { name: nm, kind: 'inspect', group: g.key, commander: c.key });
             for (const [a, b] of g.wcRanges || []) ranges.push({ a, b, name: g.name, kind: g.kind || 'machine', group: g.key, commander: c.key });
         }
@@ -112,46 +132,99 @@ const hasAny = (s, list) => list.some((p) => s.includes(p));
 
 /** 作業テキスト・作業区 → { name, kind, group, commander }。kind: machine / inspect / wash / misc。
  *  当てる順(先に当たった物で決まる・切り替え前の readWorkName と同じ): 検査の作業区 → 洗浄 → 付帯作業 → 作業区の範囲 → 仕様変更の言葉 → 工程名の言葉 → 付帯作業 */
-export function classifyOp(text, code, reg = DEFAULT_SAP_SORT) {
+export function classifyOp(text, code, reg = activeReg) { return classifyCore(text, code, reg).out; }
+
+/** classifyOp と同じ答え + どの決まりで決まったか via(inspect/wash/misc/range/change/text/none)。none=どの決まりにも当たらず付帯作業へ落ちた物=「まだ仕分けていない物」 */
+export function classifyCore(text, code, reg = activeReg) {
     const k = compile(reg);
     const raw = String(text || '').replace(/：/g, ':').replace(/\s+/g, ' ').trim();
     const t = raw.replace(/^\d{4}[:\s]+/, '');   // 先頭の「2385:」を外す
     const c = Number(code);
     const ins = k.inspect.get(c);
-    if (ins) return { ...ins };
-    if (k.wash && hasAny(t, k.wash.textHas)) return { name: k.wash.name, kind: k.wash.kind, group: k.wash.group, commander: k.wash.commander };
+    if (ins) return { out: { ...ins }, via: 'inspect' };
+    if (k.wash && hasAny(t, k.wash.textHas)) return { out: { name: k.wash.name, kind: k.wash.kind, group: k.wash.group, commander: k.wash.commander }, via: 'wash' };
     const head = t.split(':')[0];
     const isChange = !!k.change && startsAny(head, k.change.headStarts);
     const m = k.misc;
-    const miscOut = (name) => ({ name, kind: 'misc', group: 'misc', commander: k.miscCommander });
+    const miscOut = (name, via = 'misc') => ({ out: { name, kind: 'misc', group: 'misc', commander: k.miscCommander }, via });
     if (!isChange && (startsAny(head, m.headStarts) || hasAny(t, m.textHas))) {
         const nt = m.nameIfTextHas;
         return miscOut(nt && t.includes(nt[0]) ? nt[1] : m.name);
     }
     const r = k.ranges.find((x) => c >= x.a && c <= x.b);
-    if (r) return { name: r.name, kind: r.kind, group: r.group, commander: r.commander };
+    if (r) return { out: { name: r.name, kind: r.kind, group: r.group, commander: r.commander }, via: 'range' };
     if (isChange) {
         const h = k.text.find((x) => t.includes(x.kw));
-        return h ? { name: h.name, kind: h.kind, group: h.group, commander: h.commander } : { name: k.change.name, kind: k.change.kind, group: k.change.group, commander: k.change.commander };
+        return { out: h ? { name: h.name, kind: h.kind, group: h.group, commander: h.commander } : { name: k.change.name, kind: k.change.kind, group: k.change.group, commander: k.change.commander }, via: 'change' };
     }
     const h = k.text.find((x) => head.includes(x.kw) || t.includes(x.kw));
-    if (h) return { name: h.name, kind: h.kind, group: h.group, commander: h.commander };
-    return miscOut(m.name);
+    if (h) return { out: { name: h.name, kind: h.kind, group: h.group, commander: h.commander }, via: 'text' };
+    return miscOut(m.name, 'none');
 }
 
 /** 画面の並び順(旧 sapBoard.js の LANE_ORDER) */
-export const laneOrderOf = (reg = DEFAULT_SAP_SORT) => reg.laneOrder.slice();
+export const laneOrderOf = (reg = activeReg) => reg.laneOrder.slice();
 
 /** アプリごとの作業区の表(旧 app_wcs.json の apps): { product:['2309'], final:['2526'], parts:['2509','2519'] } */
-export function appWcsOf(reg = DEFAULT_SAP_SORT) {
+export function appWcsOf(reg = activeReg) {
     const out = {};
     for (const c of reg.commanders) for (const g of c.groups) if (g.type === 'site' && g.app) out[g.app] = g.wc.slice();
     return out;
 }
 
 /** 束 machine に入れる工程の kind(旧 machine_rules.json の machine_kinds): 負荷に数えるグループの kind */
-export function machineKindsOf(reg = DEFAULT_SAP_SORT) {
+export function machineKindsOf(reg = activeReg) {
     const s = new Set();
     for (const c of reg.commanders) for (const g of c.groups) if (g.type === 'process' && g.count) s.add(g.kind || 'machine');
     return ['machine', 'wash'].filter((x) => s.has(x));
+}
+
+/** 作業区(番号)が入っているグループを全部返す(1つ目=数えるグループ・shared の重ね入れは後ろ)。戻り: [{ commander, group, shared }] */
+export function groupsOfWc(code, reg = activeReg) {
+    const c = Number(code), s = String(code == null ? '' : code).trim(), out = [];
+    for (const cm of reg.commanders) for (const g of cm.groups) {
+        const hit = (g.wc || []).includes(s) || (g.wcRanges || []).some(([a, b]) => Number.isFinite(c) && c >= a && c <= b);
+        if (hit) out.push({ commander: cm.key, group: g.key, shared: g.shared === true });
+    }
+    return out.sort((x, y) => Number(x.shared) - Number(y.shared));
+}
+
+/** 「重なっている」の印: 2つ以上のグループに入っている作業区の一覧 [{ wc, groups:[key…] }](数える先は1つだけ・重ね入れは数に足さない) */
+export function overlapMarks(reg = activeReg) {
+    const wcs = new Set();
+    for (const cm of reg.commanders) for (const g of cm.groups) {
+        for (const w of g.wc || []) wcs.add(w);
+        for (const [a, b] of g.wcRanges || []) if (b - a <= 1000) for (let n = a; n <= b; n++) wcs.add(String(n));
+    }
+    const out = [];
+    for (const w of [...wcs].sort()) { const gs = groupsOfWc(w, reg); if (gs.length > 1) out.push({ wc: w, groups: gs.map((x) => x.group) }); }
+    return out;
+}
+
+/** テンプレート → SAP の作業区。結びつけが無い・壊れている・知らない作業区だけ なら [](=今と同じ・品目と作業区だけで見る)。
+ *  引き方: 「品目コード__テンプレID」(専用)があればそれ・無ければ「テンプレID」。戻り: 作業区(文字)の配列 */
+export function wcsOfTemplate(templateId, model = '', reg = activeReg) {
+    try {
+        for (const cm of reg.commanders) for (const g of cm.groups) {
+            const ops = g.templateOps;
+            if (!ops || typeof ops !== 'object' || Array.isArray(ops)) continue;
+            const own = (g.wc || []);
+            for (const k of [model ? `${model}__${templateId}` : null, String(templateId)]) {
+                if (k && Array.isArray(ops[k])) return ops[k].filter((w) => typeof w === 'string' && own.includes(w));
+            }
+        }
+    } catch { /* 壊れていても 今と同じ([])で動く */ }
+    return [];
+}
+
+/** 結びつけを1つ直した新しい登録を返す(元は変えない・検査の司令塔の groupKey のグループに入れる)。wcs が空なら そのテンプレの結びつけを外す。書くのは saveSapSort(管理者だけ) */
+export function withTemplateOps(reg, groupKey, templateId, wcs) {
+    const o = JSON.parse(JSON.stringify(reg));
+    for (const cm of o.commanders) for (const g of cm.groups) if (g.key === groupKey) {
+        const ops = { ...(g.templateOps && typeof g.templateOps === 'object' && !Array.isArray(g.templateOps) ? g.templateOps : {}) };
+        if (wcs && wcs.length) ops[templateId] = wcs.map(String); else delete ops[templateId];
+        if (Object.keys(ops).length) g.templateOps = ops; else delete g.templateOps;
+        return o;
+    }
+    throw new Error(`グループ ${groupKey} が登録にありません`);
 }

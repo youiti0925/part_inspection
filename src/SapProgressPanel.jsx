@@ -12,6 +12,8 @@ import InspectArrivalSection from './InspectArrivalSection.jsx';
 import MachineGroupView from './MachineGroupView.jsx';
 import { applyMoves, effUnits } from './domain/sapGroups.js';
 import { sapFlagOn } from './domain/sapArrivalStore.js';
+import { t, setActiveLabels, buildLabels } from './domain/labels.js';   // 画面の言葉の辞書(空なら今の文字のまま)
+import { sapSortFlagOn, applySapSortOnce } from './domain/sapSortStore.js';   // 仕分けの登録を開いた時に1回だけ読む(旗 feature:sapSort が ON の時だけ・既定 OFF)
 import { baseNowMs } from './domain/sapBoard.js';
 import { buildOrders, reachList, loadByGroup, loadByWorkCenter, itemSummary, gaugeOf, stageView, handoffList, dailyLoad, STATUS_LABEL } from './domain/sapProgress.js';
 
@@ -70,7 +72,7 @@ function GaugeLegend() {
     );
 }
 
-export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, autoMg = null, autoSub = null, lots = null }) {
+export default function SapProgressPanel({ force = false, autoUrl = null, autoChartIndex = 0, autoStage = null, autoTab = 'order', autoDays = null, autoSort = null, autoMg = null, autoSub = null, lots = null, sapSortLoader = null, groupLabels = null }) {
     const [on] = useState(() => force || isSapProgressOn());
     const [baseOrders, setOrders] = useState(null);
     const [info, setInfo] = useState('');
@@ -141,6 +143,20 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
         const f = e.target.files && e.target.files[0];
         if (f) await loadBuffer(f.name, await f.arrayBuffer());
     };
+    // 仕分けの登録と辞書: この画面を開いた時に1回だけ(旗 feature:sapSort が ON の時だけ・開きっぱなしで聞き直さない・同じ日の2回目からは端末の控え)。無い・壊れている時は 今と同じ分け方・今の文字
+    const [, setSortRev] = useState(0);
+    useEffect(() => {
+        if (!on || !sapSortFlagOn()) return undefined;
+        let dead = false;
+        (async () => {
+            const r = await applySapSortOnce({ loader: sapSortLoader });
+            if (dead) return;
+            setActiveLabels(buildLabels({ commander: r.commanderLabels, group: groupLabels }));
+            setSortRev((n) => n + 1);
+        })();
+        return () => { dead = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [on]);
     // 見本の入口だけ: 同じ PC の 127.0.0.1 にある写しを自動で読む(画面の確認用・本番の画面では使わない)
     useEffect(() => {
         if (!autoUrl) return;
@@ -163,7 +179,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
 
     return (
         <section data-testid="sap-progress" className="bg-white border border-slate-300 rounded-lg p-4 my-4 text-sm text-slate-800">
-            <h2 className="text-lg font-bold mb-1">🏭 SAP 工程の進み <span className="text-xs font-normal text-slate-500">(試験機能・端末の中だけで読みます)</span></h2>
+            <h2 className="text-lg font-bold mb-1">🏭 {t('sap.title', 'SAP 工程の進み')} <span className="text-xs font-normal text-slate-500">(試験機能・端末の中だけで読みます)</span></h2>
             <p className="text-xs text-slate-600 mb-2">SAP の工程表(xlsx)を選ぶと、部品検査に届く見込みと機械グループの負荷が出ます。ファイルはどこにも送りません・保存もしません。</p>
             <div className="flex flex-wrap items-center gap-3 mb-2">
                 <input type="file" accept=".xlsx" onChange={onFile} data-testid="sap-file" className="text-xs" />
@@ -218,7 +234,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                     </table></div>
                 </>)}
 
-                <h3 className="font-bold mt-3 mb-1">① 部品検査に近い順 <span className="text-xs font-normal text-slate-500">(行を押すと下にその指図のチャート)</span></h3>
+                <h3 className="font-bold mt-3 mb-1">{t('sap.reach', '① 部品検査に近い順')} <span className="text-xs font-normal text-slate-500">(行を押すと下にその指図のチャート)</span></h3>
                 <div className="flex flex-wrap items-center gap-2 mb-2 text-xs">
                     {tabBtn(tab, setTab, '14', `今後14日以内 (${cnt((o) => o.daysFromToday >= 0 && o.daysFromToday <= 14)})`)}
                     {tabBtn(tab, setTab, 'late', `見込み日が過ぎた (${cnt((o) => o.daysFromToday < 0)})`)}
@@ -249,7 +265,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                 <GaugeLegend />
                 {gaugeRows.length ? gaugeRows.map((o) => <Gauge key={o.order} order={o} today={today} />) : <p className="text-xs text-slate-500">該当なし</p>}
 
-                <h3 className="font-bold mt-4 mb-1">次の工程(作業区)への連絡</h3>
+                <h3 className="font-bold mt-4 mb-1">{t('sap.handoff', '次の工程(作業区)への連絡')}</h3>
                 <div className="flex gap-2 mb-1 text-xs">
                     {tabBtn(hoTab, setHoTab, 'passed', `前の工程が済 → 次へ渡った (${handoffs.filter((h) => h.kind === 'passed').length})`)}
                     {tabBtn(hoTab, setHoTab, 'expected', `今の工程が終わると次へ渡る見込み (${handoffs.filter((h) => h.kind === 'expected').length})`)}
@@ -266,7 +282,7 @@ export default function SapProgressPanel({ force = false, autoUrl = null, autoCh
                     </table>
                 </div>
 
-                <h3 className="font-bold mt-4 mb-1">② 機械グループごとの負荷 <span className="text-xs font-normal text-slate-500">(未完了の機械の占有時間=段取り+機械・H)</span></h3>
+                <h3 className="font-bold mt-4 mb-1">{t('sap.groupsLoad', '② 機械グループごとの負荷')} <span className="text-xs font-normal text-slate-500">(未完了の機械の占有時間=段取り+機械・H)</span></h3>
                 <div data-testid="sap-load">
                     {groups.filter((g) => g.kind === 'machine').map((g) => (
                         <div key={g.name} className="mb-1">

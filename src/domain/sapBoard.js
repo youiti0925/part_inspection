@@ -8,12 +8,13 @@
 import { hoursOf } from './sapSchedule.js';
 import { DAY_MS } from './sapProgress.js';
 import { DUE_TIER } from './operationsSimulation/dueRowFacts.js';
-import { laneOrderOf } from './sapSort.js';
+import { laneOrderOf, subscribeActiveSapSort } from './sapSort.js';
 
 export const HOURS_PER_DAY = 7.75;       // 定時 08:30-17:00 から休憩を引いた1台あたりの1日の働ける時間
 export const HEAT_WARN_DAYS = 4;         // 待ちの標準時間 ÷ 台数 が この日数ぶん以上 → 黄(注意)
 export const HEAT_BAD_DAYS = 8;          // この日数ぶん以上 → 赤(溜まり大)
 export const LANE_ORDER = laneOrderOf();   // 並び順は 登録 sap-sort/1(sap_sort.default.json)の laneOrder(11-25 に集約)
+subscribeActiveSapSort((reg) => { LANE_ORDER.splice(0, LANE_ORDER.length, ...laneOrderOf(reg)); });   // 登録を読み込んだ時だけ同じ配列の中身を入れ替える(import した側もそのまま追従)
 
 export const chainOf = (o) => o.stages.filter((s) => s.kind !== 'misc');
 const r1 = (x) => Math.round(x * 10) / 10;

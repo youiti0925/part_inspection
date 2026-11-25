@@ -8,6 +8,7 @@
 import React, { useMemo, useState } from 'react';
 import { capacityGroups, groupWcs } from './domain/sapGroups.js';
 import { machineBundleCheck } from './domain/sapBundleCheck.js';
+import { t } from './domain/labels.js';   // 画面の言葉の辞書(空なら今の文字のまま)
 
 const LV = {
     red: 'border-rose-300 bg-rose-100 text-rose-700', yellow: 'border-amber-300 bg-amber-50 text-amber-800', green: 'border-slate-200 bg-white text-slate-700',
@@ -55,9 +56,9 @@ export default function MachineGroupView({ initialOpen = null, orders, nowMs, pe
             <td colSpan={5 + weeks.length} className="px-3 py-3">
                 <div className="grid gap-3 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
                     <div className="rounded-xl border border-slate-200 bg-white p-3" data-mg-wcs={g.name}>
-                        <b className="text-sm">中の作業区</b> <span className="text-xs text-slate-500">(台数・人数・掛け持ちを入れると 計算し直します・今は 台数の仮=各1台)</span>
+                        <b className="text-sm">{t('machine.inner.heading', '中の作業区')}</b> <span className="text-xs text-slate-500">(台数・人数・掛け持ちを入れると 計算し直します・今は 台数の仮=各1台)</span>
                         <table className="mt-1 w-full text-xs">
-                            <thead><tr className="text-slate-500"><th className="p-0.5 text-left">作業区</th><th className="p-0.5" title="同時に何台動かせるか">台数</th><th className="p-0.5" title="その作業区で働く人数(既定は台数と同じ)">人数</th><th className="p-0.5" title="1人で複数台を同時に回せる(人が要るのは段取り+作業者の間だけ)。不可なら 同時に動ける台数=min(台数,人数)">掛け持ち</th><th className="p-0.5 text-left">持ち越し</th>{weeks.map((w) => <th key={w.startMs} className="p-0.5 font-normal" title={w.label}>{w.name}</th>)}</tr></thead>
+                            <thead><tr className="text-slate-500"><th className="p-0.5 text-left">{t('machine.inner.wc', '作業区')}</th><th className="p-0.5" title="同時に何台動かせるか">{t('machine.inner.units', '台数')}</th><th className="p-0.5" title="その作業区で働く人数(既定は台数と同じ)">{t('machine.inner.people', '人数')}</th><th className="p-0.5" title="1人で複数台を同時に回せる(人が要るのは段取り+作業者の間だけ)。不可なら 同時に動ける台数=min(台数,人数)">{t('machine.inner.multi', '掛け持ち')}</th><th className="p-0.5 text-left">持ち越し</th>{weeks.map((w) => <th key={w.startMs} className="p-0.5 font-normal" title={w.label}>{w.name}</th>)}</tr></thead>
                             <tbody>{g.wcs.slice().sort((a, b) => Math.max(...b.cells.slice(0, 3).map((c) => c.pct)) - Math.max(...a.cells.slice(0, 3).map((c) => c.pct))).map((x) => { const cf = cfgOf(x.wc); return (
                                 <tr key={x.wc} className="border-t border-slate-100" data-mg-wc={x.wc}>
                                     <td className="p-0.5 font-bold tabular-nums">{x.wc}</td>
@@ -71,7 +72,7 @@ export default function MachineGroupView({ initialOpen = null, orders, nowMs, pe
                         {g.wcsAll.some((x) => !x.active) ? <p className="mt-1 text-xs text-slate-500">未完了の工程が無い作業区({g.wcsAll.filter((x) => !x.active).map((x) => x.wc).join('・')})は 能力に数えていません。</p> : null}
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-white p-3" data-mg-list={g.name}>
-                        <b className="text-sm">先に片付ける候補</b> <span className="text-xs text-slate-500">(計画開始の古い順・上位10)・同じ機械グループの別の作業区へ回せます(決めるのは人)</span>
+                        <b className="text-sm">{t('machine.todo.heading', '先に片付ける候補')}</b> <span className="text-xs text-slate-500">(計画開始の古い順・上位10)・同じ機械グループの別の作業区へ回せます(決めるのは人)</span>
                         <table className="mt-1 w-full text-xs">
                             <thead><tr className="text-slate-500"><th className="p-0.5 text-left">品名 / 指図</th><th className="p-0.5">作業区</th><th className="p-0.5">計画開始</th><th className="p-0.5 text-right">{res === 'worker' ? '人の時間' : '機械の時間'}</th><th className="p-0.5 text-left">回す</th></tr></thead>
                             <tbody>{g.top.map((t) => { const key = t.key; const isMoved = key in (moves || {}); const cand = wcAll.filter((w) => w !== t.wc); return (
@@ -92,7 +93,7 @@ export default function MachineGroupView({ initialOpen = null, orders, nowMs, pe
 
     return (
         <div data-testid="sap-mg" className="text-slate-800">
-            <div className="mb-1"><h2 className="inline-block text-xl font-bold">機械グループ 負荷</h2><span className="ml-2 text-xs text-slate-500">{fileLabel}・済んでいない機械工程だけ(検査は 検査の画面へ)</span></div>
+            <div className="mb-1"><h2 className="inline-block text-xl font-bold">{t('machine.title', '機械グループ 負荷')}</h2><span className="ml-2 text-xs text-slate-500">{fileLabel}・済んでいない機械工程だけ(検査は 検査の画面へ)</span></div>
             {bundle.short ? <div className="my-2 rounded-xl border-2 border-amber-400 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900" role="alert" data-testid="sap-mg-bundle-short" data-why={bundle.why}>⚠ {bundle.text}</div> : null}
             <div className="my-3 grid gap-3 lg:grid-cols-[1.1fr_1fr]">
                 <div className="rounded-xl border border-slate-200 p-3" data-testid="sap-mg-answer">
@@ -140,12 +141,12 @@ export default function MachineGroupView({ initialOpen = null, orders, nowMs, pe
             <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white" data-testid="sap-mg-scroll">
                 <table className="w-full max-lg:min-w-[56rem] border-separate border-spacing-0 text-sm" data-testid="sap-mg-table">
                     <thead><tr className="bg-slate-50 text-xs font-semibold text-slate-600">
-                        <th className="max-lg:whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left">工程(機械グループ)</th>
-                        <th className="max-lg:whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left">作業区(今週〜2週後)</th>
+                        <th className="max-lg:whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left">{t('machine.col.group', '工程(機械グループ)')}</th>
+                        <th className="max-lg:whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left">{t('machine.col.wcs', '作業区(今週〜2週後)')}</th>
                         <th className="max-lg:whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left">持ち越し<br /><span className="font-normal">計画日を過ぎた未完了</span></th>
                         {weeks.map((w, i) => <th key={w.startMs} className={`max-lg:whitespace-nowrap border-b border-slate-200 px-1 py-1.5 text-center ${w.thin ? 'text-slate-400' : ''}`}>{w.name}<br /><span className="font-normal">{w.label}{i === 0 ? `・残り${w.work}日` : ''}</span></th>)}
                         <th className="max-lg:whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left">実績の待ち<br /><span className="font-normal">前の済→済 中央</span></th>
-                        <th className="border-b border-slate-200 px-2 py-1.5 text-left">見立て・注意</th>
+                        <th className="border-b border-slate-200 px-2 py-1.5 text-left">{t('machine.col.note', '見立て・注意')}</th>
                     </tr></thead>
                     <tbody>
                         {groups.map((g) => {
