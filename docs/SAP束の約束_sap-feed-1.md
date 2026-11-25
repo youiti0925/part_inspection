@@ -92,7 +92,7 @@
 
 実物の見本を全作業区まるごと 1 個の束にすると 2,939,933 バイト(上限 1,000,000 を超えた・検査⑫)。設計 C-3 の通りアプリごとに分ける。
 
-- 分け方の表は `scripts/sap_feed/app_wcs.json`(設定): product=2309・final=2526・parts=2509,2519(設計 B-3。清水さんの確認待ち=F-2 の 3)。コードに作業区の番号は書かない。
+- 分け方の表は **登録 sap-sort/1**(`src/domain/sap_sort.default.json`・11-25 に app_wcs.json・machine_rules.json から1つへ集約): 検査の司令塔の製品=2309・最終=2526・部品=2509,2519(設計 B-3。清水さんの確認待ち=F-2 の 3)。アプリと束を作る係(feed.py の sap_sort.py)が同じファイルを読む。コードに作業区の番号は書かない(登録が無い・壊れている時だけ、同じ答えのコードの既定で動く)。
 - 出す物: `sap-feed-product.json`・`sap-feed-final.json`・`sap-feed-parts.json`(各 `sap-feed/1`)と、全体の記録 `sap-feed-record.json`。記録の `apps.<名前>` に作業区・指図数・工程数・未完了数・バイト数・ハッシュ、`other` にどのアプリにも属さない件数。
 - 束の追加欄(足すだけなので版は `sap-feed/1` のまま): `app`(アプリ名)・`wcs`(その束の作業区の配列)。全部入りの 1 個(`--single`・試験用)にはこの 2 欄は無い。
 - 工程は作業区で分け、どの工程も 1 つの束にだけ入る。`orders` はその束に工程がある指図だけ。`history.weekly` はその束の作業区だけ。`wcMap`・`usualDays` は今まで通り空。
@@ -110,7 +110,7 @@
 アプリの『機械グループ負荷』画面(sapGroups.js・sapProgress.js)は、検査以外の機械工程(旋盤・立旋盤・フライス・横M/C・門M/C・平面/円筒研削・歯切り・仕様変更・面取り洗浄)の未完了を全部使う。検査の作業区だけの 3 冊にも「どこにも使わない」件数にも入っていなかったので、4 冊目の束を足した。
 
 - 中身: 工程の分類が `machine` か `wash` の物だけ。`misc`(付帯作業)と `inspect`(検査)は入れない。検査の作業区(app_wcs.json にある作業区)の工程は検査アプリの束が先で、machine には入れない(1 つの工程は 1 つの束だけ)。
-- 分類の表: `scripts/sap_feed/machine_rules.json`(sapProgress.js の CODE_FALLBACK・NAME_RULES・readWorkName の規則を起こした設定)。feed.py の `classify_work` はこの表を読む。**sapProgress.js を直したらこの表も同じに直す**。同じ答えを返す事は `npm run sap-feed:test` が node で readWorkName を呼び、合成データの全工程+作業テキスト×作業区コードの 2,540 通りで確かめる。分類には SAP_作業 の「作業 Text」を使う(束には作業 Text そのものは入れない。入れるのは分類の結果 `name`・`kind` だけ)。「作業 Text」は読む必須の見出しに足した(検査①)。
+- 分類の表: **登録 sap-sort/1**(`src/domain/sap_sort.default.json`)の1つだけ(11-25 に sapProgress.js の CODE_FALLBACK・NAME_RULES・machine_rules.json を集約・JS は `sapSort.js` の classifyOp、Python は `scripts/sap_feed/sap_sort.py` の classify_op が同じ登録を読む)。**直す所は登録の1か所**。切り替え前と同じ答えである事は `src/domain/__tests__/sapSort.test.mjs` と `scripts/sap_feed/selftest_sap_sort.py`(凍結した旧版との差 0・束のバイト列が同じ)が確かめる。アプリと同じ答えを返す事は `npm run sap-feed:test` が node で readWorkName を呼び、合成データの全工程+作業テキスト×作業区コードの 2,540 通りで確かめる。分類には SAP_作業 の「作業 Text」を使う(束には作業 Text そのものは入れない。入れるのは分類の結果 `name`・`kind` だけ)。「作業 Text」は読む必須の見出しに足した(検査①)。
 - 束 machine の追加欄: `ops[].name`(機械グループの名前)・`ops[].kind`(`machine` か `wash`)・束の `app:"machine"`・`wcs`・`part`・`parts`。`ops[].suspectOrder` は machine の束には入れない(機械グループの画面は読まず、sapGroups.js が順番から自分で数えるため)。他の欄は src/domain/sapProgress.js の toStage が読む物を残した(order・act・wc・qty・std1〜3=hJ・hL・hN・done・actualEnd・earlyStart/earlyEnd=planStart/planEnd)。
 - 大きさ: 1 冊が上限(1,000,000)を超える時は、**指図ごとに**割って `sap-feed-machine-1.json`・`sap-feed-machine-2.json` …とする(上限は変えない)。理由: 工程名(グループ)ごとに割ると、同じ指図の前後の工程が別の冊に分かれ、読み手(sapBoard.js・sapGroups.js の chainOf)が「1 つ前の工程の終わり」を引けなくなるため。指図ごとなら 1 つの指図の工程は必ず同じ冊に入る。読み手は全部の冊を足して読む(`parts` に冊の数)。`history.weekly` は 1 冊目だけに入れる(足して二重にならない)。
 - 記録 `apps.machine`: 作業区・指図数・工程数・未完了数・バイト数・ハッシュ・`parts`(冊ごと)・`byName`(工程名ごとの件数)。`other` は machine に入れた分を引いた残り(本当にどこにも使わない工程)。

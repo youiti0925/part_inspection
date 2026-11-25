@@ -1,0 +1,43 @@
+{
+  "schema": "sap-sort/1",
+  "rev": 1,
+  "_about": "SAP 工程の仕分けの登録(既定値=切り替え前の表と同じ答え)。元: sapProgress.js の CODE_FALLBACK・NAME_RULES・readWorkName、sapBoard.js の LANE_ORDER、scripts/sap_feed の machine_rules.json・app_wcs.json(11-25 に1つへ集約)。アプリ(sapSort.js)と束を作る係(feed.py)が同じ物を読む。当てる順は仕組みの側に固定(2 検査の作業区 → 洗浄 → 付帯作業 → 作業区の範囲 → 仕様変更 → 言葉)。データで変えられるのは どの番号・どの言葉が どのグループか。",
+  "commanders": [
+    {
+      "key": "inspect", "name": "検査", "order": 1,
+      "groups": [
+        { "key": "product", "name": "製品", "type": "site", "app": "product", "wc": ["2309"] },
+        { "key": "final", "name": "最終", "type": "site", "app": "final", "wc": ["2526"] },
+        { "key": "parts", "name": "部品", "type": "site", "app": "parts", "wc": ["2509", "2519"],
+          "wcNames": { "2509": "三次元検査", "2519": "受入検査" } }
+      ]
+    },
+    {
+      "key": "machine", "name": "機械", "order": 2,
+      "groups": [
+        { "key": "lathe", "name": "旋盤", "type": "process", "kind": "machine", "count": true, "wcRanges": [[2313, 2319]] },
+        { "key": "lathe_v", "name": "立旋盤", "type": "process", "kind": "machine", "count": true, "wcRanges": [[2341, 2349]] },
+        { "key": "milling", "name": "フライス", "type": "process", "kind": "machine", "count": true, "wcRanges": [[2320, 2329]] },
+        { "key": "mc_h", "name": "横M/C", "type": "process", "kind": "machine", "count": true, "wcRanges": [[2351, 2359]] },
+        { "key": "mc_g", "name": "門M/C", "type": "process", "kind": "machine", "count": true, "wcRanges": [[2361, 2369]] },
+        { "key": "grind_flat", "name": "平面研削", "type": "process", "kind": "machine", "count": true, "wcRanges": [[2381, 2389]] },
+        { "key": "grind_round", "name": "円筒研削", "type": "process", "kind": "machine", "count": true, "wcRanges": [[2371, 2379]] },
+        { "key": "gear", "name": "歯切り", "type": "process", "kind": "machine", "count": true, "wcRanges": [[2390, 2396]] },
+        { "key": "change", "name": "仕様変更", "type": "process", "kind": "machine", "count": true, "wcRanges": [[2330, 2336]] },
+        { "key": "wash", "name": "面取り洗浄", "type": "process", "kind": "wash", "count": true, "wcRanges": [] }
+      ],
+      "textRules": [
+        ["平面研削", "grind_flat"], ["円筒研削", "grind_round"], ["歯切り", "gear"],
+        ["ﾌﾗｲｽ", "milling"], ["フライス", "milling"], ["門M/C", "mc_g"], ["横M/C", "mc_h"],
+        ["立旋盤", "lathe_v"], ["旋盤", "lathe"]
+      ],
+      "special": {
+        "wash": { "textHas": ["洗浄"], "to": "wash" },
+        "misc": { "name": "付帯作業", "headStarts": ["付帯作業"], "textHas": ["一時置き", "応援", "現合"],
+                  "nameIfTextHas": ["一時置き", "付帯作業(一時置き)"], "count": false },
+        "change": { "headStarts": ["仕様変更"], "fallbackTo": "change" }
+      }
+    }
+  ],
+  "laneOrder": ["旋盤", "立旋盤", "フライス", "横M/C", "門M/C", "平面研削", "円筒研削", "歯切り", "仕様変更", "面取り洗浄", "受入検査", "三次元検査", "検査"]
+}

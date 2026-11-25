@@ -13,7 +13,7 @@
     "version-watch": "node scripts/selftest-version-watch.mjs && node scripts/verify-version-watch.mjs",
     "reload-gate": "node scripts/verify-reload-gate.mjs",
     "sap-synth:test": "python -I -X utf8 scripts/sap_synth/selftest_synth.py",
-    "sap-feed:test": "python -I -X utf8 scripts/sap_feed/selftest_sap_feed.py",
+    "sap-feed:test": "python -I -X utf8 scripts/sap_feed/selftest_sap_feed.py && python -I -X utf8 scripts/sap_feed/selftest_sap_sort.py",
     "sap-feed:final": "python -I -X utf8 scripts/sap_feed/selftest_sap_feed.py --final",
     "lint": "eslint .",
     "preview": "vite preview",

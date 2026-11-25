@@ -10,7 +10,7 @@
       直し: 実績日は消さず未完了の工程を足す形に変更。種 101 は使い切りなので最後の種は 505 に替えた(直した後に 1 回だけ流す)
       11-24 種 202 は緑。その後、実物の説明シートは「作成」が文字列 YYYY/MM/DD HH:MM(基準日は日付)で検査①に止まった=仕様変更(規則 made_text・合成 Excel も実物の形に)。
       202 も使い切りなので最後の種は 303 に替えたが、303 は order_str(D1)の試験入力が種に頼っていて赤 1 件(3 番目の指図が英字始まりになり、数に直しても変わらなかった=試験入力の欠陥)。
-      直し: 先頭が 0 で数字だけの指図を試験の中で自分で作る形に変更(種に頼らない)。303 も使い切り。404 は全部緑(1 回目)。その後、機械グループ用の束 machine(分類表 machine_rules.json・上限を超えたら指図ごとに冊を割る)を足したので、最後の種は 505(--final)
+      直し: 先頭が 0 で数字だけの指図を試験の中で自分で作る形に変更(種に頼らない)。303 も使い切り。404 は全部緑(1 回目)。その後、機械グループ用の束 machine(分類表は登録 sap-sort/1・上限を超えたら指図ごとに冊を割る)を足したので、最後の種は 505(--final)
 """
 import copy
 import datetime
@@ -26,6 +26,7 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from feed import CHK, FORBIDDEN_KEYS, RULES, Rules, classify_work, run_feed, write_outputs   # noqa: E402
+from sap_sort import app_wcs_of, load_sap_sort   # noqa: E402
 from make_feed import truth_to_reference   # noqa: E402
 from make_synth_xlsx import build, serial   # noqa: E402
 from xlsx_min import XDate, write_xlsx   # noqa: E402
@@ -53,17 +54,17 @@ def sh(sheets, name):
     return dict(sheets)[name]
 
 
-APPS = {'product': ['2309'], 'final': ['2526'], 'parts': ['2509', '2519']}     # app_wcs.json と同じ(試験は設定ファイルに頼らない)
+APPS = {'product': ['2309'], 'final': ['2526'], 'parts': ['2509', '2519']}     # 切り替え前の app_wcs.json と同じ(試験は設定ファイルに頼らない・登録から作った表と同じ事は selftest_sap_sort.py で確かめる)
 
 
-MR = json.load(open(os.path.join(HERE, 'machine_rules.json'), encoding='utf-8'))      # 束 machine の分類表(設定ファイルそのもの)
+MR = load_sap_sort()[0]      # 束 machine の分類表 = 登録 sap-sort/1(同梱の既定ファイルそのもの・アプリと同じ物)
 
 
-def run(sheets, prev=None, reference=None, rules=None, max_bytes=1000000, inject=None, name='x', app_wcs=None, machine_rules=None):
+def run(sheets, prev=None, reference=None, rules=None, max_bytes=1000000, inject=None, name='x', app_wcs=None, sap_sort=None):
     _n[0] += 1
     p = os.path.join(TMP.name, '操業データ_%s_%d.xlsx' % (name, _n[0]))
     write_xlsx(p, sheets)
-    return run_feed(p, prev_record=prev, reference=reference, rules=rules, max_bytes=max_bytes, inject=inject, app_wcs=app_wcs, machine_rules=machine_rules)
+    return run_feed(p, prev_record=prev, reference=reference, rules=rules, max_bytes=max_bytes, inject=inject, app_wcs=app_wcs, sap_sort=sap_sort)
 
 
 # 生の行の列の位置(headers_spec.json の SAP_作業 / SAP_製造指図 の並び)
@@ -558,7 +559,7 @@ def t3_mutants():
         results = []
         for off in (False, True):
             try:
-                rec, b, d = run(c['sheets'], reference=c.get('ref'), rules=Rules(off=[rule] if off else [], skip_checks=c.get('skip', ()) if off else ()), name='m', app_wcs=APPS if c.get('app') else None, machine_rules=MR if c.get('machine') else None, max_bytes=c.get('max_bytes', 1000000))
+                rec, b, d = run(c['sheets'], reference=c.get('ref'), rules=Rules(off=[rule] if off else [], skip_checks=c.get('skip', ()) if off else ()), name='m', app_wcs=APPS if c.get('app') else None, sap_sort=MR if c.get('machine') else None, max_bytes=c.get('max_bytes', 1000000))
                 results.append(b is not None and bool(c['ok'](rec, b, d)))
             except Exception as e:   # noqa: BLE001 規則を外して落ちた=赤
                 results.append(False)
@@ -664,7 +665,7 @@ def t7_apps():
 
 
 def t8_machine():
-    print('\n== 束 machine(機械グループの画面用・機械と洗浄の工程・分類は machine_rules.json・アプリ本体と同じ答え) ==')
+    print('\n== 束 machine(機械グループの画面用・機械と洗浄の工程・分類は登録 sap-sort/1・アプリ本体と同じ答え) ==')
     # (1) 分類がアプリ本体と全工程で同じ答え(node でアプリ本体の readWorkName を呼ぶ)
     pairs = []
     sheets, _ = S(SEED[0], 'D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D15 D16 D17'.split(), 300)
@@ -674,7 +675,7 @@ def t8_machine():
     pairs += [(t, c) for t in texts for c in codes]
     node = node_classify(pairs)
     diff = [(p_, n_, classify_work(p_[0], p_[1], MR)) for p_, n_ in zip(pairs, node) if classify_work(p_[0], p_[1], MR) != n_]
-    check('分類: Python(machine_rules.json)と sapProgress.js の readWorkName が %d 通りの(作業テキスト, 作業区)で同じ答え(うち合成データの全工程 %d 行)' % (len(set((str(t or ''), str(c or '')) for t, c in pairs)), len(sh(sheets, 'SAP_作業')) - 1), not diff, str(diff[:3]))
+    check('分類: Python(登録 sap-sort/1)と sapProgress.js の readWorkName が %d 通りの(作業テキスト, 作業区)で同じ答え(うち合成データの全工程 %d 行)' % (len(set((str(t or ''), str(c or '')) for t, c in pairs)), len(sh(sheets, 'SAP_作業')) - 1), not diff, str(diff[:3]))
     kinds = {}
     for n_ in node:
         kinds[n_['kind']] = kinds.get(n_['kind'], 0) + 1
@@ -683,7 +684,7 @@ def t8_machine():
     for n, quirks in ((40, []), (300, 'D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D15 D16 D17'.split())):
         sheets, truth = S(SEED[0], quirks, n)
         one = run(sheets, reference=truth_to_reference(truth), name='m1')
-        rec, bs, ds = run(sheets, reference=truth_to_reference(truth), name='m2', app_wcs=APPS, machine_rules=MR)
+        rec, bs, ds = run(sheets, reference=truth_to_reference(truth), name='m2', app_wcs=APPS, sap_sort=MR)
         nm = '指図%d・癖%s' % (n, 'all' if quirks else 'なし')
         check('machine %s: 検査が全部 OK(A1 を含む)' % nm, rec['status'] == 'ok', str(rec.get('reasons')))
         if rec['status'] != 'ok':
@@ -698,19 +699,19 @@ def t8_machine():
         check('machine %s: 記録に作業区・指図数・工程数・未完了数・バイト数・ハッシュ・工程名ごとの件数がある' % nm, all(k in m for k in ('wcs', 'orders', 'ops', 'openOps', 'bytes', 'sha256', 'byName', 'parts')) and sum(v['ops'] for v in m['byName'].values()) == m['ops'])
     # (3) 上限を超えたら指図ごとに冊を割る
     sheets, truth = S(SEED[0], [], 40)
-    rec, bs, ds = run(sheets, reference=truth_to_reference(truth), max_bytes=20000, name='m3', app_wcs=APPS, machine_rules=MR)
+    rec, bs, ds = run(sheets, reference=truth_to_reference(truth), max_bytes=20000, name='m3', app_wcs=APPS, sap_sort=MR)
     mk_ = [k for k in bs if k.startswith('machine-')] if bs else []
     print('     上限 20000 で割る: machine は %d 冊・大きさ %s' % (len(mk_), [len(ds[k]) for k in sorted(mk_)] if ds else None))
     check('machine 上限 20000: 2 冊以上に割れて、各冊が上限以内・指図ごとに割れていて答えと一致', rec['status'] == 'ok' and len(mk_) >= 2 and all(len(ds[k]) <= 20000 for k in mk_) and machine_ok(sheets, rec, bs), str(rec.get('reasons')))
     # (4) 合成 3000 指図
     sheets, truth = S(SEED[0], [], 3000)
-    rec, bs, ds = run(sheets, reference=truth_to_reference(truth), name='m4', app_wcs=APPS, machine_rules=MR)
+    rec, bs, ds = run(sheets, reference=truth_to_reference(truth), name='m4', app_wcs=APPS, sap_sort=MR)
     sizes = {k: len(v) for k, v in (ds or {}).items()}
     print('     指図 3000 の束の大きさ(バイト): %s・どこにも使わない工程 %s' % (sizes, rec.get('other', {}).get('ops')))
     check('machine 指図 3000: 全部の束(machine は冊ごと)が上限 1,000,000 以内で検査が全部 OK・machine の答えが一致', rec['status'] == 'ok' and all(v <= 1000000 for v in sizes.values()) and machine_ok(sheets, rec, bs), str(rec.get('reasons')))
     # (5) 書き出し
     sheets, truth = S(SEED[0], [], 40)
-    rec, bs, ds = run(sheets, reference=truth_to_reference(truth), name='m5', app_wcs=APPS, machine_rules=MR)
+    rec, bs, ds = run(sheets, reference=truth_to_reference(truth), name='m5', app_wcs=APPS, sap_sort=MR)
     outd = os.path.join(TMP.name, 'out_machine')
     write_outputs(outd, rec, ds)
     check('書き出し: sap-feed-machine-1.json を含む', 'sap-feed-machine-1.json' in os.listdir(outd) and 'sap-feed-record.json' in os.listdir(outd))

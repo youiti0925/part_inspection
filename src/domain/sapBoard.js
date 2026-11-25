@@ -8,11 +8,12 @@
 import { hoursOf } from './sapSchedule.js';
 import { DAY_MS } from './sapProgress.js';
 import { DUE_TIER } from './operationsSimulation/dueRowFacts.js';
+import { laneOrderOf } from './sapSort.js';
 
 export const HOURS_PER_DAY = 7.75;       // 定時 08:30-17:00 から休憩を引いた1台あたりの1日の働ける時間
 export const HEAT_WARN_DAYS = 4;         // 待ちの標準時間 ÷ 台数 が この日数ぶん以上 → 黄(注意)
 export const HEAT_BAD_DAYS = 8;          // この日数ぶん以上 → 赤(溜まり大)
-export const LANE_ORDER = ['旋盤', '立旋盤', 'フライス', '横M/C', '門M/C', '平面研削', '円筒研削', '歯切り', '仕様変更', '面取り洗浄', '受入検査', '三次元検査', '検査'];
+export const LANE_ORDER = laneOrderOf();   // 並び順は 登録 sap-sort/1(sap_sort.default.json)の laneOrder(11-25 に集約)
 
 export const chainOf = (o) => o.stages.filter((s) => s.kind !== 'misc');
 const r1 = (x) => Math.round(x * 10) / 10;

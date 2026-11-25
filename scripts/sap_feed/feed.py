@@ -23,6 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'sap_synth'))
 from xlsx_min import read_xlsx   # noqa: E402
 from make_synth_xlsx import norm, load_spec   # noqa: E402
+from sap_sort import classify_work, js_number, machine_kinds_of   # noqa: E402,F401  分類の表は登録 sap-sort/1 に1つだけ(11-25 に machine_rules.json・app_wcs.json から集約)
 
 SCHEMA = 'sap-feed/1'
 DONE_TOKENS = ('TECO', 'CMPL', 'DLV', 'CLSD', 'DLT', 'LKD')   # 終わった・消された指図の記号(RPA と同じ 6 つ)
@@ -61,48 +62,6 @@ class Rules:
 
     def on(self, name):
         return name not in self.off
-
-
-def js_number(code):
-    """JS の Number(code) と同じ(空=0・数でない=NaN)。sapProgress.js readWorkName の c と同じ値にする"""
-    t = str(code if code is not None else '').strip()
-    if t == '':
-        return 0.0
-    if re.fullmatch(r'[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?', t):
-        return float(t)
-    return float('nan')
-
-
-def classify_work(text, code, mr, same_as_app=True):
-    """作業テキスト・作業区 → {name, kind}(kind: machine / inspect / wash / misc)。src/domain/sapProgress.js の readWorkName と同じ答え(表は machine_rules.json)。
-    same_as_app=False は規則を外した版(試験用): 作業区コードの範囲の表を使わない"""
-    raw = re.sub(r'\s+', ' ', str(text or '').replace('：', ':')).strip()
-    t = re.sub(r'^\d{4}[:\s]+', '', raw)
-    c = js_number(code)
-    ic = mr['inspect_codes']
-    for k, nm in ic.items():
-        if c == float(k):
-            return {'name': nm, 'kind': 'inspect'}
-    if re.search(mr['wash']['pattern'], t):
-        return {'name': mr['wash']['name'], 'kind': 'wash'}
-    head = t.split(':')[0]
-    is_change = bool(re.search(mr['change']['head_pattern'], head))
-    mi = mr['misc']
-    if not is_change and (re.search(mi['head_pattern'], head) or re.search(mi['text_pattern'], t)):
-        return {'name': mi['name_if_text_contains'][1] if mi['name_if_text_contains'][0] in t else mi['name'], 'kind': 'misc'}
-    if same_as_app:
-        for a, b, nm in mr['code_fallback']:
-            if a <= c <= b:
-                return {'name': nm, 'kind': 'machine'}
-    if is_change:
-        for k, nm in mr['name_rules']:
-            if k in t:
-                return {'name': nm, 'kind': 'machine'}
-        return {'name': mr['change']['default_name'], 'kind': 'machine'}
-    for k, nm in mr['name_rules']:
-        if k in head or k in t:
-            return {'name': nm, 'kind': 'machine'}
-    return {'name': mi['default_name'], 'kind': 'misc'}
 
 
 def sha256_file(path):
@@ -357,7 +316,7 @@ def stop_record(base, stage, checks, reason_lines, extra=None):
     return rec
 
 
-def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_BYTES, inject=None, app_wcs=None, machine_rules=None):
+def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_BYTES, inject=None, app_wcs=None, sap_sort=None):
     rules = rules or Rules()
     base = {'schema': SCHEMA, 'fileName': os.path.basename(path)}
     checks = []
@@ -633,12 +592,12 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
                 else:
                     owner[w] = app
         machine_ops = []
-        if machine_rules is not None:
-            mkinds = set(machine_rules['machine_kinds'])
+        if sap_sort is not None:
+            mkinds = set(machine_kinds_of(sap_sort))
             for o in ops_out:
                 if o['wc'] in owner:
                     continue                                                # 検査の作業区(アプリの束)が先
-                c = classify_work(text_by_key.get((o['order'], o['act']), ''), o['wc'], machine_rules, rules.on('machine_rules_same_as_app'))
+                c = classify_work(text_by_key.get((o['order'], o['act']), ''), o['wc'], sap_sort, rules.on('machine_rules_same_as_app'))
                 if c['kind'] in mkinds or not rules.on('machine_partition'):   # 規則を外した版: 属さない工程を全部 machine に入れる
                     d = {k: v for k, v in o.items() if k != 'suspectOrder'}      # 機械グループの画面は suspectOrder を読まない(sapGroups.js が順番から自分で数える)
                     d['name'], d['kind'] = c['name'], c['kind']
@@ -660,7 +619,7 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
             other_ops = [o for o in ops_out if o['wc'] not in owner and (o['order'], o['act']) not in m_keys]
         else:
             other_ops = [o for o in ops_out if o['wc'] not in owner]       # 規則を外した版: machine に入れた分を引かない(二重に数える)
-        if machine_rules is not None:
+        if sap_sort is not None:
             m_wcs = sorted({o['wc'] for o in machine_ops})
             m_have = {o['order'] for o in machine_ops}
             m_orders = [o for o in orders_out if o['order'] in m_have]
@@ -723,11 +682,11 @@ def run_feed(path, prev_record=None, reference=None, rules=None, max_bytes=MAX_B
             have = {o['order'] for o in a_ops}
             if any(o['order'] not in have for o in ords):
                 a1_probs.append('%s の束に、そのアプリの工程が 1 つも無い指図が入っている' % app)
-        if machine_rules is not None:
+        if sap_sort is not None:
             wk_keys = [(w['wc'], w['week']) for k, v in parts.items() if k.startswith('machine-') for w in v[3]]
             if len(wk_keys) != len(set(wk_keys)):
                 a1_probs.append('machine の束の history が複数の束で重複している(足すと二重になる)')
-            if any(o['kind'] not in set(machine_rules['machine_kinds']) for k, v in parts.items() if k.startswith('machine-') for o in v[2]):
+            if any(o['kind'] not in set(machine_kinds_of(sap_sort)) for k, v in parts.items() if k.startswith('machine-') for o in v[2]):
                 a1_probs.append('machine の束に、機械・洗浄でない工程(付帯作業・検査など)が入っている')
         if sum(sum(1 for o in v[2] if not o['done']) for v in parts.values()) + sum(1 for o in other_ops if not o['done']) != len(open_ops):
             a1_probs.append('未完了の工程の数が、アプリ分+どれにも属さない分と全体で合わない')
