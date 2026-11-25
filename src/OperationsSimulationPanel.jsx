@@ -66,7 +66,7 @@ import {
 } from 'lucide-react';
 
 import { ErrorBoundary } from './ErrorBoundary.jsx';
-// 🔗 SAP の検査の到着見込みを「これから届く」(lot.entryAt)へ入れる(旗 feature:sapProgress=1 で xlsx を読んだ時だけ・既定 OFF=何も変わらない)
+// 🔗 SAP の検査の到着見込みを「これから届く」(lot.entryAt)へ入れる(旗は既定 ON・xlsx を読んだ時だけ働く=読まなければ何も変わらない)
 import { useSapArrivalFeed } from './useSapArrivalFeed.js';
 import { applySapArrivals } from './domain/sapArrival.js';
 import { SapArrivalStrip } from './SapArrivalStrip.jsx';

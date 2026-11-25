@@ -15,7 +15,7 @@ import { sapFlagOn } from './domain/sapArrivalStore.js';
 import { baseNowMs } from './domain/sapBoard.js';
 import { buildOrders, reachList, loadByGroup, loadByWorkCenter, itemSummary, gaugeOf, stageView, handoffList, dailyLoad, STATUS_LABEL } from './domain/sapProgress.js';
 
-/** 旗: localStorage の feature:sapProgress が '1' の時だけ ON(既定 OFF)。読み方は domain/sapArrivalStore.js の sapFlagOn と同じ1本 */
+/** 旗: 既定 ON・localStorage の feature:sapProgress='0' で OFF。読み方は domain/sapArrivalStore.js の sapFlagOn と同じ1本 */
 function isSapProgressOn() { return sapFlagOn(); }
 /** 端末の中(localStorage)だけに覚える。読み書きできない時は 覚えずに動く。本番(Firestore)には書かない */
 const LS = 'sapProgress:';

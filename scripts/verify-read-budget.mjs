@@ -43,8 +43,46 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { restoreIfApp, sliceFilePaths } from './lib-source-reader.mjs';
 
 export const FREE_READS_PER_DAY = 50_000;
+
+// 🚨 2026-10-26(清水さん了承): 1日の読み取りの **判定** は Firebase コンソールの実数で行う。
+//   最悪の場合(全端末の控えが空)の見積りは表として残すが、判定には使わない。
+export const MEASURED_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'read-budget-measured.json');
+export const MEASURED_MAX_AGE_DAYS = 14;
+export const MEASURED_LIMIT_RATIO = 0.8;
+export const WORST_NOTE_MULTIPLE = 5;
+export const loadMeasured = (p = MEASURED_PATH) => {
+  try { return { raw: fs.readFileSync(p, 'utf8'), path: p }; }
+  catch (e) { return { raw: null, path: p, err: String(e.message || e) }; }
+};
+// 純関数。{ ok, reasons[], m, peak, limit, ageDays } を返す。
+export const judgeMeasured = (raw, today, worstDay = null, free = FREE_READS_PER_DAY) => {
+  const limit = Math.floor(free * MEASURED_LIMIT_RATIO);
+  const reasons = [];
+  if (raw == null) return { ok: false, reasons: ['実測の紙(scripts/read-budget-measured.json)が無い。Firebase コンソールから読んで置くこと'], limit };
+  let m;
+  try { m = JSON.parse(raw); } catch { return { ok: false, reasons: ['実測の紙(scripts/read-budget-measured.json)が JSON として読めない'], limit }; }
+  const isNum = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+  if (!m || typeof m !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(String(m.measuredAt || ''))
+      || !m.source || !isNum(m.perDayAvg) || !isNum(m.last24h)
+      || (m.recentPerDayMax != null && !isNum(m.recentPerDayMax))) {
+    return { ok: false, m, reasons: ['実測の紙が不正(measuredAt=YYYY-MM-DD / source / perDayAvg / last24h は必須の数)'], limit };
+  }
+  const t0 = Date.parse(m.measuredAt + 'T00:00:00Z'), t1 = Date.parse(String(today) + 'T00:00:00Z');
+  const ageDays = Math.round((t1 - t0) / 86400000);
+  if (!Number.isFinite(ageDays)) return { ok: false, m, reasons: ['実測の日付が読めない'], limit };
+  if (ageDays > MEASURED_MAX_AGE_DAYS) {
+    reasons.push(`実測が古い(${m.measuredAt} から ${ageDays}日 > ${MEASURED_MAX_AGE_DAYS}日)。Firebase コンソールを読み直して read-budget-measured.json を更新すること`);
+  }
+  const peak = Math.max(m.perDayAvg, m.last24h, m.recentPerDayMax || 0);
+  if (peak > limit) {
+    reasons.push(`実測の1日の読み取り ${peak.toLocaleString('en-US')}件 が 無料枠の${Math.round(MEASURED_LIMIT_RATIO * 100)}%(${limit.toLocaleString('en-US')}件)を超えている`);
+  }
+  const worstNote = worstDay != null && peak > 0 && worstDay > peak * WORST_NOTE_MULTIPLE;
+  return { ok: reasons.length === 0, reasons, m, peak, limit, ageDays, worstNote };
+};
 
 // 走らせた場所 = このファイルの1つ上（scripts/ の親）。Windows でも Linux でも同じに出る。
 export const SELF_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -269,14 +307,48 @@ export const checkOvercountFresh = (apps, table = OVERCOUNT, srcOf = null) => {
 export const isOvercounted = (appKey, col, table = OVERCOUNT) =>
   (table[appKey] || []).some((x) => x.col === col);
 
+// 🚨 2026-10-26: 「遅延(lazy)」と数えた口が、本当に開いた画面の門(ゲート)の後ろに在るか。
+//   lazy は **見積りを小さくする** 側の申告なので、門が消えて起動時の読みに戻ったら赤にする。
+//   evidence = 「門の判定 → すぐ後ろでその棚を購読」の並びが実コードに在る事(コメントは除いて見る)。
+export const LAZY_GATES = {
+  final: [{ col: 'target_time_history', file: 'App.firebase.jsx',
+    evidence: /if \(!historyWanted\b[^\n]*\n[\s\S]{0,1200}?watchCollection\(APP_DATA_ID,\s*'target_time_history'/,
+    why: '分析・最適化タブを開いた端末だけ張る(historyWanted)' }],
+  product: [],
+  parts: [],
+};
+export const checkLazyGateFresh = (apps, table = LAZY_GATES, srcOf = null) => {
+  const bad = [];
+  for (const [key, list] of Object.entries(table)) {
+    const app = apps.find((a) => a.key === key);
+    if (!app || app.missing) continue;
+    for (const st of list) {
+      let src = null;
+      if (srcOf) src = srcOf(key, st.file);
+      else {
+        const p = path.join(app.dir, st.file);
+        src = fs.existsSync(p) ? stripComments(readSrc(p)) : null;
+      }
+      if (src == null) { bad.push({ key, col: st.col, why: `${st.file} が見つからない` }); continue; }
+      if (!st.evidence.test(src)) {
+        bad.push({ key, col: st.col,
+          why: `${st.col} を「開いた画面でだけ読む(遅延)」と数えているのに、実コードに門が無い(起動時の読みに戻っている可能性＝見積りが小さい)` });
+      }
+    }
+  }
+  return bad;
+};
+
 // 起動時に必ず張る物。⚠どれが起動時かは実コードを読んで決めた(門を why に書く)。
 // ⚠⚠ ここが実コードとずれたら見積りが黙って嘘になるので、下の checkStartupFresh() が突き合わせる。
 export const STARTUP = {
   final: {
     always: ['lots', 'contact_requests', 'arrival_times', 'push_tokens', 'workers', 'worker_settings',
-             'target_time_history', 'notes', 'announcements', 'indirectWork', 'field_reports', 'video_recipes',
+             'notes', 'announcements', 'indirectWork', 'field_reports', 'video_recipes',
              // ⭐星取表の指名の印+🎓教育の出来事(2026-08-29)。新しい順500件のみ購読(App側にlimit:500)
-             'skill_marks', 'education_events'],
+             'skill_marks', 'education_events',
+             // 📉🪦 消したロットの墓標(2026-09-27)。「前回の続きだけ読む」時に、前回より後の物だけ購読する(App側に limit:200)
+             'lots_deleted'],
     docs: [['final-inspection-v1', 'settings'], ['contact-shared-v1', 'settings']],
     shared: [['contact-shared-v1', 'app_feedback'], ['contact-shared-v1', 'app_notices'],
              // 📦 2026-09-17 共有棚(両方の工場の負荷・曜日/営業日の配置)を 1回読み→購読 に(清水さん「スーパーリロードしないと計算できない」)
@@ -286,7 +358,12 @@ export const STARTUP = {
     //     「開いた1台に何枚あるか」は書類の中身を見ないと数えられず、この見張りは件数の控えしか持たない。
     //     エミュレータのミラーでの実測は 1台あたり 1〜24枚(平均11.8枚)。数字を作らずに、ここは上限として残す。
     lazy: [['final-inspection-v1', 'lot_images',
-      '🚦開いているロットの分だけ購読する形へ(2026-08-30)。ここの件数は棚ぜんぶ=**上振れ**。実測は1台あたり平均11.8枚']],
+      '🚦開いているロットの分だけ購読する形へ(2026-08-30)。ここの件数は棚ぜんぶ=**上振れ**。実測は1台あたり平均11.8枚'],
+      // 📉 2026-10-26 数え直し(緩めではなく実際の動きに合わせた): 目標時間の履歴は起動時ではなく、
+      //   分析/最適化タブを開いた端末だけが張る(historyWanted)。しかも今月+先月だけ(where)。
+      //   ここの件数は棚ぜんぶ=**上振れ**。「ゲートが実コードに在る」事は LAZY_GATES + checkLazyGateFresh が毎回突き合わせる。
+      ['final-inspection-v1', 'target_time_history',
+        '分析・最適化タブを開いた端末だけ(historyWanted・src/App.firebase.jsx)。今月+先月だけ読む']],
     why: 'src/App.firebase.jsx の unsubs 配列。?live= と ?renraku=1 は一部/全部を止める',
   },
   product: {
@@ -314,9 +391,7 @@ export const STARTUP = {
     why: 'src/App.jsx の unsubs 配列。lots は limit:500 + 未完了だけの2本立て(=同じ doc を2回読む)',
   },
   parts: {
-    always: ['lots', 'templates', 'workers', 'notes', 'announcements', 'observationPlans',
-             // 📉🪦 消したロットの墓標(2026-09-28)。「前回の続きだけ読む」時に、前回より後の物だけ購読する(App 側は tombLotsSpec = limit 200)
-             'lots_deleted'],
+    always: ['lots', 'templates', 'workers', 'notes', 'announcements', 'observationPlans'],
     docs: [['parts-inspection-v1', 'settings']],
     shared: [],
     // 🚨 2026-08-30 直した: logs / indirectWork / improvements は起動時ではなく
@@ -342,7 +417,8 @@ export const stripComments = (src) => src
   .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
   .replace(/(^|[^:])\/\/[^\n]*/g, (m, p1) => p1 + ' '.repeat(m.length - p1.length));
 
-export const readSrc = (p) => fs.readFileSync(p, 'utf8').split(String.fromCharCode(0)).join('');
+// 🔎 11-15: App.firebase.jsx は区画を戻した字で読む(基準と同じ字=読み口と絞り込み・許可行の対応が切れない)。木の根は src の1つ上。
+export const readSrc = (p) => restoreIfApp(p, fs.readFileSync(p, 'utf8'), path.dirname(path.dirname(p))).split(String.fromCharCode(0)).join('');
 
 export const walk = (dir, out = []) => {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -758,7 +834,9 @@ export const scanApp = (app) => {
     return { ...app, sites: [], missing: true, files: 0,
       notSeen: app.notSeen || `${app.dir} が無い（フォルダごと読めない）` };
   }
-  const files = walk(app.dir);
+  // 🔎 11-15: 区画ファイル(台帳の to)は別の1本として数えない(本文は戻した App の中に在る・二重に数えない)
+  const sliceSet = sliceFilePaths(path.dirname(app.dir));
+  const files = walk(app.dir).filter((f) => !sliceSet.has(path.relative(path.dirname(app.dir), f).split(path.sep).join('/')));
   if (!files.length) {
     return { ...app, sites: [], missing: true, files: 0,
       notSeen: `${app.dir} に .js/.jsx が1つも無い（読む物が無い）` };
@@ -1537,6 +1615,20 @@ DATA(db).getAll(ns, 'lots', { map: ROW_DATA_WINS }),
       && OVERCOUNT_NOT_SUBTRACTED.every(([, , why]) => typeof why === 'string' && why.length >= 20),
     '🚨 引けていない口は「引けない理由」まで書く（黙って落とさない）');
 
+  // --- (E4) 🚨 遅延(lazy)と数えた口の門が本当に在るか(2026-10-26) ----------
+  const lgApps = [{ key: 'final', missing: false, dir: '(memory)' }];
+  const lgSrc = (code) => () => code;
+  say(LAZY_GATES.final.some((x) => x.col === 'target_time_history')
+      && STARTUP.final.lazy.some((x) => x[1] === 'target_time_history')
+      && !STARTUP.final.always.includes('target_time_history'),
+    '目標時間の履歴は always ではなく lazy に居て、門の証拠も登録してある');
+  say(checkLazyGateFresh(lgApps, LAZY_GATES, lgSrc(
+    "useEffect(() => {\n if (!historyWanted || !user) return undefined;\n const u = DATA(db).watchCollection(APP_DATA_ID, 'target_time_history', onRows, {});\n}, []);")).length === 0,
+    '門(historyWanted)の後ろで購読していれば通す');
+  say(checkLazyGateFresh(lgApps, LAZY_GATES, lgSrc(
+    "useEffect(() => {\n if (!user || !db) return undefined;\n const u = DATA(db).watchCollection(APP_DATA_ID, 'target_time_history', onRows, {});\n}, []);")).length === 1,
+    '🚨 門が消えて起動時の読みに戻ったら赤(lazy と数えたまま通さない)');
+
   // ①と②が本当に分かれているか。作り物の棚で数える。
   const ocCounts = { ns: {
     'final-inspection-v1': { lots: { docs: 100 }, lot_images: { docs: 900 } },
@@ -1601,6 +1693,27 @@ const APPS=[{ id: 'final-inspection-v1' }];`;
   say(dNotHere.lowerBound === true && dNotHere.uncounted.some((u) => /司令塔③/.test(u)),
     '🚨 ③を見ていない日の合計は「合計」ではなく **下限** として出す（何を数えていないかも名指し）');
 
+  // --- (G) 1日の読み取りの判定は実数(日付つき) ------------------------------
+  {
+    const T = '2026-10-26';
+    const good = JSON.stringify({ measuredAt: '2026-10-26', source: '試験', perDayAvg: 21667, last24h: 14000, recentPerDayMax: 35000 });
+    say(judgeMeasured(null, T).ok === false, '🚨 実測の紙が無ければ ❌');
+    say(judgeMeasured('{broken', T).ok === false, '🚨 実測の紙が壊れていれば ❌');
+    say(judgeMeasured(JSON.stringify({ measuredAt: '2026-10-26' }), T).ok === false, '🚨 必須の欄が無ければ ❌');
+    const stale = JSON.stringify({ measuredAt: '2026-10-11', source: '試験', perDayAvg: 1, last24h: 1 });
+    say(judgeMeasured(stale, T).ok === false, '🚨 実測が15日前なら期限切れで ❌');
+    const edge = JSON.stringify({ measuredAt: '2026-10-12', source: '試験', perDayAvg: 1, last24h: 1 });
+    say(judgeMeasured(edge, T).ok === true, '実測が14日前ちょうどは通す');
+    const hi = JSON.stringify({ measuredAt: T, source: '試験', perDayAvg: 1000, last24h: 1000, recentPerDayMax: 40_001 });
+    say(judgeMeasured(hi, T).ok === false, '🚨 実測の最大が無料枠の80%(40,000)を超えたら ❌');
+    const hi2 = JSON.stringify({ measuredAt: T, source: '試験', perDayAvg: 1000, last24h: 40_001 });
+    say(judgeMeasured(hi2, T).ok === false, '🚨 直近24時間が80%超でも ❌');
+    const jg = judgeMeasured(good, T, 55_170);
+    say(jg.ok === true && jg.peak === 35000, '実測が80%以内なら、最悪の見積りが110%(55,170)でも通す');
+    say(jg.worstNote === false && judgeMeasured(good, T, 400_000).worstNote === true,
+      '最悪の見積りが実測の5倍超なら注記だけ(❌にはしない)');
+  }
+
   console.log(bad === 0 ? '🧪 見張り自身の試験: 合格\n' : `🧪 見張り自身の試験: ❌ ${bad}件 失敗\n`);
   return bad === 0;
 };
@@ -1643,7 +1756,10 @@ export const main = () => {
   const fresh = checkStartupFresh(apps, counts);
   const embedBad = checkEmbedFresh(apps);
   const overcountBad = checkOvercountFresh(apps);
+  const lazyGateBad = checkLazyGateFresh(apps);
   const verdict = judge({ sites, allows, today });
+  const ml = loadMeasured();
+  const meas = judgeMeasured(ml.raw, today, est.unreadable ? null : est.day);
 
   // --- 🚨 どこを見たか（見ていない物を黙って合格にしない） -------------------
   const selfApp = apps.find((a) => a.self);
@@ -1802,17 +1918,27 @@ export const main = () => {
       for (const u of est.uncounted) console.log(`     ・${u}`);
       console.log('     → 本当の数は Firebase コンソールの使用量か、③画面の「実測」で見る事。');
     }
-    if (est.overFloor) {
-      console.log(`\n   ❌ ②（棚ぜんぶで数えた口を1件も数えない数）でも無料枠を ${num(est.dayFloor - FREE_READS_PER_DAY)}回 超えています。`);
-      console.log('      ＝上振れを全部落としても超える＝**確かに超えています**。');
-    } else if (est.undecided) {
-      console.log(`\n   ⏳ 決められません。① ${num(est.day)}件 は枠を超え、② ${num(est.dayFloor)}件 は枠の中です。`);
-      console.log(`      無料枠 ${num(FREE_READS_PER_DAY)} は ②と① の**間**にあります。`);
-      console.log('      🚨 どちらの線で赤にするかは、まだ決まっていません（清水さん待ち）。');
-      console.log('      🚨 混ざった数の上に ❌「出荷しないでください」は出しません（2026-09-04 に直した所）。');
-      console.log('      本当の数は Firebase コンソールの使用量で見てください。');
+    console.log('\n   ■ 上の ①② は「最悪の場合(全端末の控えが空)の見積り・判定には使わない」。');
+    if (est.overFloor || est.undecided) {
+      console.log(`     最悪の場合の見積りは無料枠 ${num(FREE_READS_PER_DAY)} を超える(① ${est.pct}% / ② ${est.pctFloor}%)が、判定は下の実数で行う。`);
     }
   }
+
+  // --- ②' 実数(Firebase コンソール)での1日の判定 ----------------------------
+  console.log('\n--------------------------------------------------------------------------');
+  console.log("②' 1日の読み取りの判定（Firebase コンソールの実数・日付つき）");
+  console.log('--------------------------------------------------------------------------');
+  if (meas.m && meas.m.measuredAt) {
+    const m = meas.m;
+    console.log(`   実測(${m.measuredAt} に読んだ・${meas.ageDays}日前): 平均 ${num(m.perDayAvg)}/日 ・ 直近24h ${num(m.last24h)} ・ 直近の最大 ${num(m.recentPerDayMax || 0)}/日`);
+    console.log(`   出どころ: ${m.source}`);
+    console.log(`   判定の基準: 3つの最大 ${num(meas.peak || 0)} が 無料枠の${Math.round(MEASURED_LIMIT_RATIO * 100)}%(${num(meas.limit)}) 以下 かつ ${MEASURED_MAX_AGE_DAYS}日以内の実測`);
+  } else {
+    console.log('   実測が読めない。');
+  }
+  console.log(`   最悪の場合(全端末の控えが空)の見積り・判定には使わない: ${est.unreadable ? '(出せず)' : `① ${num(est.day)}件(${est.pct}%) / ② ${num(est.dayFloor)}件(${est.pctFloor}%)`}` + (meas.m && meas.m.measuredAt ? ` ／ 実測(${meas.m.measuredAt}): 最大 ${num(meas.peak || 0)}件` : ''));
+  if (meas.worstNote) console.log(`   ※最悪の見積りは実測の最大の ${WORST_NOTE_MULTIPLE}倍を超えている(注記のみ・判定には使わない)`);
+  console.log(meas.ok ? '   → ✅ 1日の読み取りは実数で無料枠の8割以内' : `   → ❌ ${meas.reasons.join(' / ')}`);
 
   // --- ③ 見積りの土台がずれていないか -------------------------------------
   if (fresh.gone.length || fresh.extra.length || fresh.notChecked.length) {
@@ -1924,12 +2050,12 @@ export const main = () => {
   // 🚨🚨 2026-09-04: ❌ の土台は「棚ぜんぶで数えた口を1件も数えない数(②)」だけ。
   //   ①(上振れ込み)で ❌ を出すと、自分で「上振れ」と書いた数の上に出荷差し止めが乗る。
   //   ①だけが超えている時は「決められません」として、赤にも緑にもしない(下で別に出す)。
-  if (!est.unreadable && est.overFloor) {
-    reasons.push(`1日の見積り ${num(est.dayFloor)}件（棚ぜんぶで数えた口を1件も数えない数）が`
-      + ` 無料枠 ${num(FREE_READS_PER_DAY)} を超えている(${est.pctFloor}%)`);
-  }
+  // 🚨 2026-10-26: 1日の読み取りの判定は実数(meas)。最悪の見積り(②)は判定に使わない。
+  for (const r of meas.reasons) reasons.push(r);
   // 🚨「棚ぜんぶは読まない」は **②を小さくする** 側の申告。裏が取れない申告は通さない。
   for (const b of overcountBad) reasons.push(`棚ぜんぶは読まない、と書いてあるのに実コードに証拠が無い: ${b.key} / ${b.col} … ${b.why}`);
+
+  for (const b of lazyGateBad) reasons.push(`遅延の読みと数えているのに実コードに門が無い: ${b.key} / ${b.col} … ${b.why}`);
 
   if (listOnly) {
     console.log('（--list なので判定は出しません。上の一覧と見積りだけです）');
@@ -1943,14 +2069,14 @@ export const main = () => {
       console.log(`   🚫 見ていない: ${unseenApps.map((a) => a.label).join(' / ')}`);
       console.log('      → そのアプリのリポジトリの中で同じ物を走らせるまで、そこは何も確かめていません。');
     }
-    if (est.undecided) {
+    if (false) {
       // 🚨 合格でも「決められない」を黙って消さない(2026-09-04)。強さを変えて残す。
       console.log('   見た範囲では、絞り込みの無い読み口は在りません。');
       console.log(`   ⏳ ただし1日の見積りは **決められていません**: ① ${num(est.day)}件(枠を超える) / ② ${num(est.dayFloor)}件(枠の中)。`);
       console.log('      上の②の所に、どちらの口を引いたか・引けていないかを名指しで出してあります。');
       console.log('      🚨 どちらの線で赤にするかは 清水さん待ち。混ざった数の上に ❌ は出しません。');
     } else {
-      console.log('   見た範囲では、絞り込みの無い読み口は無く、見積りも無料枠の中です。');
+      console.log('   見た範囲では、絞り込みの無い読み口は無く、1日の読み取りは実数(Firebase コンソール)で無料枠の8割以内です。');
     }
     console.log('==========================================================================');
     return 0;

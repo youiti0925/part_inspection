@@ -77,13 +77,15 @@ test('SA07 受け渡し: 保存せずメモリの中だけ・読み込むと購�
     setSapArrivals(null); assert.equal(getSapArrivals(), null); off(); setSapArrivals(null); assert.equal(n, 2);
 });
 
-test('SA08 旗: feature:sapProgress が 1 の時だけ ON(既定 OFF)・OFF の間は 受け渡しがあっても 読む側は使わない', async () => {
+test('SA08 旗: 既定 ON(値なし・1・読めない例外 → ON)・feature:sapProgress が 0 の時だけ OFF', async () => {
     const { sapFlagOn } = await import('../sapArrivalStore.js');
     const keep = globalThis.localStorage;
     try {
-        globalThis.localStorage = { getItem: () => null }; assert.equal(sapFlagOn(), false);
+        globalThis.localStorage = { getItem: () => null }; assert.equal(sapFlagOn(), true);
         globalThis.localStorage = { getItem: (k) => (k === 'feature:sapProgress' ? '1' : null) }; assert.equal(sapFlagOn(), true);
+        globalThis.localStorage = { getItem: (k) => (k === 'feature:sapProgress' ? '0' : null) }; assert.equal(sapFlagOn(), false);
         globalThis.localStorage = { getItem: () => '0' }; assert.equal(sapFlagOn(), false);
-        globalThis.localStorage = { getItem: () => { throw new Error('blocked'); } }; assert.equal(sapFlagOn(), false);
+        globalThis.localStorage = { getItem: () => { throw new Error('blocked'); } }; assert.equal(sapFlagOn(), true);
+        delete globalThis.localStorage; assert.equal(sapFlagOn(), true);   // localStorage 自体が無い
     } finally { if (keep === undefined) delete globalThis.localStorage; else globalThis.localStorage = keep; }
 });

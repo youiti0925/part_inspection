@@ -35,7 +35,7 @@ import ProgressImportExtras from './ProgressImportExtras.jsx';
 import PendingImportPanel from './PendingImportPanel.jsx';
 import ProgressSheetMapPanel from './ProgressSheetMapPanel.jsx';
 import { SHIP_DONE_COL } from './domain/progressShipDone.js'; // 🔗 進捗管理表の U 列(出庫完了日)の列の字(部品検査だけの追加・progressSheet.js は製品と対なので触らない)
-import SapProgressPanel from './SapProgressPanel.jsx'; // 🏭 SAP 工程の進み(旗 feature:sapProgress=1 の時だけ出る・既定 OFF)
+import SapProgressPanel from './SapProgressPanel.jsx'; // 🏭 SAP 工程の進み(既定 ON・端末で feature:sapProgress='0' なら出ない)
 import MapViewLanes from './mapviews/MapViewLanes.jsx';
 import MapViewTimeline from './mapviews/MapViewTimeline.jsx';
 import { fmtWorkSec } from './domain/incomingWork.js';
