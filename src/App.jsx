@@ -38,7 +38,7 @@ import { SHIP_DONE_COL } from './domain/progressShipDone.js'; // 🔗 進捗管�
 import { loadSapSort, saveSapSort, isSapSortAdmin } from './domain/sapSortStore.js'; // 🗂 SAP 工程の仕分けの登録を読む(旗 feature:sapSort が ON の時だけ・画面を開いた時に1回)
 import { publishMachineDigest } from './domain/machineDigest.js'; // 🏯 機械の集計を最上位司令塔へ載せる(管理者が押した時の1件だけ・SAP 工程の進みの機械グループの画面)
 import SapSortAdmin from './SapSortAdmin.jsx'; // 🗂 管理者の仕分けの登録画面(旗 feature:sapSort が ON の時だけ出る)
-import SapProgressPanel from './SapProgressPanel.jsx'; // 🏭 SAP 工程の進み(旗 feature:sapProgress=1 の時だけ出る・既定 OFF)
+import SapProgressPanel from './SapProgressPanel.jsx'; // 🏭 SAP 工程の進み(既定 ON・端末で feature:sapProgress='0' なら出ない)
 import MapViewLanes from './mapviews/MapViewLanes.jsx';
 import MapViewTimeline from './mapviews/MapViewTimeline.jsx';
 import { fmtWorkSec } from './domain/incomingWork.js';
