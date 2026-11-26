@@ -1,3 +1,9 @@
+// 目的: 「社内版の通知の切替」 通知を relay(中継)・signal(社内 Web Push)・lan(各 PC の受け取り係)のどれで送る・受けるか切り替える。
+// 入力: onprem-config.json の pushMode・PocketBase の窓口(住所と札)・通知の宛先と文面。
+// 出力: 通知の口(createOnpremPush)・宛先の札の見分け(wp: / lan: / FCM)。notify_queue・push_subs・push_tokens への行。
+// 呼ぶ人: src/onprem/pushSwitch.js・src/onprem/onpremBoot.jsx。
+// 触る外の物: PocketBase の notify_queue・push_subs・push_tokens・端末の IndexedDB(秘密)・localStorage(受け取り係の id)。Firebase・Cloudflare は signal・lan では呼ばない。
+// 確かめ方: npm test(src/data/__tests__/webPushClient.test.mjs・4アプリで md5 が同じ事も見る)。
 // ============================================================================
 // 社内版の通知の切替(2026-10-31)— relay(今の中継・既定) / signal(社内の Web Push・本文なし)
 // ----------------------------------------------------------------------------

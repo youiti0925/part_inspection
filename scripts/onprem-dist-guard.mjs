@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+// 目的: 「社内版の出力の関門」 dist-onprem の全ファイルが配ってよい形に合うか調べ、配る物の一覧(onprem-files.json)を書く・照らす。
+// 入力: 出力先のフォルダ(既定 dist-onprem)・--write の有無。
+// 出力: 配る物の一覧 onprem-files.json(--write の時)・問題の一覧と終了コード(1=失敗)。
+// 呼ぶ人: scripts/build-onprem.mjs(writeOnpremManifest)・vite.config.js・手。
+// 触る外の物: --write の時の dist-onprem/onprem-files.json と見本ファイルの削除だけ。通信しない。
+// 確かめ方: npm run build:onprem が通り onprem-files.json が書かれる事・node scripts/onprem-dist-guard.mjs で今の出力が一覧と同じと出る事。4アプリで中身が同じ。
 // ============================================================================
 // 🔒 社内版の出力(dist-onprem)の関門(4アプリ共通・同じ中身)
 // ----------------------------------------------------------------------------

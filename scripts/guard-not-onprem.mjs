@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+// 目的: 「社内版の混入止め」 社内版(VITE_ONPREM=1)を本番(Firebase Hosting の dist)へ混ぜないよう、ビルドと出す前に止める関門。
+// 入力: vite の mode・VITE_ONPREM・.env 系ファイル・firebase.json の hosting.public・出力先の中の社内版の印。
+// 出力: 問題が無ければ何も出さず終了コード 0・有れば理由を出して 1(vite の設定は plugin として止める)。
+// 呼ぶ人: vite.config.js の onpremGuardPlugin・npm run build の prebuild・firebase.json の predeploy・scripts/deploy.mjs。
+// 触る外の物: ファイルを読むだけ(何も書かない・firebase も vite も import しない)。
+// 確かめ方: npm test(src/domain/__tests__/guardNotOnprem.test.mjs)・4アプリで中身が同じ事を md5 で比べる。
 // ============================================================================
 // 🛡 社内版(VITE_ONPREM=1)を本番(Firebase Hosting)へ混ぜない関門 — 4アプリ共通・中身は4つとも同じ(2026-10-30)
 // ----------------------------------------------------------------------------

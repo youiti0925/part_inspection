@@ -29,7 +29,7 @@ import {
 } from '../webPushClient.js';
 
 // md5 of src/data/webPushClient.js (LF). Change it in all four apps at once.
-const SHARED_WEBPUSH_MD5 = 'b52375cd1ee0b64e99bf7d5f54dc8721';
+const SHARED_WEBPUSH_MD5 = 'eaf14c59e84f21e652112a0fa50847e5';
 const SRC = readFileSync(fileURLToPath(new URL('../webPushClient.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
 
 const ORIGIN = 'https://kensa.local';

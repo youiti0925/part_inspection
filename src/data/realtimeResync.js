@@ -1,3 +1,9 @@
+// 目的: 「購読が切れた後の張り直しと読み直し」 社内版で購読(SSE)が切れて戻った時に、切れていた間の取りこぼしを読み直し、止まったままの流れを切って張り直させる。
+// 入力: ブラウザの fetch(/api/realtime の GET・POST だけを見る)・保管庫(backend)・online の合図。
+// 出力: 張り直した時の読み直し(購読中の一覧は refresh・購読していない一覧は古い印)。取り付けを外す関数。
+// 呼ぶ人: src/data/readRetry.js(installRealtimeResync)。
+// 触る外の物: ブラウザの fetch を包む事とタイマー・保管庫の読み直しだけ。pbClient.js・pocketbaseBackend.js は触らない。
+// 確かめ方: npm test(src/data/__tests__/realtimeReconnect.test.mjs・realtimeResync1031.test.mjs・realtimeResyncOpenTimeout.test.mjs)。
 // ============================================================================
 // 🔁 社内版(PocketBase): 購読(SSE)が切れた後の張り直しと、切れていた間の取りこぼしの読み直し(2026-10-31)
 // ----------------------------------------------------------------------------

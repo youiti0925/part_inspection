@@ -1,3 +1,9 @@
+// 目的: 「社内サーバ版の起動の設定」 onprem-config.json の読み方・端末用アカウントの覚え方・全部を PocketBase にする保管庫の決め方。
+// 入力: onprem-config.json の中身・ビルド時の値(VITE_PB_URL など)・端末に覚えたアカウント(localStorage 相当)。
+// 出力: 使う形の設定(parseOnpremConfig)・領域ごとの保管庫の表(ONPREM_PROVIDERS)・読み書きの小さい関数。
+// 呼ぶ人: 社内版の起動(src/onprem/ の起動の部品)・試験(src/data/__tests__/onpremConfig.test.mjs)。
+// 触る外の物: 設定ファイルの読み込み(fetchOnpremConfig)と、渡された保管場所(storage)への端末アカウントの書き消しだけ。firebase も DOM も import しない。
+// 確かめ方: npm test(src/data/__tests__/onpremConfig.test.mjs)。
 // ============================================================================
 // 社内サーバ(オンプレ)用の切替 — 設定の読み方と保管庫の決め方(2026-10-29 G1/G3)
 // ----------------------------------------------------------------------------
