@@ -1,0 +1,130 @@
+/* 部品検査に いつ来るか: Fable の見本(検査_いつ来るか_製品検査形.html)の CSS を .ia の中だけに閉じ込めた物。文字は最小 12px */
+.ia{background:#fff;padding:0.625rem;border:1px solid #e2e8f0;border-radius:0.75rem;color:#0f172a;font-size:0.875rem}
+.ia *{box-sizing:border-box}
+.ia .tn{font-variant-numeric:tabular-nums}
+.ia .x2{font-size:0.75rem;line-height:1.25}
+.ia .head{display:flex;flex-wrap:wrap;align-items:center;gap:0.25rem 0.75rem;margin-bottom:0.375rem}
+.ia .head h1{margin:0;font-size:0.875rem;font-weight:900;color:#0f172a}
+.ia .legend{display:flex;flex-wrap:wrap;align-items:center;gap:0.25rem 0.875rem;font-size:0.75rem;font-weight:700;color:#64748b;background:#f8fafc;border-radius:0.5rem;padding:0.375rem 0.5rem;margin-bottom:0.5rem}
+.ia .legend span.i{display:inline-flex;align-items:center;gap:0.25rem}
+.ia .lg{display:inline-block;height:0.5rem;width:1.25rem;border-radius:9999px}
+.ia .tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0.5rem;margin-bottom:0.375rem}
+.ia .tile{border:2px solid;border-radius:0.5rem;padding:0.375rem 0.5rem;text-align:left;font:inherit;cursor:pointer;min-height:2.75rem}
+.ia .tile .l{font-size:0.75rem;font-weight:900;line-height:1.25}
+.ia .tile .n{font-size:1.125rem;font-weight:900;line-height:1}
+.ia .tile .n small{font-size:0.75rem;font-weight:700;margin-left:0.125rem}
+.ia .tile[aria-pressed="true"]{outline:3px solid #0f172a;outline-offset:1px}
+.ia .tile.k-week{border-color:#67e8f9;background:#ecfeff;color:#155e75}
+.ia .tile.k-late{border-color:#fda4af;background:#fff1f2;color:#be123c}
+.ia .tile.k-stuck{border-color:#e11d48;background:#fff;color:#be123c}
+.ia .tile.k-ok{border-color:#6ee7b7;background:#ecfdf5;color:#047857}
+.ia .bar2{display:flex;flex-wrap:wrap;align-items:center;gap:0.25rem;margin-bottom:0.25rem}
+.ia .bar2 .lab{font-size:0.75rem;font-weight:900;color:#334155;margin-right:0.125rem}
+.ia .btn{font:inherit;font-size:0.75rem;font-weight:900;min-height:2.75rem;padding:0 0.5rem;border-radius:0.5rem;border:2px solid #cbd5e1;background:#fff;color:#334155;cursor:pointer}
+.ia .btn[aria-pressed="true"]{border-color:#1e293b;background:#1e293b;color:#fff}
+.ia .other{margin-left:auto;font-size:0.75rem;color:#64748b;font-weight:700}
+.ia .grid{display:grid;grid-template-columns:22rem 6rem 1fr;align-items:center;gap:0.5rem}
+.ia .hdr{align-items:end}
+.ia .hdr .c{font-size:0.75rem;font-weight:900;color:#64748b}
+.ia .hdr .axis{overflow-x:clip;position:relative;height:1.5rem;border-bottom:2px solid #e2e8f0}
+.ia .dh{position:absolute;bottom:0;white-space:nowrap;padding:0 0.25rem;font-size:0.75rem;line-height:1;font-weight:700;color:#475569}
+.ia .dh.today{background:#0e7490;color:#fff;font-weight:900;padding:0.25rem;border-radius:0.25rem 0.25rem 0 0;z-index:3;transform:translateX(-50%)}
+.ia .row{min-height:2.75rem;width:100%;border-bottom:1px solid #f1f5f9;padding:0.25rem 0;position:relative}
+.ia .row:hover{background:#f8fafc}
+.ia .sig{position:absolute;left:-0.375rem;top:0.25rem;bottom:0.25rem;width:0.25rem;border-radius:0.25rem}
+.ia .sig.red{background:#e11d48}
+.ia .sig.yellow{background:#f59e0b}
+.ia .sig.green{background:#10b981}
+.ia .sig.gray{background:#cbd5e1}
+.ia .name{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;column-gap:0.5rem;min-width:0;padding-left:0.25rem}
+.ia .av{grid-row:span 2;display:inline-flex;width:2rem;height:2rem;border-radius:9999px;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:0.75rem;flex-shrink:0}
+.ia .l1{display:flex;min-width:0;align-items:baseline;line-height:1.25}
+.ia .l1 b{font-size:1rem;font-weight:900;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ia .l1 i{font-style:normal;font-size:0.875rem;font-weight:700;color:#64748b;white-space:nowrap;flex-shrink:0}
+.ia .l2{grid-column-start:2;font-size:0.75rem;line-height:1.25;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ia .late{display:inline-flex;align-items:center;gap:0.25rem;justify-self:end;min-width:0}
+.ia .late .g{position:relative;height:0.5rem;width:2.5rem;border-radius:9999px;background:#f1f5f9;overflow:hidden}
+.ia .late .g div{height:100%;background:#f43f5e}
+.ia .late .g.fc div{background:repeating-linear-gradient(135deg,#fda4af 0 4px,#fecdd3 4px 8px)}
+.ia .late b{font-size:0.875rem;font-weight:900;line-height:1;color:#e11d48;white-space:nowrap}
+.ia .ax{position:relative;height:2.75rem;overflow-x:clip}
+.ia .col{position:absolute;top:0;bottom:0;border-left:1px dashed #f1f5f9}
+.ia .col.off{background-color:#fff;background-image:repeating-linear-gradient(135deg,rgba(148,163,184,0.25) 0,rgba(148,163,184,0.25) 0.125rem,transparent 0.125rem,transparent 0.5rem);z-index:4;border-left:0}
+.ia .col.tod{background:rgba(236,254,255,0.6)}
+.ia .pl{position:absolute;top:0.25rem;height:0.375rem;background:#cbd5e1;border-radius:9999px;z-index:1}
+.ia .now{position:absolute;top:0;bottom:0;width:0.125rem;margin-left:-0.0625rem;background:#0e7490;z-index:5}
+.ia .dm{position:absolute;width:0.5625rem;height:0.5625rem;transform:translate(-50%,-50%) rotate(45deg);z-index:6}
+.ia .dm.plan{top:0.4375rem;background:#fff;border:2px solid #64748b}
+.ia .dm.arr{top:2.1875rem;width:0.6875rem;height:0.6875rem;background:#0891b2;border:1.5px solid #fff}
+.ia .dm.arr.red{background:#e11d48}
+.ia .dm.arr.here{background:#0e7490}
+.ia .b{position:absolute;top:1.8125rem;height:0.75rem;z-index:2}
+.ia .b.done{background:#0e7490}
+.ia .b.doneL{background:#9f1239}
+.ia .b.fc{background:#67e8f9}
+.ia .b.fcL{background:#fb7185}
+.ia .b.sep{box-shadow:inset -2px 0 0 #fff}
+.ia .b.rl{border-radius:9999px 0 0 9999px}
+.ia .b.rr{border-radius:0 9999px 9999px 0}
+.ia .b.rl.rr{border-radius:9999px}
+.ia .tick{position:absolute;top:1.8125rem;height:0.75rem;width:1px;background:#fff;z-index:3;opacity:0.8}
+.ia .gap{position:absolute;top:2.125rem;height:0.125rem;background:#cbd5e1;border-radius:9999px;z-index:1}
+.ia .gap.stop{top:2.0625rem;height:0;border-top:0.1875rem dotted #e11d48;background:none;border-radius:0}
+.ia .lb{position:absolute;white-space:nowrap;font-size:0.75rem;line-height:1;z-index:7}
+.ia .lb.plan{top:0.0625rem;color:#64748b;font-weight:700;margin-left:0.5rem}
+.ia .lb.arr{top:1.8125rem;height:0.75rem;display:flex;align-items:center;color:#334155;font-weight:900;margin-left:0.625rem}
+.ia .lb.arr.red{color:#be123c}
+.ia .lb.flip{transform:translateX(-100%);margin-left:-0.625rem;background:rgba(255,255,255,0.85);padding:0 0.125rem}
+.ia .lb.edge{right:0;background:rgba(255,255,255,0.9);padding:0 0.125rem}
+.ia .lb.ledge{left:0;margin-left:0;background:rgba(255,255,255,0.9);padding:0 0.125rem}
+.ia .tag{position:absolute;top:1.6875rem;height:1rem;display:inline-flex;align-items:center;gap:0.25rem;white-space:nowrap;z-index:7;margin-left:0.375rem;font-size:0.75rem;font-weight:900;line-height:1}
+.ia .tag.stop{color:#fff;background:#e11d48;border-radius:0.25rem;padding:0 0.375rem}
+.ia .tag.unk{color:#64748b;border:1.5px dashed #94a3b8;border-radius:0.25rem;padding:0 0.375rem;background:#fff}
+.ia .zz{position:absolute;inset:0;width:100%;height:100%;z-index:6;overflow:visible;pointer-events:none}
+.ia .more{margin-top:0.25rem;width:100%;min-height:2.75rem;border:1px dashed #cbd5e1;border-radius:0.5rem;background:#fff;font:inherit;font-size:0.75rem;font-weight:900;color:#0e7490;cursor:pointer}
+.ia .foot{margin-top:0.5rem;font-size:0.75rem;color:#94a3b8;line-height:1.5}
+@media (max-width:820px){.ia .other{margin-left:0}.ia .l1 i{display:none}.ia .sds{display:none}.ia .grid{grid-template-columns:10.5rem 4.25rem 1fr;gap:0.25rem}.ia .late .g{display:none}.ia .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.ia .code{font-size:0.75rem;font-weight:900;color:#0f172a;background:#e2e8f0;border-radius:0.25rem;padding:0 0.25rem;margin-right:0.375rem;white-space:nowrap;flex-shrink:0;align-self:center;line-height:1.5}
+.ia .l2{display:flex;align-items:center;gap:0.375rem}
+.ia .l2 b{font-weight:900;color:#334155;white-space:nowrap}
+.ia .sds{display:inline-flex;gap:1px;align-items:center;flex-shrink:0}
+.ia .sd{width:0.3125rem;height:0.5rem;background:#e2e8f0;border-radius:1px}
+.ia .sd.d{background:#0e7490}
+.ia .sd.c{background:#fff;outline:2px solid #06b6d4;outline-offset:-1px;width:0.4375rem;height:0.625rem}
+.ia .sd.i{transform:rotate(45deg);width:0.4375rem;height:0.4375rem;background:#fff;border:1.5px solid #64748b;margin:0 1px}
+.ia .sd.i.c{border-color:#06b6d4;outline:none}
+.ia .sl{position:absolute;top:0.875rem;height:0.75rem;line-height:0.75rem;font-size:0.75rem;font-weight:700;color:#475569;white-space:nowrap;overflow:hidden;z-index:7;padding-left:1px}
+.ia .sl b{font-weight:900;color:#0f172a}
+.ia .mk{position:absolute;top:0;bottom:0;z-index:5}
+.ia .mk.limit{width:0.1875rem;margin-left:-0.09375rem;background:#f59e0b}
+.ia .mk.ship{width:0;border-left:2px dashed #7c3aed;margin-left:-1px}
+.ia .mk.ship::before{content:"";position:absolute;top:0;left:-0.375rem;border:0.3125rem solid transparent;border-top:0.4375rem solid #7c3aed;border-bottom:0}
+.ia .lc{display:flex;flex-direction:column;align-items:flex-end;gap:0.125rem;min-width:0}
+.ia .ov{font-size:0.75rem;font-weight:900;line-height:1;color:#fff;background:#9f1239;border-radius:0.25rem;padding:0.125rem 0.25rem;white-space:nowrap}
+.ia .row.over{background:#fff1f2}
+.ia .mock{font-size:0.75rem;font-weight:700;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:0.5rem;padding:0.25rem 0.5rem;margin-bottom:0.375rem}
+.ia .grp{display:flex;align-items:center;gap:0.5rem;margin-top:0.625rem;padding:0.375rem 0.625rem;border-radius:0.5rem;font-size:0.875rem;font-weight:900;color:#fff}
+.ia .grp small{font-size:0.75rem;font-weight:700;opacity:0.9}
+.ia .grp .n{font-size:1.125rem;font-variant-numeric:tabular-nums}
+.ia .grp.red{background:#e11d48}
+.ia .grp.stop{background:#9f1239}
+.ia .grp.gray{background:#64748b}
+.ia .grp.here{background:#0e7490}
+.ia .grp.green{background:#059669}
+.ia .grpmore{width:100%;min-height:2.75rem;border:1px dashed #cbd5e1;border-radius:0.5rem;background:#fff;font:inherit;font-size:0.75rem;font-weight:900;color:#0e7490;cursor:pointer;margin-top:0.125rem}
+.ia .col.mon{border-left:2px solid #cbd5e1}
+.ia .hdr .axis{height:2.5rem}
+.ia .dh .rel{display:block;font-size:0.75rem;font-weight:900;color:#0f172a;margin-top:0.125rem}
+.ia .dh{font-weight:900;color:#0f172a}
+.ia .dh.today{color:#fff}
+
+/* 狭い画面(スマホ 375px など): 一覧(見出し・棒グラフ)を 最低幅のある箱に入れ 箱の中で 横にスクロールする。
+   つぶさない理由: 名前の列が 10.5rem・棒が 50px ほどになり 品名が切れ・棒が右で切れ・見出しが重なる。PC 幅(821px〜)は 今までと同じ(箱は 幅いっぱい・最低幅なし) */
+.ia .scrollhint{display:none;margin:0 0 0.25rem;font-size:0.75rem;font-weight:700;color:#64748b}
+.ia .ia-scroll{overflow-x:auto;padding-left:0.5rem;margin-left:-0.5rem}
+@media (max-width:820px){
+  .ia .scrollhint{display:block}
+  .ia .ia-scroll-in{min-width:48rem}
+  .ia .grid{grid-template-columns:13rem 5rem 1fr}
+  .ia .grp{white-space:nowrap}
+}

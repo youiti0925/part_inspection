@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { onpremGuardPlugin } from './scripts/guard-not-onprem.mjs'
+import { collectBuildStamp } from './scripts/verify-no-regress.mjs'
 
 // 🏢 2026-10-29 社内サーバ版(npm run build:onprem = vite build --mode onprem)だけ:
 //   ① 出力先を dist-onprem に分ける(本番の dist と混ぜない)
@@ -55,7 +56,42 @@ const onpremDropPlugin = (outDir) => ({
 //   ・社内版の出力先が本番の出力先(dist・大文字小文字を問わず・解決したパスで比べる)→ 止める。
 //   ⚠ 開発サーバ(vite dev)は止めない。止めない時の設定・出力は今までと同じ(関門の部品は いつものビルドでは何も出さない)。
 
-// https://vite.dev/config/
+// ============================================================================
+// 🆕 版の印(build id)をビルドに焼き込む(2026-11-03・最終検査と同じ物)
+// ----------------------------------------------------------------------------
+// 何のため: 出す前の ⓪(scripts/verify-no-regress.mjs)が「いま本番に出ている版が、これから出す物の
+//   祖先か」を調べる為。2026-11-03 に、別の枝から本番へ出していた直しを master から出して黙って消した。
+// 焼き込む先は同じ1つの値:
+//   ① index.html の <meta name="app-build" content="YYYYMMDD-HHMMSS-<短いハッシュ>">
+//   ② dist/version.json  {"build":"…","commit":"<40桁>","dirty":false,"builtAt":"…"}
+//      dirty = 追跡中のファイルが変わったまま焼いた(.claude/ は数えない)。
+// ⚠静的ファイルだけ(Firestore を使わない＝読み書きの枠を食わない)。firebase.json で version.json は no-store。
+// ⚠作る処理は scripts/verify-no-regress.mjs の collectBuildStamp(4アプリ共通)。
+// ============================================================================
+function buildStamp() {
+  const STAMP = collectBuildStamp()
+  return {
+    name: 'app-build-stamp',
+    transformIndexHtml() {
+      return [
+        { tag: 'meta', attrs: { name: 'app-build', content: STAMP.build }, injectTo: 'head' },
+        { tag: 'meta', attrs: { name: 'app-built-at', content: STAMP.builtAt }, injectTo: 'head' },
+      ]
+    },
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'version.json',
+        source: `${JSON.stringify({ build: STAMP.build, commit: STAMP.commit, dirty: STAMP.dirty, builtAt: STAMP.builtAt }, null, 2)}
+`,
+      })
+    },
+    closeBundle() {
+      console.log(`  app-build-stamp: 版の印 = ${STAMP.build}${STAMP.dirty ? '  ⚠dirty' : ''}`)
+    },
+  }
+}
+
 // ============================================================================
 // 📴 繋がらなくても開ける(2026-11-02): この版の画面部品の一覧(precache.json)を出す
 // ----------------------------------------------------------------------------
@@ -64,7 +100,7 @@ const onpremDropPlugin = (outDir) => ({
 // ⚠名前は index.html からの相対(assets/…)。社内版(base ./・/final/ の様な下の階層)でも同じ一覧が使える。
 // ⚠一覧は「この版のビルドで出来た物」だけ。js/css/字体/wasm は 20MB まで、画像は 1MB まで
 //   (端末の容量と通信を食わない為)。外した物は skippedBig に名前を残す(黙って外さない)。外した部品の画面だけは繋がるまで開けない。
-// ⚠社内版のビルド(VITE_ONPREM=1 / mode onprem)だけで出す。いつものビルド(Firebase 版)の出力は今までと同じ。
+// ⚠**両方の版で出す**(2026-11-26 合流で決定・最終検査と同じ): Firebase 版の firebase-messaging-sw.js も社内版の onprem-sw.js も、起動時にこの precache.json を読んで画面部品を保存する。
 // ⚠precache.json は入口(https-front)と関門(scripts/onprem-dist-guard.mjs)の「配ってよい形」に足してある。
 // ⚠これは保存の一覧を出すだけ。配信の設定(index.html は no-store)は変えない。
 // ============================================================================
@@ -104,7 +140,7 @@ export default defineConfig(({ mode }) => {
   return {
     // 社内版だけ相対(下の階層 /parts/ でも動く)。いつものビルドは base を書かない(= '/' のまま・前と同じ)。
     ...(onprem ? { base: './' } : {}),
-    plugins: [onpremGuardPlugin(), react(), ...(onprem ? [onpremDropPlugin('dist-onprem'), offlinePrecache()] : [])],
+    plugins: [onpremGuardPlugin(), react(), buildStamp(), ...(onprem ? [onpremDropPlugin('dist-onprem')] : []), offlinePrecache()],
     // 社内版かどうかをビルドの時の定数にする(いつものビルドでは false → 社内版だけの道は出力から消える)。
     define: { __ONPREM__: JSON.stringify(onprem && flag === '1') },
     server: {

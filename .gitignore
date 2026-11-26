@@ -38,6 +38,10 @@ dist-onprem
 audit/
 _*.mjs
 _*.js
+# ただし操業シミュの試験の土台(製品と同じ3本)は Git に入れる: 入れ忘れると 元の作業場以外で試験4本が読み込めず落ちる(2026-11-24 の原因)
+!src/opsim/__tests__/_jsxRuntime.mjs
+!src/opsim/__tests__/_lucideStub.mjs
+!src/opsim/__tests__/_reactHost.mjs
 *backup*.json
 *_backup_*.json
 *dump*.json

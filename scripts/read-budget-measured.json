@@ -1,0 +1,10 @@
+{
+  "measuredAt": "2026-11-24",
+  "source": "Cloud Monitoring API firestore.googleapis.com/document/read_count (プロジェクト inspection-time-c4fd3・1日ごとの合計・直近30日 10-26〜11-24)。Firebase コンソールの使用状況と同じ元の数字。",
+  "windowDays": 30,
+  "totalReads": 342798,
+  "perDayAvg": 11427,
+  "last24h": 38096,
+  "recentPerDayMax": 38096,
+  "notes": "直近の平日は約1.3〜2.8万/日。11-24 の 38,096 は当日の分割・SAP・本番反映の作業(開発の読み)を含む高め。5万/日の無料枠の内。10-26 より平均は下がった。"
+}
