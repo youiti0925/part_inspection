@@ -356,6 +356,22 @@ export const createFirebaseBackend = (db, fs) => {
       });
     },
 
+    /** 版(rev)が期待どおりの時だけ書く(取引)。違えば何も書かず stale と「今の中身」を返す。
+     *  🚨「読んで→版を比べて→save」を端末側で分けると、2人の管理者が同時に押して両方通り、後の人が前の人の直しを黙って消す(採点 P2)。
+     *  build は (今の中身 または null)→書く文書 の関数(取引が再試行されても同じ答えになる様に、時計や外の状態を見ない)。版が無い・数でない文書は defaultRev とみなす。 */
+    saveIfRev: async (ns, col, id, expectRev, build, defaultRev = 1) => {
+      const ref = docRef(ns, col, id);
+      return await fs.runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        const cur = snap.exists() ? (snap.data() || {}) : null;
+        const curRev = cur && Number.isFinite(cur.rev) ? cur.rev : defaultRev;
+        if (curRev !== Number(expectRev)) return { ok: false, reason: 'stale', cur, rev: curRev };
+        const doc = typeof build === 'function' ? build(cur) : build;
+        tx.set(ref, prep(doc));
+        return { ok: true, doc, rev: curRev };
+      });
+    },
+
     /** 無い時だけ作る(取引)。在れば何も書かず taken。
      *  🚨「読んで無いと確かめて→save」を端末側で分けると、2台が同時に確かめてから両方書けて後勝ち(移動案の初回保存)。 */
     createOnce: async (ns, col, id, doc) => {
@@ -458,6 +474,7 @@ export const createProvider = ({ backends, providers = DEFAULT_PROVIDERS, onUnkn
     appendCapped: callAsync('appendCapped'),
     commitVersion: callAsync('commitVersion'),
     createOnce: callAsync('createOnce'),
+    saveIfRev: callAsync('saveIfRev'),
   };
 };
 

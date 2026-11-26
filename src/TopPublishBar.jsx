@@ -6,17 +6,21 @@
 // 触る外の物: 押した時だけ onPublish 経由で overview-app-v1/top_status/machine の1件(自動では書かない・開いただけでは何もしない)
 // 確かめ方: node scripts/verify-top-machine-emulator.mjs(本物の Firestore エミュレータ)・画面の写しは ③ の docs/最上位司令塔_朝の画面_1126
 import { useState } from 'react';
-import { buildMachineDigest } from './domain/machineDigest.js';
+import { buildMachineDigest, needsStaleConfirm, friendlyDigestError } from './domain/machineDigest.js';
 import { summarizeSort } from './domain/sapSortStore.js';
 import { getActiveSapSort } from './domain/sapSort.js';
 
 const hm = (ms) => { const d = new Date(ms); return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
-export default function TopPublishBar({ cap, handoffs, todayIso, sortRows, basis, onPublish, canPublish }) {
+export default function TopPublishBar({ cap, handoffs, todayIso, sortRows, basis, onPublish, canPublish, movedCount = 0 }) {
     const [busy, setBusy] = useState(false);
     const [res, setRes] = useState(null);   // { ok, text }
+    const [ask, setAsk] = useState(false);  // 古い表を載せる確かめ(1回目で出し・2回目で載せる)
+    const blocked = movedCount > 0;         // 「回した試し」が残っている数字は載せない(元に戻してから)
     const click = async () => {
-        if (busy) return;
+        if (busy || blocked) return;
+        if (needsStaleConfirm(todayIso, Date.now()) && !ask) { setAsk(true); return; }
+        setAsk(false);
         setBusy(true); setRes(null);
         try {
             const reg = getActiveSapSort();
@@ -24,16 +28,18 @@ export default function TopPublishBar({ cap, handoffs, todayIso, sortRows, basis
             const r = await onPublish(digest);
             const over = digest.groups.filter((g) => g.status === 'over').length, tight = digest.groups.filter((g) => g.status === 'tight').length;
             setRes({ ok: true, text: `${hm(digest.builtAt)} に載せました(${Math.max(1, Math.round(r.bytes / 1024))}KB・グループ ${digest.groups.length}・あふれる ${over}・ぎりぎり ${tight}・今日終わる見込み ${digest.today.finishToday}・終わった ${digest.today.doneToday})` });
-        } catch (e) { setRes({ ok: false, text: `載せられませんでした: ${e && e.message ? e.message : e}` }); }
+        } catch (e) { setRes({ ok: false, text: `載せられませんでした: ${friendlyDigestError(e, (cap.groups || []).map((g) => g.name))}` }); }
         setBusy(false);
     };
     return (
         <div className="my-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm" data-testid="top-publish">
             <div className="flex flex-wrap items-center gap-2">
-                <button type="button" onClick={click} disabled={!canPublish || busy} className={`min-h-9 rounded-lg px-3 font-black ${canPublish && !busy ? 'bg-indigo-600 text-white' : 'bg-slate-300 text-slate-500'}`} data-testid="top-publish-btn">{busy ? '載せています…' : '最上位司令塔へ載せる'}</button>
+                <button type="button" onClick={click} disabled={!canPublish || busy || blocked} className={`min-h-9 rounded-lg px-3 font-black ${canPublish && !busy ? 'bg-indigo-600 text-white' : 'bg-slate-300 text-slate-500'}`} data-testid="top-publish-btn">{busy ? '載せています…' : '最上位司令塔へ載せる'}</button>
                 <span className="text-xs text-slate-700">{canPublish ? 'この画面の数字を、最上位司令塔の機械の札へ載せます(押した時の1回だけ書きます・自動では書きません)。' : '載せられるのは管理者の人だけです(ヘッダー左上で「管理者」を選んでください)。'}</span>
             </div>
             <p className="mt-1 text-xs text-slate-600">載せる物: グループの名前・週ごとの%・持ち越しの時間と件数・あふれる/ぎりぎりの判定・今日終わる見込み/終わったの件数・まだ仕分けていない作業区の番号と件数。<b>指図番号・品目・客先・金額・作業者名は載せません。</b></p>
+            {blocked ? <p className="mt-1 text-xs font-bold text-amber-800" data-testid="top-publish-moved">回した試しが {movedCount}件 あります。元に戻してから載せてください(回した後の数字を、そのまま載せない為です)。</p> : null}
+            {ask ? <p className="mt-1 text-xs font-bold text-amber-800" data-testid="top-publish-stale">この表は {String(todayIso).slice(5).replace('-', '/')} の分です(今日の表ではありません)。載せるなら もう一度 押してください。</p> : null}
             {res ? <p className={`mt-1 text-xs font-bold ${res.ok ? 'text-emerald-700' : 'text-rose-700'}`} role="status" data-testid="top-publish-res">{res.text}</p> : null}
         </div>
     );

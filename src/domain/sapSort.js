@@ -75,7 +75,21 @@ export function validateSapSort(reg) {
         const sp = c.special || {};
         if (sp.wash && (!isStrList(sp.wash.textHas) || !c.groups.some((g) => g.key === sp.wash.to))) errors.push(`${c.key}: 洗浄の決まりが壊れています`);
         if (sp.misc && (typeof sp.misc.name !== 'string' || !isStrList(sp.misc.headStarts) || !isStrList(sp.misc.textHas))) errors.push(`${c.key}: 付帯作業の決まりが壊れています`);
+        // 付帯作業へ回す作業区の範囲(登録画面の「付帯作業(数えない)」・採点 P6): 形の検査と、他のグループの範囲との重なりの検査
+        if (sp.misc && sp.misc.wcRanges != null) {
+            if (!Array.isArray(sp.misc.wcRanges)) errors.push(`${c.key}: 付帯作業の作業区の範囲の形が違います`);
+            else for (const r of sp.misc.wcRanges) {
+                if (!Array.isArray(r) || r.length !== 2 || !Number.isFinite(r[0]) || !Number.isFinite(r[1]) || r[0] > r[1]) { errors.push(`${c.key}: 付帯作業の作業区の範囲の形が違います`); continue; }
+                for (const o of ranges) if (r[0] <= o.b && o.a <= r[1]) errors.push(`作業区の範囲が重なっています: 付帯作業(${r[0]}〜${r[1]}) と ${o.key}`);
+                ranges.push({ a: r[0], b: r[1], key: 'misc' });
+            }
+        }
         if (sp.change && (!isStrList(sp.change.headStarts) || !c.groups.some((g) => g.key === sp.change.fallbackTo))) errors.push(`${c.key}: 仕様変更の決まりが壊れています`);
+    }
+    // 検査の作業区(site)が 工程の範囲に入っている登録は 何も変わらず登録だけ汚れる(仕分けは検査が先)ので赤にする(採点 P8④)
+    for (const c of reg.commanders) for (const g of c && Array.isArray(c.groups) ? c.groups : []) {
+        if (!g || g.type !== 'site' || !isStrList(g.wc)) continue;
+        for (const w of g.wc) { const n = Number(w); const hit = ranges.find((o) => Number.isFinite(n) && n >= o.a && n <= o.b); if (hit) errors.push(`作業区 ${w} は検査の作業区ですが、${hit.key} の範囲に入っています`); }
     }
     const mc = reg.commanders.find((c) => c && c.special && c.special.misc);
     if (!mc) errors.push('付帯作業の決まりがありません(どれにも当たらない工程の行き先が決まりません)');
@@ -151,6 +165,7 @@ export function classifyCore(text, code, reg = activeReg) {
         const nt = m.nameIfTextHas;
         return miscOut(nt && t.includes(nt[0]) ? nt[1] : m.name);
     }
+    if (m.wcRanges && m.wcRanges.some(([a, b]) => c >= a && c <= b)) return miscOut(m.name, 'misc');   // 登録画面で「付帯作業(数えない)」へ回した作業区
     const r = k.ranges.find((x) => c >= x.a && c <= x.b);
     if (r) return { out: { name: r.name, kind: r.kind, group: r.group, commander: r.commander }, via: 'range' };
     if (isChange) {

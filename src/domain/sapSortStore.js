@@ -61,6 +61,24 @@ const lsCache = {
 };
 const dayOf = (now) => { const d = new Date(now); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 
+/** 保存した文書の「1つ前の版」(prev)を { rev, reg } で取り出す。無い・壊れている時は null(1つ前へ戻すボタンが出ないだけ) */
+export function prevOfStored(stored) {
+    try {
+        const p = stored && stored.prev;
+        if (!p || typeof p !== 'object') return null;
+        const reg = fromStored(p);
+        if (!validateSapSort(reg).ok) return null;
+        return { rev: Number.isFinite(p.rev) ? p.rev : null, reg };
+    } catch { return null; }
+}
+
+/** 上へ(書き出し・最上位司令塔)出す形: テンプレートの結びつけ(品目コードが目印に入る)を落とす。設計 §2.6「登録に品目は入らない」(採点 P13) */
+export function toUpper(reg) {
+    const o = JSON.parse(JSON.stringify(reg));
+    for (const c of o.commanders || []) for (const g of c.groups || []) delete g.templateOps;
+    return o;
+}
+
 /** 登録を読む: その日に読んでいれば控えを使う(読み取り0)・無ければ settings/sap_sort を1回だけ読む(1文書=読み取り1)。
  *  文書が無い・読めない・壊れている・知らない版 → 今と同じ分け方(既定)で動き、理由を errors に返す。例外は投げない */
 export async function loadSapSort({ provider, ns, now = Date.now(), cache = lsCache } = {}) {
@@ -69,7 +87,7 @@ export async function loadSapSort({ provider, ns, now = Date.now(), cache = lsCa
         const r = resolveSapSort(stored == null ? null : fromStored(stored));
         const cl = {};
         if (!r.usedDefault) for (const c of r.reg.commanders) if (c && c.labels) cl[c.key] = c.labels;
-        return { reg: r.reg, usedDefault: r.usedDefault, errors: [...r.errors, ...extra], source, commanderLabels: cl, rev: r.reg.rev };
+        return { reg: r.reg, usedDefault: r.usedDefault, errors: [...r.errors, ...extra], source, commanderLabels: cl, rev: r.reg.rev, prev: r.usedDefault ? null : prevOfStored(stored) };
     };
     const hit = cache.get();
     if (hit && hit.day === day) return fin(hit.doc, 'cache');
@@ -88,21 +106,51 @@ export async function loadSapSort({ provider, ns, now = Date.now(), cache = lsCa
  *  成功したら { rev, bytes } を返し、端末の控えも新しくする。baseRev=画面が読んだ時の rev(文書が無い時は既定の rev) */
 export async function saveSapSort({ provider, ns, reg, baseRev, user, now = Date.now(), cache = lsCache } = {}) {
     if (!isSapSortAdmin(user && user.name)) throw new SapSortError('not-admin', '仕分けを変えられるのは管理者の人だけです。ヘッダー左上で「管理者」を選んでください。');
-    if (!provider || typeof provider.getOne !== 'function' || typeof provider.save !== 'function') throw new SapSortError('no-provider', '保存の窓口がありません');
+    if (!provider || !(typeof provider.saveIfRev === 'function' || (typeof provider.getOne === 'function' && typeof provider.save === 'function'))) throw new SapSortError('no-provider', '保存の窓口がありません');
     const v = validateSapSort(reg);
     if (!v.ok) throw new SapSortError('invalid', `登録に間違いがあるので保存しません: ${v.errors.join(' / ')}`, v.errors);
-    const cur = await provider.getOne(ns, SAP_SORT_COL, SAP_SORT_ID);
-    const curRev = cur && Number.isFinite(cur.rev) ? cur.rev : null;
-    const expect = curRev == null ? DEFAULT_SAP_SORT.rev : curRev;
-    if (Number(baseRev) !== expect) throw new SapSortError('stale', `他の人が先に直しました(今の版 ${expect}・この画面は ${baseRev})。開き直してからやり直してください。`);
-    const rev = expect + 1;
-    const doc = { ...toStored(reg), rev, updatedAt: new Date(now).toISOString(), updatedBy: String(user.name) };
-    const size = approxBytes(doc);
-    if (size > SAFE_BYTES) throw new SapSortError('too-big', `登録が大きすぎます(${Math.round(size / 1024)}KB)。1文書の上限(1MB)の手前の ${Math.round(SAFE_BYTES / 1024)}KB までです。`);
-    await provider.save(ns, SAP_SORT_COL, SAP_SORT_ID, doc, { merge: false });   // 丸ごと置き換える(入れ子の古い項目を残さない)
+    const defRev = DEFAULT_SAP_SORT.rev;
+    const revOf = (c) => (c && Number.isFinite(c.rev) ? c.rev : defRev);
+    // 書く文書を 今の中身 cur から作る(1つ前の版を prev に1つだけ残す・prev の中の prev は消す)。取引が再試行されても同じ答えになる様、外の状態を見ない
+    const build = (cur) => {
+        const rev = revOf(cur) + 1;
+        const doc = { ...toStored(reg), rev, updatedAt: new Date(now).toISOString(), updatedBy: String(user.name) };
+        if (cur) { const { prev: _drop, ...before } = cur; doc.prev = before; }
+        const size = approxBytes(doc);
+        if (size > SAFE_BYTES) throw new SapSortError('too-big', `登録が大きすぎます(${Math.round(size / 1024)}KB)。1文書の上限(1MB)の手前の ${Math.round(SAFE_BYTES / 1024)}KB までです。`);
+        return doc;
+    };
+    // 他の人が先に直した: 今の版を端末の控えと「1回だけ読んだ結果」に入れてから断る(入れないと その日は 古い版のままで 二度と保存できない・採点 P1)
+    const stale = (cur) => {
+        const expect = revOf(cur);
+        const r = resolveSapSort(cur == null ? null : fromStored(cur));
+        cache.set({ day: dayOf(now), doc: cur || null });
+        if (!r.usedDefault) refreshOnce(r.reg, expect);
+        throw new SapSortError('stale', `他の人が先に直しました。新しい版(第${expect}版)を読み込みました。もう一度直してください。`, { latest: r.reg, rev: expect, prev: r.usedDefault ? null : prevOfStored(cur) });
+    };
+    let doc;
+    let viaTx = false;
+    if (typeof provider.saveIfRev === 'function') {
+        // 窓口が取引に対応していれば 読む→版を比べる→書く を1つの取引で(2人が同時に押しても 後の人が前の人の直しを消さない・採点 P2)
+        try {
+            const r = await provider.saveIfRev(ns, SAP_SORT_COL, SAP_SORT_ID, baseRev, build, defRev);
+            if (!r.ok) stale(r.cur);
+            doc = r.doc; viaTx = true;
+        } catch (e) {
+            if (e instanceof SapSortError) throw e;
+            if (!/対応していません/.test(String(e && e.message))) throw e;   // 取引に対応しない保管庫(PocketBase)だけ 下の2手へ
+        }
+    }
+    if (!viaTx) {
+        // 取引に対応しない保管庫: 読んで→比べて→書く の2手のまま(同時に押された時の取りこぼしが残る。PocketBase の移行時に取引を足す事)
+        const cur = await provider.getOne(ns, SAP_SORT_COL, SAP_SORT_ID);
+        if (Number(baseRev) !== revOf(cur)) stale(cur);
+        doc = build(cur);
+        await provider.save(ns, SAP_SORT_COL, SAP_SORT_ID, doc, { merge: false });   // 丸ごと置き換える(入れ子の古い項目を残さない)
+    }
     cache.set({ day: dayOf(now), doc });
-    refreshOnce(reg, rev);   // 画面を開き直した時(applySapSortOnce)に、保存前の古い登録を返さない
-    return { rev, bytes: size };
+    refreshOnce(reg, doc.rev);   // 画面を開き直した時(applySapSortOnce)に、保存前の古い登録を返さない
+    return { rev: doc.rev, bytes: approxBytes(doc) };
 }
 
 // ---- 画面を開いた時に1回だけ(プロセスの中でも1回) ----

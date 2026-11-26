@@ -10,7 +10,7 @@ import { DEFAULT_SAP_SORT, setActiveSapSort } from './domain/sapSort.js';
 import { LABEL_CATALOG, COMMON_WORDS, buildLabels, setActiveLabels } from './domain/labels.js';
 import {
     assignWc, removeShared, sortTargets, rangeText, wcsInGroup, placementOf, compareSort, sameReg, withLabel, clearLabels, labelsOf,
-    templateChoices, siteWcChoices, setTemplateWc, linkedWcs, getSharedSortRows, subscribeSharedSortRows,
+    templateChoices, siteWcChoices, setTemplateWc, linkedWcs, getSharedSortRows, subscribeSharedSortRows, loadState, exportSortFile, MISC_KEY, MISC_LABEL,
 } from './domain/sapSortEdit.js';
 
 const DICT_COMMANDER = 'machine';   // 画面の言葉の辞書を持たせる司令塔(機械グループ・SAP の画面が使う)
@@ -23,7 +23,7 @@ const TABS = [['sort', '工程の仕分け'], ['tpl', 'テンプレートと工�
 function CommitInput({ value, onCommit, disabled, placeholder, testId, width = 'w-44' }) {
     const [v, setV] = useState(value);
     useEffect(() => { setV(value); }, [value]);
-    return <input value={v} disabled={disabled} placeholder={placeholder} data-testid={testId} onChange={(e) => setV(e.target.value)} onBlur={() => v !== value && onCommit(v)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} className={`border rounded px-2 py-1 text-sm ${width} disabled:bg-slate-100`} />;
+    return <input value={v} disabled={disabled} placeholder={placeholder} data-testid={testId} onChange={(e) => setV(e.target.value)} onBlur={() => { if (v !== value && onCommit(v) === false) setV(value); }} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} className={`border rounded px-2 py-1 text-sm ${width} disabled:bg-slate-100`} />;
 }
 
 export default function SapSortAdmin({ loader = null, saver = null, userName = '', templates = [], modelTemplates = [], groupLabels = null }) {
@@ -35,7 +35,7 @@ export default function SapSortAdmin({ loader = null, saver = null, userName = '
     const [filter, setFilter] = useState('');
     const [msg, setMsg] = useState(null);
     const [busy, setBusy] = useState(false);
-    const admin = isSapSortAdmin(userName);
+    const isAdm = isSapSortAdmin(userName);
     const on = sapSortFlagOn();
 
     useEffect(() => subscribeSharedSortRows(setRows), []);
@@ -46,7 +46,7 @@ export default function SapSortAdmin({ loader = null, saver = null, userName = '
             const r = await applySapSortOnce({ loader });   // 仕分けの画面と同じ1回を分け合う(ここでは読みを増やさない)
             if (dead) return;
             const reg = r && r.reg ? r.reg : DEFAULT_SAP_SORT;
-            setLoaded({ reg, rev: Number.isFinite(reg.rev) ? reg.rev : 1, usedDefault: !r || r.usedDefault !== false, errors: (r && r.errors) || [] });
+            setLoaded({ reg, rev: Number.isFinite(reg.rev) ? reg.rev : 1, usedDefault: !r || r.usedDefault !== false, errors: (r && r.errors) || [], source: (r && r.source) || 'none', prev: (r && r.prev) || null });
             setDraft(reg);
         })();
         return () => { dead = true; };
@@ -61,22 +61,43 @@ export default function SapSortAdmin({ loader = null, saver = null, userName = '
     if (!on) return null;
     if (!loaded || !draft) return <section data-testid="sap-sort-admin" className="bg-white border border-slate-300 rounded-lg p-4 my-4 text-sm text-slate-500">仕分けの登録を読み込んでいます…</section>;
 
+    const lock = loadState({ errors: loaded.errors, source: loaded.source, usedDefault: loaded.usedDefault });
+    const admin = isAdm && !lock.locked;   // 読めなかった・壊れている時は 誰も直せない(既定で上書きさせない)
     const sum = cmp;
     const unsortedNow = compareSort(rows, draft, draft);   // 今の下書きで数えた物(未分類・グループごとの件数・重なり)
     const unList = unsortedNow.unclassifiedList;
     const unN = unsortedNow.unclassified.after;
     const edit = (fn) => { setMsg(null); try { setDraft(fn(draft)); } catch (e) { setMsg({ ok: false, text: e && e.message ? e.message : String(e) }); } };
     const place = (wc, group) => edit((d) => assignWc(d, wc, group));
-    const dictEdit = (part, key, value) => { const r = withLabel(draft, DICT_COMMANDER, part, key, value); if (r.problems.length) setMsg({ ok: false, text: r.problems.join(' / ') }); else { setMsg(null); setDraft(r.reg); } };
+    const dictEdit = (part, key, value) => { const r = withLabel(draft, DICT_COMMANDER, part, key, value); if (r.problems.length) { setMsg({ ok: false, text: r.problems.join(' / ') }); return false; } setMsg(null); setDraft(r.reg); return true; };
     const save = async () => {
         setBusy(true); setMsg(null);
         try {
             const r = await saver(draft, loaded.rev);
+            const saved = { ...draft, rev: r.rev };   // 保存した版の番号を入れる(古い番号のまま 今使う登録・下書き・読み込み結果に入れない)
             setActiveLabels(buildLabels({ commander: labelsOf(draft, DICT_COMMANDER), group: groupLabels }));   // 保存した言葉と仕分けを、いま開いている画面にもすぐ効かせる
-            setActiveSapSort(draft);
-            setLoaded({ reg: draft, rev: r.rev, usedDefault: false, errors: [] });
+            setActiveSapSort(saved);
+            setDraft(saved);
+            setLoaded({ reg: saved, rev: r.rev, usedDefault: false, errors: [], source: 'saved', prev: { rev: loaded.rev, reg: loaded.reg } });
             setMsg({ ok: true, text: `保存しました(第${r.rev}版)。` });
-        } catch (e) { setMsg({ ok: false, text: e && e.message ? e.message : String(e) }); } finally { setBusy(false); }
+        } catch (e) {
+            if (e && e.code === 'stale' && e.detail && e.detail.latest) {
+                // 他の人が先に直した: 新しい版に差し替える(開き直さなくても 次の保存が通る)
+                const latest = e.detail.latest;
+                setActiveSapSort(latest); setDraft(latest);
+                setLoaded({ reg: latest, rev: e.detail.rev, usedDefault: false, errors: [], source: 'server', prev: e.detail.prev || null });
+            }
+            setMsg({ ok: false, text: e && e.message ? e.message : String(e) });
+        } finally { setBusy(false); }
+    };
+    const download = () => {
+        try {
+            const f = exportSortFile(draft);
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([f.text], { type: 'application/json' })); a.download = f.name; a.click();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+            setMsg({ ok: true, text: `${f.name} を端末へ書き出しました(送信はしていません・テンプレートの結びつけは入れていません)。` });
+        } catch (e) { setMsg({ ok: false, text: `書き出せませんでした: ${e && e.message ? e.message : e}` }); }
     };
     const pl = form.wc && /^\d{1,6}$/.test(form.wc.trim()) ? placementOf(draft, form.wc.trim()) : null;
     const wantGroup = form.group || (targets[0] && targets[0].key) || '';
@@ -91,10 +112,11 @@ export default function SapSortAdmin({ loader = null, saver = null, userName = '
             <h2 className="text-lg font-bold mb-1">🗂 SAP 工程の仕分け <span className="text-xs font-normal text-slate-500">(どの作業区が、どのグループの仕事かを決めます)</span></h2>
             <div className="flex flex-wrap items-center gap-2 mb-2" role="tablist" data-testid="sap-sort-tabs">
                 {TABS.map(([k, l]) => <button key={k} type="button" role="tab" aria-selected={tab === k} data-testid={`sap-sort-tab-${k}`} onClick={() => setTab(k)} className={`px-3 py-1.5 rounded-lg text-xs font-bold ${tab === k ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>{l}</button>)}
-                <span className="text-xs text-slate-500">{admin ? '管理者として直せます' : '見るだけ(直せるのは管理者だけ)'}</span>
+                <span className="text-xs text-slate-500">{admin ? '管理者として直せます' : lock.locked ? '見るだけ(登録を読めませんでした)' : '見るだけ(直せるのは管理者だけ)'}</span>
             </div>
-            {!admin && <p data-testid="sap-sort-not-admin" className="text-xs bg-amber-50 border border-amber-300 text-amber-800 rounded px-2 py-1 mb-2">{NOT_ADMIN}</p>}
-            {loaded.usedDefault && <p className="text-xs text-slate-500 mb-2">まだ保存した登録はありません。今の部品検査の画面と同じ分け方から始まります。{loaded.errors.length ? ` (${loaded.errors[0]})` : ''}</p>}
+            {lock.locked && <p data-testid="sap-sort-locked" className="text-xs bg-rose-50 border border-rose-300 text-rose-700 rounded px-2 py-1 mb-2">{lock.text}</p>}
+            {!isAdm && <p data-testid="sap-sort-not-admin" className="text-xs bg-amber-50 border border-amber-300 text-amber-800 rounded px-2 py-1 mb-2">{NOT_ADMIN}</p>}
+            {lock.empty && <p className="text-xs text-slate-500 mb-2" data-testid="sap-sort-empty">{lock.text}</p>}
 
             {tab === 'sort' && (<div data-testid="sap-sort-pane-sort">
                 <div className="text-xs text-slate-500">この工程は、どのグループの仕事か</div>
@@ -106,9 +128,10 @@ export default function SapSortAdmin({ loader = null, saver = null, userName = '
                     <thead><tr className="bg-slate-50 text-slate-500 text-left"><th className="p-1.5">作業区</th><th className="p-1.5">作業の言葉(よく出る物)</th><th className="p-1.5 text-right">未完了</th><th className="p-1.5">どのグループへ入れるか</th></tr></thead>
                     <tbody>{unList.map((u) => (
                         <tr key={u.wc} className="border-t"><td className="p-1.5 font-bold">{u.wc}</td><td className="p-1.5">「{String(u.sample).replace(/^\d{4}[:\s]+/, '')}」</td><td className="p-1.5 text-right">{u.n}件</td>
-                            <td className="p-1.5">{/^\d+$/.test(u.wc) ? <select disabled={!admin} data-testid={`sap-sort-pick-${u.wc}`} value="" onChange={(e) => e.target.value && place(u.wc, e.target.value)} className="border rounded px-1 py-1 disabled:bg-slate-100"><option value="">選ぶ</option>{targets.map((g) => <option key={g.key} value={g.key}>{g.name}</option>)}</select> : <span className="text-slate-400">作業区の番号が無い工程です</span>}</td></tr>))}</tbody></table></div>)}
+                            <td className="p-1.5">{/^\d+$/.test(u.wc) ? <select disabled={!admin} data-testid={`sap-sort-pick-${u.wc}`} value="" onChange={(e) => e.target.value && place(u.wc, e.target.value)} className="border rounded px-1 py-1 disabled:bg-slate-100"><option value="">選ぶ</option>{targets.map((g) => <option key={g.key} value={g.key}>{g.name}</option>)}<option value={MISC_KEY}>{MISC_LABEL}</option></select> : <span className="text-slate-400">作業区の番号が無い工程です</span>}</td></tr>))}</tbody></table></div>)}
 
-                <h3 className="font-bold mt-3 mb-1">機械のグループ <span className="text-xs font-normal text-slate-500">番号の範囲と、いま入っている作業区</span></h3>
+                <h3 className="font-bold mt-3 mb-1">機械の司令塔のグループ <span className="text-xs font-normal text-slate-500">番号の範囲と、いま入っている作業区</span></h3>
+                {admin && <p className="text-xs text-slate-600 mb-1" data-testid="sap-sort-edit-hint">動かす作業区を押してください(グループの「直す」を押すと、その中の作業区が出ます)。</p>}
                 <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5" data-testid="sap-sort-groups">
                     {targets.map((t) => {
                         const g = draft.commanders.flatMap((c) => c.groups).find((x) => x.key === t.key);
@@ -122,7 +145,7 @@ export default function SapSortAdmin({ loader = null, saver = null, userName = '
                                     {form.group !== t.key && admin && <button type="button" data-testid={`sap-sort-edit-${t.key}`} onClick={() => setForm({ wc: '', group: t.key, shared: false })} className={btn + 'bg-white !py-0.5'}>直す</button>}
                                     {form.group === t.key && wcs.slice(0, 40).map((w) => <button key={w} type="button" disabled={!admin} title="この作業区を直す" onClick={() => setForm({ wc: w, group: t.key, shared: false })} className="px-1.5 py-0.5 rounded bg-slate-100 text-[11px] hover:bg-indigo-100 disabled:hover:bg-slate-100">{w}</button>)}
                                     {form.group === t.key && wcs.length > 40 && <span className="text-[11px] text-slate-400">ほか {wcs.length - 40}</span>}
-                                    {shr && wcsInGroup(shr).map((w) => <span key={`s${w}`} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[11px]" title="重ね入れ(数には足しません)">{w} ＋重ね{admin && <button type="button" aria-label={`${w} の重ねを外す`} onClick={() => edit((d) => removeShared(d, w, t.key))} className="font-bold">×</button>}</span>)}
+                                    {shr && wcsInGroup(shr).map((w) => <span key={`s${w}`} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[11px]" title="見るだけ(数には足しません)">{w} ＋見るだけ{admin && <button type="button" aria-label={`${w} の「見るだけ」を外す`} onClick={() => edit((d) => removeShared(d, w, t.key))} className="font-bold">×</button>}</span>)}
                                 </div>
                             </div>);
                     })}
@@ -132,22 +155,23 @@ export default function SapSortAdmin({ loader = null, saver = null, userName = '
                     <div className="font-bold text-xs mb-1">作業区を直す <span className="font-normal text-slate-500">(作業区を選んで、入れるグループを選びます・作った後でも直せます)</span></div>
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                         <label>作業区 <input value={form.wc} disabled={!admin} inputMode="numeric" data-testid="sap-sort-form-wc" onChange={(e) => setForm({ ...form, wc: e.target.value })} className="border rounded px-2 py-1 w-24 disabled:bg-slate-100" placeholder="例 2397" /></label>
-                        <label>入れるグループ <select value={wantGroup} disabled={!admin} data-testid="sap-sort-form-group" onChange={(e) => setForm({ ...form, group: e.target.value })} className="border rounded px-1 py-1 disabled:bg-slate-100">{targets.map((g) => <option key={g.key} value={g.key}>{g.name}</option>)}</select></label>
-                        <label className="flex items-center gap-1"><input type="checkbox" checked={form.shared} disabled={!admin} data-testid="sap-sort-form-shared" onChange={(e) => setForm({ ...form, shared: e.target.checked })} />重ねて入れる(元のグループにも残し、数には足しません)</label>
+                        <label>入れるグループ <select value={wantGroup} disabled={!admin} data-testid="sap-sort-form-group" onChange={(e) => setForm({ ...form, group: e.target.value })} className="border rounded px-1 py-1 disabled:bg-slate-100">{targets.map((g) => <option key={g.key} value={g.key}>{g.name}</option>)}<option value={MISC_KEY}>{MISC_LABEL}</option></select></label>
+                        <label className="flex items-center gap-1"><input type="checkbox" checked={form.shared} disabled={!admin} data-testid="sap-sort-form-shared" onChange={(e) => setForm({ ...form, shared: e.target.checked })} />ほかのグループでも見る(数は今のグループだけで数えます)</label>
                         <button type="button" disabled={!admin || !pl} data-testid="sap-sort-form-go" onClick={() => edit((d) => assignWc(d, form.wc.trim(), wantGroup, { shared: form.shared }))} className={btn + 'bg-indigo-600 text-white border-indigo-600 disabled:opacity-40'}>入れる</button>
                     </div>
                     {pl && <p className="text-xs text-slate-600 mt-1" data-testid="sap-sort-form-now">作業区 {pl.wc} は今: {pl.name ? `「${pl.name}」に入っています` : 'どのグループにも入っていません'}{pl.shared.length ? `(重ね入れ: ${pl.shared.map((s) => s.name).join('・')})` : ''}</p>}
                 </div>
-                {overlapNames.length > 0 && <p className="text-xs mt-2 bg-indigo-50 border border-indigo-200 rounded px-2 py-1" data-testid="sap-sort-overlaps">重なっている番号(数える先は1つだけ・重ね入れは数に足しません): {overlapNames.map((o) => `${o.wc}(${o.names.join('・')})`).join('、')}</p>}
-                <p className="text-[11px] text-slate-500 mt-2">当てる順は決まっています: 検査の作業区 → 「洗浄」の言葉 → 付帯作業 → 番号の範囲 → 「仕様変更」→ 工程の名前の言葉。直せるのは「どの番号が、どのグループか」です。</p>
+                {overlapNames.length > 0 && <p className="text-xs mt-2 bg-indigo-50 border border-indigo-200 rounded px-2 py-1" data-testid="sap-sort-overlaps">2つのグループで見ている番号(数えるのは1つ目だけ): {overlapNames.map((o) => `${o.wc}(${o.names.join('・').replace(/\(重ね\)/g, '')})`).join('、')}</p>}
+                <details className="text-[11px] text-slate-500 mt-2" data-testid="sap-sort-rules"><summary className="cursor-pointer font-semibold">仕分けの決まりを見る</summary>当てる順は決まっています: 検査の作業区 → 「洗浄」の言葉 → 付帯作業 → 番号の範囲 → 「仕様変更」→ 工程の名前の言葉。直せるのは「どの番号が、どのグループか」です。</details>
 
                 <h3 className="font-bold mt-3 mb-1">保存の前の確かめ <span className="text-xs font-normal text-slate-500">今 → 変えた後</span></h3>
                 {sum && !sum.valid && <p className="text-xs bg-rose-50 border border-rose-300 text-rose-700 rounded px-2 py-1 mb-1" data-testid="sap-sort-invalid">この登録は保存できません: {sum.errors.join(' / ')}</p>}
                 {sum && sum.valid && (changed
-                    ? <p className={`text-xs rounded px-2 py-1 mb-1 border ${sum.total.same ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-rose-50 border-rose-300 text-rose-700'}`} data-testid="sap-sort-check">{rows.length ? (sum.total.same ? `全体の件数は変わりません(${sum.total.after}件)。重なっている番号: ${sum.overlaps.length ? `${sum.overlaps.length}つ(印あり)` : 'ありません'}。保存できます。` : `全体の件数が変わっています(${sum.total.before}件 → ${sum.total.after}件)。保存しないでください。`) : '直した所があります。SAP の表を選ぶと、件数の変わり方をここで確かめられます。'}</p>
+                    ? <p className={`text-xs rounded px-2 py-1 mb-1 border ${sum.saveOk ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-rose-50 border-rose-300 text-rose-700'}`} data-testid="sap-sort-check">{rows.length ? (sum.saveOk ? `全体の件数は変わりません(${sum.total.after}件)。機械の負荷に数える工程: ${sum.load.before}件 → ${sum.load.after}件。2つのグループで見ている番号: ${sum.overlaps.length ? `${sum.overlaps.length}つ(印あり)` : 'ありません'}。保存できます。` : `全体の件数が合いません(${sum.total.before}件 → ${sum.total.after}件${sum.consistent ? '' : '・どのグループにも入らない工程か、2つに入る工程があります'})。保存しないでください。`) : '直した所があります。SAP の表を選ぶと、件数の変わり方をここで確かめられます。'}</p>
                     : <p className="text-xs text-slate-500 mb-1" data-testid="sap-sort-check">まだ直していません。</p>)}
                 {sum && rows.length > 0 && changed && (<table className="w-full text-xs border-collapse mb-1" data-testid="sap-sort-check-table"><thead><tr className="bg-slate-50 text-slate-500 text-left"><th className="p-1.5">グループ</th><th className="p-1.5 text-right">未完了の件数</th></tr></thead><tbody>
                     {sum.groups.filter((g) => g.before !== g.after).map((g) => <tr key={g.key} className="border-t"><td className="p-1.5">{g.name}</td><td className="p-1.5 text-right">{g.before}件 → <b>{g.after}件</b></td></tr>)}
+                    <tr className="border-t"><td className="p-1.5">機械の負荷に数える工程</td><td className="p-1.5 text-right">{sum.load.before}件 → <b>{sum.load.after}件</b></td></tr>
                     <tr className="border-t"><td className="p-1.5">まだ仕分けていない物</td><td className="p-1.5 text-right">{sum.unclassified.before}件 → <b>{sum.unclassified.after}件</b></td></tr>
                     <tr className="border-t font-bold"><td className="p-1.5">全体(変わってはいけない数)</td><td className="p-1.5 text-right">{sum.total.before}件 → {sum.total.after}件</td></tr></tbody></table>)}
             </div>)}
@@ -169,6 +193,7 @@ export default function SapSortAdmin({ loader = null, saver = null, userName = '
 
             {tab === 'dict' && (<div data-testid="sap-sort-pane-dict">
                 <div className="text-xs text-slate-500">画面の言葉を、どう呼ぶか(辞書)</div>
+                <div className="text-lg font-bold my-1" data-testid="sap-sort-dict-answer">言い換えている言葉 {Object.keys(dictKeys.keys).length + Object.keys(dictKeys.words).length}つ<span className="text-xs font-normal text-slate-500">(ほかは今のまま)</span></div>
                 <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-xs border-collapse mt-1" data-testid="sap-sort-dict-table">
                     <thead><tr className="bg-slate-50 text-slate-500 text-left"><th className="p-1.5">今の画面の言葉</th><th className="p-1.5">こう呼ぶ</th><th className="p-1.5">どこで</th><th className="p-1.5" /></tr></thead>
                     <tbody>{LABEL_CATALOG.map((e) => { const v = dictKeys.keys[e.key] || ''; return (
@@ -185,7 +210,9 @@ export default function SapSortAdmin({ loader = null, saver = null, userName = '
             </div>)}
 
             <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t" data-testid="sap-sort-savebar">
-                <button type="button" disabled={!admin || !changed || busy || (sum && !sum.valid)} data-testid="sap-sort-save" onClick={save} className={btn + 'bg-indigo-600 text-white border-indigo-600 disabled:opacity-40'}>保存する(第{loaded.rev + 1}版になります)</button>
+                <button type="button" disabled={!admin || !changed || busy || (sum && (!sum.valid || !sum.saveOk))} data-testid="sap-sort-save" onClick={save} className={btn + 'bg-indigo-600 text-white border-indigo-600 disabled:opacity-40'}>保存する(第{loaded.rev + 1}版になります)</button>
+                <button type="button" disabled={!admin || !loaded.prev || busy} data-testid="sap-sort-prev" onClick={() => { setMsg(null); setDraft(loaded.prev.reg); }} className={btn + 'bg-white disabled:opacity-40'}>{loaded.prev ? `1つ前の版${Number.isFinite(loaded.prev.rev) ? `(第${loaded.prev.rev}版)` : ''}へ戻す` : '1つ前の版は まだありません'}</button>
+                <button type="button" disabled={busy} data-testid="sap-sort-export" onClick={download} className={btn + 'bg-white disabled:opacity-40'}>書き出す(会社の PC 用のファイル)</button>
                 <button type="button" disabled={!changed || busy} data-testid="sap-sort-revert" onClick={() => { setMsg(null); setDraft(loaded.reg); }} className={btn + 'bg-white disabled:opacity-40'}>直した所を元に戻す</button>
                 <span className="text-xs text-slate-500">今は 第{loaded.rev}版{loaded.usedDefault ? '(保存した物は無し・今と同じ分け方)' : ''}。{admin ? '' : '直せるのは管理者だけです。'}</span>
             </div>

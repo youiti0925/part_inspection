@@ -5,7 +5,7 @@
 // 触る外の物: なし(ネットワーク・Firebase・保存に触れない。保存は sapSortStore.js の saveSapSort=管理者だけ)
 // 確かめ方: node --test src/domain/__tests__/sapSortEdit.test.mjs
 import { validateSapSort, groupsOfWc, withTemplateOps } from './sapSort.js';
-import { summarizeSort } from './sapSortStore.js';
+import { summarizeSort, toStored, toUpper } from './sapSortStore.js';
 import { cleanLabels, LABELS_SCHEMA } from './labels.js';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -56,18 +56,37 @@ export function wcsInGroup(g, limit = 200) {
     return out;
 }
 
-/** 作業区 wc を、グループ groupKey の仕事にする(新しい登録を返す・元は変えない)。
- *  shared=false(基本): 前に入っていたグループからは抜く(1つの工程は1つのグループ=二重に数えない)。
- *  shared=true: 前のグループには残したまま「重ね入れ」だけ足す(見るだけ・数には足さない・「重なっている」の印が出る) */
+const miscCmd = (o) => o.commanders.find((c) => c && c.special && c.special.misc) || null;
+const inRanges = (rs, n) => (rs || []).some(([a, b]) => n >= a && n <= b);
+export const MISC_KEY = 'misc';          // 付帯作業(数えない)への行き先の目印(グループではなく special.misc.wcRanges に入る)
+export const MISC_LABEL = '付帯作業(数えない)';
+
+/** 作業区 wc を、グループ groupKey の仕事にする(新しい登録を返す・元は変えない)。groupKey が 'misc' なら「付帯作業(数えない)」へ回す。
+ *  shared=false(基本): 前に入っていたグループからは抜く(1つの工程は1つのグループ=二重に数えない)。行き先の「重ね」に同じ番号が残っていれば それも消す。
+ *  shared=true: 前のグループには残したまま「見るだけ」を足す(数には足さない・「重なっている」の印が出る)。どこにも入っていない番号・今のグループと同じ行き先は断る。
+ *  検査の作業区(2509 など)は動かせない(仕分けは検査が先なので 何も変わらず 登録だけ汚れる) */
 export function assignWc(reg, wc, groupKey, { shared = false } = {}) {
     const w = String(wc).trim();
     if (!isNum(w)) throw new Error(`作業区の番号が読めません: ${String(wc)}`);
     const n = Number(w);
     const o = clone(reg);
+    for (const c of o.commanders) for (const g of c.groups) if (g.type === 'site' && (g.wc || []).includes(w)) throw new Error(`作業区 ${w} は検査の作業区なので動かせません`);
+    const cutFromGroups = (except) => { for (const c of o.commanders) for (const g of c.groups) { if (g.shared === true || g === except) continue; if (Array.isArray(g.wcRanges)) g.wcRanges = cutOut(g.wcRanges, n); } };
+    const mc = miscCmd(o);
+    if (groupKey === MISC_KEY) {
+        if (!mc) throw new Error('付帯作業の決まりが登録にありません');
+        if (shared) throw new Error('付帯作業は 見るだけ(重ね入れ)にはできません');
+        cutFromGroups(null);
+        mc.special.misc.wcRanges = mergeRanges([...(mc.special.misc.wcRanges || []), [n, n]]);
+        return o;
+    }
     let target = null, owner = null;
     for (const c of o.commanders) for (const g of c.groups) if (g.key === groupKey && g.type === 'process' && g.shared !== true) { target = g; owner = c; }
-    if (!target) throw new Error(`グループ ${groupKey} が登録にありません(工程のまとまりだけ選べます)`);
+    if (!target) throw new Error('そのグループは選べません。選び直してください。');
     if (shared) {
+        const pl = placementOf(reg, w);
+        if (!pl.group || pl.group === MISC_KEY) throw new Error('先に入れるグループを決めてください(どこにも入っていない番号は、見るだけにはできません)');
+        if (pl.group === groupKey) throw new Error('もう このグループに入っています');
         const key = `${groupKey}__shared`;
         let sg = owner.groups.find((g) => g.key === key);
         if (!sg) {
@@ -77,11 +96,14 @@ export function assignWc(reg, wc, groupKey, { shared = false } = {}) {
         sg.wcRanges = mergeRanges([...(sg.wcRanges || []), [n, n]]);
         return o;
     }
-    for (const c of o.commanders) for (const g of c.groups) {
-        if (g.shared === true || g === target) continue;
-        if (Array.isArray(g.wcRanges)) g.wcRanges = cutOut(g.wcRanges, n);
-    }
+    cutFromGroups(target);
+    if (mc && mc.special.misc.wcRanges) { mc.special.misc.wcRanges = cutOut(mc.special.misc.wcRanges, n); if (!mc.special.misc.wcRanges.length) delete mc.special.misc.wcRanges; }
     target.wcRanges = mergeRanges([...(target.wcRanges || []), [n, n]]);
+    // 行き先の「見るだけ」に同じ番号が残っていると、自分のグループを自分で重ねて見る形になる
+    for (const c of o.commanders) {
+        for (const g of c.groups) if (g.shared === true && g.key === `${groupKey}__shared`) g.wcRanges = cutOut(g.wcRanges || [], n);
+        c.groups = c.groups.filter((g) => !(g.shared === true && g.key === `${groupKey}__shared` && !(g.wcRanges || []).length));
+    }
     return o;
 }
 
@@ -98,6 +120,8 @@ export function removeShared(reg, wc, groupKey) {
 
 /** 作業区ごとの今の行き先(数える先)と重ね入れ: { wc, group, name, shared:[{key,name}] } */
 export function placementOf(reg, wc) {
+    const mcm = ((reg && reg.commanders) || []).find((c) => c && c.special && c.special.misc);
+    if (mcm && inRanges(mcm.special.misc.wcRanges, Number(wc))) return { wc: String(wc), group: MISC_KEY, name: MISC_LABEL, shared: [] };
     const gs = groupsOfWc(wc, reg);
     const byKey = new Map();
     for (const c of reg.commanders) for (const g of c.groups) byKey.set(g.key, g);
@@ -121,15 +145,38 @@ export function compareSort(rows, before, after) {
     if (!order.includes('misc')) order.push('misc');
     const groups = [];
     for (const k of order) {
-        const b = sb.byGroup[k] || 0, a = sa.byGroup[k] || 0;
-        if (b || a) groups.push({ key: k, name: k === 'misc' ? '付帯作業(まだ仕分けていない物を含む)' : names.get(k) || k, before: b, after: a });
+        // 付帯作業の行は「本物の付帯作業」だけ(まだ仕分けていない物は別の行で数える・同じ物を2回数えて見せない・採点 P9③)
+        const b = (sb.byGroup[k] || 0) - (k === 'misc' ? sb.unclassified.n : 0), a = (sa.byGroup[k] || 0) - (k === 'misc' ? sa.unclassified.n : 0);
+        if (b || a) groups.push({ key: k, name: k === 'misc' ? '付帯作業' : names.get(k) || k, before: b, after: a });
     }
+    // 機械の負荷に数える工程の数(今 → 変えた後): 数えるグループ(count が false でない工程のまとまり)の和
+    const loadOf = (reg, sum) => { let n = 0; for (const c of reg.commanders) for (const g of c.groups) if (g.type === 'process' && g.shared !== true && g.count !== false) n += sum.byGroup[g.key] || 0; return n; };
+    const sumAll = (sum) => Object.values(sum.byGroup).reduce((x, y) => x + y, 0);
+    const consistent = sumAll(sb) === sb.total && sumAll(sa) === sa.total;   // 全部の行が どれか1つのグループに入っている(どこにも入らない行・2つに入る行が無い)
     const v = validateSapSort(after);
+    const same = sb.total === sa.total;
     return {
-        total: { before: sb.total, after: sa.total, same: sb.total === sa.total },
+        total: { before: sb.total, after: sa.total, same },
+        load: { before: loadOf(before, sb), after: loadOf(after, sa) },
+        consistent, saveOk: v.ok && same && consistent,
         groups, unclassified: { before: sb.unclassified.n, after: sa.unclassified.n },
         unclassifiedList: sa.unclassified.byWc, overlaps: sa.overlaps, valid: v.ok, errors: v.errors,
     };
+}
+
+/** 登録を読んだ結果 → 画面の状態。読めなかった・壊れている・知らない版(errors がある)時は 直す・保存を止める(既定で上書きさせない・採点 P3)。
+ *  「まだ保存した登録はありません」は 本当に文書が無い時(errors が空で既定)だけ */
+export function loadState(r) {
+    const errors = (r && r.errors) || [];
+    if (errors.length || (r && r.source === 'error')) return { locked: true, empty: false, text: `登録を読めませんでした(${errors[0] || '通信できません'})。今は今までと同じ分け方で見せています。直す・保存はできません。` };
+    if (!r || r.usedDefault !== false) return { locked: false, empty: true, text: 'まだ保存した登録はありません。今の部品検査の画面と同じ分け方から始まります。' };
+    return { locked: false, empty: false, text: '' };
+}
+
+/** 書き出すファイル(会社の PC の SAP の係へ渡す物): 登録そのまま(版つき)・テンプレートの結びつけ(品目コードが入る)は落とす。端末へ落とすだけ(送信なし) */
+export function exportSortFile(reg) {
+    const doc = { ...toStored(toUpper(reg)) };
+    return { name: `sap_sort_rev${Number.isFinite(reg.rev) ? reg.rev : 1}.json`, text: JSON.stringify(doc, null, 2) };
 }
 
 /** 登録が同じ中身か(変えていないのに「保存」を押せない様に) */

@@ -97,7 +97,7 @@ export default function MachineGroupView({ initialOpen = null, orders, nowMs, pe
     return (
         <div data-testid="sap-mg" className="text-slate-800">
             <div className="mb-1"><h2 className="inline-block text-xl font-bold">{t('machine.title', '機械グループ 負荷')}</h2><span className="ml-2 text-xs text-slate-500">{fileLabel}・済んでいない機械工程だけ(検査は 検査の画面へ)</span></div>
-            {topPublish ? <TopPublishBar cap={cap} basis={{ resource: res, otHours: ot, saturday: sat, perQty }} {...topPublish} /> : null}
+            {topPublish ? <TopPublishBar movedCount={moved.length} cap={cap} basis={{ resource: res, otHours: ot, saturday: sat, perQty }} {...topPublish} /> : null}
             {sapSortFlagOn() ? <OvertimeCarryPanel orders={orders} nowMs={nowMs} perQty={perQty} defCap={defCap} capMap={capMap} peopleMap={peopleMap} multiMap={multiMap} res={res} onOpenGroup={(n) => { setOpenName(n); setTimeout(() => { const el = document.querySelector('[data-mg-open]'); if (el) el.scrollIntoView({ block: 'center' }); }, 0); }} /> : null}
             {bundle.short ? <div className="my-2 rounded-xl border-2 border-amber-400 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900" role="alert" data-testid="sap-mg-bundle-short" data-why={bundle.why}>⚠ {bundle.text}</div> : null}
             <div className="my-3 grid gap-3 lg:grid-cols-[1.1fr_1fr]">

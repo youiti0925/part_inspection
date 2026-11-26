@@ -137,7 +137,8 @@ export function buildMachineDigest({ cap, handoffs = [], todayIso, builtAtMs, re
         const pcts = g.cells.map((c) => pc(c.pct));
         const first3 = g.cells.slice(0, 3);
         const over = g.verdict && g.verdict.level === 'red';
-        const tight = !over && first3.some((c) => c.level === 'yellow');
+        // 持ち越しが多い(画面は「持ち越しが 全台で 約n日分」で黄色)グループも ぎりぎり に数える(上が「予定通り」になってしまうのを防ぐ・採点 P10)
+        const tight = !over && (first3.some((c) => c.level === 'yellow') || (g.verdict && g.verdict.level === 'yellow'));
         const peaks = first3.map((c) => pc(c.pct)).filter((x) => x != null);
         return {
             key: keyOfGroup(reg, g.name), name: String(g.name),
@@ -177,6 +178,22 @@ export function buildMachineDigest({ cap, handoffs = [], todayIso, builtAtMs, re
     const v = validateMachineDigest(doc);
     if (!v.ok) throw new MachineDigestError('invalid', `載せる物に間違いがあるので作りません: ${v.errors.slice(0, 5).join(' / ')}`, v.errors);
     return doc;
+}
+
+/** 載せられなかった理由を 現場の言葉にする(よく起きる2つ: グループの名前の長さ・数字が5桁以上。ほかは元の文のまま・採点 P12)。names=画面のグループ名の並び */
+export function friendlyDigestError(e, names = []) {
+    const list = e && Array.isArray(e.detail) ? e.detail : [];
+    const m = list.map((x) => /groups\[(\d+)\]\.(name|key): 文字\(1〜24字\)ではありません/.exec(String(x))).find(Boolean);
+    if (m) return `グループの名前『${names[Number(m[1])] ?? '?'}』が長すぎるので載せられません(24字まで)。名前を短くしてください。`;
+    const d = list.map((x) => /groups\[(\d+)\]\.(name|key): 名前に長い数字/.exec(String(x))).find(Boolean);
+    if (d) return `グループの名前『${names[Number(d[1])] ?? '?'}』に 長い数字(5桁以上)が入っているので載せられません。名前から数字を外してください。`;
+    return e && e.message ? e.message : String(e);
+}
+
+/** 載せる表の基準日が今日でない時(古い表で新しい集計を上書きしない為の確かめ・採点 P13)。todayIso=表の基準日(YYYY-MM-DD)・nowMs=今 */
+export function needsStaleConfirm(todayIso, nowMs) {
+    const d = new Date(nowMs); const p = (n) => String(n).padStart(2, '0');
+    return String(todayIso) !== `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 /** 載せる(管理者だけ・押した時の1件だけ書く・読まない)。形が違う物は書かない。戻り: { bytes } */

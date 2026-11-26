@@ -64,7 +64,7 @@ test('付け替え: 範囲の隣は1つにまとまり・真ん中を他へ移�
 test('付け替え: 知らないグループ・数字でない作業区は断る', () => {
     assert.throws(() => assignWc(DEFAULT_SAP_SORT, '2397', 'nothing'));
     assert.throws(() => assignWc(DEFAULT_SAP_SORT, 'abc', 'gear'));
-    assert.throws(() => assignWc(DEFAULT_SAP_SORT, '2397', 'product'), /工程のまとまり/);
+    assert.throws(() => assignWc(DEFAULT_SAP_SORT, '2397', 'product'), /選べません/);
 });
 
 test('重ね入れ(shared): 元のグループに残したまま重ねだけ足す・数には足さない・「重なっている」の印が出る・外せる', () => {

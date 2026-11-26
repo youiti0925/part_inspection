@@ -403,3 +403,40 @@ test('P34 getAll にも同じ絞り込みが効く', async () => {
   assert.equal(c.ref.__kind, 'query');
   assert.deepEqual(c.ref.parts.at(-1), { __c: 'limit', n: 5 });
 });
+
+// ============================================================================
+// saveIfRev(採点 P2・2026-11-26): 版が期待どおりの時だけ 1つの取引の中で書く
+// ============================================================================
+const SORT = 'artifacts/parts-inspection-v1/public/data/settings/sap_sort';
+
+test('P-RV1 saveIfRev: 版が合えば 取引の中で書く(読みは取引の中の1回だけ・setDoc ではなく tx.set)', async () => {
+  const { p, calls } = build(DEFAULT_PROVIDERS, { [SORT]: { rev: 3, a: 1 } });
+  const r = await p.saveIfRev('parts-inspection-v1', 'settings', 'sap_sort', 3, (cur) => ({ b: 2, rev: cur.rev + 1 }));
+  assert.equal(r.ok, true);
+  assert.deepEqual(lastSet(calls).data, { b: 2, rev: 4 });
+  assert.equal(calls.filter((c) => c.op === 'runTransaction').length, 1);
+  assert.equal(calls.filter((c) => c.op === 'setDoc').length, 0, '取引の外へは書かない');
+});
+
+test('P-RV2 saveIfRev: 版が違えば 何も書かず stale と今の中身を返す(後の人が前の人の直しを消さない)', async () => {
+  const { p, calls } = build(DEFAULT_PROVIDERS, { [SORT]: { rev: 4, a: 1 } });
+  const r = await p.saveIfRev('parts-inspection-v1', 'settings', 'sap_sort', 3, () => ({ x: 1 }));
+  assert.deepEqual({ ok: r.ok, reason: r.reason, rev: r.rev }, { ok: false, reason: 'stale', rev: 4 });
+  assert.deepEqual(r.cur, { rev: 4, a: 1 });
+  assert.equal(calls.filter((c) => c.op === 'tx.set').length, 0);
+});
+
+test('P-RV3 saveIfRev: 文書が無い時は defaultRev とみなす・版が数でない文書も defaultRev', async () => {
+  const a = build();
+  const r1 = await a.p.saveIfRev('parts-inspection-v1', 'settings', 'sap_sort', 1, () => ({ rev: 2 }), 1);
+  assert.equal(r1.ok, true);
+  const b = build(DEFAULT_PROVIDERS, { [SORT]: { rev: 'x' } });
+  const r2 = await b.p.saveIfRev('parts-inspection-v1', 'settings', 'sap_sort', 1, () => ({ rev: 2 }), 1);
+  assert.equal(r2.ok, true);
+});
+
+test('P-RV4 saveIfRev: build が投げたら 何も書かず そのまま届く(大きすぎる登録など)', async () => {
+  const { p, calls } = build(DEFAULT_PROVIDERS, { [SORT]: { rev: 1 } });
+  await assert.rejects(p.saveIfRev('parts-inspection-v1', 'settings', 'sap_sort', 1, () => { throw new Error('too-big'); }), /too-big/);
+  assert.equal(calls.filter((c) => c.op === 'tx.set').length, 0);
+});
