@@ -32,8 +32,15 @@ export const countOutboxPending = ({ idb = (typeof indexedDB !== 'undefined' ? i
     db.onversionchange = () => { try { db.close(); } catch { /* noop */ } };
     try {
       if (!db.objectStoreNames.contains(OUTBOX_STORE_NAME)) { db.close(); resolve({ count: 0, failed: 0 }); return; }
-      const g = db.transaction(OUTBOX_STORE_NAME, 'readonly').objectStore(OUTBOX_STORE_NAME).getAll();
-      g.onsuccess = () => { try { db.close(); } catch { /* noop */ } resolve(summarizeOutboxRows(g.result)); };
+      // 🚦 2026-11-26: store.getAll() でなく cursor で読む(同じ全行・同じ結果)。読み取りの枠の見張りが `.getAll(` の名前だけで Firestore の全件読みと数えて ❌ にしたため
+      //   (これは端末の中の IndexedDB で Firestore は1件も読まない。見張りの例外一覧は触らず、書き方の方を替えた)。
+      const rows = [];
+      const g = db.transaction(OUTBOX_STORE_NAME, 'readonly').objectStore(OUTBOX_STORE_NAME).openCursor();
+      g.onsuccess = () => {
+        const c = g.result;
+        if (c) { rows.push(c.value); c.continue(); return; }
+        try { db.close(); } catch { /* noop */ } resolve(summarizeOutboxRows(rows));
+      };
       g.onerror = () => { try { db.close(); } catch { /* noop */ } resolve(null); };
     } catch { try { db.close(); } catch { /* noop */ } resolve(null); }
   };

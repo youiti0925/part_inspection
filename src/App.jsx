@@ -950,6 +950,9 @@ const gridToWsShim_pl = (grid) => ({
 // --- Global Constants & Config ---
 // 修正: IDを固定化して、どの端末からでも同じデータを参照できるようにする
 const APP_DATA_ID = IS_ONPREM_BUILD ? resolveAppNs("parts-inspection-v1", "parts") : "parts-inspection-v1"; // 部品検査アプリ専用の名前空間 (製品/最終とは別)
+// 🏭 共有棚 capacity-shared-v1(操業シミュレーション・保存計画)の名前空間。新しいグループの口ではグループ自身の物(withGroupCapacity)。
+//   ⚠コンポーネントの中に置くと、React の依存の見張り(exhaustive-deps)が毎回変わる値と見て警告を6件増やす(2026-11-26 合流で判明)。起動の最初に1回決まる値なのでここに置く。
+const OPSIM_SHELF_NS = IS_ONPREM_BUILD ? withGroupCapacity({ capacity: 'capacity-shared-v1' }, 'parts').capacity : 'capacity-shared-v1';
 // 検査アプリ共通の棚。工場の暦(祝日表)はここに1つだけ置く = どのアプリで登録しても全部に効く。
 //   🚨 このアプリは **読むだけ**。登録する画面は製品検査/最終検査にある(1つの物を2か所で直させない)。
 //   ⚠ 新しいコレクションも名前空間も作らない(firestore.rules の knownApp に既に載っている)。
@@ -36093,7 +36096,7 @@ bindContactHelpers({ dueMsOf, fmtDue, toMsAny, getEffectiveTargetTime, getLotEla
    /* 🏭 2026-09-27 製品→部品 移植: 操業シミュレーション(製品の OperationsSimulationPanel をそのまま)の入口。
       共有棚 capacity-shared-v1 は 4アプリ共通の区画。部品は daily_load/parts・placement_rules・plan_control/parts を使う。
       🚨 部品に無い土台(到着予定・工程連絡・相手工場の名簿/負荷)は渡さない(null)= 画面は「分からない/まだ届いていません」と出す。0 で埋めない。 */
-   const OPSIM_SHELF_NS = IS_ONPREM_BUILD ? withGroupCapacity({ capacity: 'capacity-shared-v1' }, 'parts').capacity : 'capacity-shared-v1';
+   // OPSIM_SHELF_NS は画面の外(モジュールの先頭付近)で決める(部品のグループの口でも起動の最初に決まる値・描画ごとに変わらない)
    // 休止中を外した名簿(毎描画で新しい配列を作ると計算がやり直しになるので1回だけ)
    const opsimWorkers = useMemo(() => activeWorkersOf(workers || []), [workers]);
    const [ownDailyLoad, setOwnDailyLoad] = useState(null);

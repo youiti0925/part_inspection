@@ -14,7 +14,7 @@ import { createOutbox, createMemoryStore, STATUS, isNetworkFailure } from '../ou
 import { createPocketbaseBackend } from '../pocketbaseBackend.js';
 import { createMemoryReadCache } from '../readCache.js';
 import { PbNetworkError, PbHttpError } from '../pbClient.js';
-import { summarizeOutboxRows } from '../../offline/outboxPending.js';
+import { summarizeOutboxRows, countOutboxPending } from '../../offline/outboxPending.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const NS = 'product-inspection-v1';
@@ -199,4 +199,10 @@ test('⑥ 購読の知らせ(1件の変化)は控えにも1件だけ書く', asy
 test('⑦ 札の数え方: pending/sending = 未送信 / failed・conflict = 送れない', () => {
   assert.deepEqual(summarizeOutboxRows([{ status: 'pending' }, { status: 'sending' }, { status: 'failed' }, { status: 'conflict' }, null]), { count: 2, failed: 2 });
   assert.deepEqual(summarizeOutboxRows([]), { count: 0, failed: 0 });
+});
+
+test('OB-CUR 未送信の数は IndexedDB を cursor で全行読んで数える(getAll は使わない・読み取りの枠の見張りの誤検知を避ける 2026-11-26)', async () => {
+  const rows = [{ status: 'pending' }, { status: 'sending' }, { status: 'failed' }, { status: 'done' }];
+  const idb = { open: () => { const req = {}; setTimeout(() => { req.result = { objectStoreNames: { contains: () => true }, close() {}, transaction: () => ({ objectStore: () => ({ openCursor: () => { const g = {}; let i = 0; const step = () => setTimeout(() => { g.result = i < rows.length ? { value: rows[i], continue() { i += 1; step(); } } : null; g.onsuccess(); }, 0); step(); return g; } }) }) }; req.onsuccess(); }, 0); return req; } };
+  assert.deepEqual(await countOutboxPending({ idb }), { count: 2, failed: 1 });
 });
