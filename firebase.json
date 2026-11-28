@@ -9,7 +9,8 @@
     ],
     "predeploy": [
       "npm run build",
-      "node scripts/keep-old-assets.mjs"
+      "node scripts/keep-old-assets.mjs",
+      "node scripts/verify-deploy-safety.mjs --post"
     ],
     "rewrites": [
       {

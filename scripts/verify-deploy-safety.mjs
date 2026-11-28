@@ -710,14 +710,50 @@ export const carryWired = () => {
   return pre.some((c) => /keep-old-assets/.test(String(c))) || /scripts[/\\]deploy\.mjs/.test(pkgDeploy);
 };
 
+/** 置き場(keep-old-assets が貯める物)がこの場所に在るか。 */
+export const atticPresent = () => existsSync(join(ROOT, '.hosting-attic/index.json'));
+
+/** ビルドと持ち越しの **後で** dist を数える道(predeploy の最後の --post)が載っているか。 */
+export const postCheckWired = () => {
+  const fb = readJson('firebase.json') || {};
+  const hs = Array.isArray(fb.hosting) ? fb.hosting : fb.hosting ? [fb.hosting] : [];
+  return hs.length > 0 && hs.every((h) => {
+    const pre = Array.isArray(h.predeploy) ? h.predeploy.map(String) : h.predeploy ? [String(h.predeploy)] : [];
+    const k = pre.findIndex((x) => /keep-old-assets/.test(x));
+    const v = pre.findIndex((x) => /verify-deploy-safety\.mjs\s+--post\b/.test(x));
+    return k >= 0 && v > k;
+  });
+};
+
 const checkNoAssetLoss = async (cfgs) => {
   for (const c of cfgs) {
     const who = c.target ? `[${c.target}]` : '';
+    // 🚨 2026-11-28 塞いだ穴(その1): 置き場(.hosting-attic)の無い clone から出すと、
+    //   keep-old-assets は「戻す物が無い」まま黙って通り、古い部品が本番から消える。
+    //   置き場は .gitignore なので、新しく clone した所・新しい worktree には **必ず無い**。
+    //   前に出した事がある(台帳に builds が在る)のに置き場が無い＝その場所からは出せない。
+    if (MODE !== 'after' && carryWired() && (readLedger().builds || []).length && !atticPresent()) {
+      add('D3', `古い玉を消さないか ${who}`, 'ng',
+        '古い部品の置き場(.hosting-attic/index.json)が この場所に無い（新しい clone / worktree から出そうとしている）',
+        ['置き場は git に入らない。この場所で出すと、持ち越す物が無いので古い部品が本番から消える。',
+          '直し方: いつも出している本体のフォルダ(worktree でない元の clone)の .hosting-attic/ を丸ごとここへ写してから出す',
+          'またはいつも出している場所から出す']);
+      continue;
+    }
     const dist = distAssets(c.publicDir);
     if (!dist) {
-      add('D3', `古い玉を消さないか ${who}`, MODE === 'pre' ? 'skip' : 'ng',
+      // 🚨 2026-11-28 塞いだ穴(その2): 以前は --pre で dist が無いと「skip」で素通りし、
+      //   predeploy(build → keep-old-assets)の後に誰も dist を数えていなかった。
+      //   今は firebase.json の predeploy の最後で --post が必ず数える（carryWired が確かめる）。
+      //   その道が無いなら、ビルド前でも通さない。
+      const postWired = postCheckWired();
+      add('D3', `古い玉を消さないか ${who}`, MODE === 'pre' && postWired ? 'skip' : 'ng',
         `${c.publicDir}/ がまだ無い（ビルド前）`,
-        MODE === 'pre' ? [] : ['ビルドしてから、もう一度この見張りを通す']);
+        MODE === 'pre' && postWired
+          ? ['ビルドの後、predeploy の最後の verify-deploy-safety --post が実物で数える']
+          : MODE === 'pre'
+            ? ['ビルドの後に dist を数える道が無い。firebase.json の hosting.predeploy の最後に "node scripts/verify-deploy-safety.mjs --post" を入れる']
+            : ['ビルドしてから、もう一度この見張りを通す']);
       continue;
     }
     const have = new Set(dist);

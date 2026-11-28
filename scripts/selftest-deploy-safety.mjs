@@ -74,7 +74,7 @@ const makeTree = (name, opt = {}) => {
     put(root, 'firebase.json', {
       hosting: {
         public: 'dist',
-        predeploy: ['npm run build', 'node scripts/keep-old-assets.mjs'],
+        predeploy: opt.predeploy || ['npm run build', 'node scripts/keep-old-assets.mjs'],
         rewrites: opt.rewrites || GOOD_REWRITE,
       },
     });
@@ -97,9 +97,14 @@ const makeTree = (name, opt = {}) => {
   //   ⚠ ここが本物と同じ形になっているかが大事:
   //     ・NEXT は まだ本番に無い（出す前だから）
   //     ・OLD と NEW は keep-old-assets が持ち越して入っている
-  put(root, 'dist/index.html', '<script src="/assets/index-NEXT.js"></script>');
-  put(root, 'dist/assets/index-NEXT.js', 'console.log(2)');
-  if (!opt.dropOld) {
+  // noDist … 新しい clone の様に、まだ1回もビルドしていない木
+  if (!opt.noDist) {
+    put(root, 'dist/index.html', '<script src="/assets/index-NEXT.js"></script>');
+    put(root, 'dist/assets/index-NEXT.js', 'console.log(2)');
+  }
+  // carryOnly … 持ち越しの仕掛けは在るが、置き場(.hosting-attic)が無い（新しい clone / worktree）
+  if (opt.carryOnly) put(root, 'scripts/keep-old-assets.mjs', '// 形だけ');
+  if (!opt.dropOld && !opt.noDist) {
     put(root, 'dist/assets/index-NEW.js', 'console.log(1)');
     put(root, 'dist/assets/index-NEW.css', 'body{}');
     put(root, 'dist/assets/index-OLD.js', 'console.log(0)');
@@ -247,6 +252,49 @@ const CASES = [
     args: ['--post'],
     want: { code: 1 },
     mustHave: ['❌ D3', 'assets/index-OLD.js'],
+  },
+  // ---- 🚨 2026-11-28 塞いだ穴の試験（置き場の無い clone・ビルド前の素通り） ----
+  {
+    name: 'ng-3c … 置き場(.hosting-attic)の無い clone から出そうとしたら止める（--pre）',
+    tree: () => makeTree('ng-3c', { carryOnly: true }),
+    args: ['--pre'],
+    want: { code: 1 },
+    mustHave: ['❌ D3', '.hosting-attic/index.json', '新しい clone'],
+  },
+  {
+    name: 'ng-3d … 置き場の無い clone は、ビルド前(dist 無し)でも素通りさせない',
+    tree: () => makeTree('ng-3d', { carryOnly: true, noDist: true }),
+    args: ['--pre'],
+    want: { code: 1 },
+    mustHave: ['❌ D3', '新しい clone'],
+  },
+  {
+    name: 'ng-3e … ビルド前(dist 無し)で、ビルド後に数える道(predeploy の --post)が無いなら止める',
+    tree: () => makeTree('ng-3e', { attic: true, noDist: true }),
+    args: ['--pre'],
+    want: { code: 1 },
+    mustHave: ['❌ D3', 'ビルド前', '--post'],
+  },
+  {
+    name: 'ok-2c … ビルド前(dist 無し)でも、置き場が在り predeploy の最後に --post が在れば「後で数える」で通す',
+    tree: () => makeTree('ok-2c', {
+      attic: true, noDist: true,
+      predeploy: ['npm run build', 'node scripts/keep-old-assets.mjs', 'node scripts/verify-deploy-safety.mjs --post'],
+    }),
+    args: ['--pre'],
+    want: { code: 0 },
+    mustHave: ['⚪ D3', 'predeploy の最後'],
+    mustNotHave: ['❌ D3'],
+  },
+  {
+    name: 'ng-3f … --post が持ち越しより前に在っても「後で数える」と見なさない',
+    tree: () => makeTree('ng-3f', {
+      attic: true, noDist: true,
+      predeploy: ['npm run build', 'node scripts/verify-deploy-safety.mjs --post', 'node scripts/keep-old-assets.mjs'],
+    }),
+    args: ['--pre'],
+    want: { code: 1 },
+    mustHave: ['❌ D3', 'ビルド前'],
   },
   {
     name: 'ng-4 … 見張りを通さない裏口（deploy.bat）が在る',
